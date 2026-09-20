@@ -21,6 +21,7 @@
 
 #include "converter/lex.h"
 #include "converter/mapper.h"
+#include "opaque.h"
 #include "survey.h"
 
 // https://doc.rust-lang.org/reference/keywords.html
@@ -159,9 +160,15 @@ bool IsUserDefinedDecl(const clang::Decl *decl) {
   const auto &ctx = decl->getASTContext();
   const auto &src_mgr = ctx.getSourceManager();
   const auto src_loc = decl->getLocation();
+  // An opaque namespace is an API boundary, so its declarations are external
+  // code that happens to be visible -- exactly the status a system header
+  // already has here. Routing the test through this one predicate is the whole
+  // point: every existing "is this ours to translate?" decision then treats a
+  // TableGen-generated `mlir::` header the same way it already treats the real
+  // one under -isystem, with no second, divergent notion of externality.
   return !decl->getBeginLoc().isInvalid() && !decl->isImplicit() &&
          !src_mgr.isInSystemHeader(src_loc) &&
-         !src_mgr.isInSystemMacro(src_loc);
+         !src_mgr.isInSystemMacro(src_loc) && !Opaque::IsOpaqueDecl(decl);
 }
 
 bool RefersToUserDefinedDecl(const clang::Expr *expr) {

@@ -20,6 +20,7 @@
 
 #include "converter/converter_lib.h"
 #include "converter/translation_rule.h"
+#include "opaque.h"
 #include "survey.h"
 
 namespace cpp2rust::Mapper {
@@ -916,6 +917,18 @@ std::string mapTypeStringRecursive(const std::string &cpp_type) {
           return "Ptr<" + instantiateTgt(psubs, prule->type_info.type) + '>';
         }
       }
+    }
+
+    // A type on an opaque API boundary is not a gap in the translator: the
+    // port is expected to replace it, not carry it over. Give it a nameable
+    // Rust type and continue, so the run reports what the port still owes
+    // instead of dying on the first mention of it. Reached for boundary types
+    // that no decl walk registers -- `llvm::StringRef` and friends arrive from
+    // a system header, so lazyRegisterAndRetry declines them on purpose.
+    if (auto base = Opaque::OpaqueBaseName(cpp_type); !base.empty()) {
+      auto rs_name = ToRustName(std::move(base));
+      Opaque::NoteReferenced(rs_name);
+      return rs_name;
     }
 
     // NDEBUG builds compile the assert out, so guard the null deref below

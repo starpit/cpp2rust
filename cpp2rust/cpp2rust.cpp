@@ -20,6 +20,7 @@
 
 #include "cpp2rust_lib.h"
 #include "logging.h"
+#include "opaque.h"
 #include "survey.h"
 
 namespace fs = std::filesystem;
@@ -65,6 +66,15 @@ llvm::cl::opt<std::string>
     RulesDir("rules",
              llvm::cl::desc("Directory where translation rules are located"),
              llvm::cl::value_desc("rules"), llvm::cl::cat(cpp2rust_cmdargs));
+
+llvm::cl::list<std::string> OpaqueNamespaces(
+    "opaque-namespace",
+    llvm::cl::desc("Treat this C++ namespace as an opaque API boundary: do "
+                   "not translate its declarations, and spell a reference to "
+                   "one as an undefined Rust type instead of failing. "
+                   "Repeatable, or comma-separated"),
+    llvm::cl::value_desc("mlir"), llvm::cl::ZeroOrMore,
+    llvm::cl::CommaSeparated, llvm::cl::cat(cpp2rust_cmdargs));
 
 llvm::cl::list<std::string> CXXFlags("cxxflags",
                                      llvm::cl::desc("Additional CXXFLAGS"),
@@ -131,6 +141,9 @@ int main(int argc, char *argv[]) {
 
   cpp2rust::SetVerbose(Verbose);
   cpp2rust::SetSurvey(Survey);
+  cpp2rust::Opaque::SetNamespaces(
+      std::vector<std::string>(OpaqueNamespaces.begin(),
+                               OpaqueNamespaces.end()));
 
   if (CcFile.empty() && BuildDir.empty()) {
     llvm::errs() << "ERROR: please provide either --file or --dir\n";

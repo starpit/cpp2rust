@@ -21,6 +21,7 @@
 #include "converter/converter_lib.h"
 #include "converter/lex.h"
 #include "converter/mapper.h"
+#include "opaque.h"
 #include "survey.h"
 
 namespace cpp2rust {
@@ -90,6 +91,12 @@ void Converter::EmitGlobalInits(Model model, std::string &out) {
 }
 
 void Converter::EmitOpaqueRecords(std::string &out) {
+  // Boundary types named only as a type STRING (the mapper never had a decl to
+  // mark) join the same index, so one pass declares both and neither can
+  // collide with a record the run really did define.
+  for (const auto &name : Opaque::Referenced()) {
+    record_decls_.MarkReferenced(name);
+  }
   record_decls_.ForEachUndefined([&](const std::string &name) {
     out += "#[derive(Clone, Copy, Default, ByteRepr)]";
     out += "pub struct ";
@@ -112,14 +119,29 @@ bool Converter::Convert(clang::QualType qual_type) {
     return false;
   }
 
+  // A boundary record is no longer "user defined", but it still needs a name
+  // to exist in the output: VisitRecordType will spell it and nothing else
+  // would ever declare it.
   if (auto decl = qual_type->getAsRecordDecl();
-      decl && IsUserDefinedDecl(decl)) {
+      decl && (IsUserDefinedDecl(decl) || Opaque::IsOpaqueDecl(decl))) {
     record_decls_.MarkReferenced(GetRecordName(decl));
   }
 
   auto mapped = Mapper::Map(qual_type);
   if (!mapped.empty() && mapped != token::kIgnoreRule) {
     StrCat(mapped);
+    return false;
+  }
+
+  // An enum on the boundary needs spelling here, because there is no
+  // VisitEnumType to catch it further down: the walk below renders it as
+  // nothing at all, which silently produces `fn f(..) -> {` rather than an
+  // error. A record does not need this -- VisitRecordType already names one.
+  if (const auto *tag = qual_type->getAsTagDecl();
+      tag && llvm::isa<clang::EnumDecl>(tag) && Opaque::IsOpaqueDecl(tag)) {
+    auto name = GetRecordName(tag);
+    record_decls_.MarkReferenced(name);
+    StrCat(name);
     return false;
   }
 
@@ -244,7 +266,13 @@ bool Converter::VisitRecordType(clang::RecordType *type) {
     }
   }
 
-  StrCat(GetRecordName(decl));
+  auto name = GetRecordName(decl);
+  if (Opaque::IsOpaqueDecl(decl)) {
+    // Reached through a type the converter walks rather than maps, so
+    // Convert(QualType) never saw it. Still needs declaring.
+    record_decls_.MarkReferenced(name);
+  }
+  StrCat(name);
   Mapper::AddRuleForUserDefinedType(decl);
   return false;
 }
