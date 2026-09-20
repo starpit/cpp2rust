@@ -6,6 +6,11 @@
 
 template <typename T1> using t1 = std::deque<T1>;
 
+// The allocator-explicit spelling. Unlike std::vector, whose default argument
+// is suppressed where it is looked up, std::deque reaches the mapper as
+// std::deque<T, std::allocator<T>> and otherwise has no rule at all.
+template <typename T1, typename T2> using t6 = std::deque<T1, T2>;
+
 template <typename T1> T1 &f1(std::deque<T1> &o) { return o.back(); }
 
 template <typename T1> T1 &f2(std::deque<T1> &o) { return o.front(); }
@@ -224,4 +229,12 @@ bool f41(const std::deque<T1> &a, const std::deque<T1> &b) {
 template <typename T1>
 bool f42(const std::deque<T1> &a, const std::deque<T1> &b) {
   return operator!=(a, b);
+}
+
+template <typename T1> std::deque<T1> f43(std::size_t n, const T1 &value) {
+  return std::deque<T1>(n, value);
+}
+
+template <typename T1> std::deque<T1> f44(std::size_t n) {
+  return std::deque<T1>(n);
 }

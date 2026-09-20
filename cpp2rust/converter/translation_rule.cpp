@@ -326,11 +326,25 @@ void ExprRule::validate(const std::string &name) const {
     auto pos = src.find('T', i);
     if (pos == std::string::npos)
       break;
-    auto ch = pos + 1 < e ? src[pos + 1] : '\0';
-    if (ch >= '1' && ch <= '9') {
-      has_generic[ch - '1'] = true;
-      i = pos + 1;
+    // Parse the whole digit run: T1 and T10 are different generics, and
+    // reading one character would see T10 as T1 and then miss T10 entirely.
+    size_t end = pos + 1;
+    while (end < e && src[end] >= '0' && src[end] <= '9') {
+      ++end;
     }
+    if (end > pos + 1) {
+      unsigned idx = std::stoul(src.substr(pos + 1, end - pos - 1));
+      if (idx >= 1 && idx <= kMaxGenerics) {
+        has_generic[idx - 1] = true;
+      }
+      i = end - 1;
+    }
+  }
+
+  if (generics.size() > kMaxGenerics) {
+    llvm::errs() << name << ": " << generics.size()
+                 << " generics exceeds kMaxGenerics " << kMaxGenerics << '\n';
+    llvm::report_fatal_error("Too many generics");
   }
 
   for (size_t i = 0, e = generics.size(); i < e; ++i) {

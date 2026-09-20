@@ -15,7 +15,9 @@
 
 namespace cpp2rust::TranslationRule {
 
-static inline constexpr unsigned kMaxGenerics = 9;
+// Raised from 9 so a rule can describe a wide std::tie. Everything that
+// scans for `TN` must parse a multi-digit run, not a single character.
+static inline constexpr unsigned kMaxGenerics = 32;
 
 struct TextFragment {
   std::string text;

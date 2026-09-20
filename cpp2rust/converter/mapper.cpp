@@ -428,8 +428,18 @@ std::string instantiateTgt(const std::vector<std::optional<std::string>> &types,
       ++pos;
       continue;
     }
-    const auto &repl = types.at(instantiated_template[pos + 1] - '1').value();
-    instantiated_template.replace(pos, 2, repl);
+    // The index can be more than one digit, and the token to replace is
+    // `T` plus that whole run -- replacing a fixed two characters turns
+    // T10 into <binding of T1> followed by a stray "0".
+    size_t end = pos + 1;
+    while (end < instantiated_template.size() &&
+           std::isdigit(instantiated_template[end])) {
+      ++end;
+    }
+    unsigned idx = std::stoul(instantiated_template.substr(pos + 1,
+                                                           end - pos - 1));
+    const auto &repl = types.at(idx - 1).value();
+    instantiated_template.replace(pos, end - pos, repl);
     pos += repl.length();
   }
   return instantiated_template;

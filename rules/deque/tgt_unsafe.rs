@@ -200,3 +200,15 @@ unsafe fn f41<T1: PartialEq>(a0: Vec<T1>, a1: Vec<T1>) -> bool {
 unsafe fn f42<T1: PartialEq>(a0: Vec<T1>, a1: Vec<T1>) -> bool {
     a0 != a1
 }
+
+fn t6<T1, T2>() -> Vec<T1> {
+    Default::default()
+}
+
+unsafe fn f43<T1: Clone>(a0: usize, a1: T1) -> Vec<T1> {
+    vec![a1; a0 as usize]
+}
+
+unsafe fn f44<T1: Default>(a0: usize) -> Vec<T1> {
+    (0..(a0) as usize).map(|_| <T1>::default()).collect::<Vec<_>>()
+}
