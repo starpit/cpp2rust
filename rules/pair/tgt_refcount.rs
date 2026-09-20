@@ -16,6 +16,13 @@ fn f1<T1, T2>(a0: (Value<T1>, Value<T2>)) -> Value<T2> {
     a0.1
 }
 
+fn f3<T1: Default, T2: Default>() -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(T1::default())),
+        Rc::new(RefCell::new(T2::default())),
+    )
+}
+
 fn f2<T1: Clone, T2: Clone>(a0: (Value<T1>, Value<T2>)) -> (Value<T1>, Value<T2>) {
     (
         Rc::new(RefCell::new(a0.0.borrow().clone())),
@@ -102,4 +109,55 @@ fn f16<T1: PartialEq, T2: PartialEq>(
     a1: (Value<T1>, Value<T2>),
 ) -> bool {
     a0 != a1
+}
+
+fn f18<T1: TryFrom<T3>, T2: FromIterator<u8>, T3: Clone>(
+    a0: T3,
+    a1: &'static [u8],
+) -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(
+            T1::try_from(a0).ok().expect("failed conversion"),
+        )),
+        Rc::new(RefCell::new(
+            a1.iter()
+                .copied()
+                .chain(std::iter::once(0))
+                .collect::<T2>(),
+        )),
+    )
+}
+
+fn f19<T1: FromIterator<u8>, T2: TryFrom<T3>, T3: Clone>(
+    a0: &'static [u8],
+    a1: T3,
+) -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(
+            a0.iter()
+                .copied()
+                .chain(std::iter::once(0))
+                .collect::<T1>(),
+        )),
+        Rc::new(RefCell::new(
+            T2::try_from(a1).ok().expect("failed conversion"),
+        )),
+    )
+}
+
+fn f20<T1: FromIterator<u8>, T2: TryFrom<T3>, T3: Clone>(
+    a0: &'static [u8],
+    a1: T3,
+) -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(
+            a0.iter()
+                .copied()
+                .chain(std::iter::once(0))
+                .collect::<T1>(),
+        )),
+        Rc::new(RefCell::new(
+            T2::try_from(a1).ok().expect("failed conversion"),
+        )),
+    )
 }

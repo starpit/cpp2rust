@@ -212,3 +212,7 @@ unsafe fn f43<T1: Clone>(a0: usize, a1: T1) -> Vec<T1> {
 unsafe fn f44<T1: Default>(a0: usize) -> Vec<T1> {
     (0..(a0) as usize).map(|_| <T1>::default()).collect::<Vec<_>>()
 }
+
+unsafe fn f45<T1>() -> Vec<T1> {
+    Vec::new()
+}

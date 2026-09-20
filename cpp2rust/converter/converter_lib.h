@@ -276,7 +276,7 @@ struct SwitchArm {
   bool has_fallthrough;
 };
 
-std::vector<SwitchArm> AnalyzeSwitchArms(clang::CompoundStmt *body);
+std::vector<SwitchArm> AnalyzeSwitchArms(clang::Stmt *body);
 
 bool CompoundHasTopLevelLabel(const clang::CompoundStmt *compound);
 

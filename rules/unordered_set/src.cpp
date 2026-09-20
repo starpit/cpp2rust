@@ -182,3 +182,11 @@ template <typename T1>
 bool f31(const std::unordered_set<T1> &a, const std::unordered_set<T1> &b) {
   return operator!=(a, b);
 }
+
+// The initializer-list constructor.  Unlike std::set, libc++'s unordered_set
+// initializer-list constructor has no defaulted trailing parameter that the
+// converter has to fill in, so this rule takes exactly one argument.
+template <typename T1>
+std::unordered_set<T1> f32(std::initializer_list<T1> a0) {
+  return std::unordered_set<T1>(a0);
+}

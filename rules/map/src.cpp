@@ -159,3 +159,16 @@ template <typename T1, typename T2>
 bool f31(const std::map<T1, T2> &a, const std::map<T1, T2> &b) {
   return operator!=(a, b);
 }
+
+// The initializer-list constructor: `std::map<K, V> m = {{k, v}, ...};`.
+// libc++ declares it as
+//     map(initializer_list<value_type>, const key_compare& = key_compare())
+// so the resolved rule carries the comparator parameter too, and the converter
+// passes `None` for it.  std::pair<const T1, T2> appears only INSIDE this
+// signature -- no std::pair<const T1, T2> TYPE rule is introduced, so the
+// `const T *` ambiguity that killed the earlier attempt at that family does
+// not arise here: T1 and T2 are already pinned by std::map<T1, T2>.
+template <typename T1, typename T2>
+std::map<T1, T2> f32(std::initializer_list<std::pair<const T1, T2>> a0) {
+  return std::map<T1, T2>(a0);
+}

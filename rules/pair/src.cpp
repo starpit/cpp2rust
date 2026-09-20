@@ -14,6 +14,14 @@ template <typename T1, typename T2> T2 &f1(std::pair<T1, T2> &o) {
   return o.second;
 }
 
+// The default constructor. t1 supplies the default VALUE wherever the mapper
+// materialises one, but an explicit `std::pair<A, B> p;` is a CXXConstructExpr
+// and needs a function rule of its own, otherwise it falls back to the mangled
+// `std_pair_A__B_::std_pair_A__B_()` placeholder.
+template <typename T1, typename T2> std::pair<T1, T2> f3() {
+  return std::pair<T1, T2>();
+}
+
 template <typename T1, typename T2>
 std::pair<T1, T2> f2(const std::pair<T1, T2> &a0) {
   return std::pair<T1, T2>(a0);
@@ -74,4 +82,48 @@ bool f15(const std::pair<T1, T2> &a, const std::pair<T1, T2> &b) {
 template <typename T1, typename T2>
 bool f16(const std::pair<T1, T2> &a, const std::pair<T1, T2> &b) {
   return operator!=(a, b);
+}
+
+// ---------------------------------------------------------------------------
+// The converting constructors.  Everything below exists because libc++'s pair
+// constructors are themselves templates: the argument types are deduced from
+// the CALL, not from T1/T2, so `std::pair<long long, long long>(p)` where `p`
+// is a `std::pair<int, int>` resolves to a signature that f2 (the same-type
+// copy constructor) cannot unify with.  The resolved spellings these produce
+// were read straight out of `cpp2rust --verbose` ("search expr ..., result:"
+// with an empty result immediately before a mangled-fallback emission).
+// ---------------------------------------------------------------------------
+
+// NOT ADDED: `pair<A, B>` from a `pair<C, D>` with DIFFERENT element types
+// (e.g. `std::pair<long long, long long>(std::pair<int, int>)`).  Written as
+//     template <typename T1, typename T2, typename T3, typename T4>
+//     std::pair<T1, T2> f17(const std::pair<T3, T4> &a0);
+// it resolves to `pair(const std::pair<T3, T4> &)`, which the matcher rates
+// EXACTLY as specific as f2's `pair(const std::pair<T1, T2> &)`.  The
+// converter then reports "ambiguous translation rule ... Refusing to guess"
+// and silently falls back to a whole-tuple `.clone()` -- which in the refcount
+// model clones the Rc handles, so the copy ALIASES the original.  That broke
+// tests/unit/clone_vs_move.cpp.  Reverted; the converting copy constructor
+// stays unmapped until the matcher can rank one pattern above the other.
+
+// `std::pair<const Enum, std::string>(e, "literal")`.  The second argument is
+// a string LITERAL, so libc++ deduces the parameter as `const char (&)[N]`
+// rather than std::string, and f7's `T4 &&` cannot unify with an array
+// reference.  char is spelled concretely because the Rust side has to know the
+// element width to walk the NUL-terminated literal.
+template <typename T1, typename T2, typename T3, std::size_t T4>
+std::pair<T1, T2> f18(T3 &&a0, const char (&a1)[T4]) {
+  return std::pair<T1, T2>(std::move(a0), a1);
+}
+
+// `std::pair<const std::string, V>("literal", lvalue)`.
+template <typename T1, typename T2, typename T3, std::size_t T4>
+std::pair<T1, T2> f19(const char (&a0)[T4], T3 &a1) {
+  return std::pair<T1, T2>(a0, a1);
+}
+
+// `std::pair<const std::string, V>("literal", rvalue)`.
+template <typename T1, typename T2, typename T3, std::size_t T4>
+std::pair<T1, T2> f20(const char (&a0)[T4], T3 &&a1) {
+  return std::pair<T1, T2>(a0, std::move(a1));
 }

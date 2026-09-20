@@ -41,3 +41,17 @@ std::istreambuf_iterator<T1> f7(std::istreambuf_iterator<T1> &a0) {
 std::istreambuf_iterator<char> f8(std::basic_streambuf<char> *p) {
   return std::istreambuf_iterator<char>(p);
 }
+
+// The std::string overloads.  f1/f5 cover only the `const char *` spelling, so
+// every `std::ofstream out(fileName)` where fileName is a std::string fell
+// back to the mangled `std_basic_ofstream_..::std_basic_ofstream_..N()`
+// placeholder.  As with f1/f5 the openmode is dropped: std::ofstream and
+// std::ifstream both map to ::std::fs::File, which is opened for write and
+// read respectively.
+std::ofstream f9(const std::string &filename, std::ios_base::openmode mode) {
+  return std::ofstream(filename, mode);
+}
+
+std::ifstream f10(const std::string &filename, std::ios_base::openmode mode) {
+  return std::ifstream(filename, mode);
+}

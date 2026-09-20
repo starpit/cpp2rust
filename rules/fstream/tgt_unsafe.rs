@@ -41,3 +41,11 @@ unsafe fn f7(a0: ::std::fs::File) -> ::std::fs::File {
 unsafe fn f8(a0: ::std::fs::File) -> ::std::fs::File {
     a0
 }
+
+unsafe fn f9(a0: Vec<libc::c_char>) -> ::std::fs::File {
+    ::std::fs::File::create(::std::ffi::CStr::from_ptr(a0.as_ptr()).to_str().unwrap()).unwrap()
+}
+
+unsafe fn f10(a0: Vec<libc::c_char>) -> ::std::fs::File {
+    ::std::fs::File::open(::std::ffi::CStr::from_ptr(a0.as_ptr()).to_str().unwrap()).unwrap()
+}

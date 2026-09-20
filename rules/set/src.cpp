@@ -114,3 +114,12 @@ template <typename T1>
 bool f23(const std::set<T1> &a, const std::set<T1> &b) {
   return operator!=(a, b);
 }
+
+// The initializer-list constructor: `std::set<T> s = {a, b, c};`.  libc++
+// declares it as
+//     set(initializer_list<value_type>, const value_compare& = value_compare())
+// so the resolved rule carries the comparator parameter too, and the converter
+// passes `None` for it.
+template <typename T1> std::set<T1> f24(std::initializer_list<T1> a0) {
+  return std::set<T1>(a0);
+}

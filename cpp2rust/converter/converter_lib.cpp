@@ -1551,9 +1551,20 @@ static bool SwitchCaseHasFallthrough(clang::Stmt *stmt) {
   return true;
 }
 
-std::vector<SwitchArm> AnalyzeSwitchArms(clang::CompoundStmt *body) {
+std::vector<SwitchArm> AnalyzeSwitchArms(clang::Stmt *body) {
+  // A switch body is normally a CompoundStmt, but the grammar allows any
+  // statement, e.g. `switch (0) case 0: default: <stmt>` (gtest's
+  // GTEST_AMBIGUOUS_ELSE_BLOCKER_). Treat a non-compound body as a
+  // single-statement body.
+  llvm::ArrayRef<clang::Stmt *> body_stmts;
+  if (auto *compound = clang::dyn_cast<clang::CompoundStmt>(body)) {
+    body_stmts = {compound->body_begin(), compound->size()};
+  } else {
+    body_stmts = {&body, 1};
+  }
+
   std::vector<SwitchArm> arms;
-  for (clang::Stmt *s : body->body()) {
+  for (clang::Stmt *s : body_stmts) {
     llvm::StringRef label;
     clang::Stmt *inner = s;
     if (auto *outer = clang::dyn_cast<clang::LabelStmt>(inner)) {

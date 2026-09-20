@@ -148,3 +148,9 @@ fn f22<T1: PartialEq>(a0: BTreeMap<T1, Value<T1>>, a1: BTreeMap<T1, Value<T1>>) 
 fn f23<T1: PartialEq>(a0: BTreeMap<T1, Value<T1>>, a1: BTreeMap<T1, Value<T1>>) -> bool {
     a0 != a1
 }
+
+fn f24<T1: Ord + Clone>(a0: Vec<T1>, a1: Option<()>) -> BTreeMap<T1, Value<T1>> {
+    a0.into_iter()
+        .map(|__k: T1| (__k.clone(), Rc::new(RefCell::new(__k))))
+        .collect()
+}

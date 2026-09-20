@@ -1630,6 +1630,9 @@ bool Converter::Convert(clang::Expr *expr,
   computed_expr_type_ = ComputedExprType::Unknown;
   bool result = TraverseStmt(expr);
   if (expr && computed_expr_type_ == ComputedExprType::Unknown) {
+    llvm::errs() << "computed_expr_type_ not set at ";
+    expr->getExprLoc().print(llvm::errs(), ctx_.getSourceManager());
+    llvm::errs() << "\n";
     expr->dump();
     assert(false && "computed_expr_type_ not set");
   }
@@ -2045,6 +2048,12 @@ Converter::CallInfo Converter::CollectCallInfo(clang::CallExpr *expr) {
     if (is_materialize && ca.param_type->isReferenceType()) {
       ca.kind = Kind::Materialized;
     } else if (is_materialize) {
+      ca.kind = Kind::Inline;
+    }
+    // A defaulted argument is passed as `None`: EmitArgList never converts it,
+    // so hoisting or materializing it would emit a binding nothing reads --
+    // and converting a `std::string` default there asserted outright.
+    if (ca.has_default && clang::isa<clang::CXXDefaultArgExpr>(arg)) {
       ca.kind = Kind::Inline;
     }
     info.args.push_back(std::move(ca));
@@ -3075,6 +3084,35 @@ bool Converter::VisitConditionalOperator(clang::ConditionalOperator *expr) {
   return false;
 }
 
+// An integral constant declared in a library header has no Rust global to
+// name: nothing translates <string>, so `std::string::npos` came out as a
+// reference to an undeclared `npos_0` -- code that does not compile, in both
+// models. Clang has already folded the use (it is a non-odr constant use), so
+// emit the value it folded to. A constant the rules know about still wins:
+// the mapper is consulted first.
+std::optional<std::string>
+Converter::FoldLibraryConstant(clang::DeclRefExpr *expr) {
+  auto *var = clang::dyn_cast<clang::VarDecl>(expr->getDecl());
+  if (!var || isAddrOf() || IsUserDefinedDecl(var) ||
+      var->getType()->isReferenceType() || expr->getType()->isReferenceType()) {
+    return std::nullopt;
+  }
+  if (Mapper::Contains(GetCalleeOrExpr(expr))) {
+    return std::nullopt;
+  }
+  clang::Expr::EvalResult result;
+  if (!expr->EvaluateAsInt(result, ctx_) || !result.Val.isInt()) {
+    return std::nullopt;
+  }
+  llvm::SmallString<32> num;
+  result.Val.getInt().toString(num, 10);
+  auto qual_type = expr->getType();
+  if (Mapper::Map(qual_type) == "i32") {
+    return std::string(num);
+  }
+  return getTypedLiteral(num.c_str(), GetUnsafeTypeAsString(qual_type));
+}
+
 std::string Converter::ConvertDeclRefExpr(clang::DeclRefExpr *expr) {
   if (isAddrOf()) {
     clang::Expr *addrof_op = ToAddrOf(ctx_, expr);
@@ -3130,6 +3168,12 @@ bool Converter::VisitDeclRefExpr(clang::DeclRefExpr *expr) {
       Convert(bound);
       return false;
     }
+  }
+
+  if (auto folded = FoldLibraryConstant(expr)) {
+    StrCat(*folded);
+    computed_expr_type_ = ComputedExprType::FreshValue;
+    return false;
   }
 
   auto str = ConvertDeclRefExpr(expr);
@@ -3863,7 +3907,9 @@ bool Converter::VisitCXXDefaultArgExpr(clang::CXXDefaultArgExpr *expr) {
   if (expr->getType()->isPointerType()) {
     StrCat(token::kDefault);
     computed_expr_type_ = ComputedExprType::FreshPointer;
+    return false;
   }
+  Convert(expr->getExpr());
   return false;
 }
 
@@ -3996,7 +4042,7 @@ void Converter::EmitSwitchArm(const SwitchArm &arm, bool is_default) {
 }
 
 bool Converter::VisitSwitchStmt(clang::SwitchStmt *stmt) {
-  auto *body = clang::dyn_cast<clang::CompoundStmt>(stmt->getBody());
+  clang::Stmt *body = stmt->getBody();
   assert(body);
   auto arms = AnalyzeSwitchArms(body);
 
@@ -5025,6 +5071,20 @@ std::string Converter::ConvertPlaceholder(clang::Expr *expr, clang::Expr *arg,
       return ConvertFreshRValue(arg);
     }
     auto lvalue = ConvertLValue(arg);
+    if (getenv("CPP2RUST_DEBUG_DEREF")) {
+      llvm::errs() << "TAKE-PLACEHOLDER at "
+                   << arg->getExprLoc().printToString(ctx_.getSourceManager())
+                   << " arg=" << arg->getStmtClassName() << " type='"
+                   << arg->getType().getAsString() << "' lvalue='" << lvalue
+                   << "' pending=" << (int)computed_expr_type_ << "\n";
+    }
+    // ConvertLValue can stash the argument instead of emitting it, leaving
+    // `lvalue` empty. There is no place expression to borrow then, so ask the
+    // model for the take form of what it stashed.
+    if (auto taken = TakePendingDerefAsMemTake()) {
+      computed_expr_type_ = ComputedExprType::FreshValue;
+      return std::move(*taken);
+    }
     SetFresh();
     return std::format("std::mem::take(&mut {})", std::move(lvalue));
   }

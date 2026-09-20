@@ -406,6 +406,85 @@ matchTemplate(const std::string &template_str,
   return captured;
 }
 
+// `const T1` is spelled west of the type name, but when T1 binds to a POINTER
+// clang prints the very same type east of the `*`: `const T1 &` with
+// T1 = `Node *` is `Node *const &`, not `const Node * &`. A rule source keeps
+// the west spelling it was written with, so the literal `const ` in front of
+// the placeholder never lines up and the rule silently does not match. That is
+// how `std::map<K *, V>::operator[]` fell through to the generic subscript
+// path and came out as pointer arithmetic (`(m as Ptr<..>).offset(k)`).
+//
+// Produce the east-const spellings of `src` so the caller can retry with them.
+// Only the placeholders are moved: a `const` in front of a concrete name is
+// part of that name and means something else (`const Node *` is a pointer to
+// const, a different type from `Node *const`).
+std::vector<std::string> eastConstVariants(const std::string &src,
+                                           const std::string &instantiated) {
+  // The east spelling only ever shows up as `*` followed by `const`; without
+  // one in the text there is nothing a variant could match.
+  if (instantiated.find("*const") == std::string::npos &&
+      instantiated.find("* const") == std::string::npos) {
+    return {};
+  }
+
+  // Offsets of every `const T<n>` in `src`, plus the length of the run.
+  struct Site {
+    size_t pos;  // index of 'c' in "const"
+    size_t len;  // length of "const<ws>T<digits>"
+    size_t name; // index of 'T'
+  };
+  std::vector<Site> sites;
+  for (size_t i = src.find("const"); i != std::string::npos;
+       i = src.find("const", i + 1)) {
+    // "const" must be a whole word.
+    if (i > 0 && (std::isalnum((unsigned char)src[i - 1]) || src[i - 1] == '_')) {
+      continue;
+    }
+    size_t j = i + 5;
+    if (j >= src.size() || !std::isspace((unsigned char)src[j])) {
+      continue;
+    }
+    while (j < src.size() && std::isspace((unsigned char)src[j])) {
+      j++;
+    }
+    if (j + 1 >= src.size() || src[j] != 'T' ||
+        !std::isdigit((unsigned char)src[j + 1])) {
+      continue;
+    }
+    size_t k = j + 1;
+    while (k < src.size() && std::isdigit((unsigned char)src[k])) {
+      k++;
+    }
+    sites.push_back({i, k - i, j});
+  }
+
+  // A signature with more than a handful of them is not worth enumerating.
+  constexpr size_t kMaxSites = 4;
+  if (sites.empty() || sites.size() > kMaxSites) {
+    return {};
+  }
+
+  std::vector<std::string> variants;
+  for (unsigned mask = 1; mask < (1u << sites.size()); ++mask) {
+    std::string out;
+    size_t copied = 0;
+    for (size_t s = 0; s < sites.size(); ++s) {
+      if (!(mask & (1u << s))) {
+        continue;
+      }
+      const Site &site = sites[s];
+      out.append(src, copied, site.pos - copied);
+      // "const  T1" -> "T1 const"
+      out.append(src, site.name, site.pos + site.len - site.name);
+      out.append(" const");
+      copied = site.pos + site.len;
+    }
+    out.append(src, copied, std::string::npos);
+    variants.push_back(std::move(out));
+  }
+  return variants;
+}
+
 // Substitutes concrete types into a target template string using the provided
 // type mapping. Each template parameter in `tgt_template` is replaced with its
 // corresponding instantiated type from `types`.
@@ -457,6 +536,16 @@ search(std::unordered_multimap<std::string, T> &map, const std::string &txt,
   for (; it != end; ++it) {
     auto &this_rule = it->second;
     auto this_subs = matchTemplate(this_rule.src, txt);
+    if (!this_subs) {
+      // Retry with `const Tn` respelled east of the pointer, which is how
+      // clang prints it when Tn binds to a pointer type.
+      for (const auto &variant : eastConstVariants(this_rule.src, txt)) {
+        this_subs = matchTemplate(variant, txt);
+        if (this_subs) {
+          break;
+        }
+      }
+    }
     if (!this_subs) {
       continue;
     }

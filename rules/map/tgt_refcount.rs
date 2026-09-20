@@ -192,3 +192,12 @@ fn f30<T1: PartialEq, T2: PartialEq>(a0: BTreeMap<T1, Value<T2>>, a1: BTreeMap<T
 fn f31<T1: PartialEq, T2: PartialEq>(a0: BTreeMap<T1, Value<T2>>, a1: BTreeMap<T1, Value<T2>>) -> bool {
     a0 != a1
 }
+
+fn f32<T1: Ord + Clone, T2>(
+    a0: Vec<(Value<T1>, Value<T2>)>,
+    a1: Option<()>,
+) -> BTreeMap<T1, Value<T2>> {
+    a0.into_iter()
+        .map(|(__k, __v): (Value<T1>, Value<T2>)| (__k.borrow().clone(), __v))
+        .collect()
+}

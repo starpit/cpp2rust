@@ -292,3 +292,12 @@ template <typename T1, typename T2>
 bool f48(const std::unordered_map<T1, T2> &a, const std::unordered_map<T1, T2> &b) {
   return operator!=(a, b);
 }
+
+// The initializer-list constructor.  As with unordered_set, libc++ gives this
+// one no defaulted trailing parameter.  See rules/map/src.cpp f32 for why the
+// std::pair<const T1, T2> spelling is safe inside a ctor signature.
+template <typename T1, typename T2>
+std::unordered_map<T1, T2>
+f49(std::initializer_list<std::pair<const T1, T2>> a0) {
+  return std::unordered_map<T1, T2>(a0);
+}

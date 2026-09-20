@@ -386,6 +386,16 @@ public:
 
   virtual bool VisitDeclRefExpr(clang::DeclRefExpr *expr);
   std::string ConvertDeclRefExpr(clang::DeclRefExpr *expr);
+  std::optional<std::string> FoldLibraryConstant(clang::DeclRefExpr *expr);
+
+  // The refcount model can stash an lvalue as a pending deref rather than
+  // emitting a place expression. `std::mem::take(&mut <nothing>)` is not a
+  // recovery, so a consumer that needs the moved-out value asks the model for
+  // the take form of whatever is stashed. Returns nullopt when nothing is
+  // pending, which is always the case in the unsafe model.
+  virtual std::optional<std::string> TakePendingDerefAsMemTake() {
+    return std::nullopt;
+  }
 
   virtual bool VisitParenExpr(clang::ParenExpr *expr);
 

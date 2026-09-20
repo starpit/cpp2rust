@@ -238,3 +238,8 @@ template <typename T1> std::deque<T1> f43(std::size_t n, const T1 &value) {
 template <typename T1> std::deque<T1> f44(std::size_t n) {
   return std::deque<T1>(n);
 }
+
+// The default constructor. std::vector and std::set have one (vector/f4,
+// set/f13); std::deque did not, so every `std::deque<T> d;` in a translated TU
+// fell back to the mangled `std_deque_..::std_deque_..N()` placeholder.
+template <typename T1> std::deque<T1> f45() { return std::deque<T1>(); }

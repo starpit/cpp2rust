@@ -143,3 +143,9 @@ unsafe fn f30<T1: PartialEq, T2: PartialEq>(a0: BTreeMap<T1, Box<T2>>, a1: BTree
 unsafe fn f31<T1: PartialEq, T2: PartialEq>(a0: BTreeMap<T1, Box<T2>>, a1: BTreeMap<T1, Box<T2>>) -> bool {
     a0 != a1
 }
+
+unsafe fn f32<T1: Ord + Clone, T2>(a0: Vec<(T1, T2)>, a1: Option<()>) -> BTreeMap<T1, Box<T2>> {
+    a0.into_iter()
+        .map(|(__k, __v): (T1, T2)| (__k, Box::new(__v)))
+        .collect()
+}

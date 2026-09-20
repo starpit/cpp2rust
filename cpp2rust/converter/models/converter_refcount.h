@@ -284,6 +284,8 @@ private:
   std::string DerefPtrExpr(std::string_view ptr_expr,
                            clang::QualType pointee_type);
 
+  std::optional<std::string> TakePendingDerefAsMemTake() override;
+
   std::string GetInnerType(clang::QualType type);
 
   std::string ConvertFreshLValue(clang::Expr *expr);

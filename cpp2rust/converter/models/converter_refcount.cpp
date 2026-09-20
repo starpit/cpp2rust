@@ -362,6 +362,13 @@ std::string ConverterRefCount::ConvertFresh(
 std::string ConverterRefCount::ConvertFreshRValue(
     clang::Expr *expr, std::optional<clang::QualType> implicit_convert_to) {
   auto str = ConvertRValue(expr, implicit_convert_to);
+  if (computed_expr_type_ == ComputedExprType::Pending &&
+      getenv("CPP2RUST_DEBUG_DEREF")) {
+    llvm::errs() << "PENDING-RVALUE at "
+                 << expr->getExprLoc().printToString(ctx_.getSourceManager())
+                 << " expr=" << expr->getStmtClassName() << " str='" << str
+                 << "' held='" << pending_deref_.peek() << "'\n";
+  }
   if (!isFresh() && !expr->getType()->isVoidType()) {
     SetFresh();
     return std::format("({}).clone()", std::move(str));
@@ -883,6 +890,12 @@ bool ConverterRefCount::VisitDeclRefExpr(clang::DeclRefExpr *expr) {
     }
   }
 
+  if (auto folded = FoldLibraryConstant(expr)) {
+    StrCat(*folded);
+    computed_expr_type_ = ComputedExprType::FreshValue;
+    return false;
+  }
+
   auto str = ConvertDeclRefExpr(expr);
 
   if (auto fn_decl = clang::dyn_cast<clang::FunctionDecl>(decl)) {
@@ -1285,6 +1298,13 @@ bool ConverterRefCount::VisitStringLiteral(clang::StringLiteral *expr) {
 bool ConverterRefCount::VisitImplicitCastExpr(clang::ImplicitCastExpr *expr) {
   auto *sub_expr = expr->getSubExpr();
 
+  if (getenv("CPP2RUST_DEBUG_CAST")) {
+    llvm::errs() << "CAST " << expr->getCastKindName() << " at "
+                 << expr->getExprLoc().printToString(ctx_.getSourceManager())
+                 << " from '" << sub_expr->getType().getAsString() << "' to '"
+                 << expr->getType().getAsString() << "'\n";
+  }
+
   if (expr->isXValue() && sub_expr->isLValue()) {
     Convert(sub_expr);
     computed_expr_type_ = ComputedExprType::Value;
@@ -1333,7 +1353,11 @@ bool ConverterRefCount::VisitImplicitCastExpr(clang::ImplicitCastExpr *expr) {
 
   if (expr->getCastKind() == clang::CastKind::CK_DerivedToBase) {
     if (expr->getType()->isPointerType()) {
-      auto ptype = clang::dyn_cast<clang::PointerType>(expr->getType());
+      // isPointerType() looks through sugar but dyn_cast<PointerType> does
+      // not: on a typedef (`std::deque<Base *>::value_type`, the parameter of
+      // push_front) it yields null and the getPointeeType() below asserts.
+      // getAs<> desugars, which is what the guard above already assumed.
+      const auto *ptype = expr->getType()->getAs<clang::PointerType>();
       auto pointee_type = ptype->getPointeeType()->getAsCXXRecordDecl();
 
       if (pointee_type && abstract_structs_.contains(GetID(pointee_type))) {
@@ -2087,7 +2111,17 @@ bool ConverterRefCount::VisitCXXConstructExpr(clang::CXXConstructExpr *expr) {
   auto *ctor = expr->getConstructor();
   if (IsRValueConvertingConstructor(ctor) ||
       (ctor->isMoveConstructor() && !IsUserDefinedDecl(ctor->getParent()))) {
-    StrCat(ConvertLValue(expr->getArg(0)));
+    auto str = ConvertLValue(expr->getArg(0));
+    if (computed_expr_type_ == ComputedExprType::Pending && !isLValue()) {
+      // ConvertLValue stashed the argument (it goes through a Ptr) and emitted
+      // nothing. This constructor is a pass-through, so what the caller gets
+      // is this expression -- there is no member call downstream to consume
+      // the pending deref, and leaving it set trips isFresh(). Redo it as the
+      // rvalue the caller actually asked for.
+      pending_deref_.take();
+      str = ConvertRValue(expr->getArg(0));
+    }
+    StrCat(std::move(str));
     return false;
   }
 
@@ -2787,6 +2821,16 @@ std::string ConverterRefCount::DerefPtrExpr(std::string_view ptr_expr,
                                             clang::QualType pointee_type) {
   return std::format("({}{}{})", GetPointerDerefPrefix(pointee_type), ptr_expr,
                      GetPointerDerefSuffix(pointee_type));
+}
+
+std::optional<std::string> ConverterRefCount::TakePendingDerefAsMemTake() {
+  if (pending_deref_.empty()) {
+    return std::nullopt;
+  }
+  // `.deref()` hands back a `Ref`, so `&mut (*p.upgrade().deref())` does not
+  // borrow: with_mut is how this model reaches the pointee mutably.
+  return std::format("{}.with_mut(|__v| std::mem::take(__v))",
+                     pending_deref_.take());
 }
 
 bool ConverterRefCount::IsReferenceType(const clang::Expr *expr) const {
