@@ -90,6 +90,11 @@ void Converter::EmitGlobalInits(Model model, std::string &out) {
   out += "}\n";
 }
 
+void Converter::NoteOpaqueRecord(std::string name) {
+  Opaque::NoteReferenced(name);
+  record_decls_.MarkReferenced(std::move(name));
+}
+
 void Converter::EmitOpaqueRecords(std::string &out) {
   // Boundary types named only as a type STRING (the mapper never had a decl to
   // mark) join the same index, so one pass declares both and neither can
@@ -98,11 +103,58 @@ void Converter::EmitOpaqueRecords(std::string &out) {
     record_decls_.MarkReferenced(name);
   }
   record_decls_.ForEachUndefined([&](const std::string &name) {
-    out += "#[derive(Clone, Copy, Default, ByteRepr)]";
-    out += "pub struct ";
-    out += name;
-    out += ";\n";
+    if (!Opaque::IsReferenced(name)) {
+      // An ordinary record the run declared but never defined. Unchanged.
+      out += "#[derive(Clone, Copy, Default, ByteRepr)]";
+      out += "pub struct ";
+      out += name;
+      out += ";\n";
+      return;
+    }
+    EmitOpaqueHandle(name, out);
   });
+}
+
+void Converter::EmitOpaqueHandle(const std::string &name, std::string &out) {
+  // An API boundary type is a HANDLE, and emitting it as a zero-sized struct
+  // throws that away: every value of the type becomes the same value, so `==`
+  // answers `true` for any two of them and a map keyed on one has a single
+  // slot. That is not "unimplemented", it is wrong, and it compiles.
+  //
+  // The APIs this exists for say so themselves. `mlir::Type`, `Attribute` and
+  // `AffineExpr` are each a single uniqued `ImplType *`, and their `operator==`
+  // is that pointer's comparison; `mlir::operator==(OpState, OpState)` is
+  // `lhs.getOperation() == rhs.getOperation()`. So a newtype over an integer
+  // handle, compared and hashed by that integer, is not an approximation of
+  // those operators -- it is exactly what they do. `Default` is the null
+  // handle, which is also what a default-constructed `mlir::Type` is.
+  //
+  // Ordering is derived for the same reason: the C++ that puts one of these in
+  // a `std::map` gets `std::less` over the same pointer, so handle order and
+  // C++ order are equally arbitrary and equally stable within a run.
+  //
+  // What is deliberately NOT derived is arithmetic. `AffineExpr::operator+`
+  // builds a new uniqued node in an `MLIRContext` -- the port's own model of it
+  // (`dataflowir-gen`'s `AffineExpr`) is a tree with `Add`/`Mul` arms, not a
+  // number -- so adding two handles would silently add two interning ids and
+  // produce a third handle that means nothing. Leaving `Add` unimplemented
+  // makes `a + b` in the output a type error that names the gap, and a later
+  // rule that maps the C++ type onto that tree gets the operator for free
+  // because the tree already implements `Add`. See ConvertOpaqueOperatorCall.
+  out += "#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, "
+         "Hash)]\n";
+  out += "#[repr(transparent)]\n";
+  out += "pub struct ";
+  out += name;
+  out += "(pub u64);\n";
+  // ByteRepr cannot be DERIVED here: the derive macro rejects any struct with
+  // a field. It is a bound on Ptr<T>, so it still has to hold. Spell it out --
+  // the size is the handle's own, and to_bytes/from_bytes keep the trait's
+  // panicking defaults, because a boundary handle's bytes are not something a
+  // port may reinterpret.
+  out += "impl ByteRepr for ";
+  out += name;
+  out += " { fn byte_size() -> usize { ::std::mem::size_of::<Self>() } }\n";
 }
 
 bool Converter::VisitRecoveryExpr(clang::RecoveryExpr *expr) {
@@ -122,9 +174,12 @@ bool Converter::Convert(clang::QualType qual_type) {
   // A boundary record is no longer "user defined", but it still needs a name
   // to exist in the output: VisitRecordType will spell it and nothing else
   // would ever declare it.
-  if (auto decl = qual_type->getAsRecordDecl();
-      decl && (IsUserDefinedDecl(decl) || Opaque::IsOpaqueDecl(decl))) {
-    record_decls_.MarkReferenced(GetRecordName(decl));
+  if (auto decl = qual_type->getAsRecordDecl(); decl) {
+    if (IsUserDefinedDecl(decl)) {
+      record_decls_.MarkReferenced(GetRecordName(decl));
+    } else if (Opaque::IsOpaqueDecl(decl)) {
+      NoteOpaqueRecord(GetRecordName(decl));
+    }
   }
 
   auto mapped = Mapper::Map(qual_type);
@@ -140,7 +195,7 @@ bool Converter::Convert(clang::QualType qual_type) {
   if (const auto *tag = qual_type->getAsTagDecl();
       tag && llvm::isa<clang::EnumDecl>(tag) && Opaque::IsOpaqueDecl(tag)) {
     auto name = GetRecordName(tag);
-    record_decls_.MarkReferenced(name);
+    NoteOpaqueRecord(name);
     StrCat(name);
     return false;
   }
@@ -270,7 +325,7 @@ bool Converter::VisitRecordType(clang::RecordType *type) {
   if (Opaque::IsOpaqueDecl(decl)) {
     // Reached through a type the converter walks rather than maps, so
     // Convert(QualType) never saw it. Still needs declaring.
-    record_decls_.MarkReferenced(name);
+    NoteOpaqueRecord(name);
   }
   StrCat(name);
   Mapper::AddRuleForUserDefinedType(decl);
@@ -3271,6 +3326,64 @@ bool Converter::VisitParenExpr(clang::ParenExpr *expr) {
   return false;
 }
 
+bool Converter::ConvertOpaqueOperatorCall(clang::CXXOperatorCallExpr *expr) {
+  // An overloaded operator declared inside an opaque namespace is an operator
+  // ON the boundary. There is no body to translate and no rule mapping it yet,
+  // and aborting the whole run over it is what stops the bridge: `==` on
+  // mlir::Type alone accounts for half the remaining blockers.
+  //
+  // The transliteration is the operator itself: `a == b` stays `a == b`. That
+  // keeps both operands and the shape in the output, and it pushes the
+  // question of what the operator MEANS onto the operand type, where it
+  // belongs -- EmitOpaqueHandle derives exactly the traits whose meaning is
+  // handle identity and no others. So `==`, `!=` and the ordering comparisons
+  // compile and are right; `+`, `-`, `%` and everything else compile to a
+  // rustc error that names the missing trait and the type, which is the gap
+  // stated precisely rather than a placeholder that has forgotten what it was.
+  //
+  // It also survives the eventual fix. When a rule maps mlir::AffineExpr onto
+  // the port's own tree type, that type already implements Add, so the `+`
+  // sites here start working with no further converter change; a
+  // `cpp2rust_unsupported!()` marker in their place would not have.
+  if (!Opaque::Enabled()) {
+    return false;
+  }
+  const auto *callee = expr->getDirectCallee();
+  if (callee == nullptr || !Opaque::IsOpaqueDecl(callee)) {
+    return false;
+  }
+  const char *spelling = clang::getOperatorSpelling(expr->getOperator());
+  if (spelling == nullptr) {
+    return false;
+  }
+  // A member operator counts `this` as its first argument, so one argument is
+  // unary and two are binary either way round.
+  const auto num_args = expr->getNumArgs();
+  if (num_args != 1 && num_args != 2) {
+    return false;
+  }
+  // Convert the operands before opening the parenthesis: converting one can
+  // hoist a binding, which must not land inside the expression.
+  auto lhs = ConvertRValue(expr->getArg(0));
+  auto rhs = num_args == 2 ? ConvertRValue(expr->getArg(1)) : std::string();
+  PushParen outer(*this);
+  if (num_args == 1) {
+    StrCat(spelling);
+    PushParen operand(*this);
+    StrCat(lhs);
+  } else {
+    {
+      PushParen left(*this);
+      StrCat(lhs);
+    }
+    StrCat(spelling);
+    PushParen right(*this);
+    StrCat(rhs);
+  }
+  computed_expr_type_ = ComputedExprType::FreshValue;
+  return true;
+}
+
 bool Converter::ConvertCXXOperatorCallExpr(clang::CXXOperatorCallExpr *expr) {
   switch (expr->getOperator()) {
   case clang::OverloadedOperatorKind::OO_Equal:
@@ -3328,6 +3441,9 @@ bool Converter::ConvertCXXOperatorCallExpr(clang::CXXOperatorCallExpr *expr) {
     break;
   default: {
     const char *spelling = clang::getOperatorSpelling(expr->getOperator());
+    if (ConvertOpaqueOperatorCall(expr)) {
+      break;
+    }
     if (ReportUnsupported("CXXOperatorCallExpr", spelling,
                           expr->getExprLoc(), ctx_)) {
       StrCat(UnsupportedPlaceholder("CXXOperatorCallExpr", spelling));

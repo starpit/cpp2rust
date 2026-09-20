@@ -84,4 +84,10 @@ void NoteReferenced(std::string rust_name);
 // Every opaque Rust type named so far, sorted.
 const std::set<std::string> &Referenced();
 
+// True when `rust_name` is one of those -- i.e. a boundary type rather than a
+// record the run declared but never defined for some other reason. The two
+// share one emission pass but not one shape, so the pass has to tell them
+// apart. Always false with the feature off.
+bool IsReferenced(const std::string &rust_name);
+
 } // namespace cpp2rust::Opaque

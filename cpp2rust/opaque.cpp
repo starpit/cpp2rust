@@ -141,4 +141,8 @@ void NoteReferenced(std::string rust_name) {
 
 const std::set<std::string> &Referenced() { return referenced_; }
 
+bool IsReferenced(const std::string &rust_name) {
+  return referenced_.contains(rust_name);
+}
+
 } // namespace cpp2rust::Opaque

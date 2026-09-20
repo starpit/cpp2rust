@@ -1732,6 +1732,25 @@ bool ConverterRefCount::VisitInitListExpr(clang::InitListExpr *expr) {
       return false;
     }
 
+    // `g({v})` where `g` takes `const std::vector<T> &`. The braced list holds
+    // one element of the parameter's own type, so no initializer_list can be
+    // formed from it and the reference binds DIRECTLY to that element: clang
+    // marks the InitListExpr an LVALUE and builds no temporary. The braces are
+    // then pure syntax, and the translation is the element.
+    //
+    // This has to be caught before the field walk below, because that walk
+    // names the C++ RECORD's fields -- and for a type a rule replaced those
+    // are the standard library implementation's, not the Rust type's. It spelt
+    // this copy as `Vec<T> { __begin_: v.clone(), __end_: null, anon_3:
+    // default }`: three of libc++'s private members, one of them anonymous,
+    // assigned to a `Vec` that has none of them. Nothing downstream could
+    // recover -- the `<` is read as a comparison and rustfmt rejects the file,
+    // which is how the whole TU was lost.
+    if (expr->isLValue() && expr->getNumInits() == 1) {
+      Convert(expr->getInit(0));
+      return false;
+    }
+
     StrCat(GetUnsafeTypeAsString(qual_type));
     {
       PushBrace brace(*this);

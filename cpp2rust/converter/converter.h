@@ -53,6 +53,13 @@ public:
   virtual void EmitFilePreamble();
 
   static void EmitOpaqueRecords(std::string &out);
+  // Declares one API-boundary type as an identity-bearing handle. Only reached
+  // when --opaque-namespace is in effect.
+  static void EmitOpaqueHandle(const std::string &name, std::string &out);
+  // Records `name` as an API-boundary type AND as a record still owed a
+  // declaration. The two indexes have to agree: the second decides whether
+  // anything is emitted, the first decides which shape.
+  static void NoteOpaqueRecord(std::string name);
   static void EmitGlobalInits(Model model, std::string &out);
 
   static void EmitMethodsOnPtr(std::string &out);
@@ -658,6 +665,11 @@ protected:
   virtual void ConvertUniquePtrDeref(clang::CXXOperatorCallExpr *expr);
 
   virtual bool ConvertCXXOperatorCallExpr(clang::CXXOperatorCallExpr *expr);
+
+  // Transliterates an overloaded operator whose callee is on an opaque API
+  // boundary. Returns false -- writing nothing -- when it is not one, or with
+  // --opaque-namespace absent.
+  bool ConvertOpaqueOperatorCall(clang::CXXOperatorCallExpr *expr);
 
   std::string GetMappedAsString(clang::Expr *expr, clang::Expr **args = nullptr,
                                 unsigned num_args = 0,

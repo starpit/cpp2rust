@@ -1497,9 +1497,27 @@ std::string ToString(clang::QualType qual_type, ScalarSugar sugar) {
     } else if (const auto *ptr = t->getAs<clang::PointerType>()) {
       auto pointee = ptr->getPointeeType();
       auto canonical = pointee.getCanonicalType().getDesugaredType(*ctx_);
-      if (Map(pointee) == Map(canonical)) {
-        pointee = canonical;
+      if (Map(pointee) != Map(canonical)) {
+        // The pointee's sugar decides its Rust type -- `size_t` is `usize`
+        // where `unsigned long` is `u64` -- so the pointer has to be spelled
+        // with the same NAME the scalar lookup registered, which is the
+        // typedef's own unqualified name. Printing the sugared QualType
+        // instead spells it however the source did: `size_t *` finds the rule
+        // but `std::size_t *` does not, and the miss falls through to the
+        // desugared spelling, so the identical C++ type yields `*mut usize`
+        // through one header and `*mut u64` through the other. The second is
+        // not just inconsistent, it does not compile: the local it points at
+        // is a `usize`, and `&mut x as *mut u64` is an invalid cast.
+        std::string spelling;
+        if (pointee.isConstQualified()) {
+          spelling = "const ";
+        }
+        spelling +=
+            ToString(pointee.getUnqualifiedType(), ScalarSugar::kPreserve);
+        spelling += " *";
+        return normalizeTranslationRule(std::move(spelling));
       }
+      pointee = canonical;
       std::string out;
       llvm::raw_string_ostream os(out);
       ctx_->getPointerType(pointee).print(os, getPrintPolicy());
