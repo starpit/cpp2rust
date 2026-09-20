@@ -551,3 +551,120 @@ std::vector<std::vector<T1>> &f111(std::vector<std::vector<T1>> &dst,
                                    std::vector<std::vector<T1>> &&src) {
   return dst.operator=(std::move(src));
 }
+
+template <typename T1>
+bool f112(const std::vector<T1> &a, const std::vector<T1> &b) {
+  return operator==(a, b);
+}
+
+template <typename T1>
+bool f113(const std::vector<T1> &a, const std::vector<T1> &b) {
+  return operator!=(a, b);
+}
+
+// ---------------------------------------------------------------------------
+// Reverse iterators (rbegin/rend/crbegin/crend and the ops on the result).
+//
+// MODEL: a std::reverse_iterator over a contiguous container is represented by
+// a pointer to the element it DEREFERENCES to, and walking it backwards.
+// So rbegin() addresses the LAST element, operator++ DECREMENTS the pointer,
+// operator-- increments it, and operator*() is the identity (unlike the real
+// std::reverse_iterator, whose stored `base()` sits one past the element).
+//
+// rend() is therefore the slot one BEFORE the first element. Both models can
+// name that slot exactly and reproducibly:
+//   * refcount: Ptr<T> keeps a `usize` offset, so "one before index 0" is the
+//     wrapped offset usize::MAX; PartialEq compares (kind, offset) so a
+//     decremented iterator and a freshly built rend() compare equal.
+//   * unsafe: a raw `base - 1`, built with wrapping_sub/offset(-1) so the two
+//     spellings produce the identical address.
+// On an EMPTY container rbegin() and rend() both land on that same slot, so a
+// reverse loop terminates immediately -- which is what C++ does too.
+//
+// base() is the pointer + 1, i.e. the forward iterator one past the element,
+// exactly as the standard specifies.
+//
+// A single pair of rules covers both the const and the non-const reverse
+// iterator: `std::__wrap_iter<T1 *>` unifies with `std::__wrap_iter<const
+// int *>` by capturing T1 = `const int`, the same way f22/f26/f27 already
+// serve std::vector<T1>::const_iterator.
+// ---------------------------------------------------------------------------
+
+template <typename T1>
+using t8 = typename std::vector<T1>::reverse_iterator;
+template <typename T1>
+using t9 = typename std::vector<T1>::const_reverse_iterator;
+
+template <typename T1>
+typename std::vector<T1>::reverse_iterator f114(std::vector<T1> &o) {
+  return o.rbegin();
+}
+
+template <typename T1>
+typename std::vector<T1>::reverse_iterator f115(std::vector<T1> &o) {
+  return o.rend();
+}
+
+template <typename T1>
+typename std::vector<T1>::const_reverse_iterator f116(const std::vector<T1> &o) {
+  return o.rbegin();
+}
+
+template <typename T1>
+typename std::vector<T1>::const_reverse_iterator f117(const std::vector<T1> &o) {
+  return o.rend();
+}
+
+template <typename T1>
+typename std::vector<T1>::const_reverse_iterator
+f118(const std::vector<T1> &o) {
+  return o.crbegin();
+}
+
+template <typename T1>
+typename std::vector<T1>::const_reverse_iterator
+f119(const std::vector<T1> &o) {
+  return o.crend();
+}
+
+template <typename T1>
+typename std::vector<T1>::reference
+f120(typename std::vector<T1>::reverse_iterator it) {
+  return it.operator*();
+}
+
+template <typename T1>
+typename std::vector<T1>::reverse_iterator &
+f121(typename std::vector<T1>::reverse_iterator &it) {
+  return it.operator++();
+}
+
+template <typename T1>
+typename std::vector<T1>::reverse_iterator
+f122(typename std::vector<T1>::reverse_iterator a0, int a1) {
+  return a0.operator++(a1);
+}
+
+template <typename T1>
+typename std::vector<T1>::reverse_iterator &
+f123(typename std::vector<T1>::reverse_iterator &it) {
+  return it.operator--();
+}
+
+template <typename T1>
+bool f124(const typename std::vector<T1>::reverse_iterator &it1,
+          const typename std::vector<T1>::reverse_iterator &it2) {
+  return operator==(it1, it2);
+}
+
+template <typename T1>
+bool f125(const typename std::vector<T1>::reverse_iterator &it1,
+          const typename std::vector<T1>::reverse_iterator &it2) {
+  return operator!=(it1, it2);
+}
+
+template <typename T1>
+typename std::vector<T1>::iterator
+f126(const typename std::vector<T1>::reverse_iterator &it) {
+  return it.base();
+}

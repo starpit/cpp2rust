@@ -365,3 +365,88 @@ fn f105<T1: Clone + ByteRepr>(a0: Ptr<Vec<T1>>, a1: Vec<T1>) {
 fn f111<T1: ByteRepr + Clone>(a0: Ptr<Vec<Value<Vec<T1>>>>, a1: &mut Vec<Value<Vec<T1>>>) {
     a0.write(std::mem::take(&mut *a1))
 }
+
+fn f112<T1: PartialEq>(a0: Vec<Value<T1>>, a1: Vec<Value<T1>>) -> bool {
+    a0 == a1
+}
+
+fn f113<T1: PartialEq>(a0: Vec<Value<T1>>, a1: Vec<Value<T1>>) -> bool {
+    a0 != a1
+}
+
+// ---------------------------------------------------------------------------
+// Reverse iterators. See the header comment on the matching rules in src.cpp:
+// a reverse iterator is the Ptr<T> to the element it dereferences to and it
+// walks BACKWARDS, so rbegin() is offset len-1, rend() is offset -1,
+// operator++ decrements and operator-- increments.
+//
+// Ptr<T>::offset is a usize, so "one before the first element" is the wrapped
+// offset; `to_end().offset(-(len + 1))` produces exactly the value that
+// PrefixDec leaves behind when the walk steps off the front (both go through
+// wrapping_sub of one elem_step), so `it != v.rend()` terminates. Building it
+// off to_end() rather than off a0 keeps it correct whatever offset a0 carries,
+// and makes the empty-container case (rbegin() == rend()) fall out for free.
+// ---------------------------------------------------------------------------
+
+fn t8<T1>() -> Ptr<T1> {
+    Ptr::null()
+}
+
+fn t9<T1>() -> Ptr<T1> {
+    Ptr::null()
+}
+
+fn f114<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0.to_end().offset(-1_isize)
+}
+
+fn f115<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    let __len = a0.len() as isize;
+    a0.to_end().offset(-(__len + 1))
+}
+
+fn f116<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0.to_end().offset(-1_isize)
+}
+
+fn f117<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    let __len = a0.len() as isize;
+    a0.to_end().offset(-(__len + 1))
+}
+
+fn f118<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0.to_end().offset(-1_isize)
+}
+
+fn f119<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    let __len = a0.len() as isize;
+    a0.to_end().offset(-(__len + 1))
+}
+
+fn f120<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0
+}
+
+fn f121<T1>(a0: &mut Ptr<T1>) -> Ptr<T1> {
+    a0.prefix_dec()
+}
+
+fn f122<T1>(a0: &mut Ptr<T1>) -> Ptr<T1> {
+    a0.postfix_dec()
+}
+
+fn f123<T1>(a0: &mut Ptr<T1>) -> Ptr<T1> {
+    a0.prefix_inc()
+}
+
+fn f124<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
+    a0 == a1
+}
+
+fn f125<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
+    a0 != a1
+}
+
+fn f126<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0.offset(1_isize)
+}

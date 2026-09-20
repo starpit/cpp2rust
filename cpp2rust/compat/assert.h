@@ -11,4 +11,11 @@
 
 void cpp2rust_assert_fail(bool condition) __attribute__((noreturn));
 
+#ifdef __cplusplus
+// assert() contextually converts its operand, so a plain bool parameter
+// rejects types with an *explicit* operator bool (mlir::Value, llvm::Error,
+// iterators, ...). Convert explicitly to match the real assert().
+#define assert(expr) cpp2rust_assert_fail(static_cast<bool>(expr))
+#else
 #define assert(expr) cpp2rust_assert_fail(expr)
+#endif

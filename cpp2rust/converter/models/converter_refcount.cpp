@@ -15,6 +15,7 @@
 #include "converter/converter_lib.h"
 #include "converter/lex.h"
 #include "converter/mapper.h"
+#include "survey.h"
 
 namespace cpp2rust {
 ConverterRefCount::ConverterRefCount(std::string &rs_code,
@@ -40,7 +41,12 @@ static bool IsBoxedType(std::string_view type) {
 }
 
 static bool IsBoxedType(clang::QualType type) {
-  return IsBoxedType(Mapper::Map(type.getUnqualifiedType()));
+  auto mapped = Mapper::Map(type.getUnqualifiedType());
+  if (getenv("CPP2RUST_DEBUG_BOXED")) {
+    llvm::errs() << "BOXED? '" << Mapper::ToString(type.getUnqualifiedType())
+                 << "' -> '" << mapped << "'\n";
+  }
+  return IsBoxedType(mapped);
 }
 
 static bool NeedsMutAccess(const clang::CXXMethodDecl *method,
@@ -74,6 +80,9 @@ bool ConverterRefCount::PendingDeref::compute_inner_boxed(clang::Expr *expr) {
 
 void ConverterRefCount::PendingDeref::set(std::string str, bool fresh,
                                           clang::Expr *expr) {
+  if (!empty() && getenv("CPP2RUST_DEBUG_DEREF")) {
+    llvm::errs() << "DEREF-STACK held='" << value << "' new='" << str << "'\n";
+  }
   assert_consumed();
   set_unchecked(std::move(str), fresh, expr);
 }
@@ -530,6 +539,13 @@ void ConverterRefCount::AddDefaultTrait(const clang::RecordDecl *decl) {
 
 void ConverterRefCount::AddDefaultTraitForUnion(const clang::RecordDecl *decl) {
   auto name = GetRecordName(decl);
+  // getASTRecordLayout() requires a complete definition; asking for the
+  // layout of an opaque union is a crash inside clang, not a diagnostic.
+  if ((!decl->isCompleteDefinition() || decl->isDependentContext()) &&
+      ReportUnsupported("UnlayoutableRecord", name, decl->getLocation(),
+                        ctx_)) {
+    return;
+  }
   StrCat("impl Default for", name);
   PushBrace impl_brace(*this);
   StrCat("fn default() -> Self");
@@ -572,6 +588,16 @@ void ConverterRefCount::EmitRustUnion(clang::RecordDecl *decl) {
 
 void ConverterRefCount::AddByteReprTrait(const clang::RecordDecl *decl) {
   auto struct_name = GetRecordName(decl);
+
+  // A dependent template pattern (a class template or a partial
+  // specialization) is a complete definition but has no layout: only its
+  // instantiations do. Every byte-repr query below needs one, so bail before
+  // the first -- asking clang for it is a crash, not a diagnostic.
+  if ((!decl->isCompleteDefinition() || decl->isDependentContext()) &&
+      ReportUnsupported("UnlayoutableRecord", struct_name,
+                        decl->getLocation(), ctx_)) {
+    return;
+  }
 
   if (!TypeImplementsByteRepr(ctx_.getCanonicalTagType(decl))) {
     StrCat(std::format("impl ByteRepr for {}", struct_name));
@@ -668,7 +694,7 @@ void ConverterRefCount::EmitFunctionPreamble(clang::FunctionDecl *decl) {
       auto type = ToString(param->getType());
       auto init = name;
 
-      if (param->hasDefaultArg()) {
+      if (param->hasDefaultArg() && !param->hasUninstantiatedDefaultArg()) {
         init = std::format("{}.unwrap_or({})", name,
                            ToString(param->getDefaultArg()));
       }
@@ -833,8 +859,24 @@ bool ConverterRefCount::VisitDeclRefExpr(clang::DeclRefExpr *expr) {
     }
   }
 
-  auto str = ConvertDeclRefExpr(expr);
   auto decl = expr->getDecl();
+
+  // A structured binding is not a variable: clang gives each name an
+  // expression reading it out of the holding object (a member access, or a
+  // get<I> call for tuple-likes). Convert that instead of the name.
+  if (auto *binding = llvm::dyn_cast<clang::BindingDecl>(decl)) {
+    // A map-loop binding was emitted as a real local off the iterator, so it
+    // falls through and is treated like any other Value<T>. Every other kind
+    // reads out of the holding object clang built for it.
+    if (!map_binding_decls_.contains(binding)) {
+      if (auto *bound = binding->getBinding()) {
+        Convert(bound);
+        return false;
+      }
+    }
+  }
+
+  auto str = ConvertDeclRefExpr(expr);
 
   if (auto fn_decl = clang::dyn_cast<clang::FunctionDecl>(decl)) {
     if (isAddrOf()) {
@@ -890,6 +932,14 @@ bool ConverterRefCount::VisitDeclRefExpr(clang::DeclRefExpr *expr) {
         StrCat(str);
       } else {
         if (isLValue()) {
+          // A reference to a boxed container is ALREADY a Ptr<..>, so there
+          // is nothing to deref later -- stashing it leaves a pending deref
+          // no one consumes. Emit it as the pointer it is.
+          if (IsBoxedType(ref->getPointeeType())) {
+            StrCat(str);
+            computed_expr_type_ = ComputedExprType::FreshPointer;
+            return false;
+          }
           pending_deref_.set(str, /*fresh=*/false);
           return false;
         }
@@ -1044,6 +1094,9 @@ static std::vector<const char *> printf2fmt(std::string &format) {
           }
         }
       }
+    }
+    if (ReportUnsupported("PrintfFormat", format)) {
+      break;
     }
     llvm::errs() << "Unknown printf format: " << format << '\n';
     assert(0);
@@ -1378,6 +1431,8 @@ bool ConverterRefCount::VisitFunctionPointerCast(
       auto fn_type = ConvertFunctionPointerType(target_proto);
       StrCat(std::format("{}.cast_fn::<{}>().expect(\"ub:wrong fn type\")",
                          ToString(expr->getSubExpr()), fn_type));
+    } else if (ReportUnsupported("FunctionPointerCast", "unhandled cast")) {
+      StrCat(UnsupportedPlaceholder("FunctionPointerCast", "unhandled cast"));
     } else {
       assert(0 && "Unhandled function pointer cast");
     }
@@ -1842,11 +1897,40 @@ bool ConverterRefCount::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
          ConvertObject(stmt->getRangeInit()), ')');
   PushBrace brace(*this);
 
-  EmitByValueShadow(
-      loop_var_name, loop_var->getType(), std::string(loop_var_name),
-      "Value<" + Mapper::Map(GetForRangeIteratorType(stmt)) + '>');
+  // A set yields its ELEMENT, not a key/value pair, so the loop variable is
+  // the element cell rather than the iterator.
+  auto range_class = GetClassName(stmt->getRangeInit()->getType());
+  const bool is_set =
+      range_class == "std::set" || range_class == "std::unordered_set";
+  if (is_set) {
+    StrCat(keyword::kLet, loop_var_name, token::kAssign,
+           loop_var_name + ".second().as_pointer()", token::kSemiColon);
+  } else {
+    EmitByValueShadow(
+        loop_var_name, loop_var->getType(), std::string(loop_var_name),
+        "Value<" + Mapper::Map(GetForRangeIteratorType(stmt)) + '>');
+  }
 
-  ConvertForRangeBody(stmt, loop_var);
+  // `for (auto &[k, v] : map)`. The loop variable is the iterator, not a
+  // pair, so the two names come off the iterator rather than out of a
+  // holding object the way an ordinary structured binding does.
+  if (auto *decomp = llvm::dyn_cast<clang::DecompositionDecl>(loop_var)) {
+    auto bindings = decomp->bindings();
+    if (bindings.size() == 2) {
+      static constexpr const char *kAccessor[] = {".first()", ".second()"};
+      for (unsigned i = 0; i < 2; ++i) {
+        StrCat(keyword::kLet, GetNamedDeclAsString(bindings[i]),
+               token::kAssign, loop_var_name + kAccessor[i],
+               token::kSemiColon);
+        map_binding_decls_.insert(bindings[i]);
+      }
+    }
+  }
+
+  // For a set the loop variable has been rebound to the element pointer, so
+  // it must NOT be treated as a map iterator -- uses of it are ordinary
+  // reads through a reference and need the usual deref.
+  ConvertForRangeBody(stmt, is_set ? nullptr : loop_var);
 
   return false;
 }
@@ -2660,11 +2744,19 @@ std::string ConverterRefCount::ConvertMappedMethodCall(
                        ConvertIRFragment(mc.body, expr, args, num_args, ctx));
   }
 
-  ConvertIRFragment(mc.receiver, expr, args, num_args, ctx);
-  assert(!pending_deref_.empty());
+  auto receiver = ConvertIRFragment(mc.receiver, expr, args, num_args, ctx);
 
-  bool is_boxed = pending_deref_.is_boxed();
-  auto ptr = pending_deref_.take();
+  // The receiver usually stashes itself as a pending deref for us to take.
+  // It does not when it already emitted a pointer directly -- a reference to
+  // a boxed container does that -- in which case its own text IS the pointer.
+  bool is_boxed = false;
+  std::string ptr;
+  if (pending_deref_.empty()) {
+    ptr = std::move(receiver);
+  } else {
+    is_boxed = pending_deref_.is_boxed();
+    ptr = pending_deref_.take();
+  }
   auto body = ConvertIRFragment(mc.body, expr, args, num_args, ctx);
   SetFreshType(expr->getType());
 

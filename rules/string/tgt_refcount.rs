@@ -190,3 +190,120 @@ fn f29(a0: Ptr<Vec<u8>>, a1: Vec<u8>) {
 fn f30(a0: Ptr<Vec<u8>>, a1: &mut Vec<u8>) {
     a0.write(std::mem::take(&mut *a1))
 }
+
+// operator+(const std::string&, const std::string&)
+fn f31(a0: Vec<u8>, a1: Vec<u8>) -> Vec<u8> {
+    let mut r = a0;
+    r.pop();
+    r.extend(a1.iter().copied().take_while(|&c| c != 0));
+    r.push(0);
+    r
+}
+
+// operator+(std::string&&, std::string&&)
+fn f32(a0: Vec<u8>, a1: Vec<u8>) -> Vec<u8> {
+    let mut r = a0;
+    r.pop();
+    r.extend(a1.iter().copied().take_while(|&c| c != 0));
+    r.push(0);
+    r
+}
+
+// operator+(std::string&&, char)
+fn f33(a0: Vec<u8>, a1: u8) -> Vec<u8> {
+    let mut r = a0;
+    r.pop();
+    r.push(a1);
+    r.push(0);
+    r
+}
+
+// operator+(const std::string&, char)
+fn f34(a0: Vec<u8>, a1: u8) -> Vec<u8> {
+    let mut r = a0;
+    r.pop();
+    r.push(a1);
+    r.push(0);
+    r
+}
+
+// std::string::operator+=(const std::string&)
+fn f35(a0: Ptr<Vec<u8>>, a1: Vec<u8>) {
+    a0.with_mut(|__v: &mut Vec<u8>| {
+        __v.pop();
+        __v.extend(a1.iter().copied().take_while(|&c| c != 0));
+        __v.push(0);
+    });
+}
+
+// std::string::operator+=(const char*)
+fn f36(a0: Ptr<Vec<u8>>, a1: Ptr<u8>) {
+    a0.with_mut(|__v: &mut Vec<u8>| {
+        __v.pop();
+        __v.extend(a1.to_c_string_iterator());
+        __v.push(0);
+    });
+}
+
+// std::string::operator+=(char)
+fn f37(a0: Ptr<Vec<u8>>, a1: u8) {
+    a0.with_mut(|__v: &mut Vec<u8>| {
+        __v.pop();
+        __v.push(a1);
+        __v.push(0);
+    });
+}
+
+// operator+(const char*, const std::string&)
+fn f38(a0: Ptr<u8>, a1: Vec<u8>) -> Vec<u8> {
+    let mut r: Vec<u8> = a0.to_c_string_iterator().collect();
+    r.extend(a1.iter().copied().take_while(|&c| c != 0));
+    r.push(0);
+    r
+}
+
+// operator+(const char*, std::string&&)
+fn f39(a0: Ptr<u8>, a1: Vec<u8>) -> Vec<u8> {
+    let mut r: Vec<u8> = a0.to_c_string_iterator().collect();
+    r.extend(a1.iter().copied().take_while(|&c| c != 0));
+    r.push(0);
+    r
+}
+
+// operator+(std::string&&, const std::string&)
+fn f40(a0: Vec<u8>, a1: Vec<u8>) -> Vec<u8> {
+    let mut r = a0;
+    r.pop();
+    r.extend(a1.iter().copied().take_while(|&c| c != 0));
+    r.push(0);
+    r
+}
+
+// operator+(const std::string&, std::string&&)
+fn f41(a0: Vec<u8>, a1: Vec<u8>) -> Vec<u8> {
+    let mut r = a0;
+    r.pop();
+    r.extend(a1.iter().copied().take_while(|&c| c != 0));
+    r.push(0);
+    r
+}
+
+fn f42(a0: Vec<u8>, a1: Vec<u8>) -> bool {
+    a0 == a1
+}
+
+fn f43(a0: Vec<u8>, a1: Vec<u8>) -> bool {
+    a0 != a1
+}
+
+fn f44(a0: Vec<u8>, a1: Ptr<u8>) -> bool {
+    !a0.iter().copied().take_while(|&c| c != 0).eq(a1.to_c_string_iterator())
+}
+
+fn f45(a0: Ptr<u8>, a1: Vec<u8>) -> bool {
+    a0.to_c_string_iterator().eq(a1.iter().copied().take_while(|&c| c != 0))
+}
+
+fn f46(a0: Ptr<u8>, a1: Vec<u8>) -> bool {
+    !a0.to_c_string_iterator().eq(a1.iter().copied().take_while(|&c| c != 0))
+}

@@ -21,6 +21,7 @@
 #include "converter/converter_lib.h"
 #include "converter/lex.h"
 #include "converter/mapper.h"
+#include "survey.h"
 
 namespace cpp2rust {
 std::unordered_map<std::string, std::string> Converter::inner_structs_;
@@ -198,11 +199,16 @@ bool Converter::VisitBuiltinType(clang::BuiltinType *type) {
   case clang::BuiltinType::NullPtr:
     Convert(ctx_.VoidPtrTy);
     break;
-  default:
-    llvm::errs() << "unsupported builtin type: "
-                 << type->getName(ctx_.getPrintingPolicy()) << '\n';
+  default: {
+    auto name = type->getName(ctx_.getPrintingPolicy());
+    if (ReportUnsupported("BuiltinType", name)) {
+      StrCat(UnsupportedPlaceholder("BuiltinType", name));
+      break;
+    }
+    llvm::errs() << "unsupported builtin type: " << name << '\n';
     assert(0 && "unsupported builtin type\n");
     break;
+  }
   }
   return false;
 }
@@ -212,11 +218,25 @@ bool Converter::VisitRecordType(clang::RecordType *type) {
   if (auto lambda = clang::dyn_cast<clang::CXXRecordDecl>(decl)) {
     if (lambda->isLambda()) {
       if (in_function_formals_) {
-        StrCat(
-            ConvertFunctionPointerType(lambda->getLambdaCallOperator()
-                                           ->getType()
-                                           ->getAs<clang::FunctionProtoType>(),
-                                       FnProtoType::LambdaCallOperator));
+        // A GENERIC lambda's call operator is a template: its `auto` params
+        // and deduced return are dependent and render empty, producing
+        // `impl Fn(Ptr< > ,) ->  `, which is not Rust. Use the instantiation
+        // the program actually uses, as VisitLambdaExpr does.
+        const clang::FunctionDecl *call_op = lambda->getLambdaCallOperator();
+        if (auto *tmpl = call_op->getDescribedFunctionTemplate()) {
+          const clang::FunctionDecl *only = nullptr;
+          unsigned count = 0;
+          for (auto *spec : tmpl->specializations()) {
+            ++count;
+            only = spec;
+          }
+          if (count == 1) {
+            call_op = only;
+          }
+        }
+        StrCat(ConvertFunctionPointerType(
+            call_op->getType()->getAs<clang::FunctionProtoType>(),
+            FnProtoType::LambdaCallOperator));
       } else {
         StrCat('_');
       }
@@ -332,7 +352,12 @@ Converter::ConvertFunctionPointerType(const clang::FunctionProtoType *proto,
   }
   result += ')';
   if (!proto->getReturnType()->isVoidType()) {
-    result += std::format(" -> {}", ToString(proto->getReturnType()));
+    // A dependent (deduced, uninstantiated) return type renders empty; a bare
+    // `->` with nothing after it does not parse, and no return clause is the
+    // right reading anyway.
+    if (auto ret = ToString(proto->getReturnType()); !ret.empty()) {
+      result += std::format(" -> {}", ret);
+    }
   }
   return result;
 }
@@ -373,15 +398,36 @@ bool Converter::VisitUsingType(clang::UsingType *type) {
 bool Converter::Convert(clang::Decl *decl) { return TraverseDecl(decl); }
 
 bool Converter::VisitTranslationUnitDecl(clang::TranslationUnitDecl *decl) {
+  // Register every project type before converting any body: rules are
+  // otherwise added only as the walk reaches each decl, so a function
+  // converted ahead of a type's declaration could not map it.
+  Mapper::PreRegisterUserDefinedTypes(decl);
+
+  const bool dbg = getenv("CPP2RUST_DEBUG_TU") != nullptr;
+  size_t total = 0, user = 0, converted = 0;
   for (auto *child : decl->decls()) {
+    ++total;
+    if (IsUserDefinedDecl(child)) {
+      ++user;
+    } else if (dbg) {
+      llvm::errs() << "SKIP(not-user) " << child->getDeclKindName() << " @ "
+                   << child->getLocation().printToString(
+                          ctx_.getSourceManager())
+                   << '\n';
+    }
     if (IsUserDefinedDecl(child) &&
         (IsInMainFile(child) || !decl_ids_.contains(GetID(child)))) {
+      ++converted;
       Convert(child);
       if (!hoisted_records_.empty()) {
         StrCat(hoisted_records_);
         hoisted_records_.clear();
       }
     }
+  }
+  if (dbg) {
+    llvm::errs() << "TU children: total=" << total << " user=" << user
+                 << " converted=" << converted << '\n';
   }
   return false;
 }
@@ -544,7 +590,8 @@ bool Converter::ConvertVarDeclSkipInit(clang::VarDecl *decl) {
 
   bool is_parm_with_default_value = false;
   if (auto parm = clang::dyn_cast<clang::ParmVarDecl>(decl)) {
-    is_parm_with_default_value = parm->hasDefaultArg();
+    is_parm_with_default_value =
+        parm->hasDefaultArg() && !parm->hasUninstantiatedDefaultArg();
   }
 
   if (is_parm_with_default_value) {
@@ -996,7 +1043,8 @@ bool Converter::VisitCXXRecordDecl(clang::CXXRecordDecl *decl) {
       return false;
     }
     EmitRustStructOrUnion(decl);
-  } else {
+  } else if (!ReportUnsupported("RecordKind", GetRecordName(decl),
+                                decl->getLocation(), ctx_)) {
     // FIXME: improve error handling
     assert(0 && "unsupported record kind");
   }
@@ -1044,6 +1092,12 @@ void Converter::DefineImplicitMembers(clang::CXXRecordDecl *decl) {
 
 bool Converter::VisitCXXMethodDecl(clang::CXXMethodDecl *decl) {
   decl->dump(log());
+  // Same reason as IsConvertibleFunctionDecl: the body of an uninstantiated
+  // template is dependent, and a generic lambda's operator() is one of these.
+  // A call in it has no resolved callee to read a prototype off.
+  if (decl->isTemplated()) {
+    return false;
+  }
   if (!ShouldConvertMethod(decl)) {
     return false;
   }
@@ -1218,7 +1272,9 @@ void Converter::EmitFunctionPreamble(clang::FunctionDecl *decl) {
   auto params = decl->getDefinition() ? decl->getDefinition()->parameters()
                                       : decl->parameters();
   for (auto *param : params) {
-    if (param->hasDefaultArg()) {
+    // hasDefaultArg() is true for a default clang has not instantiated yet
+    // (a template's), and getDefaultArg() asserts on those. Nothing to emit.
+    if (param->hasDefaultArg() && !param->hasUninstantiatedDefaultArg()) {
       auto name = GetNamedDeclAsString(param);
       auto type = ToString(param->getType());
       auto init = std::format("{}.unwrap_or({})", name,
@@ -1454,7 +1510,13 @@ bool Converter::VisitCXXForRangeStmt(clang::CXXForRangeStmt *stmt) {
 
   log() << "GetClassName: " << GetClassName(range_init_type) << '\n';
 
-  if (GetClassName(range_init_type) == "std::map") {
+  // Every node-based associative container iterates through the same
+  // MapIter runtime type, so they all take the map path. Without this they
+  // fall through to the vector path, which types the loop variable as the
+  // container and emits code that does not compile.
+  if (auto name = GetClassName(range_init_type);
+      name == "std::map" || name == "std::set" ||
+      name == "std::unordered_map" || name == "std::unordered_set") {
     return VisitCXXForRangeStmtMap(stmt);
   }
   if (GetClassName(range_init_type) == "std::basic_string") {
@@ -1908,13 +1970,32 @@ Converter::CallInfo Converter::CollectCallInfo(clang::CallExpr *expr) {
       proto = ptr_ty->getPointeeType()->getAs<clang::FunctionProtoType>();
     }
   }
-  assert((function || proto) &&
-         "Either function decl or function prototype should be known");
+  if (!function && !proto) {
+    // No prototype to read parameter types off: treat every argument as
+    // variadic so the survey can carry on past the call and still record
+    // what the callee actually was.
+    if (curr_function_ && getenv("CPP2RUST_DEBUG_CALL")) {
+      llvm::errs() << "UNPROTOTYPED in '"
+                   << curr_function_->getQualifiedNameAsString() << "' ("
+                   << curr_function_->getLocation().printToString(
+                          ctx_.getSourceManager())
+                   << ") templated=" << curr_function_->isTemplated()
+                   << " descTmpl="
+                   << (curr_function_->getDescribedFunctionTemplate() != nullptr)
+                   << " callee=" << callee->getType().getAsString() << '\n';
+    }
+    if (!ReportUnsupported("UnprototypedCallee",
+                           callee->getType().getAsString(), expr->getExprLoc(),
+                           ctx_)) {
+      assert(0 && "Either function decl or function prototype should be known");
+    }
+  }
 
   unsigned num_args = expr->getNumArgs() - arg_begin;
   unsigned num_named_params =
-      function ? function->getNumParams() : proto->getNumParams();
-  info.is_variadic = function ? function->isVariadic() : proto->isVariadic();
+      function ? function->getNumParams() : (proto ? proto->getNumParams() : 0);
+  info.is_variadic =
+      function ? function->isVariadic() : (proto ? proto->isVariadic() : true);
   info.is_fn_ptr_call = !function;
   info.is_libc_passthrough = Mapper::IsLibcPassthrough(GetCalleeOrExpr(expr));
 
@@ -1927,7 +2008,10 @@ Converter::CallInfo Converter::CollectCallInfo(clang::CallExpr *expr) {
         .param_type = function ? function->getParamDecl(i)->getType()
                                : proto->getParamType(i),
         .expr = arg,
-        .has_default = function && function->getParamDecl(i)->hasDefaultArg(),
+        .has_default = function &&
+                       function->getParamDecl(i)->hasDefaultArg() &&
+                       !function->getParamDecl(i)
+                            ->hasUninstantiatedDefaultArg(),
         .kind = (IsLiteral(arg) || info.is_libc_passthrough) ? Kind::Inline
                                                              : Kind::Hoisted,
     };
@@ -2462,6 +2546,11 @@ bool Converter::VisitImplicitCastExpr(clang::ImplicitCastExpr *expr) {
   }
   case clang::CastKind::CK_ConstructorConversion:
   case clang::CastKind::CK_DerivedToBase:
+  // Clang uses DerivedToBase when binding to a free operator's reference
+  // parameter and UncheckedDerivedToBase for a MEMBER operator's implicit
+  // object argument. Both are a no-op in Rust; without this the latter fell
+  // to the default arm and emitted a bogus `as <BaseType>` cast.
+  case clang::CastKind::CK_UncheckedDerivedToBase:
     Convert(sub_expr);
     break;
   case clang::CastKind::CK_IntegralToBoolean:
@@ -2955,8 +3044,19 @@ std::string Converter::ConvertDeclRefExpr(clang::DeclRefExpr *expr) {
 }
 
 bool Converter::VisitDeclRefExpr(clang::DeclRefExpr *expr) {
-  auto str = ConvertDeclRefExpr(expr);
   auto decl = expr->getDecl();
+
+  // A structured binding is not a variable: clang gives each name an
+  // expression reading it out of the holding object (a member access, or a
+  // get<I> call for tuple-likes). Convert that instead of the name.
+  if (auto *binding = llvm::dyn_cast<clang::BindingDecl>(decl)) {
+    if (auto *bound = binding->getBinding()) {
+      Convert(bound);
+      return false;
+    }
+  }
+
+  auto str = ConvertDeclRefExpr(expr);
 
   if (decl->getType()->getAs<clang::ReferenceType>() && !isAddrOf() &&
       !map_iter_decls_.contains(clang::dyn_cast<clang::VarDecl>(decl))) {
@@ -3078,11 +3178,18 @@ bool Converter::ConvertCXXOperatorCallExpr(clang::CXXOperatorCallExpr *expr) {
     }
     computed_expr_type_ = ComputedExprType::FreshValue;
     break;
-  default:
+  default: {
+    const char *spelling = clang::getOperatorSpelling(expr->getOperator());
+    if (ReportUnsupported("CXXOperatorCallExpr", spelling,
+                          expr->getExprLoc(), ctx_)) {
+      StrCat(UnsupportedPlaceholder("CXXOperatorCallExpr", spelling));
+      computed_expr_type_ = ComputedExprType::FreshValue;
+      break;
+    }
     // FIXME: improve error handling
-    llvm::errs() << "unsupported CXXOperatorCallExpr: "
-                 << clang::getOperatorSpelling(expr->getOperator()) << '\n';
+    llvm::errs() << "unsupported CXXOperatorCallExpr: " << spelling << '\n';
     assert(0);
+  }
   }
   return false;
 }
@@ -3500,7 +3607,8 @@ void Converter::ConvertCXXConstructExprArgs(clang::CXXConstructExpr *expr) {
   for (unsigned param_idx = 0; param_idx < ctor->getNumParams(); ++param_idx) {
     auto param = ctor->getParamDecl(param_idx);
     auto param_type = param->getType();
-    bool has_default = param->hasDefaultArg();
+    bool has_default =
+        param->hasDefaultArg() && !param->hasUninstantiatedDefaultArg();
 
     if (arg_idx < expr->getNumArgs() &&
         clang::isa<clang::CXXDefaultArgExpr>(expr->getArg(arg_idx))) {
@@ -3634,11 +3742,15 @@ bool Converter::VisitOffsetOfExpr(clang::OffsetOfExpr *expr) {
 
 bool Converter::VisitEnumDecl(clang::EnumDecl *decl) {
   ENSURE(decl_ids_.insert(GetID(decl)).second);
-  if (Mapper::Contains(ctx_.getCanonicalTagType(decl))) {
+  if (!Mapper::Contains(ctx_.getCanonicalTagType(decl))) {
+    Mapper::AddRuleForUserDefinedType(decl);
+  }
+  auto name = GetRecordName(decl);
+  // Having a rule no longer implies having been emitted -- the rules are now
+  // pre-registered -- so track emission on its own.
+  if (!decl->isCompleteDefinition() || !record_decls_.MarkDefined(name)) {
     return false;
   }
-  Mapper::AddRuleForUserDefinedType(decl);
-  auto name = GetRecordName(decl);
   StrCat(std::format("pub type {} = {};", name,
                      GetUnsafeTypeAsString(decl->getIntegerType())));
   for (auto e : decl->enumerators()) {
@@ -3672,19 +3784,49 @@ bool Converter::VisitConstantExpr(clang::ConstantExpr *expr) {
 }
 
 bool Converter::VisitLambdaExpr(clang::LambdaExpr *expr) {
+  clang::CXXMethodDecl *call_op =
+      expr->getLambdaClass()->getLambdaCallOperator();
+
+  // A generic lambda's call operator is a function template: its parameters
+  // are `auto` and its body is dependent, so nothing in it has a resolved
+  // callee. A Rust closure has one concrete signature, so translate the
+  // instantiation the program actually uses.
+  if (auto *tmpl = call_op->getDescribedFunctionTemplate()) {
+    clang::FunctionDecl *only = nullptr;
+    unsigned count = 0;
+    for (auto *spec : tmpl->specializations()) {
+      if (spec->hasBody()) {
+        ++count;
+        only = spec;
+      }
+    }
+    if (count == 1) {
+      call_op = llvm::cast<clang::CXXMethodDecl>(only);
+    } else {
+      const char *why = count == 0 ? "never instantiated"
+                                   : "instantiated at several types";
+      if (ReportUnsupported("GenericLambda", why, expr->getExprLoc(), ctx_)) {
+        StrCat(UnsupportedPlaceholder("GenericLambda", why));
+        computed_expr_type_ = ComputedExprType::FreshValue;
+        return false;
+      }
+      llvm::errs() << "unsupported generic lambda: " << why << '\n';
+      assert(0 && "generic lambda");
+    }
+  }
+
   if (isAddrOf() && expr->capture_size() == 0) {
     StrCat("Some");
   }
   PushParen paren(*this);
   StrCat('|');
-  for (auto p : expr->getLambdaClass()->getLambdaCallOperator()->parameters()) {
+  for (auto p : call_op->parameters()) {
     StrCat(GetNamedDeclAsString(p), token::kColon, ToString(p->getType()),
            token::kComma);
   }
   StrCat("| {");
-  EmitFunctionPreamble(expr->getLambdaClass()->getLambdaCallOperator());
-  PushCurrFunction push_fn(*this,
-                           expr->getLambdaClass()->getLambdaCallOperator());
+  EmitFunctionPreamble(call_op);
+  PushCurrFunction push_fn(*this, call_op);
   ConvertFunctionBody(curr_function_);
   StrCat('}');
   return false;
@@ -3860,7 +4002,12 @@ std::string Converter::GetArrayDefaultAsString(clang::QualType qual_type) {
           clang::dyn_cast<clang::IncompleteArrayType>(qual_type)) {
     return GetDefaultAsString(array_type->getElementType());
   }
-  if (Mapper::ToString(qual_type).contains("std::array")) {
+  // Must BE a std::array, not merely mention one: a substring test also
+  // matches std::map<std::string, std::array<unsigned, N>>, whose second
+  // template argument is a type rather than the array's extent.
+  const auto *array_record =
+      qual_type.getNonReferenceType()->getAsCXXRecordDecl();
+  if (array_record && array_record->getName() == "array") {
     assert(GetTemplateArgs(qual_type).has_value());
     auto template_args = *GetTemplateArgs(qual_type);
     assert(template_args.size() == 2);
@@ -3880,7 +4027,14 @@ std::string Converter::GetArrayDefaultAsString(clang::QualType qual_type) {
       break;
     }
     default:
-      assert(0 && "Unsupported array size kind");
+      if (getenv("CPP2RUST_DEBUG_ARRAY")) {
+        llvm::errs() << "ARRAY-KIND type='" << Mapper::ToString(qual_type)
+                     << "' kind=" << static_cast<int>(array_size.getKind())
+                     << " nargs=" << template_args.size() << '\n';
+      }
+      if (!ReportUnsupported("ArraySizeKind", "non-integral array size")) {
+        assert(0 && "Unsupported array size kind");
+      }
       break;
     }
     return std::format(
@@ -4044,8 +4198,12 @@ Converter::GetOverloadedFunctionName(const clang::FunctionDecl *decl) {
   ReplaceAll(name, ";", "_");
   name.erase(std::remove_if(name.begin(), name.end(),
                             [](char c) {
+                              // ',' matters for a multi-argument template:
+                              // BTreeMap<i32, Value<i32>> otherwise leaves a
+                              // comma in what becomes a Rust identifier.
                               return c == '<' || c == '>' || c == ' ' ||
-                                     c == ':';
+                                     c == ':' || c == ',' || c == '(' ||
+                                     c == ')';
                             }),
              name.end());
   std::replace(name.begin(), name.end(), '*', 'p');
@@ -4315,7 +4473,12 @@ pub fn main() {{
 }
 
 void Converter::ConvertAbstractClass(clang::CXXRecordDecl *decl) {
-  ENSURE(abstract_structs_.insert(GetID(decl)).second);
+  // Emit the trait once. Reaching the same abstract class twice is not a
+  // defect -- a redeclaration or a second route into the record does it --
+  // but emitting its trait twice would not compile.
+  if (!abstract_structs_.insert(GetID(decl)).second) {
+    return;
+  }
   auto trait_name = GetRecordName(decl);
   auto access_specifier_as_string = AccessSpecifierAsString(decl->getAccess());
   auto signature = std::format("{} {} trait {}", access_specifier_as_string,
@@ -4556,6 +4719,13 @@ void Converter::ConvertUnsignedArithBinaryOperator(clang::BinaryOperator *op,
     StrCat("wrapping_rem");
     break;
   default:
+    if (ReportUnsupported("UnsignedBinaryOperator",
+                          clang::BinaryOperator::getOpcodeStr(opcode),
+                          op->getExprLoc(), ctx_)) {
+      StrCat(UnsupportedPlaceholder("UnsignedBinaryOperator",
+                                    clang::BinaryOperator::getOpcodeStr(opcode)));
+      break;
+    }
     // FIXME: improve error handling
     llvm::errs() << "unsupported unsigned binary operator: " << opcode << '\n';
     op->dump();

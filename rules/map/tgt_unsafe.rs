@@ -114,3 +114,32 @@ unsafe fn f25<T1, T2>(a0: &mut BTreeMap<T1, Box<T2>>, a1: &mut BTreeMap<T1, Box<
 unsafe fn f26<T1: Clone, T2: Clone>(a0: &mut BTreeMap<T1, Box<T2>>, a1: BTreeMap<T1, Box<T2>>) {
     *a0 = a1.clone()
 }
+
+unsafe fn f27<T1: PartialEq, T2: PartialEq>(
+    a0: UnsafeMapIterator<T1, T2>,
+    a1: UnsafeMapIterator<T1, T2>,
+) -> bool {
+    a0 != a1
+}
+
+unsafe fn f28<T1: Ord + Clone, T2>(
+    a0: &mut UnsafeMapIterator<T1, T2>,
+) -> UnsafeMapIterator<T1, T2> {
+    a0.inc();
+    a0.clone()
+}
+
+unsafe fn f29<T1: Ord + Clone, T2>(
+    a0: &mut UnsafeMapIterator<T1, T2>,
+) -> UnsafeMapIterator<T1, T2> {
+    a0.inc();
+    a0.clone()
+}
+
+unsafe fn f30<T1: PartialEq, T2: PartialEq>(a0: BTreeMap<T1, Box<T2>>, a1: BTreeMap<T1, Box<T2>>) -> bool {
+    a0 == a1
+}
+
+unsafe fn f31<T1: PartialEq, T2: PartialEq>(a0: BTreeMap<T1, Box<T2>>, a1: BTreeMap<T1, Box<T2>>) -> bool {
+    a0 != a1
+}

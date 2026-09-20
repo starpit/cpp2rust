@@ -493,3 +493,83 @@ unsafe fn f110<T1: Clone>(a0: Vec<T1>) -> Vec<T1> {
 unsafe fn f111<T1: Clone>(a0: &mut Vec<Vec<T1>>, a1: &mut Vec<Vec<T1>>) {
     *a0 = std::mem::take(&mut *a1)
 }
+
+unsafe fn f112<T1: PartialEq>(a0: Vec<T1>, a1: Vec<T1>) -> bool {
+    a0 == a1
+}
+
+unsafe fn f113<T1: PartialEq>(a0: Vec<T1>, a1: Vec<T1>) -> bool {
+    a0 != a1
+}
+
+// ---------------------------------------------------------------------------
+// Reverse iterators. See the header comment on the matching rules in src.cpp:
+// a reverse iterator is the raw pointer to the element it dereferences to and
+// it walks BACKWARDS, so rbegin() is `base + len - 1`, rend() is `base - 1`,
+// operator++ decrements and operator-- increments.
+//
+// `base - 1` is built with wrapping_sub so it is well defined for an empty
+// Vec (whose as_ptr() is a dangling but aligned address), and it is the same
+// address that UnsafePrefixDec::prefix_dec produces when the walk steps off
+// the front, which is what makes `it != v.rend()` terminate.
+// ---------------------------------------------------------------------------
+
+fn t8<T1>() -> *mut T1 {
+    Default::default()
+}
+
+fn t9<T1>() -> *const T1 {
+    Default::default()
+}
+
+unsafe fn f114<T1>(a0: &mut Vec<T1>) -> *mut T1 {
+    a0.as_mut_ptr().add(a0.len()).wrapping_sub(1)
+}
+
+unsafe fn f115<T1>(a0: &mut Vec<T1>) -> *mut T1 {
+    a0.as_mut_ptr().wrapping_sub(1)
+}
+
+unsafe fn f116<T1>(a0: Vec<T1>) -> *const T1 {
+    a0.as_ptr().add(a0.len()).wrapping_sub(1)
+}
+
+unsafe fn f117<T1>(a0: Vec<T1>) -> *const T1 {
+    a0.as_ptr().wrapping_sub(1)
+}
+
+unsafe fn f118<T1>(a0: Vec<T1>) -> *const T1 {
+    a0.as_ptr().add(a0.len()).wrapping_sub(1)
+}
+
+unsafe fn f119<T1>(a0: Vec<T1>) -> *const T1 {
+    a0.as_ptr().wrapping_sub(1)
+}
+
+unsafe fn f120<T1>(a0: *mut T1) -> *mut T1 {
+    a0
+}
+
+unsafe fn f121<T1>(a0: &mut *mut T1) -> *mut T1 {
+    a0.prefix_dec()
+}
+
+unsafe fn f122<T1>(a0: &mut *mut T1) -> *mut T1 {
+    a0.postfix_dec()
+}
+
+unsafe fn f123<T1>(a0: &mut *mut T1) -> *mut T1 {
+    a0.prefix_inc()
+}
+
+unsafe fn f124<T1>(a0: *const T1, a1: *const T1) -> bool {
+    a0 == a1
+}
+
+unsafe fn f125<T1>(a0: *const T1, a1: *const T1) -> bool {
+    a0 != a1
+}
+
+unsafe fn f126<T1>(a0: *mut T1) -> *mut T1 {
+    a0.wrapping_add(1)
+}

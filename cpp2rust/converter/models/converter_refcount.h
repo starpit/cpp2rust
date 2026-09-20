@@ -190,6 +190,13 @@ public:
   }
   bool Convert(clang::Stmt *stmt) override {
     auto result = Converter::Convert(stmt);
+    if (!pending_deref_.empty() && getenv("CPP2RUST_DEBUG_DEREF")) {
+      llvm::errs() << "PENDING-DEREF at "
+                   << stmt->getBeginLoc().printToString(
+                          ctx_.getSourceManager())
+                   << " stmt=" << stmt->getStmtClassName()
+                   << " held='" << pending_deref_.peek() << "'\n";
+    }
     pending_deref_.assert_consumed();
     return result;
   }
@@ -374,6 +381,7 @@ private:
       return result;
     }
     bool empty() const { return value.empty(); }
+    const std::string &peek() const { return value; }
     bool is_boxed() const { return pointee_is_boxed; }
     bool is_fresh() const { return ptr_is_fresh; }
     void assert_consumed() const {

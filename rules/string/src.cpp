@@ -87,3 +87,43 @@ std::string &f29(std::string &dst, const std::string &src) {
 std::string &f30(std::string &dst, std::string &&src) {
   return dst.operator=(std::move(src));
 }
+
+std::string f31(const std::string &a, const std::string &b) { return a + b; }
+
+std::string f32(std::string &&a, std::string &&b) {
+  return std::move(a) + std::move(b);
+}
+
+std::string f33(std::string &&a, char b) { return std::move(a) + b; }
+
+std::string f34(const std::string &a, char b) { return a + b; }
+
+std::string &f35(std::string &s, const std::string &o) {
+  return s.operator+=(o);
+}
+
+std::string &f36(std::string &s, const char *o) { return s.operator+=(o); }
+
+std::string &f37(std::string &s, char c) { return s.operator+=(c); }
+
+std::string f38(const char *a, const std::string &b) { return a + b; }
+
+std::string f39(const char *a, std::string &&b) { return a + std::move(b); }
+
+std::string f40(std::string &&a, const std::string &b) {
+  return std::move(a) + b;
+}
+
+std::string f41(const std::string &a, std::string &&b) {
+  return a + std::move(b);
+}
+
+bool f42(const std::string &a, const std::string &b) { return a == b; }
+
+bool f43(const std::string &a, const std::string &b) { return a != b; }
+
+bool f44(const std::string &a, const char *b) { return a != b; }
+
+bool f45(const char *a, const std::string &b) { return a == b; }
+
+bool f46(const char *a, const std::string &b) { return a != b; }

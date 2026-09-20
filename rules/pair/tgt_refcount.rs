@@ -89,3 +89,17 @@ fn f14<T1: Default + ByteRepr, T2: Default + ByteRepr>(
 ) {
     a0.write(std::mem::take(&mut *a1))
 }
+
+fn f15<T1: PartialEq, T2: PartialEq>(
+    a0: (Value<T1>, Value<T2>),
+    a1: (Value<T1>, Value<T2>),
+) -> bool {
+    a0 == a1
+}
+
+fn f16<T1: PartialEq, T2: PartialEq>(
+    a0: (Value<T1>, Value<T2>),
+    a1: (Value<T1>, Value<T2>),
+) -> bool {
+    a0 != a1
+}

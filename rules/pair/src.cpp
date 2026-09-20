@@ -2,6 +2,11 @@
 // Distributed under the MIT license that can be found in the LICENSE file.
 
 #include <utility>
+// <vector> is pulled in deliberately: with only <utility>, libc++ prints the
+// free comparison operators as std::operator== rather than std::__1::operator==,
+// and the rules then silently fail to match in any real TU (which will always
+// have included a larger header first).
+#include <vector>
 
 template <typename T1, typename T2> using t1 = std::pair<T1, T2>;
 
@@ -59,4 +64,14 @@ std::pair<T1, T2> &f13(std::pair<T1, T2> &dst, const std::pair<T1, T2> &src) {
 template <typename T1, typename T2>
 std::pair<T1, T2> &f14(std::pair<T1, T2> &dst, std::pair<T1, T2> &&src) {
   return dst.operator=(std::move(src));
+}
+
+template <typename T1, typename T2>
+bool f15(const std::pair<T1, T2> &a, const std::pair<T1, T2> &b) {
+  return operator==(a, b);
+}
+
+template <typename T1, typename T2>
+bool f16(const std::pair<T1, T2> &a, const std::pair<T1, T2> &b) {
+  return operator!=(a, b);
 }

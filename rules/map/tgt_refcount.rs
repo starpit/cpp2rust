@@ -162,3 +162,33 @@ fn f26<T1: Ord + Clone + 'static, T2: Clone + 'static>(
             .collect(),
     )
 }
+
+fn f27<T1: PartialEq, T2: PartialEq>(
+    a0: RefcountMapIter<T1, T2>,
+    a1: RefcountMapIter<T1, T2>,
+) -> bool {
+    a0 != a1
+}
+
+fn f28<T1: Ord + Clone + 'static, T2: 'static>(
+    a0: &mut RefcountMapIter<T1, T2>,
+) -> RefcountMapIter<T1, T2> {
+    a0.inc();
+    a0.clone()
+}
+
+fn f29<T1: Ord + Clone + 'static, T2: 'static>(
+    a0: &mut RefcountMapIter<T1, T2>,
+) -> RefcountMapIter<T1, T2> {
+    a0.inc();
+    a0.clone()
+}
+
+
+fn f30<T1: PartialEq, T2: PartialEq>(a0: BTreeMap<T1, Value<T2>>, a1: BTreeMap<T1, Value<T2>>) -> bool {
+    a0 == a1
+}
+
+fn f31<T1: PartialEq, T2: PartialEq>(a0: BTreeMap<T1, Value<T2>>, a1: BTreeMap<T1, Value<T2>>) -> bool {
+    a0 != a1
+}

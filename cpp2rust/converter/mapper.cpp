@@ -20,6 +20,7 @@
 
 #include "converter/converter_lib.h"
 #include "converter/translation_rule.h"
+#include "survey.h"
 
 namespace cpp2rust::Mapper {
 
@@ -85,6 +86,36 @@ std::string GetTypeMapKey(const std::string &str) {
 
 void AddTypeRule(std::string src, TranslationRule::TypeRule &&rule) {
   auto key = GetTypeMapKey(src);
+  // Idempotent: registering a type twice is normal (a decl can be reached by
+  // more than one route) and must not depend on the caller guarding first.
+  // Guarding on "is the plain name known" used to skip the whole call and
+  // leave the POINTER forms unregistered.
+  auto [it, end] = types_.equal_range(key);
+  for (; it != end; ++it) {
+    if (it->second.src == src) {
+      return;
+    }
+  }
+  // A top-level const pointer (`DtInfo *const`) is the same Rust type as the
+  // plain one -- constness is dropped on that side -- but it is a distinct
+  // spelling that lookups use and nothing registered it.
+  if (src.ends_with(" *")) {
+    auto const_src = src + "const";
+    bool have = false;
+    auto [cb, ce] = types_.equal_range(key);
+    for (; cb != ce; ++cb) {
+      if (cb->second.src == const_src) {
+        have = true;
+        break;
+      }
+    }
+    if (!have) {
+      auto copy = rule;
+      copy.src = const_src;
+      types_.emplace(key, std::move(copy));
+    }
+  }
+
   rule.src = std::move(src);
   types_.emplace(std::move(key), std::move(rule));
 }
@@ -373,6 +404,7 @@ search(std::unordered_multimap<std::string, T> &map, const std::string &txt,
   T *rule = nullptr;
   std::vector<std::optional<std::string>> subs;
 
+  const std::string *ambiguous_with = nullptr;
   for (; it != end; ++it) {
     auto &this_rule = it->second;
     auto this_subs = matchTemplate(this_rule.src, txt);
@@ -383,7 +415,23 @@ search(std::unordered_multimap<std::string, T> &map, const std::string &txt,
     if (!rule || this_rule.src.size() > rule->src.size()) {
       rule = &this_rule;
       subs = *std::move(this_subs);
+      ambiguous_with = nullptr;
+    } else if (this_rule.src.size() == rule->src.size() &&
+               this_rule.src != rule->src) {
+      // Two DIFFERENT rules of equal specificity both match, so "longest
+      // wins" is a coin flip and the multimap order decides. std::get<0> and
+      // std::get<1> on a std::tuple<int, int> do exactly this: the rules are
+      // `T1 &get(tuple<T1,T2>&)` and `T2 &get(tuple<T1,T2>&)`, equal length,
+      // both matching. Picking one silently returns the wrong element.
+      ambiguous_with = &this_rule.src;
     }
+  }
+  if (ambiguous_with) {
+    llvm::errs() << "ERROR: ambiguous translation rule for '" << txt
+                 << "': '" << rule->src << "' and '" << *ambiguous_with
+                 << "' are equally specific. Refusing to guess.\n";
+    ReportUnsupported("AmbiguousRule", txt);
+    return {};
   }
   return {rule, std::move(subs)};
 }
@@ -404,6 +452,38 @@ TranslationRule::ExprRule *search(const clang::Expr *expr) {
   return rule;
 }
 
+// Registers a project type the first time it is actually needed.
+//
+// The up-front pass cannot see everything: clang instantiates class templates
+// lazily, and cpp2rust drives Sema during conversion, so a specialization can
+// come into existence after that pass has already run. Rather than fail on a
+// type whose declaration we can plainly reach, register it here and retry.
+std::pair<TranslationRule::TypeRule *, std::vector<std::optional<std::string>>>
+lazyRegisterAndRetry(clang::QualType qual_type, const std::string &type) {
+  static bool registering = false;
+  if (registering) {
+    return {};
+  }
+
+  auto peeled = qual_type.getNonReferenceType();
+  while (peeled->isPointerType()) {
+    peeled = peeled->getPointeeType();
+  }
+  auto *tag = peeled.getUnqualifiedType()->getAsTagDecl();
+  if (!tag || !IsUserDefinedDecl(tag)) {
+    return {};
+  }
+  if (auto *def = tag->getDefinition()) {
+    tag = def;
+  }
+
+  registering = true;
+  AddRuleForUserDefinedType(tag);
+  registering = false;
+
+  return search(types_, type, GetTypeMapKey(type));
+}
+
 std::pair<TranslationRule::TypeRule *, std::vector<std::optional<std::string>>>
 search(clang::QualType qual_type) {
   auto sugared = ToString(qual_type, ScalarSugar::kPreserve);
@@ -418,6 +498,9 @@ search(clang::QualType qual_type) {
     return {};
   }
   auto res = search(types_, type, GetTypeMapKey(type));
+  if (!res.first) {
+    res = lazyRegisterAndRetry(qual_type, type);
+  }
   log() << "search type " << type
         << ", result: " << (res.first ? res.first->type_info.type : "None")
         << '\n';
@@ -453,6 +536,36 @@ void addRulesFromDirectory(const std::filesystem::path &dir, Model model) {
       }
       types_.emplace(std::move(key), std::move(rule));
     }
+  }
+}
+
+// Gives every loaded library type its `const T`, `T *` and `const T *` forms.
+//
+// A module declares only the plain spelling (`t1 = std::vector<T1>`), so a
+// `std::vector<regInfo> *` parameter or a `const std::string` had no rule at
+// all. Scalars get these for free in add_scalar_rule; this is the same thing
+// for rule-provided types, with constness dropped on the Rust side exactly as
+// scalars drop it.
+//
+// Runs AFTER every module is loaded and goes through AddTypeRule, which is
+// idempotent -- doing it inside the per-module loop trips that loop's
+// duplicate-rule check, which exits the process.
+void addDerivedTypeForms(Model model) {
+  std::vector<std::pair<std::string, std::string>> base;
+  base.reserve(types_.size());
+  for (const auto &[key, rule] : types_) {
+    if (!rule.src.starts_with("const ") && !rule.src.contains('*') &&
+        !rule.src.contains('[')) {
+      base.emplace_back(rule.src, rule.type_info.type);
+    }
+  }
+
+  // Only the `const T` form. Adding `T *` as well makes a rule match where
+  // the converter previously handled the pointer decay itself, and it emits
+  // an offset against the container instead of its elements.
+  (void)model;
+  for (const auto &[src, rust] : base) {
+    AddTypeRule("const " + src, TranslationRule::TypeRule::Plain(rust));
   }
 }
 
@@ -516,6 +629,18 @@ void addBuiltinTypes(Model model) {
   add_builtin_rule(ctx_->BoolTy, "bool");
   add_builtin_rule(ctx_->FloatTy, "f32");
   add_builtin_rule(ctx_->DoubleTy, "f64");
+
+  // Bare `void`. Only the pointer forms were registered, so a rule whose
+  // generic binds to void (std::shared_ptr<void>, a void-returning callable)
+  // had nothing to map to.
+  // The unsafe model spells a void pointee ::libc::c_void, so bare `void`
+  // must match that there; the refcount model has no libc types and uses ().
+  const char *void_rust =
+      model == Model::kUnsafe ? "::libc::c_void" : "()";
+  AddTypeRule(ToString(ctx_->VoidTy),
+              TranslationRule::TypeRule::Plain(void_rust));
+  AddTypeRule("const " + ToString(ctx_->VoidTy),
+              TranslationRule::TypeRule::Plain(void_rust));
 
   switch (model) {
   case Model::kUnsafe:
@@ -606,8 +731,69 @@ clang::QualType normalizeQualType(clang::QualType qual_type) {
 std::string mapTypeStringRecursive(const std::string &cpp_type) {
   auto [rule, subs] = search(types_, cpp_type, GetTypeMapKey(cpp_type));
   if (!rule) {
+    // Only a type STRING is available here, so the decl cannot be reached
+    // directly. Clang instantiates class templates lazily and cpp2rust drives
+    // Sema while converting, so specializations keep appearing after the
+    // up-front pass ran. Re-walk the TU once per unseen type and retry.
+    static std::unordered_set<std::string> refreshed;
+    if (ctx_ && refreshed.insert(cpp_type).second) {
+      PreRegisterUserDefinedTypes(ctx_->getTranslationUnitDecl());
+      std::tie(rule, subs) =
+          search(types_, cpp_type, GetTypeMapKey(cpp_type));
+    }
+  }
+  if (!rule) {
+    // Pointer-to-a-library-type, reached as a container's element type
+    // (std::map<K, std::vector<regInfo>*>). Deliberately handled HERE and not
+    // by registering `std::vector<T> *` as a real type rule: the converter's
+    // pointer-decay path keys on that type NOT having a rule, and giving it
+    // one makes `p[0]` index the vector handle instead of its elements.
+    // This string-level fallback only affects recursive type spelling.
+    {
+      std::string_view view = cpp_type;
+      while (view.ends_with("const")) {
+        view.remove_suffix(5);
+        while (view.ends_with(' ')) {
+          view.remove_suffix(1);
+        }
+      }
+      if (view.ends_with('*')) {
+        view.remove_suffix(1);
+        while (view.ends_with(' ')) {
+          view.remove_suffix(1);
+        }
+        std::string pointee(view);
+        if (auto [prule, psubs] =
+                search(types_, pointee, GetTypeMapKey(pointee));
+            prule) {
+          for (auto &ty : psubs) {
+            if (ty) {
+              ty = mapTypeStringRecursive(*ty);
+            }
+          }
+          return "Ptr<" + instantiateTgt(psubs, prule->type_info.type) + '>';
+        }
+      }
+    }
+
+    // NDEBUG builds compile the assert out, so guard the null deref below
+    // explicitly rather than letting it fall through.
+    if (ReportUnsupported("UnmappedType", cpp_type)) {
+      if (getenv("CPP2RUST_DEBUG_UNMAPPED")) {
+        auto key = GetTypeMapKey(cpp_type);
+        llvm::errs() << "UNMAPPED '" << cpp_type << "' key='" << key
+                     << "' registered=" << types_.size() << " near:";
+        auto [b, e] = types_.equal_range(key);
+        for (; b != e; ++b) {
+          llvm::errs() << " {" << b->second.src << "}";
+        }
+        llvm::errs() << '\n';
+      }
+      return UnsupportedPlaceholder("UnmappedType", cpp_type);
+    }
     llvm::errs() << "cpp_type: " << cpp_type << '\n';
     assert(0 && "Type is not present in types_");
+    llvm::report_fatal_error("Type is not present in types_");
   }
   for (auto &ty : subs) {
     if (ty) {
@@ -783,15 +969,109 @@ clang::QualType GetTypeForDecl(const clang::NamedDecl *decl) {
                           rdecl->getQualifier(), rdecl, /*OwnsTag*/ false);
 }
 
+void PreRegisterUserDefinedTypes(clang::DeclContext *dc) {
+  for (auto *d : dc->decls()) {
+    if (auto *tag = llvm::dyn_cast<clang::TagDecl>(d)) {
+      // Only project types: a system type without a rule must keep failing
+      // loudly rather than be silently renamed into a plausible-looking one.
+      // Anonymous tags are skipped: nothing can name one to look it up, and
+      // naming one here would consume a disambiguating id out of the order
+      // the converter itself assigns them in.
+      const bool has_name =
+          tag->getIdentifier() || tag->getTypedefNameForAnonDecl();
+      if (has_name && IsUserDefinedDecl(tag) && tag->isCompleteDefinition()) {
+        AddRuleForUserDefinedType(tag);
+      }
+    }
+    // A class template's instantiations are not TU children, so reach them
+    // through the template: types nested in one (an enum inside
+    // FoldFunction<int>, say) are concrete and do need a rule. The uninstan-
+    // tiated pattern is skipped -- it is dependent and has nothing to map.
+    if (auto *tmpl = llvm::dyn_cast<clang::ClassTemplateDecl>(d)) {
+      for (auto *spec : tmpl->specializations()) {
+        // The specialization is itself a type that needs a rule, not just a
+        // scope holding some.
+        if (IsUserDefinedDecl(spec)) {
+          AddRuleForUserDefinedType(spec);
+        }
+        if (spec->isCompleteDefinition()) {
+          PreRegisterUserDefinedTypes(spec);
+        }
+      }
+      continue;
+    }
+    // Namespaces and records only: recursing into function bodies would cost
+    // a full extra walk of the TU for the rare function-local type.
+    if (llvm::isa<clang::NamespaceDecl, clang::RecordDecl,
+                  clang::LinkageSpecDecl>(d)) {
+      PreRegisterUserDefinedTypes(llvm::cast<clang::DeclContext>(d));
+    }
+  }
+}
+
 void AddRuleForUserDefinedType(clang::NamedDecl *decl) {
   auto cpp_name = ToString(GetTypeForDecl(decl));
   auto rs_name = ToRustName(cpp_name);
 
+  // A class template specialization registers under the spelling that keeps
+  // defaulted template arguments -- FoldFunction<std::vector<long long,
+  // std::allocator<long long>>> -- while lookups use the spelling that drops
+  // them. Register the dropped form under the same Rust name as well, or the
+  // type is unreachable by the name every caller actually uses.
+  if (auto *spec =
+          llvm::dyn_cast<clang::ClassTemplateSpecializationDecl>(decl)) {
+    auto policy = getPrintPolicy();
+    policy.SuppressDefaultTemplateArgs = true;
+    std::string terse;
+    llvm::raw_string_ostream os(terse);
+    clang::QualType(ctx_->getCanonicalTagType(spec)).print(os, policy);
+    if (terse != cpp_name && !terse.empty()) {
+      AddTypeRule(terse, TranslationRule::TypeRule::Plain(rs_name));
+      AddTypeRule("const " + terse, TranslationRule::TypeRule::Plain(rs_name));
+      switch (model_) {
+      case Model::kUnsafe:
+        AddTypeRule(terse + " *",
+                    TranslationRule::TypeRule::UnsafePtr("*mut " + rs_name));
+        AddTypeRule("const " + terse + " *",
+                    TranslationRule::TypeRule::UnsafePtr("*const " + rs_name));
+        break;
+      case Model::kRefCount:
+        AddTypeRule(terse + " *", TranslationRule::TypeRule::RefcountPtr(
+                                      "Ptr<" + rs_name + '>'));
+        AddTypeRule("const " + terse + " *",
+                    TranslationRule::TypeRule::RefcountPtr("Ptr<" + rs_name +
+                                                           '>'));
+        break;
+      }
+    }
+  }
+
   AddTypeRule(cpp_name, TranslationRule::TypeRule::Plain(rs_name));
+  // Scalars register their const forms too (see add_scalar_rule); without the
+  // same here, a `const Foo *` parameter has no rule even though `Foo *` does.
+  // Constness is dropped on the Rust side, as it is for scalars.
+  AddTypeRule("const " + cpp_name, TranslationRule::TypeRule::Plain(rs_name));
 
   if (auto record_decl = llvm::dyn_cast<clang::RecordDecl>(decl)) {
-    // Forward declaration
+    // Forward declaration. A pointer to an incomplete type is still valid
+    // C++ and still needs a rule; only the abstract/dyn distinction needs
+    // the definition, so assume the non-abstract form here.
     if (!record_decl->isThisDeclarationADefinition()) {
+      switch (model_) {
+      case Model::kUnsafe:
+        AddTypeRule(cpp_name + " *",
+                    TranslationRule::TypeRule::UnsafePtr("*mut " + rs_name));
+        AddTypeRule("const " + cpp_name + " *",
+                    TranslationRule::TypeRule::UnsafePtr("*const " + rs_name));
+        break;
+      case Model::kRefCount:
+        AddTypeRule(cpp_name + " *", TranslationRule::TypeRule::RefcountPtr(
+                                         "Ptr<" + rs_name + '>'));
+        AddTypeRule("const " + cpp_name + " *",
+                    TranslationRule::TypeRule::RefcountPtr("Ptr<" + rs_name +
+                                                           '>'));
+        break;
+      }
       return;
     }
 
@@ -801,10 +1081,16 @@ void AddRuleForUserDefinedType(clang::NamedDecl *decl) {
         case Model::kUnsafe:
           AddTypeRule(cpp_name + " *", TranslationRule::TypeRule::UnsafePtr(
                                            "*mut dyn " + rs_name));
+          AddTypeRule("const " + cpp_name + " *",
+                      TranslationRule::TypeRule::UnsafePtr("*const dyn " +
+                                                           rs_name));
           break;
         case Model::kRefCount:
           AddTypeRule(cpp_name + " *", TranslationRule::TypeRule::RefcountPtr(
                                            "PtrDyn<dyn " + rs_name + '>'));
+          AddTypeRule("const " + cpp_name + " *",
+                      TranslationRule::TypeRule::RefcountPtr("PtrDyn<dyn " +
+                                                             rs_name + '>'));
           break;
         }
       } else {
@@ -812,10 +1098,16 @@ void AddRuleForUserDefinedType(clang::NamedDecl *decl) {
         case Model::kUnsafe:
           AddTypeRule(cpp_name + " *",
                       TranslationRule::TypeRule::UnsafePtr("*mut " + rs_name));
+          AddTypeRule("const " + cpp_name + " *",
+                      TranslationRule::TypeRule::UnsafePtr("*const " +
+                                                           rs_name));
           break;
         case Model::kRefCount:
           AddTypeRule(cpp_name + " *", TranslationRule::TypeRule::RefcountPtr(
                                            "Ptr<" + rs_name + '>'));
+          AddTypeRule("const " + cpp_name + " *",
+                      TranslationRule::TypeRule::RefcountPtr("Ptr<" + rs_name +
+                                                             '>'));
           break;
         }
       }
@@ -956,7 +1248,12 @@ std::string ToString(const clang::NamedDecl *decl) {
       os << "shreq";
       break;
     default:
-      assert(0 && "Unexpected overloaded operator kind");
+      if (!ReportUnsupported("OverloadedOperatorKind",
+                             clang::getOperatorSpelling(op))) {
+        assert(0 && "Unexpected overloaded operator kind");
+      }
+      os << "unsupported";
+      break;
     }
   } else if (const auto *method_decl =
                  llvm::dyn_cast<clang::CXXMethodDecl>(func_decl)) {
@@ -1054,8 +1351,11 @@ std::string ToString(const clang::Expr *expr) {
           }
         }
       } else if (auto for_range = GetParentForRange(*ctx_, ME)) {
-        if (ToString(for_range->getRangeInit()->getType())
-                .starts_with("std::map<")) {
+        auto range_type = ToString(for_range->getRangeInit()->getType());
+        if (range_type.starts_with("std::map<") ||
+            range_type.starts_with("std::set<") ||
+            range_type.starts_with("std::unordered_map<") ||
+            range_type.starts_with("std::unordered_set<")) {
           auto iter_type = GetForRangeIteratorType(for_range);
           if (!iter_type.isNull()) {
             return ToString(iter_type) + "->" + ToString(member_decl);
@@ -1102,6 +1402,7 @@ void LoadTranslationRules(Model model, clang::ASTContext &ctx,
 
   addBuiltinTypes(model);
   addRulesFromDirectory(rules_dir, model);
+  addDerivedTypeForms(model);
 
 #if 0
   for (auto &[src, rule] : exprs_) {

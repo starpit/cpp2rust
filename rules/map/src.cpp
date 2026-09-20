@@ -131,3 +131,31 @@ template <typename T1, typename T2>
 std::map<T1, T2> &f26(std::map<T1, T2> &dst, const std::map<T1, T2> &src) {
   return dst.operator=(src);
 }
+
+template <typename T1, typename T2>
+bool f27(typename std::map<T1, T2>::const_iterator a,
+         typename std::map<T1, T2>::const_iterator b) {
+  return operator!=(a, b);
+}
+
+template <typename T1, typename T2>
+typename std::map<T1, T2>::iterator &
+f28(typename std::map<T1, T2>::iterator &it) {
+  return it.operator++();
+}
+
+template <typename T1, typename T2>
+typename std::map<T1, T2>::const_iterator &
+f29(typename std::map<T1, T2>::const_iterator &it) {
+  return it.operator++();
+}
+
+template <typename T1, typename T2>
+bool f30(const std::map<T1, T2> &a, const std::map<T1, T2> &b) {
+  return operator==(a, b);
+}
+
+template <typename T1, typename T2>
+bool f31(const std::map<T1, T2> &a, const std::map<T1, T2> &b) {
+  return operator!=(a, b);
+}

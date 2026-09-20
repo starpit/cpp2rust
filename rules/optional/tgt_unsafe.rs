@@ -1,0 +1,152 @@
+// Copyright (c) 2022-present INESC-ID.
+// Distributed under the MIT license that can be found in the LICENSE file.
+
+// std::optional<T> maps to Rust's Option<T>. In the unsafe model the contained
+// value is stored inline; the refcount overlay boxes it in a Value<T> so that
+// value()/operator* can hand out a Ptr into it.
+
+fn t1<T1>() -> Option<T1> {
+    None
+}
+
+// --- construction ----------------------------------------------------------
+
+unsafe fn f1<T1>() -> Option<T1> {
+    None
+}
+
+unsafe fn f2<T1>() -> Option<T1> {
+    None
+}
+
+unsafe fn f3<T1>(a0: T1) -> Option<T1> {
+    Some(a0)
+}
+
+unsafe fn f4<T1>(a0: T1) -> Option<T1> {
+    Some(a0)
+}
+
+unsafe fn f5<T1>(a0: T1) -> Option<T1> {
+    Some(a0)
+}
+
+unsafe fn f6<T1: Clone>(a0: Option<T1>) -> Option<T1> {
+    a0.clone()
+}
+
+unsafe fn f7<T1>(a0: &mut Option<T1>) -> Option<T1> {
+    a0.take()
+}
+
+// --- assignment ------------------------------------------------------------
+
+unsafe fn f8<T1: Clone>(a0: &mut Option<T1>, a1: Option<T1>) {
+    *a0 = a1.clone()
+}
+
+unsafe fn f9<T1>(a0: &mut Option<T1>, a1: &mut Option<T1>) {
+    *a0 = a1.take()
+}
+
+unsafe fn f10<T1>(a0: &mut Option<T1>) {
+    *a0 = None
+}
+
+unsafe fn f11<T1>(a0: &mut Option<T1>, a1: T1) {
+    *a0 = Some(a1)
+}
+
+unsafe fn f12<T1>(a0: &mut Option<T1>, a1: T1) {
+    *a0 = Some(a1)
+}
+
+unsafe fn f13<T1>(a0: &mut Option<T1>, a1: T1) {
+    *a0 = Some(a1)
+}
+
+// --- observers -------------------------------------------------------------
+
+unsafe fn f15<T1>(a0: Option<T1>) -> bool {
+    a0.is_some()
+}
+
+unsafe fn f16<T1>(a0: &mut Option<T1>) -> *mut T1 {
+    a0.as_mut()
+        .map_or(::std::ptr::null_mut(), |v| v as *mut T1)
+}
+
+unsafe fn f17<T1>(a0: &Option<T1>) -> *const T1 {
+    a0.as_ref().map_or(::std::ptr::null(), |v| v as *const T1)
+}
+
+unsafe fn f18<T1>(a0: &mut Option<T1>) -> *mut T1 {
+    a0.as_mut()
+        .map_or(::std::ptr::null_mut(), |v| v as *mut T1)
+}
+
+unsafe fn f19<T1>(a0: &Option<T1>) -> *const T1 {
+    a0.as_ref().map_or(::std::ptr::null(), |v| v as *const T1)
+}
+
+unsafe fn f20<T1>(a0: &mut Option<T1>) -> &mut T1 {
+    a0.as_mut().unwrap()
+}
+
+unsafe fn f21<T1>(a0: &Option<T1>) -> &T1 {
+    a0.as_ref().unwrap()
+}
+
+unsafe fn f22<T1: Clone>(a0: Option<T1>, a1: T1) -> T1 {
+    a0.as_ref().map_or(a1, |v| v.clone())
+}
+
+unsafe fn f23<T1: Clone>(a0: Option<T1>, a1: T1) -> T1 {
+    a0.as_ref().map_or(a1, |v| v.clone())
+}
+
+unsafe fn f24<T1: Clone>(a0: Option<T1>, a1: T1) -> T1 {
+    a0.as_ref().map_or(a1, |v| v.clone())
+}
+
+// --- comparison ------------------------------------------------------------
+
+unsafe fn f26<T1: PartialEq>(a0: Option<T1>, a1: Option<T1>) -> bool {
+    a0 == a1
+}
+
+unsafe fn f27<T1: PartialEq>(a0: Option<T1>, a1: Option<T1>) -> bool {
+    a0 != a1
+}
+
+unsafe fn f28<T1>(a0: Option<T1>) -> bool {
+    a0.is_none()
+}
+
+unsafe fn f29<T1>(a0: Option<T1>) -> bool {
+    a0.is_some()
+}
+
+// --- has_value()/reset() ---------------------------------------------------
+// libc++ declares these two in private base classes of std::optional, so both
+// the type rules and the expression rules name the base class (see src.cpp).
+
+#[cfg(target_os = "macos")]
+fn t2<T1>() -> Option<T1> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn t3<T1>() -> Option<T1> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn f14<T1>(a0: Option<T1>) -> bool {
+    a0.is_some()
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn f25<T1>(a0: &mut Option<T1>) {
+    *a0 = None
+}

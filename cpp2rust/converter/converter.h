@@ -807,6 +807,9 @@ protected:
   };
 
   std::unordered_set<const clang::VarDecl *> map_iter_decls_;
+  // Structured-binding names bound to a map iterator's first()/second()
+  // rather than read out of a holding object.
+  std::unordered_set<const clang::BindingDecl *> map_binding_decls_;
 
   // Local variables hoisted outside a goto_block so that all labels can see and
   // use the variables.

@@ -21,6 +21,7 @@
 
 #include "converter/lex.h"
 #include "converter/mapper.h"
+#include "survey.h"
 
 // https://doc.rust-lang.org/reference/keywords.html
 static const char rust_keywords[][12] = {
@@ -395,17 +396,33 @@ bool IsPassThroughConstructor(const clang::CXXConstructorDecl *ctor) {
 }
 
 bool IsConvertibleCXXRecordDecl(const clang::CXXRecordDecl *decl) {
-  return decl->isThisDeclarationADefinition() &&
-         std::all_of(
-             decl->method_begin(), decl->method_end(), [](auto *method) {
-               auto *ctor = clang::dyn_cast<clang::CXXConstructorDecl>(method);
-               return method->getDefinition() || method->isPureVirtual() ||
-                      method->getTemplateInstantiationPattern() ||
-                      method->getDescribedFunctionTemplate() ||
-                      (ctor ? ctor->isCopyOrMoveConstructor()
-                            : method->isCopyAssignmentOperator() ||
-                                  method->isMoveAssignmentOperator());
-             });
+  auto ok = [](const clang::CXXMethodDecl *method) {
+    const auto *ctor = clang::dyn_cast<clang::CXXConstructorDecl>(method);
+    return method->getDefinition() || method->isPureVirtual() ||
+           method->getTemplateInstantiationPattern() ||
+           method->getDescribedFunctionTemplate() ||
+           (ctor ? ctor->isCopyOrMoveConstructor()
+                 : method->isCopyAssignmentOperator() ||
+                       method->isMoveAssignmentOperator());
+  };
+  if (!decl->isThisDeclarationADefinition()) {
+    return false;
+  }
+  if (getenv("CPP2RUST_DEBUG_RECORD")) {
+    for (const auto *m : decl->methods()) {
+      if (!ok(m)) {
+        llvm::errs() << "RECORD-SKIP " << decl->getNameAsString()
+                     << " blocked by '" << m->getNameAsString() << "'"
+                     << (m->isImplicit() ? " [implicit]" : "")
+                     << (clang::isa<clang::CXXConstructorDecl>(m) ? " [ctor]"
+                                                                  : "")
+                     << (clang::isa<clang::CXXDestructorDecl>(m) ? " [dtor]"
+                                                                 : "")
+                     << '\n';
+      }
+    }
+  }
+  return std::all_of(decl->method_begin(), decl->method_end(), ok);
 }
 
 bool IsConvertibleCXXMethodDecl(const clang::CXXMethodDecl *decl) {
@@ -417,7 +434,12 @@ bool IsConvertibleCXXMethodDecl(const clang::CXXMethodDecl *decl) {
 }
 
 bool IsConvertibleFunctionDecl(const clang::FunctionDecl *decl) {
-  return decl->hasBody() && decl->isThisDeclarationADefinition();
+  // An uninstantiated template pattern has a body, but that body is made of
+  // dependent expressions: a call in it has no resolved callee and a type in
+  // it has no layout. Only instantiations are translatable, so leave the
+  // pattern alone rather than asserting deep inside its first dependent node.
+  return decl->hasBody() && decl->isThisDeclarationADefinition() &&
+         !decl->isTemplated();
 }
 
 bool IsUniquePtr(clang::QualType type) {
@@ -698,7 +720,22 @@ std::string GetNamedDeclAsString(const clang::NamedDecl *decl) {
   }
 
   if (name.empty()) {
+    // The holding object of a structured binding has no name of its own; the
+    // BindingDecls refer to it. Give it a stable synthetic one so it can be
+    // declared and the bindings can read through it.
+    if (llvm::isa<clang::DecompositionDecl>(decl)) {
+      return std::format("__binding_{:x}",
+                         reinterpret_cast<uintptr_t>(decl->getCanonicalDecl()) &
+                             0xffffff);
+    }
     auto *pdecl = llvm::dyn_cast<clang::ParmVarDecl>(decl);
+    if (!pdecl) {
+      // Anonymous struct/union members, unnamed bitfields and the like.
+      if (ReportUnsupported("UnnamedDecl", decl->getDeclKindName())) {
+        return std::format("__unnamed_{}",
+                           reinterpret_cast<uintptr_t>(decl) & 0xffffff);
+      }
+    }
     assert(pdecl && "Unexpected unnamed construct");
 
     const auto *fn =
@@ -752,8 +789,12 @@ clang::QualType GetReturnTypeOfFunction(const clang::CallExpr *expr) {
     }
   }
 
-  assert(0 && "Unhandled function prototype");
-  return {};
+  if (!ReportUnsupported("FunctionPrototype", "unhandled callee type")) {
+    assert(0 && "Unhandled function prototype");
+  }
+  // Fall back to the call's own type: a null QualType here just moves the
+  // crash into clang and buries the construct that actually failed.
+  return expr->getType().getCanonicalType();
 }
 
 const char *GetOverloadedOperator(const clang::FunctionDecl *decl) {
@@ -838,8 +879,12 @@ const char *GetOverloadedOperator(const clang::FunctionDecl *decl) {
   case clang::OO_Subscript:
     return "operator_index";
   default:
-    assert(0 && "unsupported overloaded operator");
-    return "";
+    if (!ReportUnsupported(
+            "OverloadedOperatorName",
+            clang::getOperatorSpelling(decl->getOverloadedOperator()))) {
+      assert(0 && "unsupported overloaded operator");
+    }
+    return "operator_unsupported";
   }
 }
 

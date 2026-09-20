@@ -56,4 +56,9 @@ std::string ToRustName(std::string name);
 void LoadTranslationRules(Model model, clang::ASTContext &ctx,
                           const std::string &rules_dir);
 void AddRuleForUserDefinedType(clang::NamedDecl *decl);
+
+// Registers a type rule for every user-defined tag reachable from `dc`.
+// Rules are otherwise added only as the converter walks onto each decl, so a
+// function body converted earlier than a type's declaration cannot map it.
+void PreRegisterUserDefinedTypes(clang::DeclContext *dc);
 } // namespace cpp2rust::Mapper

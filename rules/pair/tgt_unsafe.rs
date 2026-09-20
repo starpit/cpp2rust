@@ -45,3 +45,11 @@ unsafe fn f13<T1: Clone, T2: Clone>(a0: &mut (T1, T2), a1: (T1, T2)) {
 unsafe fn f14<T1: Default, T2: Default>(a0: &mut (T1, T2), a1: &mut (T1, T2)) {
     *a0 = std::mem::take(&mut *a1)
 }
+
+unsafe fn f15<T1: PartialEq, T2: PartialEq>(a0: (T1, T2), a1: (T1, T2)) -> bool {
+    a0 == a1
+}
+
+unsafe fn f16<T1: PartialEq, T2: PartialEq>(a0: (T1, T2), a1: (T1, T2)) -> bool {
+    a0 != a1
+}

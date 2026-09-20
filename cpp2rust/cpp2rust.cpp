@@ -20,6 +20,7 @@
 
 #include "cpp2rust_lib.h"
 #include "logging.h"
+#include "survey.h"
 
 namespace fs = std::filesystem;
 
@@ -29,6 +30,14 @@ llvm::cl::OptionCategory cpp2rust_cmdargs("Cpp2Rust options");
 llvm::cl::opt<bool> Verbose("verbose", llvm::cl::desc("Enable verbose logging"),
                             llvm::cl::init(false),
                             llvm::cl::cat(cpp2rust_cmdargs));
+
+llvm::cl::opt<std::string>
+    Survey("survey",
+           llvm::cl::desc("Do not abort on an unsupported construct: record it, "
+                          "carry on, and write every gap found to this file. "
+                          "The Rust output of a survey run is not usable"),
+           llvm::cl::value_desc("survey.tsv"),
+           llvm::cl::cat(cpp2rust_cmdargs));
 
 llvm::cl::opt<std::string> CcFile("file",
                                   llvm::cl::desc("Path to the C++ file"),
@@ -121,6 +130,7 @@ int main(int argc, char *argv[]) {
   llvm::cl::ParseCommandLineOptions(argc, argv);
 
   cpp2rust::SetVerbose(Verbose);
+  cpp2rust::SetSurvey(Survey);
 
   if (CcFile.empty() && BuildDir.empty()) {
     llvm::errs() << "ERROR: please provide either --file or --dir\n";
@@ -189,12 +199,15 @@ int main(int argc, char *argv[]) {
   file << rs_code;
   file.close();
 
-  // call rustfmt.
-  std::string rustfmt_command =
-      "rustfmt +" RUST_STABLE_VERSION " --edition 2024 " + RsFile;
-  if (std::system(rustfmt_command.c_str()) != 0) {
-    llvm::errs() << "ERROR: failed to run rustfmt\n";
-    return EXIT_FAILURE;
+  // call rustfmt. A survey run emits placeholders where it could not
+  // translate, so its output is not expected to parse.
+  if (Survey.empty()) {
+    std::string rustfmt_command =
+        "rustfmt +" RUST_STABLE_VERSION " --edition 2024 " + RsFile;
+    if (std::system(rustfmt_command.c_str()) != 0) {
+      llvm::errs() << "ERROR: failed to run rustfmt\n";
+      return EXIT_FAILURE;
+    }
   }
 
   return EXIT_SUCCESS;

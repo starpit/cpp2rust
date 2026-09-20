@@ -95,6 +95,8 @@ impl<T: ByteRepr> ByteRepr for Box<T> {}
 impl<T: 'static> ByteRepr for *const T {}
 impl<T: 'static> ByteRepr for *mut T {}
 impl<A: ByteRepr, B: ByteRepr> ByteRepr for (A, B) {}
+impl<A: ByteRepr, B: ByteRepr, C: ByteRepr> ByteRepr for (A, B, C) {}
+impl<A: ByteRepr, B: ByteRepr, C: ByteRepr, D: ByteRepr> ByteRepr for (A, B, C, D) {}
 impl<K: 'static, V: 'static> ByteRepr for std::collections::BTreeMap<K, V> {}
 
 // Type-erased byte-level access to the original allocation.

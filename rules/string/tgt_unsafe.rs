@@ -180,3 +180,132 @@ unsafe fn f29(a0: &mut Vec<libc::c_char>, a1: Vec<libc::c_char>) {
 unsafe fn f30(a0: &mut Vec<libc::c_char>, a1: &mut Vec<libc::c_char>) {
     *a0 = std::mem::take(&mut *a1)
 }
+
+unsafe fn f31(a0: Vec<libc::c_char>, a1: Vec<libc::c_char>) -> Vec<libc::c_char> {
+    let mut r = a0;
+    r.pop();
+    r.extend(a1.iter().copied().take_while(|&c| c != 0));
+    r.push(0);
+    r
+}
+
+unsafe fn f32(a0: Vec<libc::c_char>, a1: Vec<libc::c_char>) -> Vec<libc::c_char> {
+    let mut r = a0;
+    r.pop();
+    r.extend(a1.iter().copied().take_while(|&c| c != 0));
+    r.push(0);
+    r
+}
+
+unsafe fn f33(a0: Vec<libc::c_char>, a1: libc::c_char) -> Vec<libc::c_char> {
+    let mut r = a0;
+    r.pop();
+    r.push(a1);
+    r.push(0);
+    r
+}
+
+unsafe fn f34(a0: Vec<libc::c_char>, a1: libc::c_char) -> Vec<libc::c_char> {
+    let mut r = a0;
+    r.pop();
+    r.push(a1);
+    r.push(0);
+    r
+}
+
+unsafe fn f35(a0: &mut Vec<libc::c_char>, a1: Vec<libc::c_char>) {
+    a0.pop();
+    a0.extend(a1.iter().copied().take_while(|&c| c != 0));
+    a0.push(0);
+}
+
+unsafe fn f36(a0: &mut Vec<libc::c_char>, a1: *const libc::c_char) {
+    a0.pop();
+    let __from = a1;
+    a0.extend_from_slice(::std::slice::from_raw_parts(
+        __from,
+        (0..).position(|i| *__from.add(i) == 0).unwrap(),
+    ));
+    a0.push(0);
+}
+
+unsafe fn f37(a0: &mut Vec<libc::c_char>, a1: libc::c_char) {
+    a0.pop();
+    a0.push(a1);
+    a0.push(0);
+}
+
+unsafe fn f38(a0: *const libc::c_char, a1: Vec<libc::c_char>) -> Vec<libc::c_char> {
+    let __from = a0;
+    let mut r = ::std::slice::from_raw_parts(
+        __from,
+        (0..).position(|i| *__from.add(i) == 0).unwrap(),
+    )
+    .to_vec();
+    r.extend(a1.iter().copied().take_while(|&c| c != 0));
+    r.push(0);
+    r
+}
+
+unsafe fn f39(a0: *const libc::c_char, a1: Vec<libc::c_char>) -> Vec<libc::c_char> {
+    let __from = a0;
+    let mut r = ::std::slice::from_raw_parts(
+        __from,
+        (0..).position(|i| *__from.add(i) == 0).unwrap(),
+    )
+    .to_vec();
+    r.extend(a1.iter().copied().take_while(|&c| c != 0));
+    r.push(0);
+    r
+}
+
+unsafe fn f40(a0: Vec<libc::c_char>, a1: Vec<libc::c_char>) -> Vec<libc::c_char> {
+    let mut r = a0;
+    r.pop();
+    r.extend(a1.iter().copied().take_while(|&c| c != 0));
+    r.push(0);
+    r
+}
+
+unsafe fn f41(a0: Vec<libc::c_char>, a1: Vec<libc::c_char>) -> Vec<libc::c_char> {
+    let mut r = a0;
+    r.pop();
+    r.extend(a1.iter().copied().take_while(|&c| c != 0));
+    r.push(0);
+    r
+}
+
+unsafe fn f42(a0: Vec<libc::c_char>, a1: Vec<libc::c_char>) -> bool {
+    a0 == a1
+}
+
+unsafe fn f43(a0: Vec<libc::c_char>, a1: Vec<libc::c_char>) -> bool {
+    a0 != a1
+}
+
+unsafe fn f44(a0: Vec<libc::c_char>, a1: *const libc::c_char) -> bool {
+    let __from = a1;
+    let __b = ::std::slice::from_raw_parts(
+        __from,
+        (0..).position(|i| *__from.add(i) == 0).unwrap(),
+    );
+    !a0.iter().copied().take_while(|&c| c != 0).eq(__b.iter().copied())
+}
+
+unsafe fn f45(a0: *const libc::c_char, a1: Vec<libc::c_char>) -> bool {
+    let __from = a0;
+    let __a = ::std::slice::from_raw_parts(
+        __from,
+        (0..).position(|i| *__from.add(i) == 0).unwrap(),
+    );
+    __a.iter().copied().eq(a1.iter().copied().take_while(|&c| c != 0))
+}
+
+unsafe fn f46(a0: *const libc::c_char, a1: Vec<libc::c_char>) -> bool {
+    let __from = a0;
+    let __a = ::std::slice::from_raw_parts(
+        __from,
+        (0..).position(|i| *__from.add(i) == 0).unwrap(),
+    );
+    !__a.iter().copied().eq(a1.iter().copied().take_while(|&c| c != 0))
+}
