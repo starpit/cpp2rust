@@ -39,6 +39,23 @@ namespace fs = std::filesystem;
 
 namespace cpp2rust {
 
+// Opt-in: spell out the template arguments that a signature cannot show.
+//
+// A rule for `std::holds_alternative<float>` is indistinguishable from one
+// for `std::holds_alternative<int>` unless the argument is part of the
+// resolved signature, because the parameter it is deduced from never
+// mentions it. Off by default so that regenerating an existing rule module
+// reproduces it byte for byte; a module opts in (by carrying an
+// `explicit-template-args` marker file) only when it has a rule that needs
+// the distinction. The converter prefers the spelled-out signature and falls
+// back to the plain one, so opted-in and plain modules coexist.
+bool ExplicitTemplateArgs = false;
+
+static Mapper::TemplateArgs targsMode() {
+  return ExplicitTemplateArgs ? Mapper::TemplateArgs::kInclude
+                              : Mapper::TemplateArgs::kOmit;
+}
+
 enum LookupKind { RegularName, CXXMethodName, CXXConstructorName, ADL };
 
 struct LookupInfo {
@@ -137,14 +154,14 @@ public:
 
       if (const auto *fcall = R.Nodes.getNodeAs<clang::CallExpr>("fcall")) {
         if (fcall->getDirectCallee()) {
-          add(Mapper::ToString(fcall));
+          add(Mapper::ToString(fcall, targsMode()));
           return;
         }
 
         LookupInfo lookup(fcall->getCallee());
         clang::NamedDecl *decl =
             lookupCalledDecl(func->getDescribedFunctionTemplate(), lookup);
-        add(Mapper::ToString(decl));
+        add(Mapper::ToString(decl, targsMode()));
         return;
       }
       if (const auto *ctor =
@@ -162,7 +179,7 @@ public:
       }
       if (const auto *um =
               R.Nodes.getNodeAs<clang::UnresolvedMemberExpr>("umuse")) {
-        add(Mapper::ToString(um));
+        add(Mapper::ToString(um, targsMode()));
         return;
       }
       if (R.Nodes.getNodeAs<clang::DeclRefExpr>("declref")) {
@@ -187,12 +204,12 @@ public:
           clang::MemberExpr *expr = lookupArrowAccess(
               func->getDescribedFunctionTemplate(), dsme->getMemberNameInfo(),
               dsme->getQualifierLoc());
-          add(Mapper::ToString(expr));
+          add(Mapper::ToString(expr, targsMode()));
           return;
         }
         clang::NamedDecl *decl = lookupMemberAccess(
             func->getDescribedFunctionTemplate(), dsme->getMember());
-        add(Mapper::ToString(decl));
+        add(Mapper::ToString(decl, targsMode()));
         return;
       }
       if (const auto *uctor =
@@ -200,7 +217,7 @@ public:
         LookupInfo lookup(uctor);
         clang::NamedDecl *decl =
             lookupCalledDecl(func->getDescribedFunctionTemplate(), lookup);
-        add(Mapper::ToString(decl));
+        add(Mapper::ToString(decl, targsMode()));
         return;
       }
       if (const auto *lit =
@@ -1023,11 +1040,21 @@ llvm::cl::list<std::string> CXXFlags("cxxflags",
                                      llvm::cl::value_desc("cxxflags"),
                                      llvm::cl::ZeroOrMore, llvm::cl::cat(cat));
 
+llvm::cl::opt<bool> ExplicitTemplateArgs(
+    "explicit-template-args",
+    llvm::cl::desc("Resolve a rule's signature with its non-deduced template "
+                   "arguments spelled out, so that rules for two "
+                   "instantiations of a signature-invariant template (e.g. "
+                   "std::holds_alternative<T>, std::get<I>) are distinct"),
+    llvm::cl::init(false), llvm::cl::cat(cat));
+
 } // namespace
 
 int main(int argc, char *argv[]) {
   llvm::cl::HideUnrelatedOptions(cat);
   llvm::cl::ParseCommandLineOptions(argc, argv);
+
+  cpp2rust::ExplicitTemplateArgs = ExplicitTemplateArgs;
 
   llvm::SmallVector<llvm::StringRef, 4> cxx_flags(CXXFlags.begin(),
                                                   CXXFlags.end());

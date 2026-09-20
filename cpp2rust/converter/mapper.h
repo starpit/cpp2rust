@@ -46,11 +46,27 @@ enum class ScalarSugar {
   kPreserve,
 };
 
+// Whether a printed function signature carries the template arguments that
+// its own text cannot otherwise show.
+//
+// `std::holds_alternative<float>(v)` and `std::holds_alternative<int>(v)`
+// print the SAME signature -- `bool std::holds_alternative(const
+// std::variant<...> &)` -- because the parameter it is deduced from does not
+// mention the argument. kInclude spells those arguments out, so the two
+// calls become distinguishable; kOmit is what every existing caller wants and
+// is byte-for-byte what the printer produced before this option existed.
+enum class TemplateArgs {
+  kOmit,
+  kInclude,
+};
+
 clang::QualType GetTypeForDecl(const clang::NamedDecl *decl);
 std::string ToString(clang::QualType qual_type,
                      ScalarSugar sugar = ScalarSugar::kDesugar);
-std::string ToString(const clang::Expr *expr);
-std::string ToString(const clang::NamedDecl *decl);
+std::string ToString(const clang::Expr *expr,
+                     TemplateArgs targs = TemplateArgs::kOmit);
+std::string ToString(const clang::NamedDecl *decl,
+                     TemplateArgs targs = TemplateArgs::kOmit);
 std::string ToRustName(std::string name);
 
 void LoadTranslationRules(Model model, clang::ASTContext &ctx,

@@ -201,11 +201,24 @@ foreach(_rule_dir IN LISTS rule_subdirs)
       list(APPEND _cxxflags --cxxflags=${_flag})
     endforeach()
   endif()
+  # A module that drops an (empty) `explicit-template-args` file next to its
+  # src.cpp is resolved with its non-deduced template arguments spelled out,
+  # so that two instantiations of a signature-invariant template --
+  # std::holds_alternative<T>, std::get<I> -- can carry two different rules.
+  # Opt-in per module: it respells the signature of every rule in the module
+  # whose call has such an argument, and no module needs it until it has a
+  # rule that cannot be written without it.
+  set(_targs)
+  set(_targs_file)
+  if(EXISTS ${_rule_dir}/explicit-template-args)
+    set(_targs_file ${_rule_dir}/explicit-template-args)
+    set(_targs --explicit-template-args)
+  endif()
   add_custom_command(
     OUTPUT ${_cpp_out}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${_out_dir}
-    COMMAND $<TARGET_FILE:cpp-rule-preprocessor> --dir ${_rule_dir} --out ${_cpp_out} ${_cxxflags}
-    DEPENDS ${_cpp_srcs} ${_cxxflags_file} ${PROJECT_SOURCE_DIR}/cpp2rust/cpp_rule_preprocessor.cpp ${RUSTLS_HEADER} ${BROTLI_HEADERS}
+    COMMAND $<TARGET_FILE:cpp-rule-preprocessor> --dir ${_rule_dir} --out ${_cpp_out} ${_cxxflags} ${_targs}
+    DEPENDS ${_cpp_srcs} ${_cxxflags_file} ${_targs_file} ${PROJECT_SOURCE_DIR}/cpp2rust/cpp_rule_preprocessor.cpp ${RUSTLS_HEADER} ${BROTLI_HEADERS}
     VERBATIM
   )
   list(APPEND cpp_rules_ir_outputs ${_cpp_out})

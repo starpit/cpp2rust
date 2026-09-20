@@ -4,9 +4,11 @@
 #include "converter/mapper.h"
 
 #include <clang/AST/ExprCXX.h>
+#include <clang/AST/RecursiveASTVisitor.h>
 #include <clang/Basic/OperatorKinds.h>
 #include <clang/Basic/SourceManager.h>
 #include <clang/Lex/Lexer.h>
+#include <llvm/ADT/SmallString.h>
 #include <llvm/Support/ThreadPool.h>
 
 #include <cctype>
@@ -14,6 +16,7 @@
 #include <format>
 #include <optional>
 #include <regex>
+#include <set>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -575,20 +578,51 @@ search(std::unordered_multimap<std::string, T> &map, const std::string &txt,
   return {rule, std::move(subs)};
 }
 
+struct ExprMatch {
+  TranslationRule::ExprRule *rule = nullptr;
+  std::vector<std::optional<std::string>> subs;
+  std::string text; // the signature the match was made against
+};
+
+// Looks an expression up by signature, most specific spelling first.
+//
+// A template argument that is not deduced from a parameter leaves no trace in
+// the signature -- `std::holds_alternative<float>` and
+// `std::holds_alternative<int>` print the same text, and so do `std::get<0>`
+// and `std::get<1>` on a `std::tuple<int, int>`. Pass one asks with those
+// arguments spelled out, which is the only spelling that can tell such calls
+// apart. Pass two asks with the plain signature, which is what every rule
+// written before this existed is keyed by; a rule set that says nothing about
+// the arguments therefore keeps answering exactly as it did.
+ExprMatch searchExpr(const clang::Expr *expr) {
+  ExprMatch match;
+  auto with_targs = ToString(expr, TemplateArgs::kInclude);
+  auto plain = ToString(expr);
+  if (with_targs != plain) {
+    // Printed even when nothing matches: this is the only place a rule author
+    // can read off the signature a rule for THIS instantiation has to have.
+    log() << "search expr explicit template args " << with_targs << '\n';
+    auto res = search(exprs_, with_targs, GetExprMapKey(with_targs));
+    if (res.first) {
+      return {res.first, std::move(res.second), std::move(with_targs)};
+    }
+  }
+  auto res = search(exprs_, plain, GetExprMapKey(plain));
+  return {res.first, std::move(res.second), std::move(plain)};
+}
+
 TranslationRule::ExprRule *search(const clang::Expr *expr) {
   if (RefersToUserDefinedDecl(expr)) {
     return nullptr;
   }
-  auto qualified_name = ToString(expr);
-  auto [rule, subs] =
-      search(exprs_, qualified_name, GetExprMapKey(qualified_name));
-  log() << "search expr " << qualified_name << ", result:\n";
-  if (rule) {
-    rule->dump();
+  auto match = searchExpr(expr);
+  log() << "search expr " << match.text << ", result:\n";
+  if (match.rule) {
+    match.rule->dump();
   } else {
     log() << "None\n";
   }
-  return rule;
+  return match.rule;
 }
 
 // Registers a project type the first time it is actually needed.
@@ -1020,8 +1054,7 @@ std::string MapFunctionName(const clang::FunctionDecl *decl) {
 }
 
 std::string InstantiateTemplate(const clang::Expr *expr, unsigned n) {
-  auto expr_str = ToString(expr);
-  auto [rule, subs] = search(exprs_, expr_str, GetExprMapKey(expr_str));
+  auto [rule, subs, matched] = searchExpr(expr);
   auto text = std::format("T{}", n);
   if (!rule) {
     return text;
@@ -1092,8 +1125,7 @@ const TranslationRule::TypeInfo &GetParamInfo(const clang::Expr *expr,
 }
 
 std::string GetParamType(const clang::Expr *expr, unsigned index) {
-  auto expr_str = ToString(expr);
-  auto [rule, subs] = search(exprs_, expr_str, GetExprMapKey(expr_str));
+  auto [rule, subs, matched] = searchExpr(expr);
   for (auto &ty : subs) {
     if (ty) {
       ty = mapTypeStringRecursive(*ty);
@@ -1292,6 +1324,161 @@ std::string ToRustName(std::string name) {
   return name;
 }
 
+namespace {
+
+// Every (depth, index) template parameter mentioned by a type.
+//
+// Used to answer "could this argument have been deduced from the call?".
+// Only a parameter that shows up in one of the function's PARAMETER types is
+// recoverable that way; anything else has to be written at the call site (or
+// defaulted), and is therefore invisible in the printed signature.
+class TemplateParmUseCollector
+    : public clang::RecursiveASTVisitor<TemplateParmUseCollector> {
+public:
+  using ParmSet = std::set<std::pair<unsigned, unsigned>>;
+
+  explicit TemplateParmUseCollector(ParmSet &out) : out_(out) {}
+
+  bool VisitTemplateTypeParmType(clang::TemplateTypeParmType *type) {
+    out_.emplace(type->getDepth(), type->getIndex());
+    return true;
+  }
+
+  bool VisitSubstTemplateTypeParmType(clang::SubstTemplateTypeParmType *type) {
+    if (const auto *parm = type->getReplacedParameter()) {
+      out_.emplace(parm->getDepth(), parm->getIndex());
+    }
+    return true;
+  }
+
+  // A non-type parameter appears inside a type as an expression, e.g. the `N`
+  // of `std::array<T, N>`.
+  bool VisitDeclRefExpr(clang::DeclRefExpr *expr) {
+    if (const auto *parm =
+            llvm::dyn_cast<clang::NonTypeTemplateParmDecl>(expr->getDecl())) {
+      out_.emplace(parm->getDepth(), parm->getIndex());
+    }
+    return true;
+  }
+
+private:
+  ParmSet &out_;
+};
+
+// The printed form of one explicit template argument, or nullopt for a kind
+// this code does not know how to spell. An unknown kind must disable the
+// whole suffix rather than be approximated: a key that is wrong is worse
+// than a key that is merely coarse, because the coarse one still falls back
+// to the signature-only lookup.
+std::optional<std::string>
+printTemplateArgument(const clang::TemplateArgument &arg) {
+  switch (arg.getKind()) {
+  case clang::TemplateArgument::Type:
+    return ToString(arg.getAsType());
+  case clang::TemplateArgument::Integral: {
+    llvm::SmallString<16> buf;
+    arg.getAsIntegral().toString(buf, 10);
+    return std::string(buf);
+  }
+  case clang::TemplateArgument::Pack: {
+    std::string out;
+    for (const auto &elem : arg.pack_elements()) {
+      auto text = printTemplateArgument(elem);
+      if (!text) {
+        return std::nullopt;
+      }
+      if (!out.empty()) {
+        out += ", ";
+      }
+      out += *text;
+    }
+    return out;
+  }
+  default:
+    return std::nullopt;
+  }
+}
+
+bool hasDefaultTemplateArgument(const clang::NamedDecl *param) {
+  if (const auto *type_parm =
+          llvm::dyn_cast<clang::TemplateTypeParmDecl>(param)) {
+    return type_parm->hasDefaultArgument();
+  }
+  if (const auto *value_parm =
+          llvm::dyn_cast<clang::NonTypeTemplateParmDecl>(param)) {
+    return value_parm->hasDefaultArgument();
+  }
+  if (const auto *template_parm =
+          llvm::dyn_cast<clang::TemplateTemplateParmDecl>(param)) {
+    return template_parm->hasDefaultArgument();
+  }
+  return false;
+}
+
+// `<float>` for `std::holds_alternative<float>(v)`, `<0>` for
+// `std::get<0>(t)`, and "" for the overwhelming majority of template calls,
+// whose arguments are all deduced from the parameter types and so are already
+// part of the printed signature.
+//
+// Restricting the suffix to the NON-DEDUCED arguments is what makes this
+// safe to bolt onto an existing rule set: a rule for `std::max<int>` or
+// `std::vector<T>::push_back` keeps exactly the signature text it has always
+// had, so its key does not move.
+std::string GetNonDeducedTemplateArgs(const clang::FunctionDecl *decl) {
+  const auto *args = decl->getTemplateSpecializationArgs();
+  const auto *primary = decl->getPrimaryTemplate();
+  if (!args || !primary) {
+    return {};
+  }
+  const auto *params = primary->getTemplateParameters();
+  const auto *pattern = primary->getTemplatedDecl();
+  if (!params || !pattern) {
+    return {};
+  }
+
+  std::set<std::pair<unsigned, unsigned>> deducible;
+  TemplateParmUseCollector collector(deducible);
+  for (const auto *param : pattern->parameters()) {
+    collector.TraverseType(param->getType());
+  }
+
+  std::string out;
+  const unsigned depth = params->getDepth();
+  for (unsigned i = 0, n = std::min<unsigned>(args->size(), params->size());
+       i < n; ++i) {
+    if (deducible.contains({depth, i})) {
+      continue;
+    }
+    // A parameter with a default is libc++'s SFINAE and ABI scaffolding --
+    // `template <class = int> double ceil(double)`, the `__enable_if_t<...> =
+    // 0` on every integral overload, `unique_ptr`'s `bool _Dummy = true`.
+    // Nobody writes those at a call site and no rule wants to name them;
+    // including them would respell 198 of the 1609 existing rules in terms of
+    // a standard library implementation detail.
+    if (hasDefaultTemplateArgument(params->getParam(i))) {
+      continue;
+    }
+    auto text = printTemplateArgument(args->get(i));
+    if (!text) {
+      return {};
+    }
+    if (text->empty()) {
+      // An empty pack contributes nothing and must not leave a stray comma.
+      continue;
+    }
+    if (!out.empty()) {
+      out += ", ";
+    }
+    out += *text;
+  }
+  if (out.empty()) {
+    return {};
+  }
+  return '<' + out + '>';
+}
+
+} // namespace
+
 std::string ToString(clang::QualType qual_type, ScalarSugar sugar) {
   assert(ctx_);
 
@@ -1348,7 +1535,7 @@ std::string ToString(clang::QualType qual_type, ScalarSugar sugar) {
   return normalizeTranslationRule(std::move(type));
 }
 
-std::string ToString(const clang::NamedDecl *decl) {
+std::string ToString(const clang::NamedDecl *decl, TemplateArgs targs) {
   if (auto *record = clang::dyn_cast<clang::RecordDecl>(decl);
       record && !record->getIdentifier()) {
     if (auto renamed = DisambiguateAnonymousTag(record); !renamed.empty()) {
@@ -1425,6 +1612,11 @@ std::string ToString(const clang::NamedDecl *decl) {
     func_decl->printQualifiedName(os, getPrintPolicy());
   }
 
+  // Template arguments are spliced in here, between the name and the
+  // parameter list, exactly where C++ writes them.
+  os.flush();
+  const size_t name_end = out.size();
+
   os << '(';
   for (unsigned i = 0, n = func_decl->getNumParams(); i < n; ++i) {
     if (i) {
@@ -1460,10 +1652,22 @@ std::string ToString(const clang::NamedDecl *decl) {
     }
   }
 
+  os.flush();
+  if (targs == TemplateArgs::kInclude) {
+    // Normalize the two halves separately and leave the argument list alone:
+    // normalizeTranslationRule rewrites every free-standing integer to `_`,
+    // which would collapse `std::get<0>` and `std::get<1>` back into one
+    // spelling -- the very distinction this suffix exists to make.
+    if (auto suffix = GetNonDeducedTemplateArgs(func_decl); !suffix.empty()) {
+      return normalizeTranslationRule(out.substr(0, name_end)) + suffix +
+             normalizeTranslationRule(out.substr(name_end));
+    }
+  }
+
   return normalizeTranslationRule(std::move(out));
 }
 
-std::string ToString(const clang::Expr *expr) {
+std::string ToString(const clang::Expr *expr, TemplateArgs targs) {
   if (!expr) {
     assert(0 && "!expr");
   }
@@ -1482,13 +1686,13 @@ std::string ToString(const clang::Expr *expr) {
 
   if (const auto *CE = llvm::dyn_cast<clang::CallExpr>(expr)) {
     if (const auto *decl = CE->getDirectCallee()) {
-      return ToString(decl);
+      return ToString(decl, targs);
     }
   }
 
   if (const auto *ctor = llvm::dyn_cast<clang::CXXConstructExpr>(expr)) {
     if (const auto *ctor_decl = ctor->getConstructor()) {
-      return ToString(ctor_decl);
+      return ToString(ctor_decl, targs);
     }
     assert(0 && "expr is a CXXConstructExpr but could not get constructor");
   }
@@ -1498,14 +1702,14 @@ std::string ToString(const clang::Expr *expr) {
             llvm::dyn_cast<clang::NamedDecl>(ME->getMemberDecl())) {
       if (const auto *method_decl =
               llvm::dyn_cast<clang::CXXMethodDecl>(member_decl)) {
-        return ToString(method_decl);
+        return ToString(method_decl, targs);
       }
       if (ME->isArrow()) {
         auto *base = ME->getBase()->IgnoreParenImpCasts();
         if (auto *op = llvm::dyn_cast<clang::CXXOperatorCallExpr>(base)) {
           if (op->getOperator() == clang::OO_Arrow) {
             return ToString(op->getArg(0)->getType()) + "->" +
-                   ToString(member_decl);
+                   ToString(member_decl, targs);
           }
         }
       } else if (auto for_range = GetParentForRange(*ctx_, ME)) {
@@ -1516,11 +1720,11 @@ std::string ToString(const clang::Expr *expr) {
             range_type.starts_with("std::unordered_set<")) {
           auto iter_type = GetForRangeIteratorType(for_range);
           if (!iter_type.isNull()) {
-            return ToString(iter_type) + "->" + ToString(member_decl);
+            return ToString(iter_type) + "->" + ToString(member_decl, targs);
           }
         }
       }
-      return ToString(member_decl);
+      return ToString(member_decl, targs);
     }
     assert(0 && "expr is a MemberExpr but could not get named decl");
   }
@@ -1530,15 +1734,15 @@ std::string ToString(const clang::Expr *expr) {
             llvm::dyn_cast<clang::NamedDecl>(decl_ref->getDecl())) {
       if (const auto *tmpl_decl =
               llvm::dyn_cast<clang::FunctionTemplateDecl>(named_decl)) {
-        return ToString(tmpl_decl->getTemplatedDecl());
+        return ToString(tmpl_decl->getTemplatedDecl(), targs);
       }
-      return ToString(named_decl);
+      return ToString(named_decl, targs);
     }
     return "";
   }
 
   if (const auto *uop = llvm::dyn_cast<clang::UnaryOperator>(expr)) {
-    auto sub = ToString(uop->getSubExpr());
+    auto sub = ToString(uop->getSubExpr(), targs);
     std::string_view opcode =
         clang::UnaryOperator::getOpcodeStr(uop->getOpcode());
     return uop->isPostfix() ? std::format("{}{}", sub, opcode)
