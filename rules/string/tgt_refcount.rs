@@ -311,3 +311,176 @@ fn f45(a0: Ptr<u8>, a1: Vec<u8>) -> bool {
 fn f46(a0: Ptr<u8>, a1: Vec<u8>) -> bool {
     !a0.to_c_string_iterator().eq(a1.iter().copied().take_while(|&c| c != 0))
 }
+
+// A placeholder is substituted as raw text, so a method call on one has to go
+// through a binding: `-7i64.to_string()` parses as `-(7i64.to_string())`.
+
+fn f47(a0: i32) -> Vec<u8> {
+    let __value = a0;
+    __value
+        .to_string()
+        .into_bytes()
+        .into_iter()
+        .chain(::std::iter::once(0))
+        .collect::<Vec<u8>>()
+}
+
+fn f48(a0: i64) -> Vec<u8> {
+    let __value = a0;
+    __value
+        .to_string()
+        .into_bytes()
+        .into_iter()
+        .chain(::std::iter::once(0))
+        .collect::<Vec<u8>>()
+}
+
+fn f49(a0: i64) -> Vec<u8> {
+    let __value = a0;
+    __value
+        .to_string()
+        .into_bytes()
+        .into_iter()
+        .chain(::std::iter::once(0))
+        .collect::<Vec<u8>>()
+}
+
+fn f50(a0: u32) -> Vec<u8> {
+    let __value = a0;
+    __value
+        .to_string()
+        .into_bytes()
+        .into_iter()
+        .chain(::std::iter::once(0))
+        .collect::<Vec<u8>>()
+}
+
+fn f51(a0: u64) -> Vec<u8> {
+    let __value = a0;
+    __value
+        .to_string()
+        .into_bytes()
+        .into_iter()
+        .chain(::std::iter::once(0))
+        .collect::<Vec<u8>>()
+}
+
+fn f52(a0: u64) -> Vec<u8> {
+    let __value = a0;
+    __value
+        .to_string()
+        .into_bytes()
+        .into_iter()
+        .chain(::std::iter::once(0))
+        .collect::<Vec<u8>>()
+}
+
+fn f53(a0: f32) -> Vec<u8> {
+    let __value = a0;
+    format!("{:.6}", __value)
+        .into_bytes()
+        .into_iter()
+        .chain(::std::iter::once(0))
+        .collect::<Vec<u8>>()
+}
+
+fn f54(a0: f64) -> Vec<u8> {
+    let __value = a0;
+    format!("{:.6}", __value)
+        .into_bytes()
+        .into_iter()
+        .chain(::std::iter::once(0))
+        .collect::<Vec<u8>>()
+}
+
+fn f55(a0: Vec<u8>, a1: Ptr<usize>, a2: i32) -> i32 {
+    let __pos: Ptr<usize> = a1;
+    let __text: String = a0
+        .iter()
+        .copied()
+        .take_while(|&__c| __c != 0)
+        .map(|__c| __c as char)
+        .collect();
+    let __lead = __text.len() - __text.trim_start().len();
+    let __body = &__text[__lead..];
+    let __sign = usize::from(__body.starts_with('+') || __body.starts_with('-'));
+    let __rest = &__body[__sign..];
+    let __radix: u32 = if a2 != 0 {
+        a2 as u32
+    } else if __rest.starts_with("0x") || __rest.starts_with("0X") {
+        16
+    } else if __rest.len() > 1 && __rest.starts_with('0') {
+        8
+    } else {
+        10
+    };
+    let __skip =
+        usize::from(__radix == 16 && (__rest.starts_with("0x") || __rest.starts_with("0X"))) * 2;
+    let __n = __rest[__skip..]
+        .chars()
+        .take_while(|__c| __c.is_digit(__radix))
+        .count();
+    assert!(__n > 0, "stoi: no conversion");
+    let __digits: String = [&__body[..__sign], &__rest[__skip..__skip + __n]].concat();
+    let __value = i64::from_str_radix(&__digits, __radix).expect("stoi: out of range");
+    if !__pos.is_null() {
+        __pos.write(__lead + __sign + __skip + __n);
+    }
+    __value as i32
+}
+
+fn f56(a0: Vec<u8>, a1: Ptr<usize>, a2: i32) -> i64 {
+    let __pos: Ptr<usize> = a1;
+    let __text: String = a0
+        .iter()
+        .copied()
+        .take_while(|&__c| __c != 0)
+        .map(|__c| __c as char)
+        .collect();
+    let __lead = __text.len() - __text.trim_start().len();
+    let __body = &__text[__lead..];
+    let __sign = usize::from(__body.starts_with('+') || __body.starts_with('-'));
+    let __rest = &__body[__sign..];
+    let __radix: u32 = if a2 != 0 {
+        a2 as u32
+    } else if __rest.starts_with("0x") || __rest.starts_with("0X") {
+        16
+    } else if __rest.len() > 1 && __rest.starts_with('0') {
+        8
+    } else {
+        10
+    };
+    let __skip =
+        usize::from(__radix == 16 && (__rest.starts_with("0x") || __rest.starts_with("0X"))) * 2;
+    let __n = __rest[__skip..]
+        .chars()
+        .take_while(|__c| __c.is_digit(__radix))
+        .count();
+    assert!(__n > 0, "stoll: no conversion");
+    let __digits: String = [&__body[..__sign], &__rest[__skip..__skip + __n]].concat();
+    let __value = i64::from_str_radix(&__digits, __radix).expect("stoll: out of range");
+    if !__pos.is_null() {
+        __pos.write(__lead + __sign + __skip + __n);
+    }
+    __value
+}
+
+fn f57(a0: Vec<u8>, a1: Ptr<usize>) -> f64 {
+    let __pos: Ptr<usize> = a1;
+    let __text: String = a0
+        .iter()
+        .copied()
+        .take_while(|&__c| __c != 0)
+        .map(|__c| __c as char)
+        .collect();
+    let __lead = __text.len() - __text.trim_start().len();
+    let __body = &__text[__lead..];
+    let __n = (1..=__body.len())
+        .rev()
+        .find(|&__i| __body[..__i].parse::<f64>().is_ok())
+        .expect("stod: no conversion");
+    if !__pos.is_null() {
+        __pos.write(__lead + __n);
+    }
+    __body[..__n].parse::<f64>().unwrap()
+}

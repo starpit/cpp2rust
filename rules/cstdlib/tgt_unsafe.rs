@@ -68,3 +68,19 @@ unsafe fn f9(
 unsafe fn f10(a0: *const libc::c_char, a1: *mut libc::c_char) -> *mut libc::c_char {
     libc::realpath(a0, a1)
 }
+
+unsafe fn f11(a0: i32) {
+    ::std::process::exit(a0)
+}
+
+unsafe fn f12(a0: *const libc::c_char) -> i32 {
+    libc::atoi(a0)
+}
+
+unsafe fn f13(a0: *const libc::c_char) -> i64 {
+    libc::atoll(a0)
+}
+
+unsafe fn f14(a0: *const libc::c_char) -> i32 {
+    libc::system(a0)
+}

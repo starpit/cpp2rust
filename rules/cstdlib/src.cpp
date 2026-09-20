@@ -32,3 +32,13 @@ void f9(void *base, size_t nmemb, size_t size,
 char *f10(const char *path, char *resolved_path) {
   return realpath(path, resolved_path);
 }
+
+// std::exit runs static destructors and flushes streams; process::exit does
+// neither, which matches what the translated program has (no static dtors).
+void f11(int status) { return std::exit(status); }
+
+int f12(const char *s) { return std::atoi(s); }
+
+long long f13(const char *s) { return std::atoll(s); }
+
+int f14(const char *s) { return std::system(s); }

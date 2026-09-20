@@ -74,3 +74,26 @@ std::unique_ptr<T1[]> &f15(std::unique_ptr<T1[]> &dst,
                            std::unique_ptr<T1[]> &&src) {
   return dst.operator=(std::move(src));
 }
+
+// std::unique_ptr::release -- relinquish ownership WITHOUT destroying, and
+// hand back the raw pointer. The caller becomes responsible for the object.
+//
+// In the refcount model the object is an Rc the Option owns outright (the
+// unique_ptr ctor from a raw pointer called Ptr::to_owned_opt, which dropped
+// the leaked strong reference). Releasing puts it back into the leaked state
+// -- std::mem::forget on the taken Option -- so every raw pointer get() handed
+// out earlier stays upgradeable, which is exactly what C++ guarantees.
+//
+// The returned Ptr is a StackSingle handle, the same kind get() returns, so
+// re-owning it through std::unique_ptr<T>(p) panics loudly rather than
+// silently double-owning. PtrKind::HeapSingle is pub(crate) in libcc2rs, so a
+// rule body cannot build one; that is the same limitation get() already has.
+template <typename T1> T1 *f16(std::unique_ptr<T1> &o) { return o.release(); }
+
+// `std::unique_ptr<T>(nullptr)`.  Distinct from the default constructor (f10):
+// it is a one-argument CXXConstructExpr, so f10's `unique_ptr()` never matches
+// and the call falls back to a mangled placeholder.  As in rules/shared_ptr,
+// the std::nullptr_t parameter has no Rust counterpart and is dropped.
+template <typename T1> std::unique_ptr<T1> f17(std::nullptr_t a0) {
+  return std::unique_ptr<T1>(a0);
+}

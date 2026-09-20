@@ -95,3 +95,31 @@ unsafe fn f20<T1: FromIterator<libc::c_char>, T2: TryFrom<T3>, T3: Clone>(
         T2::try_from(a1).ok().expect("failed conversion"),
     )
 }
+
+unsafe fn f21<T1, T2>(a0: T1, a1: T2) -> (T1, T2) {
+    (a0.into(), a1.into())
+}
+
+unsafe fn f22<T1, T2>(a0: T1, a1: T2) -> (T1, T2) {
+    (a0.into(), a1.into())
+}
+
+unsafe fn f23<T1, T2>(a0: T1, a1: T2) -> (T1, T2) {
+    (a0.into(), a1.into())
+}
+
+unsafe fn f24<T1, T2>(a0: T1, a1: T2) -> (T1, T2) {
+    (a0.into(), a1.into())
+}
+
+unsafe fn f25<T1, T2>(a0: T1, a1: T2) -> (T1, T2) {
+    (a0.into(), a1.into())
+}
+
+unsafe fn f26<T1, T2>(a0: T1, a1: T2) -> (T1, T2) {
+    (a0.into(), a1.into())
+}
+
+unsafe fn f27<T1, T2>(a0: T1, a1: T2) -> (T1, T2) {
+    (a0.into(), a1.into())
+}

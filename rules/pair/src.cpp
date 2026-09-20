@@ -127,3 +127,38 @@ template <typename T1, typename T2, typename T3, std::size_t T4>
 std::pair<T1, T2> f20(const char (&a0)[T4], T3 &&a1) {
   return std::pair<T1, T2>(a0, std::move(a1));
 }
+
+// std::make_pair from two LVALUES, and from two const lvalues.  f9/f10 only
+// cover the rvalue forms, so `std::make_pair(a, b)` on two named variables --
+// by far the common spelling -- had no rule at all.
+template <class T1, class T2> auto f21(T1 &a0, T2 &a1) {
+  return std::make_pair(a0, a1);
+}
+
+template <class T1, class T2> auto f22(const T1 &a0, const T2 &a1) {
+  return std::make_pair(a0, a1);
+}
+
+// The remaining make_pair value-category combinations.  Each one is a
+// separate resolved signature: libc++ deduces the parameter from the CALL, so
+// `make_pair(lvalue, rvalue)` and `make_pair(lvalue, lvalue)` never share a
+// rule.  Spellings read out of `cpp2rust --verbose`.
+template <class T1, class T2> auto f23(const T1 &a0, T2 &a1) {
+  return std::make_pair(a0, a1);
+}
+
+template <class T1, class T2> auto f24(const T1 &a0, T2 &&a1) {
+  return std::make_pair(a0, std::move(a1));
+}
+
+template <class T1, class T2> auto f25(T1 &a0, const T2 &a1) {
+  return std::make_pair(a0, a1);
+}
+
+template <class T1, class T2> auto f26(T1 &a0, T2 &&a1) {
+  return std::make_pair(a0, std::move(a1));
+}
+
+template <class T1, class T2> auto f27(T1 &&a0, const T2 &a1) {
+  return std::make_pair(std::move(a0), a1);
+}

@@ -75,3 +75,14 @@ fn f14<T1: ByteRepr>(a0: Ptr<Option<Value<T1>>>, a1: &mut Option<Value<T1>>) {
 fn f15<T1: ByteRepr>(a0: Ptr<Option<Value<Box<[T1]>>>>, a1: &mut Option<Value<Box<[T1]>>>) {
     a0.write(a1.take())
 }
+
+fn f16<T1>(a0: &mut Option<Value<T1>>) -> Ptr<T1> {
+    let __owned = a0.take();
+    let __p: Ptr<T1> = __owned.as_pointer();
+    ::std::mem::forget(__owned);
+    __p
+}
+
+fn f17<T1>() -> Option<Value<T1>> {
+    None
+}

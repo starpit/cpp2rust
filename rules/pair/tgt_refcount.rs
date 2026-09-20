@@ -161,3 +161,52 @@ fn f20<T1: FromIterator<u8>, T2: TryFrom<T3>, T3: Clone>(
         )),
     )
 }
+
+fn f21<T1, T2>(a0: T1, a1: T2) -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(a0.try_into().expect("failed conversion"))),
+        Rc::new(RefCell::new(a1.try_into().expect("failed conversion"))),
+    )
+}
+
+fn f22<T1, T2>(a0: T1, a1: T2) -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(a0.try_into().expect("failed conversion"))),
+        Rc::new(RefCell::new(a1.try_into().expect("failed conversion"))),
+    )
+}
+
+fn f23<T1, T2>(a0: T1, a1: T2) -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(a0.try_into().expect("failed conversion"))),
+        Rc::new(RefCell::new(a1.try_into().expect("failed conversion"))),
+    )
+}
+
+fn f24<T1, T2>(a0: T1, a1: T2) -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(a0.try_into().expect("failed conversion"))),
+        Rc::new(RefCell::new(a1.try_into().expect("failed conversion"))),
+    )
+}
+
+fn f25<T1, T2>(a0: T1, a1: T2) -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(a0.try_into().expect("failed conversion"))),
+        Rc::new(RefCell::new(a1.try_into().expect("failed conversion"))),
+    )
+}
+
+fn f26<T1, T2>(a0: T1, a1: T2) -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(a0.try_into().expect("failed conversion"))),
+        Rc::new(RefCell::new(a1.try_into().expect("failed conversion"))),
+    )
+}
+
+fn f27<T1, T2>(a0: T1, a1: T2) -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(a0.try_into().expect("failed conversion"))),
+        Rc::new(RefCell::new(a1.try_into().expect("failed conversion"))),
+    )
+}

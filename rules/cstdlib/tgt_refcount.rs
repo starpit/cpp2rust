@@ -93,3 +93,35 @@ fn f9(a0: AnyPtr, a1: usize, a2: usize, a3: fn(AnyPtr, AnyPtr) -> i32) {
         }
     }
 }
+
+fn f11(a0: i32) {
+    ::std::process::exit(a0)
+}
+
+fn f12(a0: Ptr<u8>) -> i32 {
+    let __text = a0.to_rust_string();
+    let __t = __text.trim_start();
+    let __n = __t
+        .char_indices()
+        .take_while(|&(__i, __c)| __c.is_ascii_digit() || (__i == 0 && (__c == '+' || __c == '-')))
+        .count();
+    __t[..__n].parse::<i64>().unwrap_or(0) as i32
+}
+
+fn f13(a0: Ptr<u8>) -> i64 {
+    let __text = a0.to_rust_string();
+    let __t = __text.trim_start();
+    let __n = __t
+        .char_indices()
+        .take_while(|&(__i, __c)| __c.is_ascii_digit() || (__i == 0 && (__c == '+' || __c == '-')))
+        .count();
+    __t[..__n].parse::<i64>().unwrap_or(0)
+}
+
+fn f14(a0: Ptr<u8>) -> i32 {
+    ::std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(a0.to_rust_string())
+        .status()
+        .map_or(-1, |__s| __s.code().unwrap_or(-1))
+}

@@ -127,3 +127,56 @@ bool f44(const std::string &a, const char *b) { return a != b; }
 bool f45(const char *a, const std::string &b) { return a == b; }
 
 bool f46(const char *a, const std::string &b) { return a != b; }
+
+// ---------------------------------------------------------------------------
+// std::to_string
+//
+// One rule per arithmetic overload: overload resolution is exact, so the
+// int rule never matches a `long long` call site.
+//
+// The float and double forms are NOT Rust's `to_string`.  libc++ implements
+// them with sprintf("%f"), i.e. always six digits after the decimal point,
+// where Rust prints the shortest round-tripping form -- so `1.5` becomes
+// "1.500000" in C++ and "1.5" in Rust.  The targets format explicitly.
+// ---------------------------------------------------------------------------
+
+std::string f47(int a0) { return std::to_string(a0); }
+
+std::string f48(long a0) { return std::to_string(a0); }
+
+std::string f49(long long a0) { return std::to_string(a0); }
+
+std::string f50(unsigned int a0) { return std::to_string(a0); }
+
+std::string f51(unsigned long a0) { return std::to_string(a0); }
+
+std::string f52(unsigned long long a0) { return std::to_string(a0); }
+
+std::string f53(float a0) { return std::to_string(a0); }
+
+std::string f54(double a0) { return std::to_string(a0); }
+
+// ---------------------------------------------------------------------------
+// std::stoi / std::stoll / std::stod
+//
+// The defaulted arguments are materialised by the caller, so the signature
+// cpp2rust looks up carries all of them: `int std::stoi(const std::string &,
+// unsigned long *, int)`.  A rule with fewer parameters never matches.
+//
+// `pos` is an out-parameter receiving the index one past the last character
+// consumed; it is usually null.  C++ throws std::invalid_argument when no
+// conversion is possible -- these panic instead, which is the loud failure,
+// not a silent zero.
+// ---------------------------------------------------------------------------
+
+int f55(const std::string &a0, std::size_t *a1, int a2) {
+  return std::stoi(a0, a1, a2);
+}
+
+long long f56(const std::string &a0, std::size_t *a1, int a2) {
+  return std::stoll(a0, a1, a2);
+}
+
+double f57(const std::string &a0, std::size_t *a1) {
+  return std::stod(a0, a1);
+}
