@@ -215,3 +215,13 @@ typename std::deque<T1>::const_iterator
 f40(const typename std::deque<T1>::const_reverse_iterator &it) {
   return it.base();
 }
+
+template <typename T1>
+bool f41(const std::deque<T1> &a, const std::deque<T1> &b) {
+  return operator==(a, b);
+}
+
+template <typename T1>
+bool f42(const std::deque<T1> &a, const std::deque<T1> &b) {
+  return operator!=(a, b);
+}

@@ -192,3 +192,11 @@ unsafe fn f39<T1>(a0: *const T1, a1: *const T1) -> bool {
 unsafe fn f40<T1>(a0: *const T1) -> *const T1 {
     a0.wrapping_add(1)
 }
+
+unsafe fn f41<T1: PartialEq>(a0: Vec<T1>, a1: Vec<T1>) -> bool {
+    a0 == a1
+}
+
+unsafe fn f42<T1: PartialEq>(a0: Vec<T1>, a1: Vec<T1>) -> bool {
+    a0 != a1
+}

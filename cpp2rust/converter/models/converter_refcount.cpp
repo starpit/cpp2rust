@@ -1228,6 +1228,11 @@ bool ConverterRefCount::VisitCallExpr(clang::CallExpr *expr) {
 
   if (isObject()) {
     StrCat(std::format("{}.to_strong().as_pointer()", std::move(str)));
+    // Every other exit from this function sets the computed type; this one
+    // did not, so a zero-argument mapped call returning a reference (
+    // llvm::errs() as the direct receiver of <<) left it Unknown and tripped
+    // the "computed_expr_type_ not set" assert. What is emitted is a pointer.
+    computed_expr_type_ = ComputedExprType::FreshPointer;
     return false;
   }
 

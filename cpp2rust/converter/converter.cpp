@@ -1267,6 +1267,13 @@ void Converter::EmitConstructorFieldInits(clang::CXXConstructorDecl *decl) {
 }
 
 bool Converter::VisitFieldDecl(clang::FieldDecl *decl) {
+  if (getenv("CPP2RUST_DEBUG_FIELD")) {
+    llvm::errs() << "FIELD " << decl->getParent()->getNameAsString() << "::"
+                 << decl->getNameAsString() << " : "
+                 << decl->getType().getAsString() << " @ "
+                 << decl->getLocation().printToString(ctx_.getSourceManager())
+                 << '\n';
+  }
   auto access_spec = AccessSpecifierAsString(decl->getAccess());
   auto field_name = GetNamedDeclAsString(decl);
   StrCat(access_spec, std::move(field_name), token::kColon);

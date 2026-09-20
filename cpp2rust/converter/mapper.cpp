@@ -129,6 +129,39 @@ void AddTypeRule(std::string src, TranslationRule::TypeRule &&rule) {
 //   template_str   = "std::vector<T1>::vector()"
 //   instantiated   = "std::vector<int>::vector()"
 //   result         = { "int" }
+// True if `text` contains a comma outside any bracket -- i.e. it spans more
+// than one template argument.
+//
+// A single template parameter must never capture one. std::tuple<T1, T2>
+// otherwise matches a 26-element std::tie tuple by binding T1 to "const
+// double &" and T2 to the remaining 25 arguments, and that bogus "type" then
+// fails to map with the whole parameter list quoted as if it were a type.
+bool spansSeveralArguments(std::string_view text) {
+  int depth = 0;
+  for (char c : text) {
+    switch (c) {
+    case '<':
+    case '(':
+    case '[':
+      ++depth;
+      break;
+    case '>':
+    case ')':
+    case ']':
+      --depth;
+      break;
+    case ',':
+      if (depth == 0) {
+        return true;
+      }
+      break;
+    default:
+      break;
+    }
+  }
+  return false;
+}
+
 std::optional<std::vector<std::optional<std::string>>>
 matchTemplate(const std::string &template_str,
               const std::string &instantiated) {
@@ -311,6 +344,9 @@ matchTemplate(const std::string &template_str,
           }
 
           repl = instantiated.substr(a, b - a);
+          if (spansSeveralArguments(*repl)) {
+            return std::nullopt;
+          }
           si = k;
         } else {
           size_t a = si;
@@ -324,6 +360,9 @@ matchTemplate(const std::string &template_str,
           }
 
           repl = instantiated.substr(a, b - a);
+          if (spansSeveralArguments(*repl)) {
+            return std::nullopt;
+          }
           si = instantiated.size();
         }
       }
@@ -757,7 +796,11 @@ std::string mapTypeStringRecursive(const std::string &cpp_type) {
           view.remove_suffix(1);
         }
       }
-      if (view.ends_with('*')) {
+      // Never a FUNCTION pointer: `Ret (*)(args)` would have its '*' stripped
+      // and the bare function type looked up, which cannot match and reports
+      // the parameter list as if it were a type. Those are handled by
+      // VisitPointerType's FunctionProtoType branch instead.
+      if (view.ends_with('*') && cpp_type.find('(') == std::string::npos) {
         view.remove_suffix(1);
         while (view.ends_with(' ')) {
           view.remove_suffix(1);
@@ -792,6 +835,9 @@ std::string mapTypeStringRecursive(const std::string &cpp_type) {
       return UnsupportedPlaceholder("UnmappedType", cpp_type);
     }
     llvm::errs() << "cpp_type: " << cpp_type << '\n';
+    if (ctx_) {
+      llvm::errs() << "  (key='" << GetTypeMapKey(cpp_type) << "')\n";
+    }
     assert(0 && "Type is not present in types_");
     llvm::report_fatal_error("Type is not present in types_");
   }
