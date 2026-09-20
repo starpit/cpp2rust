@@ -66,6 +66,7 @@ public:
 
   void ConvertLateInstantiatedMethods(clang::CXXRecordDecl *decl) override;
 
+  void ConvertMethodOnPtrTraitDecl(clang::CXXMethodDecl *method);
   void ConvertMethodOnPtr(clang::CXXMethodDecl *method);
 
   bool VisitCXXThisExpr(clang::CXXThisExpr *expr) override;
@@ -127,6 +128,10 @@ public:
   void EmitStmtExprTail(clang::Expr *tail) override;
 
   bool VisitInitListExpr(clang::InitListExpr *expr) override;
+
+  bool VisitCXXStdInitializerListExpr(
+      clang::CXXStdInitializerListExpr *expr) override;
+
   bool VisitArrayInitLoopExpr(clang::ArrayInitLoopExpr *expr) override;
 
   bool VisitArraySubscriptExpr(clang::ArraySubscriptExpr *expr) override;
@@ -266,6 +271,13 @@ private:
                              const clang::FunctionProtoType *target_proto);
 
   void EmitSetOrAssign(clang::Expr *lhs, std::string_view rhs);
+
+  // If lhs is a direct reference to a global/static value (not a reference
+  // type), emits `var.with(|rc| *rc.borrow_mut() <op> <rhs>)` and returns
+  // true. This avoids cloning the Rc just to assign through it. Returns
+  // false (emitting nothing) if lhs doesn't match this shape.
+  bool EmitGlobalValueAssign(clang::Expr *lhs, std::string_view assign_operator,
+                             std::string_view rhs);
 
   // Wraps a pointer expression with deref prefix/suffix: e.g.
   // "(*ptr.upgrade().deref())" or "(ptr.read())"

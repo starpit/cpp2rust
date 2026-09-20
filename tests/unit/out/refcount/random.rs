@@ -58,24 +58,8 @@ impl ByteRepr for Pair {}
 pub fn zero_0() -> i32 {
     return 0;
 }
-#[derive(Default)]
+#[derive(Clone, ByteRepr, Default)]
 pub struct X1 {}
-impl Clone for X1 {
-    fn clone(&self) -> Self {
-        let __this: Value<X1> = Rc::new(RefCell::new(Self {}));
-        let this: Ptr<X1> = __this.as_pointer();
-        Rc::try_unwrap(__this).ok().unwrap().into_inner()
-    }
-}
-impl ByteRepr for X1 {
-    fn byte_size() -> usize {
-        1
-    }
-    fn to_bytes(&self, buf: &mut [u8]) {}
-    fn from_bytes(buf: &[u8]) -> Self {
-        Self {}
-    }
-}
 pub fn foo_1(x1: i32, x2: Ptr<i32>, x3: Ptr<i32>, p2: Ptr<Pair>, p3: Ptr<Pair>) {
     let x1: Value<i32> = Rc::new(RefCell::new(x1));
     let x3: Value<Ptr<i32>> = Rc::new(RefCell::new(x3));

@@ -536,6 +536,13 @@ bool Converter::VisitFunctionTemplateDecl(clang::FunctionTemplateDecl *decl) {
   return false;
 }
 
+bool Converter::VisitVarTemplateDecl(clang::VarTemplateDecl *decl) {
+  for (auto *var_decl : decl->specializations()) {
+    VisitVarDecl(var_decl);
+  }
+  return false;
+}
+
 void Converter::ConvertVaListVarDecl(clang::VarDecl *decl) {
   if (clang::isa<clang::ParmVarDecl>(decl)) {
     // va_list parameter (decayed to __va_list_tag *)
@@ -1101,7 +1108,8 @@ bool Converter::VisitCXXMethodDecl(clang::CXXMethodDecl *decl) {
   if (!ShouldConvertMethod(decl)) {
     return false;
   }
-  if (!decl->isPureVirtual() && !decl->hasBody()) {
+  if (decl->getDescribedFunctionTemplate() || decl->isDependentContext() ||
+      (!decl->isPureVirtual() && !decl->hasBody())) {
     return false;
   }
   if (!decl_ids_.insert(GetMethodID(decl)).second) {
@@ -1112,7 +1120,7 @@ bool Converter::VisitCXXMethodDecl(clang::CXXMethodDecl *decl) {
   if (decl->isOutOfLine() && !decl->overridden_methods().empty()) {
     return false;
   }
-  if (decl->isOutOfLine()) {
+  if (decl->isOutOfLine() && !decl->isTemplateInstantiation()) {
     return ConvertOutOfLineMethod(decl);
   }
   return ConvertCXXMethodDecl(decl);
@@ -1160,6 +1168,9 @@ bool Converter::ConvertCXXMethodDecl(clang::CXXMethodDecl *decl) {
   ConvertFunctionReturnType(decl);
   if (decl->isPureVirtual() || method_target_ == MethodTarget::TraitDecl) {
     StrCat(token::kSemiColon);
+  } else if (method_target_ == MethodTarget::TraitDefault) {
+    PushBrace body(*this);
+    StrCat("unimplemented!()");
   } else {
     PushBrace body(*this);
     EmitFunctionPreamble(decl);
@@ -1169,7 +1180,7 @@ bool Converter::ConvertCXXMethodDecl(clang::CXXMethodDecl *decl) {
 }
 
 std::string Converter::GetSelfMaybeWithMut(const clang::CXXMethodDecl *decl) {
-  return decl->isConst() ? "&self" : "&mut self";
+  return MethodNeedsMutableReceiver(decl) ? "&mut self" : "&self";
 }
 
 std::string Converter::GetCtorName(clang::CXXConstructorDecl *decl) {
@@ -1211,8 +1222,11 @@ bool Converter::VisitCXXConstructorDecl(clang::CXXConstructorDecl *decl) {
 
 void Converter::ConvertCXXConstructorBody(clang::CXXConstructorDecl *decl) {
   EmitFunctionPreamble(decl);
-  StrCat(keyword::kLet, "mut", "this", token::kAssign, "Self");
-  {
+  StrCat(keyword::kLet, "mut", "this", token::kAssign);
+  if (decl->isDelegatingConstructor()) {
+    Convert((*decl->init_begin())->getInit());
+  } else {
+    StrCat("Self");
     PushBrace this_init(*this);
     EmitConstructorFieldInits(decl);
   }
@@ -1228,26 +1242,23 @@ void Converter::EmitConstructorFieldInits(clang::CXXConstructorDecl *decl) {
   assert(definition_or_null);
   auto *definition = clang::cast<clang::CXXConstructorDecl>(definition_or_null);
 
-  bool has_inits = !definition->inits().empty();
-  auto **ctor_initializer_list = definition->inits().begin();
-  int curr_init =
-      has_inits ? (ctor_initializer_list[0]->isBaseInitializer() ? 1 : 0) : 0;
-
   for (const auto *field : record_decl->fields()) {
     auto field_name = GetNamedDeclAsString(field);
     auto field_type = field->getType();
-    auto *ctor_initializer =
-        has_inits ? ctor_initializer_list[curr_init] : nullptr;
+    const clang::CXXCtorInitializer *ctor_initializer = nullptr;
+    for (const auto *init : definition->inits()) {
+      if (init->isMemberInitializer() && init->getMember() == field) {
+        ctor_initializer = init;
+        break;
+      }
+    }
 
-    if (has_inits &&
-        GetNamedDeclAsString(ctor_initializer->getMember()) == field_name) {
-      auto *ctor_init_expr = ctor_initializer->getInit();
+    if (ctor_initializer) {
       StrCat(field_name, token::kColon);
-      ConvertVarInit(field_type, ctor_init_expr);
-      curr_init = (curr_init + 1) % definition->getNumCtorInitializers();
-    } else if (field->hasInClassInitializer()) {
+      ConvertVarInit(field_type, ctor_initializer->getInit());
+    } else if (auto *init = field->getInClassInitializer()) {
       StrCat(field_name, token::kColon);
-      ConvertVarInit(field_type, field->getInClassInitializer());
+      ConvertVarInit(field_type, init);
     } else {
       StrCat(field_name, token::kColon, GetDefaultAsString(field_type));
     }
@@ -1837,6 +1848,14 @@ bool Converter::VisitCallExpr(clang::CallExpr *expr) {
     return false;
   }
 
+  // p->~T() is a no-op when T has nothing to destruct
+  if (auto *dtor = clang::dyn_cast_or_null<clang::CXXDestructorDecl>(
+          expr->getCalleeDecl());
+      dtor && !RecordNeedsDestruction(dtor->getParent())) {
+    SetFreshType(expr->getType());
+    return false;
+  }
+
   if (IsImplicitAssignmentCall(expr) && !Mapper::Contains(expr->getCallee())) {
     auto *call = clang::cast<clang::CXXMemberCallExpr>(expr);
     ConvertAssignment(call->getImplicitObjectArgument(), call->getArg(0), "=");
@@ -2294,6 +2313,13 @@ bool Converter::VisitFloatingLiteral(clang::FloatingLiteral *expr) {
 }
 
 bool Converter::VisitCharacterLiteral(clang::CharacterLiteral *expr) {
+  if (expr->getKind() != clang::CharacterLiteralKind::Ascii) {
+    PushParen paren(*this);
+    StrCat(std::to_string(expr->getValue()), keyword::kAs,
+           ToStringBase(expr->getType()));
+    computed_expr_type_ = ComputedExprType::FreshValue;
+    return false;
+  }
   auto uc = static_cast<unsigned char>(expr->getValue());
   std::string ch = GetEscapedCharLiteral(expr->getValue());
   ch = (uc > 0x7F ? "b'" : "'") + std::move(ch) + '\'';
@@ -2358,7 +2384,37 @@ std::string Converter::GetEscapedStringLiteral(clang::Expr *expr,
   return out;
 }
 
+bool Converter::IsArrayInitContext() const {
+  return !curr_init_type_.empty() && curr_init_type_.back()->isArrayType();
+}
+
+std::string
+Converter::GetCodeUnitArrayLiteral(const clang::StringLiteral *expr) {
+  auto elem_type =
+      ToStringBase(ctx_.getAsArrayType(expr->getType())->getElementType());
+  uint64_t len = expr->getLength();
+  uint64_t total = len + 1;
+  if (IsArrayInitContext()) {
+    if (auto *arr_ty = ctx_.getAsConstantArrayType(curr_init_type_.back())) {
+      total = std::max(arr_ty->getSize().getZExtValue(), len);
+    }
+  }
+  std::string out = "[";
+  for (uint64_t i = 0; i < total; ++i) {
+    out += std::format("{} as {}, ", i < len ? expr->getCodeUnit(i) : 0,
+                       elem_type);
+  }
+  out += ']';
+  return out;
+}
+
 bool Converter::VisitStringLiteral(clang::StringLiteral *expr) {
+  if (IsCodeUnitStringLiteral(expr)) {
+    StrCat(GetCodeUnitArrayLiteral(expr));
+    computed_expr_type_ = ComputedExprType::FreshValue;
+    return false;
+  }
+
   auto init_type = curr_init_type_.empty()
                        ? clang::QualType()
                        : curr_init_type_.back().getNonReferenceType();
@@ -2609,7 +2665,19 @@ bool Converter::VisitExplicitCastExpr(clang::ExplicitCastExpr *expr) {
     Convert(expr->getSubExpr());
     return false;
   }
+  // A cast to a reference type only rebinds the operand, it converts nothing
+  if (type->isReferenceType()) {
+    Convert(sub_expr);
+    return false;
+  }
   switch (expr->getStmtClass()) {
+  case clang::Stmt::CXXFunctionalCastExprClass:
+    if (type->isEnumeralType() && !sub_expr->getType()->isEnumeralType()) {
+      ConvertIntegerToEnumeralCast(expr, sub_expr);
+      return false;
+    }
+    Convert(sub_expr, type);
+    return false;
   case clang::Stmt::CXXReinterpretCastExprClass:
   case clang::Stmt::CXXStaticCastExprClass:
   case clang::Stmt::CStyleCastExprClass:
@@ -2664,7 +2732,8 @@ bool Converter::VisitCXXRewrittenBinaryOperator(
 
 bool Converter::VisitBinaryOperator(clang::BinaryOperator *expr) {
   if (expr->getOpcode() == clang::BO_Cmp) {
-    StrCat(std::format("({}).cmp(&({}))", ConvertRValue(expr->getLHS()),
+    StrCat(std::format("std::cmp::Ord::cmp(&({}), &({}))",
+                       ConvertRValue(expr->getLHS()),
                        ConvertRValue(expr->getRHS())));
     computed_expr_type_ = ComputedExprType::FreshValue;
     return false;
@@ -3258,11 +3327,21 @@ void Converter::SetUFCSReceiver(clang::Expr *base, bool is_arrow,
   }
   Buffer buf(*this);
   PushExprKind push(*this, ExprKind::LValue);
-  StrCat(method->isConst() ? "&" : "&mut");
+  auto object_type = is_arrow ? base->getType()->getPointeeType()
+                              : base->getType().getNonReferenceType();
+  bool cast_mut =
+      MethodNeedsMutableReceiver(method) && object_type.isConstQualified();
+  StrCat(MethodNeedsMutableReceiver(method) ? "&mut" : "&");
+  if (cast_mut) {
+    StrCat("*(&raw const");
+  }
   if (is_arrow) {
     ConvertArrow(base);
   } else {
     Convert(base);
+  }
+  if (cast_mut) {
+    StrCat(").cast_mut()");
   }
   ufcs_receiver_ = std::move(buf).str();
 }
@@ -3526,12 +3605,16 @@ bool Converter::VisitCXXNewExpr(clang::CXXNewExpr *expr) {
     if (!curr_init_type_.empty() && curr_init_type_.back()->isPointerType()) {
       StrCat(".as_mut_ptr()");
     }
+    SetFreshType(expr->getType());
   } else {
-    auto initializer_as_string = ToString(expr->getInitializer());
+    auto initializer_as_string =
+        expr->getInitializer() ? ToString(expr->getInitializer())
+                               : GetDefaultAsString(expr->getAllocatedType());
     auto new_as_string =
         std::format("(Box::leak(Box::new({})) as {})", initializer_as_string,
                     ToString(expr->getType()));
     StrCat(new_as_string);
+    SetFreshType(expr->getType());
   }
   return false;
 }
@@ -4138,6 +4221,9 @@ Converter::GetOverloadedFunctionName(const clang::FunctionDecl *decl) {
 
   for (auto *parameter : decl->parameters()) {
     name += GetUnsafeTypeAsString(parameter->getType());
+    if (parameter->getType()->isRValueReferenceType()) {
+      name += "_rv";
+    }
     name += '_';
   }
 
@@ -4196,6 +4282,7 @@ Converter::GetOverloadedFunctionName(const clang::FunctionDecl *decl) {
   ReplaceAll(name, "[", "arr");
   ReplaceAll(name, "]", "arr");
   ReplaceAll(name, ";", "_");
+  ReplaceAll(name, ",", "_");
   name.erase(std::remove_if(name.begin(), name.end(),
                             [](char c) {
                               // ',' matters for a multi-argument template:
@@ -4203,7 +4290,7 @@ Converter::GetOverloadedFunctionName(const clang::FunctionDecl *decl) {
                               // comma in what becomes a Rust identifier.
                               return c == '<' || c == '>' || c == ' ' ||
                                      c == ':' || c == ',' || c == '(' ||
-                                     c == ')';
+                                     c == ')' || c == '-';
                             }),
              name.end());
   std::replace(name.begin(), name.end(), '*', 'p');
@@ -4546,7 +4633,7 @@ std::string Converter::GetComparisonCall(const clang::FunctionDecl *op,
   auto record = GetRecordName(decl);
   auto arg = std::format("{} as *const {}", rhs, record);
   if (const auto *method = clang::dyn_cast<clang::CXXMethodDecl>(op)) {
-    auto recv = method->isConst()
+    auto recv = !MethodNeedsMutableReceiver(method)
                     ? std::string(lhs)
                     : std::format("&mut *(&raw const *{}).cast_mut()", lhs);
     return std::format("{}::{}({}, {})", GetUFCSName(method),

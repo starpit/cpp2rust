@@ -9,50 +9,18 @@ use std::rc::{Rc, Weak};
 pub trait Animal {
     fn bark(&self) -> bool;
 }
-#[derive(Default)]
+#[derive(Clone, ByteRepr, Default)]
 pub struct Dog {}
 impl Animal for Dog {
     fn bark(&self) -> bool {
         return true;
     }
 }
-impl Clone for Dog {
-    fn clone(&self) -> Self {
-        let __this: Value<Dog> = Rc::new(RefCell::new(Self {}));
-        let this: Ptr<Dog> = __this.as_pointer();
-        Rc::try_unwrap(__this).ok().unwrap().into_inner()
-    }
-}
-impl ByteRepr for Dog {
-    fn byte_size() -> usize {
-        8
-    }
-    fn to_bytes(&self, buf: &mut [u8]) {}
-    fn from_bytes(buf: &[u8]) -> Self {
-        Self {}
-    }
-}
-#[derive(Default)]
+#[derive(Clone, ByteRepr, Default)]
 pub struct Cat {}
 impl Animal for Cat {
     fn bark(&self) -> bool {
         return false;
-    }
-}
-impl Clone for Cat {
-    fn clone(&self) -> Self {
-        let __this: Value<Cat> = Rc::new(RefCell::new(Self {}));
-        let this: Ptr<Cat> = __this.as_pointer();
-        Rc::try_unwrap(__this).ok().unwrap().into_inner()
-    }
-}
-impl ByteRepr for Cat {
-    fn byte_size() -> usize {
-        8
-    }
-    fn to_bytes(&self, buf: &mut [u8]) {}
-    fn from_bytes(buf: &[u8]) -> Self {
-        Self {}
     }
 }
 pub fn main() {

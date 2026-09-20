@@ -46,6 +46,8 @@ bool IsUnionArrayMember(const clang::Expr *base);
 
 bool IsStringLiteralExpr(const clang::Expr *expr);
 
+bool IsCodeUnitStringLiteral(const clang::StringLiteral *expr);
+
 bool IsUserDefinedDecl(const clang::Decl *decl);
 
 bool RefersToUserDefinedDecl(const clang::Expr *expr);
@@ -87,11 +89,17 @@ bool HasCallableCopyConstructor(const clang::RecordDecl *decl);
 
 bool HasDefaultedCopyConstructor(const clang::RecordDecl *decl);
 
+bool RecordHasOnlyReferenceFields(const clang::RecordDecl *decl);
+
+bool RecordDerivesByteRepr(const clang::RecordDecl *decl);
+
 bool HasDefaultedCopyAssignment(const clang::RecordDecl *decl);
 
 bool IsRValueConvertingConstructor(const clang::CXXConstructorDecl *ctor);
 
 bool IsPassThroughConstructor(const clang::CXXConstructorDecl *ctor);
+
+bool MethodNeedsMutableReceiver(const clang::CXXMethodDecl *method);
 
 bool IsConvertibleCXXRecordDecl(const clang::CXXRecordDecl *decl);
 

@@ -489,6 +489,9 @@ void ConverterRefCount::AddCloneTrait(const clang::RecordDecl *decl) {
     return;
   }
 
+  if (HasDefaultedCopyConstructor(decl) && RecordHasOnlyReferenceFields(decl)) {
+    return;
+  }
   auto *cxx = clang::dyn_cast<clang::CXXRecordDecl>(decl);
   if (!cxx) {
     StrCat(keyword::kImpl, "Clone for", record_name);
@@ -587,6 +590,10 @@ void ConverterRefCount::EmitRustUnion(clang::RecordDecl *decl) {
 }
 
 void ConverterRefCount::AddByteReprTrait(const clang::RecordDecl *decl) {
+  if (RecordDerivesByteRepr(decl)) {
+    return;
+  }
+
   auto struct_name = GetRecordName(decl);
 
   // A dependent template pattern (a class template or a partial
@@ -965,7 +972,8 @@ bool ConverterRefCount::VisitDeclRefExpr(clang::DeclRefExpr *expr) {
   bool fresh = false;
   if (isRValue()) {
     if (is_global_value) {
-      StrCat(str, ".with(|rc| rc.borrow().clone())");
+      StrCat(str, TypeIsCopyable(decl_t) ? ".with(|rc| *rc.borrow())"
+                                         : ".with(|rc| rc.borrow().clone())");
       fresh = true;
     } else if (is_global_ptr) {
       StrCat(str);
@@ -1156,6 +1164,13 @@ bool ConverterRefCount::VisitCallExpr(clang::CallExpr *expr) {
     return false;
   }
 
+  // p->~T() is a no-op when T has nothing to destruct
+  if (auto *dtor = clang::dyn_cast_or_null<clang::CXXDestructorDecl>(
+          expr->getCalleeDecl());
+      dtor && !RecordNeedsDestruction(dtor->getParent())) {
+    return false;
+  }
+
   if (IsImplicitAssignmentCall(expr) && !Mapper::Contains(expr->getCallee())) {
     auto *call = clang::cast<clang::CXXMemberCallExpr>(expr);
     ConvertAssignment(call->getImplicitObjectArgument(), call->getArg(0), "=");
@@ -1232,7 +1247,15 @@ bool ConverterRefCount::VisitCallExpr(clang::CallExpr *expr) {
 }
 
 bool ConverterRefCount::VisitStringLiteral(clang::StringLiteral *expr) {
-  if (!curr_init_type_.empty() && curr_init_type_.back()->isArrayType()) {
+  if (IsCodeUnitStringLiteral(expr)) {
+    auto arr = GetCodeUnitArrayLiteral(expr);
+    StrCat(IsArrayInitContext() ? std::format("Box::from({})", arr)
+                                : '&' + arr);
+    computed_expr_type_ = ComputedExprType::FreshValue;
+    return false;
+  }
+
+  if (IsArrayInitContext()) {
     uint64_t pad = 1;
     if (auto *arr_ty = ctx_.getAsConstantArrayType(curr_init_type_.back())) {
       uint64_t arr_size = arr_ty->getSize().getZExtValue();
@@ -1325,7 +1348,11 @@ bool ConverterRefCount::VisitImplicitCastExpr(clang::ImplicitCastExpr *expr) {
       return false;
     }
     if (IsStringLiteralExpr(sub_expr)) {
-      StrCat(std::format("Ptr::from_string_literal({})",
+      auto code_unit = ToStringBase(
+          ctx_.getAsArrayType(
+                  sub_expr->IgnoreParens()->IgnoreImplicit()->getType())
+              ->getElementType());
+      StrCat(std::format("Ptr::<{}>::from_string_literal({})", code_unit,
                          ToString(sub_expr->IgnoreParens())));
       computed_expr_type_ = ComputedExprType::FreshPointer;
       return false;
@@ -1514,6 +1541,8 @@ bool ConverterRefCount::VisitExplicitCastExpr(clang::ExplicitCastExpr *expr) {
       return false;
     }
     return Converter::VisitExplicitCastExpr(expr);
+  case clang::Stmt::CXXFunctionalCastExprClass:
+    return Converter::VisitExplicitCastExpr(expr);
   default:
     return Convert(expr->getSubExpr());
   }
@@ -1677,11 +1706,15 @@ bool ConverterRefCount::VisitInitListExpr(clang::InitListExpr *expr) {
     StrCat(GetUnsafeTypeAsString(qual_type));
     {
       PushBrace brace(*this);
-      int i = 0;
+      unsigned i = 0;
       PushConversionKind push(*this, ConversionKind::FullRefCount);
       for (const auto *field : record->fields()) {
         StrCat(GetNamedDeclAsString(field), token::kColon);
-        ConvertVarInit(field->getType(), expr->getInit(i++));
+        if (i < expr->getNumInits()) {
+          ConvertVarInit(field->getType(), expr->getInit(i++));
+        } else {
+          StrCat(GetDefaultAsString(field->getType()));
+        }
         StrCat(token::kComma);
       }
     }
@@ -1715,6 +1748,12 @@ bool ConverterRefCount::VisitInitListExpr(clang::InitListExpr *expr) {
   }
   computed_expr_type_ = ComputedExprType::FreshValue;
   return false;
+}
+
+bool ConverterRefCount::VisitCXXStdInitializerListExpr(
+    clang::CXXStdInitializerListExpr *expr) {
+  PushConversionKind push(*this, ConversionKind::Unboxed);
+  return Converter::VisitCXXStdInitializerListExpr(expr);
 }
 
 void ConverterRefCount::ConvertUnionMemberAccessor(clang::MemberExpr *expr) {
@@ -2199,6 +2238,14 @@ ConverterRefCount::GetStructAttributes(const clang::RecordDecl *decl) {
     return attrs;
   }
 
+  if (HasDefaultedCopyConstructor(decl) && RecordHasOnlyReferenceFields(decl)) {
+    attrs.emplace_back("Clone");
+  }
+
+  if (RecordDerivesByteRepr(decl)) {
+    attrs.emplace_back("ByteRepr");
+  }
+
   if (RecordDerivesDefault(decl)) {
     attrs.emplace_back("Default");
   }
@@ -2228,7 +2275,12 @@ std::string ConverterRefCount::ConvertVarInitValue(clang::QualType qual_type,
     }
     if (qual_type.getNonReferenceType()->isArrayType()) {
       if (IsStringLiteralExpr(expr)) {
-        return std::format("Ptr::from_string_literal_array({})",
+        auto code_unit = ToStringBase(
+            ctx_.getAsArrayType(
+                    expr->IgnoreParens()->IgnoreImplicit()->getType())
+                ->getElementType());
+        return std::format("Ptr::<Box<[{}]>>::from_string_literal_array({})",
+                           code_unit,
                            ToString(expr->IgnoreParens()->IgnoreImplicit()));
       }
       return std::format("({} as {})", ConvertFreshPointer(expr),
@@ -2246,8 +2298,28 @@ void ConverterRefCount::ConvertVarInit(clang::QualType qual_type,
   StrCat(BoxValue(ConvertVarInitValue(qual_type, expr)));
 }
 
+bool ConverterRefCount::EmitGlobalValueAssign(clang::Expr *lhs,
+                                              std::string_view assign_operator,
+                                              std::string_view rhs) {
+  auto *decl_ref = clang::dyn_cast<clang::DeclRefExpr>(lhs->IgnoreImplicit());
+  if (!decl_ref) {
+    return false;
+  }
+  auto *var = clang::dyn_cast<clang::VarDecl>(decl_ref->getDecl());
+  if (!var || !IsGlobalVar(var) || var->getType()->isReferenceType()) {
+    return false;
+  }
+  StrCat(std::format("{}.with(|rc| *rc.borrow_mut() {} {})",
+                     GetNamedDeclAsString(var), assign_operator, rhs));
+  return true;
+}
+
 void ConverterRefCount::EmitSetOrAssign(clang::Expr *lhs,
                                         std::string_view rhs) {
+  if (EmitGlobalValueAssign(lhs, "=", rhs)) {
+    computed_expr_type_ = ComputedExprType::FreshValue;
+    return;
+  }
   auto lhs_str = ConvertLValue(lhs);
   if (!pending_deref_.empty()) {
     auto ptr = pending_deref_.take();
@@ -2272,6 +2344,8 @@ void ConverterRefCount::ConvertAssignment(clang::Expr *lhs, clang::Expr *rhs,
 
   if (assign_operator == "=") {
     EmitSetOrAssign(lhs, rhs_as_string);
+  } else if (EmitGlobalValueAssign(lhs, assign_operator, rhs_as_string)) {
+    computed_expr_type_ = ComputedExprType::FreshValue;
   } else {
     auto lhs_str = ConvertLValue(lhs);
     if (!pending_deref_.empty()) {
@@ -2498,7 +2572,12 @@ void ConverterRefCount::ConvertArraySubscript(clang::Expr *base,
     {
       PushParen paren(*this, is_inner_boxed);
       if (IsStringLiteralExpr(base)) {
-        StrCat(std::format("Ptr::from_string_literal({}).offset({})",
+        auto code_unit = ToStringBase(
+            ctx_.getAsArrayType(
+                    base->IgnoreParens()->IgnoreImplicit()->getType())
+                ->getElementType());
+        StrCat(std::format("Ptr::<{}>::from_string_literal({}).offset({})",
+                           code_unit,
                            ToString(base->IgnoreParens()->IgnoreImplicit()),
                            ConvertSubscriptIndex(idx)));
       } else {
@@ -2878,17 +2957,20 @@ bool ConverterRefCount::ConvertOutOfLineMethod(clang::CXXMethodDecl *decl) {
   return false;
 }
 
-void ConverterRefCount::ConvertMethodOnPtr(clang::CXXMethodDecl *method) {
-  auto *record = method->getParent();
+void ConverterRefCount::ConvertMethodOnPtrTraitDecl(
+    clang::CXXMethodDecl *method) {
+  Buffer buf(*this);
   {
-    Buffer buf(*this);
-    {
-      PushCurrFunction push_fn(*this, method);
-      PushMethodTarget push(*this, MethodTarget::TraitDecl);
-      ConvertCXXMethodDecl(method);
-    }
-    MethodsOnPtrFor(record).trait_body += std::move(buf).str();
+    PushCurrFunction push_fn(*this, method);
+    PushMethodTarget push(*this, method->getDefinition()
+                                     ? MethodTarget::TraitDecl
+                                     : MethodTarget::TraitDefault);
+    ConvertCXXMethodDecl(method);
   }
+  MethodsOnPtrFor(method->getParent()).trait_body += std::move(buf).str();
+}
+
+void ConverterRefCount::ConvertMethodOnPtr(clang::CXXMethodDecl *method) {
   if (!method->isThisDeclarationADefinition()) {
     return;
   }
@@ -2897,7 +2979,7 @@ void ConverterRefCount::ConvertMethodOnPtr(clang::CXXMethodDecl *method) {
     PushMethodTarget push(*this, MethodTarget::PtrImpl);
     VisitCXXMethodDecl(method);
   }
-  MethodsOnPtrFor(record).impl_body += std::move(buf).str();
+  MethodsOnPtrFor(method->getParent()).impl_body += std::move(buf).str();
 }
 
 void ConverterRefCount::ConvertLateInstantiatedMethods(
@@ -2931,7 +3013,8 @@ void ConverterRefCount::ConvertCXXRecordMethods(clang::CXXRecordDecl *decl) {
                         });
 
   auto convert_method = [&](clang::CXXMethodDecl *method) {
-    if (IsMethodOnPtr(method) && method->getDefinition()) {
+    if (IsMethodOnPtr(method)) {
+      ConvertMethodOnPtrTraitDecl(method);
       ConvertMethodOnPtr(method);
     }
   };
@@ -2982,8 +3065,11 @@ void ConverterRefCount::ConvertCXXConstructorBody(
   auto record_name = GetRecordName(decl->getParent());
   StrCat(keyword::kLet, "__this", token::kColon,
          std::format("Value<{}>", record_name), token::kAssign,
-         "Rc::new(RefCell::new(Self");
-  {
+         "Rc::new(RefCell::new(");
+  if (decl->isDelegatingConstructor()) {
+    Convert((*decl->init_begin())->getInit());
+  } else {
+    StrCat("Self");
     PushBrace this_init(*this);
     EmitConstructorFieldInits(decl);
   }

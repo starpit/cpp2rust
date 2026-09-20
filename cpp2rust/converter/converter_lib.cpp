@@ -150,6 +150,11 @@ bool IsStringLiteralExpr(const clang::Expr *expr) {
          clang::isa<clang::PredefinedExpr>(stripped);
 }
 
+bool IsCodeUnitStringLiteral(const clang::StringLiteral *expr) {
+  return expr->getCharByteWidth() != 1 ||
+         expr->getKind() == clang::StringLiteralKind::UTF8;
+}
+
 bool IsUserDefinedDecl(const clang::Decl *decl) {
   const auto &ctx = decl->getASTContext();
   const auto &src_mgr = ctx.getSourceManager();
@@ -353,6 +358,19 @@ bool HasDefaultedCopyConstructor(const clang::RecordDecl *decl) {
   return !cxx->defaultedCopyConstructorIsDeleted();
 }
 
+bool RecordDerivesByteRepr(const clang::RecordDecl *decl) {
+  return !decl->isUnion() && decl->field_empty();
+}
+
+bool RecordHasOnlyReferenceFields(const clang::RecordDecl *decl) {
+  for (auto *field : decl->fields()) {
+    if (!field->getType()->isReferenceType()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool HasDefaultedCopyAssignment(const clang::RecordDecl *decl) {
   auto *cxx = clang::dyn_cast<clang::CXXRecordDecl>(decl);
   if (!cxx) {
@@ -389,6 +407,15 @@ bool IsRValueConvertingConstructor(const clang::CXXConstructorDecl *ctor) {
          ctor->getParamDecl(0)->getType()->isRValueReferenceType();
 }
 
+bool MethodNeedsMutableReceiver(const clang::CXXMethodDecl *method) {
+  if (!method->isConst()) {
+    return true;
+  }
+  return std::any_of(method->getParent()->field_begin(),
+                     method->getParent()->field_end(),
+                     [](const clang::FieldDecl *f) { return f->isMutable(); });
+}
+
 bool IsPassThroughConstructor(const clang::CXXConstructorDecl *ctor) {
   return !IsConvertibleCopyOrMoveConstructor(ctor) &&
          (ctor->isCopyOrMoveConstructor() ||
@@ -396,33 +423,7 @@ bool IsPassThroughConstructor(const clang::CXXConstructorDecl *ctor) {
 }
 
 bool IsConvertibleCXXRecordDecl(const clang::CXXRecordDecl *decl) {
-  auto ok = [](const clang::CXXMethodDecl *method) {
-    const auto *ctor = clang::dyn_cast<clang::CXXConstructorDecl>(method);
-    return method->getDefinition() || method->isPureVirtual() ||
-           method->getTemplateInstantiationPattern() ||
-           method->getDescribedFunctionTemplate() ||
-           (ctor ? ctor->isCopyOrMoveConstructor()
-                 : method->isCopyAssignmentOperator() ||
-                       method->isMoveAssignmentOperator());
-  };
-  if (!decl->isThisDeclarationADefinition()) {
-    return false;
-  }
-  if (getenv("CPP2RUST_DEBUG_RECORD")) {
-    for (const auto *m : decl->methods()) {
-      if (!ok(m)) {
-        llvm::errs() << "RECORD-SKIP " << decl->getNameAsString()
-                     << " blocked by '" << m->getNameAsString() << "'"
-                     << (m->isImplicit() ? " [implicit]" : "")
-                     << (clang::isa<clang::CXXConstructorDecl>(m) ? " [ctor]"
-                                                                  : "")
-                     << (clang::isa<clang::CXXDestructorDecl>(m) ? " [dtor]"
-                                                                 : "")
-                     << '\n';
-      }
-    }
-  }
-  return std::all_of(decl->method_begin(), decl->method_end(), ok);
+  return decl->isThisDeclarationADefinition() && !decl->isDependentContext();
 }
 
 bool IsConvertibleCXXMethodDecl(const clang::CXXMethodDecl *decl) {
@@ -596,6 +597,10 @@ static std::string GetParamSignature(const clang::Decl *decl) {
 
 static std::string GetLexicalSpecializationID(const clang::Decl *decl) {
   std::string id;
+  if (const auto *var =
+          clang::dyn_cast<clang::VarTemplateSpecializationDecl>(decl)) {
+    id += clang::ASTNameGenerator(var->getASTContext()).getName(var);
+  }
   if (const auto *spec =
           clang::dyn_cast<clang::ClassTemplateSpecializationDecl>(
               decl->getLexicalDeclContext());
@@ -1057,8 +1062,8 @@ bool IsMethodOnPtr(const clang::CXXMethodDecl *method) {
       !IsComparisonOperator(method)) {
     return false;
   }
-  if (clang::isa<clang::CXXDestructorDecl>(method)) {
-    return GetUserDefinedDestructor(method->getParent()) != nullptr;
+  if (auto *dtor = clang::dyn_cast<clang::CXXDestructorDecl>(method)) {
+    return !dtor->isImplicit() && !dtor->isDefaulted();
   }
   return true;
 }

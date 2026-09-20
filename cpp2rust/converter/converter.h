@@ -98,6 +98,7 @@ public:
   void EmitHoistedDecls(clang::CompoundStmt *body);
 
   virtual bool VisitFunctionTemplateDecl(clang::FunctionTemplateDecl *decl);
+  bool VisitVarTemplateDecl(clang::VarTemplateDecl *decl);
 
   virtual bool VisitVarDecl(clang::VarDecl *decl);
   virtual bool LazyStaticInit() const { return true; }
@@ -349,6 +350,8 @@ public:
   virtual bool VisitCharacterLiteral(clang::CharacterLiteral *expr);
 
   std::string GetEscapedCharLiteral(char character) const;
+  std::string GetCodeUnitArrayLiteral(const clang::StringLiteral *expr);
+  bool IsArrayInitContext() const;
 
   std::string GetEscapedUTF8CharLiteral(clang::Expr *expr) const;
 
@@ -688,6 +691,7 @@ protected:
   enum class MethodTarget : uint8_t {
     ValueImpl,
     TraitDecl,
+    TraitDefault,
     PtrImpl,
   };
   MethodTarget method_target_ = MethodTarget::ValueImpl;
