@@ -50,3 +50,26 @@ bool f9(const std::array<T1, T2> &a, const std::array<T1, T2> &b) {
   return operator!=(a, b);
 }
 
+
+// ---------------------------------------------------------------------------
+// element access / bulk assignment
+// ---------------------------------------------------------------------------
+
+template <typename T1, std::size_t T2>
+T1 &f10(std::array<T1, T2> &o, std::size_t idx) {
+  return o.at(idx);
+}
+
+template <typename T1, std::size_t T2>
+const T1 &f11(const std::array<T1, T2> &o, std::size_t idx) {
+  return o.at(idx);
+}
+
+// std::array<T, N>::fill maps to an element-wise store, NOT to Vec::fill with a
+// shared handle: in the refcount model that would make every slot alias one
+// allocation.  t1 maps std::array<T, N> to Vec<T> with PLAIN elements (no
+// Value<> wrapper), so a per-element clone is both correct and cheap.
+template <typename T1, std::size_t T2>
+void f12(std::array<T1, T2> &o, const T1 &value) {
+  return o.fill(value);
+}

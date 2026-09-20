@@ -43,3 +43,24 @@ unsafe fn f9<T1: PartialEq>(a0: Vec<T1>, a1: Vec<T1>) -> bool {
     a0 != a1
 }
 
+unsafe fn f10<T1>(a0: &mut Vec<T1>, a1: usize) -> *mut T1 {
+    if a1 as usize >= a0.len() {
+        panic!("out of bounds access")
+    } else {
+        (a0).as_mut_ptr().add(a1 as usize)
+    }
+}
+
+unsafe fn f11<T1>(a0: &mut Vec<T1>, a1: usize) -> *const T1 {
+    if a1 as usize >= a0.len() {
+        panic!("out of bounds access")
+    } else {
+        (a0).as_ptr().add(a1 as usize)
+    }
+}
+
+unsafe fn f12<T1: Clone>(a0: &mut Vec<T1>, a1: T1) {
+    for __e in a0.iter_mut() {
+        *__e = a1.clone();
+    }
+}

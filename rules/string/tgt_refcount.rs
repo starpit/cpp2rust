@@ -13,9 +13,13 @@ fn t2() -> Ptr<u8> {
     Ptr::null()
 }
 
+// `count` defaults to std::string::npos == usize::MAX, which the converter
+// now folds to its real value, so a plain `a1 + a2` is a compile-time
+// overflow that rustc rejects outright.  Saturate instead.
 fn f1(a0: Vec<u8>, a1: usize, a2: usize) -> Vec<u8> {
-    let mut __tmp1 =
-        a0[(a1) as usize..::std::cmp::min((a1 + a2) as usize, a0.len().saturating_sub(1))].to_vec();
+    let mut __tmp1 = a0
+        [(a1) as usize..::std::cmp::min(a1.saturating_add(a2), a0.len().saturating_sub(1))]
+        .to_vec();
     __tmp1.push(0);
     __tmp1
 }

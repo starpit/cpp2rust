@@ -67,7 +67,7 @@ unsafe fn main_0() -> i32 {
     }
     let mut s3: Vec<libc::c_char> = {
         let mut __tmp1 = s2
-            [(2_usize) as usize..::std::cmp::min((2_usize + 5_usize) as usize, s2.len() - 1)]
+            [(2_usize) as usize..::std::cmp::min(2_usize.saturating_add(5_usize), s2.len() - 1)]
             .to_vec();
         __tmp1.push(0);
         __tmp1
@@ -83,8 +83,8 @@ unsafe fn main_0() -> i32 {
     let mut s4: Vec<libc::c_char> = {
         let mut __tmp1 = s1[(1_usize) as usize
             ..::std::cmp::min(
-                (1_usize
-                    + match s1.iter().rposition(|&c| {
+                1_usize.saturating_add(
+                    match s1.iter().rposition(|&c| {
                         ::std::ffi::CStr::from_ptr(c"l".as_ptr())
                             .to_str()
                             .unwrap()
@@ -92,7 +92,8 @@ unsafe fn main_0() -> i32 {
                     }) {
                         Some(idx) => idx,
                         None => usize::MAX,
-                    }) as usize,
+                    },
+                ),
                 s1.len() - 1,
             )]
             .to_vec();
@@ -217,8 +218,8 @@ unsafe fn main_0() -> i32 {
     assert!(((result[(6_usize)] as i32) == (('o' as libc::c_char) as i32)));
     assert!(((result[(7_usize)] as i32) == (('o' as libc::c_char) as i32)));
     let mut substr_0: Vec<libc::c_char> = {
-        let mut __tmp1 = result
-            [(5_usize) as usize..::std::cmp::min((5_usize + 3_usize) as usize, result.len() - 1)]
+        let mut __tmp1 = result[(5_usize) as usize
+            ..::std::cmp::min(5_usize.saturating_add(3_usize), result.len() - 1)]
             .to_vec();
         __tmp1.push(0);
         __tmp1
@@ -228,8 +229,8 @@ unsafe fn main_0() -> i32 {
     assert!(((substr_0[(1_usize)] as i32) == (('o' as libc::c_char) as i32)));
     assert!(((substr_0[(2_usize)] as i32) == (('o' as libc::c_char) as i32)));
     let mut substr_1: Vec<libc::c_char> = {
-        let mut __tmp1 = result
-            [(0_usize) as usize..::std::cmp::min((0_usize + 5_usize) as usize, result.len() - 1)]
+        let mut __tmp1 = result[(0_usize) as usize
+            ..::std::cmp::min(0_usize.saturating_add(5_usize), result.len() - 1)]
             .to_vec();
         __tmp1.push(0);
         __tmp1
@@ -241,8 +242,8 @@ unsafe fn main_0() -> i32 {
     assert!(((substr_1[(3_usize)] as i32) == (0)));
     assert!(((substr_1[(4_usize)] as i32) == ((' ' as libc::c_char) as i32)));
     let mut substr_2: Vec<libc::c_char> = {
-        let mut __tmp1 = result
-            [(0_usize) as usize..::std::cmp::min((0_usize + 15_usize) as usize, result.len() - 1)]
+        let mut __tmp1 = result[(0_usize) as usize
+            ..::std::cmp::min(0_usize.saturating_add(15_usize), result.len() - 1)]
             .to_vec();
         __tmp1.push(0);
         __tmp1
