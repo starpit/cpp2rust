@@ -148,3 +148,7 @@ unsafe fn f28(a0: i32, a1: *mut libc::c_char, a2: usize) -> *mut libc::c_char {
 unsafe fn f28(a0: i32, a1: *mut libc::c_char, a2: usize) -> i32 {
     libc::strerror_r(a0, a1, a2 as usize)
 }
+
+unsafe fn f29(a0: *mut libc::c_char, a1: i32) -> *mut libc::c_char {
+    libc::strchr(a0, a1)
+}

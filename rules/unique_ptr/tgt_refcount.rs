@@ -86,3 +86,11 @@ fn f16<T1>(a0: &mut Option<Value<T1>>) -> Ptr<T1> {
 fn f17<T1>() -> Option<Value<T1>> {
     None
 }
+
+fn f18<T1: Clone>(a0: T1) -> Option<Value<T1>> {
+    Some(Rc::new(RefCell::new(a0)))
+}
+
+fn f19<T1: Clone>(a0: T1) -> Option<Value<T1>> {
+    Some(Rc::new(RefCell::new(a0)))
+}

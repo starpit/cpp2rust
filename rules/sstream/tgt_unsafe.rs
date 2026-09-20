@@ -93,30 +93,6 @@ unsafe fn f12(a0: &mut Box<Vec<u8>>, a1: Vec<libc::c_char>) {
     a0.extend(a1.iter().take_while(|&&c| c != 0).map(|&c| c as u8));
 }
 
-unsafe fn f13(a0: Box<Vec<u8>>) -> bool {
-    !a0.is_empty()
-}
-
-unsafe fn f14(a0: Box<Vec<u8>>) -> bool {
-    a0.is_empty()
-}
-
-unsafe fn f15(a0: Box<Vec<u8>>) -> bool {
-    a0.is_empty()
-}
-
-unsafe fn f16(a0: Box<Vec<u8>>) -> bool {
-    a0.len() == usize::MAX
-}
-
-unsafe fn f17(a0: &mut Box<Vec<u8>>) {
-    a0.reserve(0);
-}
-
-unsafe fn f18(a0: Box<Vec<u8>>) -> bool {
-    !a0.is_empty()
-}
-
 unsafe fn f19(a0: &mut Box<Vec<u8>>, a1: &mut i32) {
     let __tok: String = {
         let mut __i = 0usize;

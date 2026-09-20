@@ -22,9 +22,14 @@
 // "buffer is not empty", bad() is always false, and clear() is a no-op (in C++
 // it resets the error state, which here has no independent existence).
 //
-// good()/eof()/fail()/bad()/clear()/operator bool() are std::basic_ios<char>
-// members, so these rules also fire for file streams, where the buffer model
-// does not apply.  They were unmapped (and so untranslatable) before.
+// Those state predicates USED to live here, as f13-f18.  They are members of
+// std::basic_ios<char>, not of any string-stream class, so the single rule the
+// signature admits also fired on std::ifstream/std::ofstream/std::cout, where
+// the buffer model does not apply and `!(*f.borrow()).is_empty()` on a
+// ::std::fs::File is not even compilable Rust.  They now live in
+// rules/basic_ios, which dispatches on the receiver's Rust representation and
+// reproduces exactly the emptiness-derived answers above for this module's
+// Box<Vec<u8>>.
 
 #include <istream>
 #include <sstream>
@@ -63,20 +68,6 @@ void f10(std::stringstream &o, const std::string &s) { return o.str(s); }
 void f11(std::ostringstream &o, const std::string &s) { return o.str(s); }
 
 void f12(std::istringstream &o, const std::string &s) { return o.str(s); }
-
-// Stream state.  These live on std::basic_ios<char>, so one rule covers every
-// char stream; the bodies model the string-stream state (see the module note).
-bool f13(const std::stringstream &o) { return o.good(); }
-
-bool f14(const std::stringstream &o) { return o.eof(); }
-
-bool f15(const std::stringstream &o) { return o.fail(); }
-
-bool f16(const std::stringstream &o) { return o.bad(); }
-
-void f17(std::stringstream &o) { return o.clear(); }
-
-bool f18(const std::stringstream &o) { return o.operator bool(); }
 
 std::istream &f19(std::istringstream &o, int &v) {
   return o.operator>>(v);

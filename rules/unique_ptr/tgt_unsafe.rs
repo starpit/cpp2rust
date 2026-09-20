@@ -78,3 +78,11 @@ unsafe fn f16<T1>(a0: &mut Option<Box<T1>>) -> *mut T1 {
 unsafe fn f17<T1>() -> Option<Box<T1>> {
     None
 }
+
+unsafe fn f18<T1: Clone>(a0: T1) -> Option<Box<T1>> {
+    Some(Box::new(a0))
+}
+
+unsafe fn f19<T1: Clone>(a0: T1) -> Option<Box<T1>> {
+    Some(Box::new(a0))
+}

@@ -44,6 +44,20 @@ template <typename T1, typename T2> std::unique_ptr<T1> f8(T2 &&a0) {
   return std::make_unique<T1>(std::move(a0));
 }
 
+// The lvalue overloads.  f8 only covers the rvalue spelling, so
+// `std::make_unique<std::string>(s)` for an lvalue `s` -- which is what
+// dsc/pcfg.cpp and dsc/superdsc.cpp do -- resolved to
+// `std::make_unique(const std::string &)` / `std::make_unique(std::string &)`
+// and matched nothing.  Both COPY the argument, exactly as C++ does: T's copy
+// constructor is what make_unique forwards to.
+template <typename T1, typename T2> std::unique_ptr<T1> f18(const T2 &a0) {
+  return std::make_unique<T1>(a0);
+}
+
+template <typename T1, typename T2> std::unique_ptr<T1> f19(T2 &a0) {
+  return std::make_unique<T1>(a0);
+}
+
 template <typename T1> void f9(std::unique_ptr<T1[]> &o) {
   return o.reset(nullptr);
 }

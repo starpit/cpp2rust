@@ -77,3 +77,7 @@ int f25(void) { return SEEK_SET; }
 int f26(void) { return SEEK_CUR; }
 
 int f27(void) { return SEEK_END; }
+
+// perror(3): the message, ": ", strerror(errno) and a newline, on stderr.
+// dsc/dsc_standalone.cpp calls it after a failed opendir().
+void f28(const char *s) { return perror(s); }

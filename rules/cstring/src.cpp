@@ -24,3 +24,10 @@ const void *f25(const void *a0, int a1, size_t a2) { return memrchr(a0, a1, a2);
 
 void *f26(void *a0, int a1, size_t a2) { return memrchr(a0, a1, a2); }
 #endif
+
+// The non-const overload.  src.c's f5 is C's single `char *strchr(const char
+// *, int)`; in C++ <cstring> splits it in three, and only the two const-taking
+// spellings had rules.  dsc/dscdefn.cpp calls strchr on a `char *`
+// (`strchr(backtraceStr, '(')`), which resolves to `char *strchr(char *, int)`
+// and matched nothing.
+char *f29(char *a0, int a1) { return strchr(a0, a1); }

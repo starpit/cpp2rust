@@ -56,12 +56,6 @@ fn f12(a0: Ptr<Box<Vec<u8>>>, a1: Vec<u8>) {
     });
 }
 
-fn f17(a0: Ptr<Box<Vec<u8>>>) {
-    a0.with_mut(|__v: &mut Box<Vec<u8>>| {
-        __v.reserve(0);
-    });
-}
-
 fn f19(a0: Ptr<Box<Vec<u8>>>, a1: Ptr<i32>) -> Ptr<Box<Vec<u8>>> {
     let __tok: String = a0.with_mut(|__v: &mut Box<Vec<u8>>| {
         let mut __i = 0usize;

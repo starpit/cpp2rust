@@ -192,3 +192,22 @@ fn f23(a0: Ptr<CFile>) -> i32 {
 fn f24(a0: Ptr<CFile>, a1: Ptr<u8>, a2: i32, a3: usize) -> i32 {
     0
 }
+
+// The refcount model has no raw C string to hand libc, so the message is
+// rebuilt and written to stderr directly.  errno is the model's own errno
+// cell, which is what every other rule in this module sets and reads.
+fn f28(a0: Ptr<u8>) {
+    let __msg = if a0.is_null() {
+        String::new()
+    } else {
+        a0.to_rust_string()
+    };
+    let __e = libcc2rs::cpp2rust_errno().read();
+    let __s = ::std::io::Error::from_raw_os_error(__e).to_string();
+    let __line = if __msg.is_empty() {
+        format!("{}\n", __s)
+    } else {
+        format!("{}: {}\n", __msg, __s)
+    };
+    let _ = ::std::io::Write::write_all(&mut ::std::io::stderr(), __line.as_bytes());
+}

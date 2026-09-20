@@ -381,3 +381,20 @@ fn f26(a0: AnyPtr, a1: i32, a2: usize) -> AnyPtr {
         }
     }
 }
+
+// Same walk as f5/f6: a hit returns the offset, a miss returns null, and
+// searching for '\0' finds the terminator rather than failing.
+fn f29(a0: Ptr<u8>, a1: i32) -> Ptr<u8> {
+    let __s = a0;
+    let __t = a1 as u8;
+    match __s.to_c_string_iterator().position(|__c| __c == __t) {
+        Some(__i) => __s.offset(__i),
+        None => {
+            if __t == 0 {
+                __s.offset(__s.to_c_string_iterator().count())
+            } else {
+                Ptr::null()
+            }
+        }
+    }
+}
