@@ -231,31 +231,55 @@ fn f34(a0: Vec<u8>, a1: u8) -> Vec<u8> {
     r
 }
 
-// std::string::operator+=(const std::string&)
-fn f35(a0: Ptr<Vec<u8>>, a1: Vec<u8>) {
-    a0.with_mut(|__v: &mut Vec<u8>| {
+// std::string::operator+=  --  all three overloads RETURN THE RECEIVER.
+//
+// C++ declares `std::string &operator+=(...)`, and dropping that reference is
+// not free: `a += b += c` is legal C++ (operator+= is a member, so it binds to
+// the rvalue `b`) and the target codebase uses it -- dsm/dsmds.h:529, :543 and
+// :558 all read `jsonStr += indent(nestedIndentLevel) += "},\n";`.  The
+// converter emits `(* <inner> .upgrade().deref())` around the inner call
+// because the signature says it yields a reference, so a unit-returning body
+// produced `(* <with_mut block> ; .upgrade().deref())` -- not Rust.  rustfmt
+// rejected the whole crate and three progtailor TUs died there
+// ("ERROR: failed to run rustfmt"), long after the converter thought it was
+// done.  Returning the receiver is the same shape rules/raw_ostream uses for
+// operator<< and for the same reason.
+//
+// The receiver placeholder is bound ONCE (`let __o = a0;`) before it is used
+// twice: a placeholder is raw text, so naming it twice would re-evaluate --
+// and so re-run the side effects of -- the receiver expression.
+//
+// In statement position the returned Ptr is simply dropped, which is what
+// `s += x;` means.
+
+fn f35(a0: Ptr<Vec<u8>>, a1: Vec<u8>) -> Ptr<Vec<u8>> {
+    let __o = a0;
+    __o.with_mut(|__v: &mut Vec<u8>| {
         __v.pop();
         __v.extend(a1.iter().copied().take_while(|&c| c != 0));
         __v.push(0);
     });
+    __o
 }
 
-// std::string::operator+=(const char*)
-fn f36(a0: Ptr<Vec<u8>>, a1: Ptr<u8>) {
-    a0.with_mut(|__v: &mut Vec<u8>| {
+fn f36(a0: Ptr<Vec<u8>>, a1: Ptr<u8>) -> Ptr<Vec<u8>> {
+    let __o = a0;
+    __o.with_mut(|__v: &mut Vec<u8>| {
         __v.pop();
         __v.extend(a1.to_c_string_iterator());
         __v.push(0);
     });
+    __o
 }
 
-// std::string::operator+=(char)
-fn f37(a0: Ptr<Vec<u8>>, a1: u8) {
-    a0.with_mut(|__v: &mut Vec<u8>| {
+fn f37(a0: Ptr<Vec<u8>>, a1: u8) -> Ptr<Vec<u8>> {
+    let __o = a0;
+    __o.with_mut(|__v: &mut Vec<u8>| {
         __v.pop();
         __v.push(a1);
         __v.push(0);
     });
+    __o
 }
 
 // operator+(const char*, const std::string&)

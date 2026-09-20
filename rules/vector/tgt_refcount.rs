@@ -450,3 +450,9 @@ fn f125<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
 fn f126<T1>(a0: Ptr<T1>) -> Ptr<T1> {
     a0.offset(1_isize)
 }
+
+// vector<bool>::at -- the VALUE at the index, not a pointer to it.  See
+// src.cpp: the proxy return type forces a read-only model.
+fn f127(a0: Ptr<bool>, a1: usize) -> bool {
+    (*a0.offset(a1 as isize).upgrade().deref())
+}

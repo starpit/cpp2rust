@@ -216,6 +216,46 @@ typename std::vector<T1>::const_iterator f44(const std::vector<T1> &o) {
 
 bool f47(std::vector<bool> &o) { return o[0]; }
 
+// std::vector<bool>::at -- the bool SPECIALIZATION only.
+//
+// Why it needs a rule of its own when the generic f7 already covers
+// `T1 & std::vector<T1>::at(unsigned long)`: libc++'s vector<bool> does not
+// return `bool &`, it returns the proxy `std::__bit_reference<std::vector<
+// bool>>`, so the printed signature is
+// `std::__bit_reference<std::vector<bool>> std::vector<bool>::at(unsigned
+// long)` and f7 never matches it.  Without this rule the call falls to
+// ConvertGenericCallExpr, which emits a method call on a record type and
+// loses the receiver -- `( { . at_usize ( ... ) } )` -- and then aborts the
+// refcount model in assert_consumed ("pending_deref_ not consumed").
+// Reproduced on dsc-based-utils/progtailor/progtailor_standalone.cpp and its
+// three siblings, via `connectivity_.at(from).at(to)`.
+//
+// READ-ONLY, and that is forced, not chosen.  The declared return type is a
+// CLASS (the proxy), not `bool &`, so the converter does not treat the result
+// as an lvalue and never inserts the deref or the `.write()` that it inserts
+// for f7.  A pointer-returning body was tried first and emits
+// `(...).offset(i) = true` and `(...).offset(i) as bool`, neither of which is
+// Rust.  Returning the VALUE is the only body that composes with f47
+// (`__bit_reference::operator bool`, whose target is the identity), and it
+// makes every READ correct.
+//
+// Consequence, stated plainly: `v.at(i) = x` on a vector<bool> now generates
+// an assignment to a non-place expression, which rustc rejects.  It is a loud
+// failure in the generated crate rather than a loud failure in the converter.
+// No call site in either surveyed scope writes through vector<bool>::at --
+// the one in the repo that does is sgr/sengraph.cpp:1263, and sgr/ is in
+// neither scope; the sites this rule unblocks are the READS at
+// sgr/sengraph.h:488 and :492, reached from the four progtailor TUs.
+//
+// vector<bool>::operator[] deliberately gets NO rule: the generic path
+// already turns it into `(v.as_pointer() as Ptr<bool>).offset(i)`, which
+// reads AND writes correctly, and a value-returning rule here would shadow
+// and break that.  Same for back().
+
+std::vector<bool>::reference f127(std::vector<bool> &o, std::size_t idx) {
+  return o.at(idx);
+}
+
 template <typename T1> void f48(std::vector<T1> &o, std::vector<T1> &a0) {
   return o.swap(a0);
 }

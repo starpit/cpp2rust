@@ -217,26 +217,36 @@ unsafe fn f34(a0: Vec<libc::c_char>, a1: libc::c_char) -> Vec<libc::c_char> {
     r
 }
 
-unsafe fn f35(a0: &mut Vec<libc::c_char>, a1: Vec<libc::c_char>) {
-    a0.pop();
-    a0.extend(a1.iter().copied().take_while(|&c| c != 0));
-    a0.push(0);
+// operator+= returns the RECEIVER in both models -- see the long note in
+// tgt_refcount.rs.  The reference in/reference out is spelled as the POINTER,
+// `*mut Vec<libc::c_char>`, not `&mut`, and the receiver placeholder is bound
+// once before being used twice.
+unsafe fn f35(a0: *mut Vec<libc::c_char>, a1: Vec<libc::c_char>) -> *mut Vec<libc::c_char> {
+    let __o = a0;
+    (*__o).pop();
+    (*__o).extend(a1.iter().copied().take_while(|&c| c != 0));
+    (*__o).push(0);
+    __o
 }
 
-unsafe fn f36(a0: &mut Vec<libc::c_char>, a1: *const libc::c_char) {
-    a0.pop();
+unsafe fn f36(a0: *mut Vec<libc::c_char>, a1: *const libc::c_char) -> *mut Vec<libc::c_char> {
+    let __o = a0;
+    (*__o).pop();
     let __from = a1;
-    a0.extend_from_slice(::std::slice::from_raw_parts(
+    (*__o).extend_from_slice(::std::slice::from_raw_parts(
         __from,
         (0..).position(|i| *__from.add(i) == 0).unwrap(),
     ));
-    a0.push(0);
+    (*__o).push(0);
+    __o
 }
 
-unsafe fn f37(a0: &mut Vec<libc::c_char>, a1: libc::c_char) {
-    a0.pop();
-    a0.push(a1);
-    a0.push(0);
+unsafe fn f37(a0: *mut Vec<libc::c_char>, a1: libc::c_char) -> *mut Vec<libc::c_char> {
+    let __o = a0;
+    (*__o).pop();
+    (*__o).push(a1);
+    (*__o).push(0);
+    __o
 }
 
 unsafe fn f38(a0: *const libc::c_char, a1: Vec<libc::c_char>) -> Vec<libc::c_char> {

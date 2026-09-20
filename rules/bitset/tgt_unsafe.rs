@@ -130,3 +130,17 @@ unsafe fn f19(a0: Vec<bool>, a1: Vec<bool>) -> bool {
     (0..a0.len().max(a1.len()))
         .any(|i| a0.as_slice().get(i).copied().unwrap_or(false) != a1.as_slice().get(i).copied().unwrap_or(false))
 }
+
+// --- bitwise assignment ----------------------------------------------------
+// `a1` is bound once: the placeholder is raw text, so naming it twice would
+// re-evaluate the operand expression.
+
+unsafe fn f20(a0: &mut Vec<bool>, a1: Vec<bool>) {
+    let __rhs = a1.clone();
+    if a0.len() < __rhs.len() {
+        a0.resize(__rhs.len(), false);
+    }
+    for (__d, __s) in a0.as_mut_slice().iter_mut().zip(__rhs.as_slice().iter()) {
+        *__d |= *__s;
+    }
+}

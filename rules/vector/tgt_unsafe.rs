@@ -573,3 +573,13 @@ unsafe fn f125<T1>(a0: *const T1, a1: *const T1) -> bool {
 unsafe fn f126<T1>(a0: *mut T1) -> *mut T1 {
     a0.wrapping_add(1)
 }
+
+// vector<bool>::at -- the VALUE at the index, not a pointer to it.  See
+// src.cpp: the proxy return type forces a read-only model.
+// `.as_slice()` is load-bearing: a bare `(a0)[i]` expands to `(*p)[i]` for a
+// raw pointer p, which autorefs THROUGH Vec's Deref to `&[bool]` and trips
+// rustc's deny-by-default `dangerous_implicit_autorefs`.  Same reason as the
+// note at the top of rules/bitset/tgt_unsafe.rs.
+unsafe fn f127(a0: &mut Vec<bool>, a1: usize) -> bool {
+    a0.as_slice()[a1 as usize]
+}

@@ -44,3 +44,18 @@ fn f10(a0: Ptr<Vec<bool>>, a1: usize) {
         __v[a1] = !__v[a1];
     })
 }
+
+// `a1` is bound OUTSIDE with_mut on purpose: the receiver's RefCell is already
+// mutably borrowed inside the closure, so evaluating the operand there would
+// panic if it reads through the same handle (`a |= a`).
+fn f20(a0: Ptr<Vec<bool>>, a1: Vec<bool>) {
+    let __rhs = a1.clone();
+    a0.with_mut(|__v: &mut Vec<bool>| {
+        if __v.len() < __rhs.len() {
+            __v.resize(__rhs.len(), false);
+        }
+        for (__d, __s) in __v.iter_mut().zip(__rhs.as_slice().iter()) {
+            *__d |= *__s;
+        }
+    })
+}

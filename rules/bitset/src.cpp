@@ -165,3 +165,23 @@ template <std::size_t T1>
 bool f19(const std::bitset<T1> &a, const std::bitset<T1> &b) {
   return a.operator!=(b);
 }
+
+// --- bitwise assignment ----------------------------------------------------
+// Only |= is provided: it is the only compound bitwise operator any call site
+// in the target scope uses (dsc-based-utils/progtailor/regstitcher.cpp:48,
+// `regDefs_[regTy] |= regnums;`).  &=, ^=, <<=, >>= and the unary ~ are left
+// out so that a call to one surfaces as a loud survey gap rather than as a
+// rule nobody has exercised.
+//
+// Like f4 (operator=), the returned reference is NOT modelled -- the target
+// body evaluates to unit -- so `a |= b` is supported as a STATEMENT but
+// `c = (a |= b)` is not.  Every call site in scope is a statement.
+//
+// Zero-extension, as everywhere else in this module: the receiver grows to the
+// operand's materialized length when the operand is longer, because bits past
+// the end are false and `false | x == x`.  It never shrinks.
+
+template <std::size_t T1>
+std::bitset<T1> &f20(std::bitset<T1> &o, const std::bitset<T1> &a1) {
+  return o.operator|=(a1);
+}
