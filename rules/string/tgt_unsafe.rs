@@ -413,8 +413,8 @@ unsafe fn f54(a0: f64) -> Vec<libc::c_char> {
         .collect::<Vec<libc::c_char>>()
 }
 
-unsafe fn f55(a0: Vec<libc::c_char>, a1: *mut u64, a2: i32) -> i32 {
-    let __pos: *mut u64 = a1;
+unsafe fn f55(a0: Vec<libc::c_char>, a1: *mut usize, a2: i32) -> i32 {
+    let __pos: *mut usize = a1;
     let __text: String = a0
         .iter()
         .copied()
@@ -444,13 +444,13 @@ unsafe fn f55(a0: Vec<libc::c_char>, a1: *mut u64, a2: i32) -> i32 {
     let __digits: String = [&__body[..__sign], &__rest[__skip..__skip + __n]].concat();
     let __value = i64::from_str_radix(&__digits, __radix).expect("stoi: out of range");
     if !__pos.is_null() {
-        *__pos = (__lead + __sign + __skip + __n) as u64;
+        *__pos = __lead + __sign + __skip + __n;
     }
     __value as i32
 }
 
-unsafe fn f56(a0: Vec<libc::c_char>, a1: *mut u64, a2: i32) -> i64 {
-    let __pos: *mut u64 = a1;
+unsafe fn f56(a0: Vec<libc::c_char>, a1: *mut usize, a2: i32) -> i64 {
+    let __pos: *mut usize = a1;
     let __text: String = a0
         .iter()
         .copied()
@@ -480,13 +480,13 @@ unsafe fn f56(a0: Vec<libc::c_char>, a1: *mut u64, a2: i32) -> i64 {
     let __digits: String = [&__body[..__sign], &__rest[__skip..__skip + __n]].concat();
     let __value = i64::from_str_radix(&__digits, __radix).expect("stoll: out of range");
     if !__pos.is_null() {
-        *__pos = (__lead + __sign + __skip + __n) as u64;
+        *__pos = __lead + __sign + __skip + __n;
     }
     __value
 }
 
-unsafe fn f57(a0: Vec<libc::c_char>, a1: *mut u64) -> f64 {
-    let __pos: *mut u64 = a1;
+unsafe fn f57(a0: Vec<libc::c_char>, a1: *mut usize) -> f64 {
+    let __pos: *mut usize = a1;
     let __text: String = a0
         .iter()
         .copied()
@@ -500,7 +500,7 @@ unsafe fn f57(a0: Vec<libc::c_char>, a1: *mut u64) -> f64 {
         .find(|&__i| __body[..__i].parse::<f64>().is_ok())
         .expect("stod: no conversion");
     if !__pos.is_null() {
-        *__pos = (__lead + __n) as u64;
+        *__pos = __lead + __n;
     }
     __body[..__n].parse::<f64>().unwrap()
 }
