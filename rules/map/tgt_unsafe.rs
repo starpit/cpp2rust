@@ -1,7 +1,7 @@
 // Copyright (c) 2022-present INESC-ID.
 // Distributed under the MIT license that can be found in the LICENSE file.
 
-use libcc2rs::{MapIterator, UnsafeMapIterator};
+use libcc2rs::{MapIterator, PostfixInc, UnsafeMapIterator};
 use std::collections::BTreeMap;
 
 fn t1<T1, T2>() -> BTreeMap<T1, Box<T2>> {
