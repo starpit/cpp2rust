@@ -216,3 +216,64 @@ unsafe fn f44<T1: Default>(a0: usize) -> Vec<T1> {
 unsafe fn f45<T1>() -> Vec<T1> {
     Vec::new()
 }
+
+// ---------------------------------------------------------------------------
+// The forward iterator: the rules/vector bodies, because the representation is
+// the same Vec<T>/*mut T. See the note in src.cpp.
+// ---------------------------------------------------------------------------
+
+unsafe fn f46<T1>(a0: &mut Vec<T1>) -> *mut T1 {
+    a0.as_mut_ptr()
+}
+
+unsafe fn f47<T1>(a0: &mut Vec<T1>) -> *mut T1 {
+    a0.as_mut_ptr().add(a0.len())
+}
+
+unsafe fn f48<T1>(a0: Vec<T1>) -> *const T1 {
+    a0.as_ptr()
+}
+
+unsafe fn f49<T1>(a0: Vec<T1>) -> *const T1 {
+    a0.as_ptr().add(a0.len())
+}
+
+unsafe fn f50<T1>(a0: *const T1, a1: *const T1) -> bool {
+    a0 == a1
+}
+
+unsafe fn f51<T1>(a0: *const T1, a1: *const T1) -> bool {
+    a0 != a1
+}
+
+unsafe fn f52<T1>(a0: *const T1, a1: *const T1) -> bool {
+    a0 == a1
+}
+
+unsafe fn f53<T1>(a0: *const T1, a1: *const T1) -> bool {
+    a0 != a1
+}
+
+unsafe fn f54<T1>(a0: *mut T1) -> *mut T1 {
+    a0
+}
+
+unsafe fn f55<T1>(a0: *const T1) -> *const T1 {
+    a0
+}
+
+unsafe fn f56<T1>(a0: *mut T1, a1: usize) -> *mut T1 {
+    a0.add(a1 as usize)
+}
+
+unsafe fn f57<T1>(a0: *mut T1, a1: usize) -> *mut T1 {
+    a0.sub(a1 as usize)
+}
+
+unsafe fn f58<T1>(a0: &mut *mut T1) -> *mut T1 {
+    a0.prefix_inc()
+}
+
+unsafe fn f59<T1>(a0: &mut *mut T1) -> *mut T1 {
+    a0.postfix_inc()
+}

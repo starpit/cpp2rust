@@ -456,3 +456,8 @@ fn f126<T1>(a0: Ptr<T1>) -> Ptr<T1> {
 fn f127(a0: Ptr<bool>, a1: usize) -> bool {
     (*a0.offset(a1 as isize).upgrade().deref())
 }
+
+// Contiguous-iterator operator-(long). The mirror of f25 (`a0.offset(a1)`).
+fn f128<T1>(a0: Ptr<T1>, a1: usize) -> Ptr<T1> {
+    a0.offset(-(a1 as isize))
+}

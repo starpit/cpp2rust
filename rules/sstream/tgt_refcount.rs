@@ -286,39 +286,100 @@ fn f28(a0: Ptr<Box<Vec<u8>>>, a1: Ptr<f64>) -> Ptr<Box<Vec<u8>>> {
     __r
 }
 
-fn f29(a0: Ptr<Box<Vec<u8>>>, a1: Ptr<Vec<u8>>) -> Ptr<Box<Vec<u8>>> {
-    let __tok: Vec<u8> = a0.with_mut(|__v: &mut Box<Vec<u8>>| {
-        let mut __i = 0usize;
-        while __i < __v.len() && __v[__i].is_ascii_whitespace() {
-            __i += 1;
+fn f29(a0: &mut Box<Vec<u8>>, a1: Ptr<Vec<u8>>) -> Ptr<Box<Vec<u8>>> {
+    ({
+        trait __Cc2Tok {
+            fn __cc2_token(&mut self) -> Vec<u8>;
         }
-        let __b = __i;
-        while __i < __v.len() && !__v[__i].is_ascii_whitespace() {
-            __i += 1;
+        impl __Cc2Tok for Vec<u8> {
+            fn __cc2_token(&mut self) -> Vec<u8> {
+                let mut __i = 0usize;
+                while __i < self.len() && self[__i].is_ascii_whitespace() {
+                    __i += 1;
+                }
+                let __b = __i;
+                while __i < self.len() && !self[__i].is_ascii_whitespace() {
+                    __i += 1;
+                }
+                let __t = self[__b..__i].to_vec();
+                self.drain(..__i);
+                __t
+            }
         }
-        let __t = __v[__b..__i].to_vec();
-        __v.drain(..__i);
-        __t
-    });
-    let mut __out: Vec<u8> = __tok;
-    __out.push(0);
-    a1.write(__out);
-    let __r: Ptr<Box<Vec<u8>>> = a0;
-    __r
+        impl __Cc2Tok for ::std::fs::File {
+            fn __cc2_token(&mut self) -> Vec<u8> {
+                use ::std::io::Read;
+                use ::std::io::Seek;
+                let mut __out: Vec<u8> = Vec::new();
+                let mut __b = [0u8; 1];
+                loop {
+                    match self.read(&mut __b) {
+                        Ok(0) => break,
+                        Ok(_) => {
+                            if __b[0].is_ascii_whitespace() {
+                                if __out.is_empty() {
+                                    continue;
+                                }
+                                // C++ stops AT the delimiter without consuming
+                                // it: the leading run of whitespace is eaten,
+                                // the trailing one is not.
+                                let _ = self.seek(::std::io::SeekFrom::Current(-1));
+                                break;
+                            }
+                            __out.push(__b[0]);
+                        }
+                        Err(_) => break,
+                    }
+                }
+                __out
+            }
+        }
+        let mut __out: Vec<u8> = a0.__cc2_token();
+        __out.push(0);
+        a1.write(__out);
+        Ptr::<Box<Vec<u8>>>::null()
+    })
 }
 
-fn f30(a0: Ptr<Box<Vec<u8>>>, a1: Ptr<Vec<u8>>, a2: u8) -> Ptr<Box<Vec<u8>>> {
-    let __line: Vec<u8> = a0.with_mut(|__v: &mut Box<Vec<u8>>| {
-        let __pos = __v.iter().position(|&c| c == a2);
-        let __keep = __pos.unwrap_or(__v.len());
-        let __end = __pos.map(|__p| __p + 1).unwrap_or(__v.len());
-        __v.drain(..__end).take(__keep).collect()
-    });
-    let mut __out: Vec<u8> = __line;
-    __out.push(0);
-    a1.write(__out);
-    let __r: Ptr<Box<Vec<u8>>> = a0;
-    __r
+fn f30(a0: &mut Box<Vec<u8>>, a1: Ptr<Vec<u8>>, a2: u8) -> Ptr<Box<Vec<u8>>> {
+    ({
+        trait __Cc2Line {
+            fn __cc2_getline(&mut self, __d: u8) -> Vec<u8>;
+        }
+        impl __Cc2Line for Vec<u8> {
+            fn __cc2_getline(&mut self, __d: u8) -> Vec<u8> {
+                let __pos = self.iter().position(|&c| c == __d);
+                let __keep = __pos.unwrap_or(self.len());
+                let __end = __pos.map(|__p| __p + 1).unwrap_or(self.len());
+                self.drain(..__end).take(__keep).collect()
+            }
+        }
+        impl __Cc2Line for ::std::fs::File {
+            fn __cc2_getline(&mut self, __d: u8) -> Vec<u8> {
+                use ::std::io::Read;
+                let mut __out: Vec<u8> = Vec::new();
+                let mut __b = [0u8; 1];
+                loop {
+                    match self.read(&mut __b) {
+                        Ok(0) => break,
+                        Ok(_) => {
+                            if __b[0] == __d {
+                                break;
+                            }
+                            __out.push(__b[0]);
+                        }
+                        Err(_) => break,
+                    }
+                }
+                __out
+            }
+        }
+        // The delimiter is this rule's own parameter, not a fixed newline.
+        let mut __out: Vec<u8> = a0.__cc2_getline(a2);
+        __out.push(0);
+        a1.write(__out);
+        Ptr::<Box<Vec<u8>>>::null()
+    })
 }
 
 fn f31(a0: Ptr<Box<Vec<u8>>>, a1: Ptr<Vec<u8>>) -> Ptr<Box<Vec<u8>>> {
@@ -335,18 +396,42 @@ fn f31(a0: Ptr<Box<Vec<u8>>>, a1: Ptr<Vec<u8>>) -> Ptr<Box<Vec<u8>>> {
     __r
 }
 
-fn f32(a0: Ptr<Box<Vec<u8>>>, a1: Ptr<u8>) -> Ptr<Box<Vec<u8>>> {
-    let __c: u8 = a0.with_mut(|__v: &mut Box<Vec<u8>>| {
-        let mut __i = 0usize;
-        while __i < __v.len() && __v[__i].is_ascii_whitespace() {
-            __i += 1;
+fn f32(a0: &mut Box<Vec<u8>>, a1: Ptr<u8>) -> Ptr<Box<Vec<u8>>> {
+    ({
+        trait __Cc2Ch {
+            fn __cc2_char(&mut self) -> u8;
         }
-        let __ch = if __i < __v.len() { __v[__i] } else { 0 };
-        let __end = ::std::cmp::min(__i + 1, __v.len());
-        __v.drain(..__end);
-        __ch
-    });
-    a1.write(__c);
-    let __r: Ptr<Box<Vec<u8>>> = a0;
-    __r
+        impl __Cc2Ch for Vec<u8> {
+            fn __cc2_char(&mut self) -> u8 {
+                let mut __i = 0usize;
+                while __i < self.len() && self[__i].is_ascii_whitespace() {
+                    __i += 1;
+                }
+                let __ch = if __i < self.len() { self[__i] } else { 0 };
+                let __end = ::std::cmp::min(__i + 1, self.len());
+                self.drain(..__end);
+                __ch
+            }
+        }
+        impl __Cc2Ch for ::std::fs::File {
+            fn __cc2_char(&mut self) -> u8 {
+                use ::std::io::Read;
+                let mut __b = [0u8; 1];
+                loop {
+                    match self.read(&mut __b) {
+                        Ok(0) => return 0,
+                        // A single char consumes exactly the char it returns,
+                        // so unlike the token form there is nothing to push
+                        // back: the file position is already where C++ leaves
+                        // it.
+                        Ok(_) if !__b[0].is_ascii_whitespace() => return __b[0],
+                        Ok(_) => continue,
+                        Err(_) => return 0,
+                    }
+                }
+            }
+        }
+        a1.write(a0.__cc2_char());
+        Ptr::<Box<Vec<u8>>>::null()
+    })
 }

@@ -16,6 +16,7 @@
 #include <cctype>
 #include <filesystem>
 #include <format>
+#include <iterator>
 #include <ranges>
 #include <unordered_set>
 
@@ -488,6 +489,45 @@ bool IsInitExprOfStringLiteral(const clang::InitListExpr *expr) {
          type->getArrayElementTypeNoTypeQual()->isCharType() &&
          clang::isa<clang::StringLiteral>(
              expr->getInit(0)->IgnoreParenImpCasts());
+}
+
+bool IsRedundantBraceAroundReference(const clang::InitListExpr *expr) {
+  // `f({v})` where `f` takes `const T &` (or `T &&`) and `v` is already a `T`.
+  // No initializer_list and no aggregate can be formed from that, so the
+  // reference binds DIRECTLY to `v`: clang builds no temporary and marks the
+  // InitListExpr a glvalue whose single element has the list's own type. The
+  // braces are then pure syntax and the translation is just the element.
+  //
+  // Verified against clang-compiled C++: for `take({r})`, `takerv({move(r)})`
+  // and a brace-wrapped `std::array`, `&n` inside the callee equals `&r` and
+  // no copy or move happens.
+  //
+  // The value kind is what separates this from real aggregate initialization.
+  // `f({x})` on a one-field aggregate `struct One{int x;}` is a prvalue and
+  // *must* build a temporary; `f({o})` where `o` is already a `One` is a
+  // glvalue and must not. Requiring a glvalue and exactly one init is
+  // therefore not a heuristic -- clang has already done the overload
+  // resolution that decides which of the two this is.
+  if (expr->isPRValue() || expr->getNumInits() != 1) {
+    return false;
+  }
+  // An implicit value-init is never a spelled element.
+  return !clang::isa<clang::ImplicitValueInitExpr>(expr->getInit(0));
+}
+
+bool HasTooFewInitsForFieldWalk(const clang::InitListExpr *expr) {
+  const auto *record = expr->getType()->getAsRecordDecl();
+  if (!record) {
+    return false;
+  }
+  // clang pads a partially-written struct aggregate with ImplicitValueInitExpr,
+  // so a well-formed struct list has one entry per field; a union instead names
+  // exactly ONE field however many it has. Either way, a field-by-field walk
+  // over all the fields reads past the end of a shorter list -- which in an
+  // NDEBUG build is an out-of-bounds read, not a clean assertion.
+  return expr->getNumInits() <
+         static_cast<unsigned>(
+             std::distance(record->field_begin(), record->field_end()));
 }
 
 std::vector<clang::CXXConstructorDecl *>

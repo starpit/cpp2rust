@@ -120,6 +120,15 @@ bool IsAsciiStringLiteral(const clang::StringLiteral *str);
 
 bool IsInitExprOfStringLiteral(const clang::InitListExpr *expr);
 
+// True when the braces of `expr` are pure syntax around a single element that
+// the enclosing reference binds to directly, so the translation is just that
+// element. See the definition for why the value kind is the deciding test.
+bool IsRedundantBraceAroundReference(const clang::InitListExpr *expr);
+
+// True when `expr` has fewer initializers than its record has fields, so
+// walking the fields and indexing the list in lockstep would read past the end.
+bool HasTooFewInitsForFieldWalk(const clang::InitListExpr *expr);
+
 bool IsLiteral(const clang::Expr *expr);
 
 std::vector<clang::CXXConstructorDecl *>

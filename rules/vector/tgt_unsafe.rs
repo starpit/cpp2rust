@@ -583,3 +583,8 @@ unsafe fn f126<T1>(a0: *mut T1) -> *mut T1 {
 unsafe fn f127(a0: &mut Vec<bool>, a1: usize) -> bool {
     a0.as_slice()[a1 as usize]
 }
+
+// Contiguous-iterator operator-(long). The mirror of f25 (`a0.add(a1)`).
+unsafe fn f128<T1>(a0: *mut T1, a1: usize) -> *mut T1 {
+    a0.sub(a1 as usize)
+}

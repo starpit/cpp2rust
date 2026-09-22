@@ -37,7 +37,10 @@ std::string TranspileSrc(std::string_view cc_code, Model model,
 }
 
 std::string TranspileDir(std::string_view build_dir, Model model,
-                         const std::string &rules_dir) {
+                         const std::string &rules_dir, bool *ok) {
+  if (ok) {
+    *ok = false;
+  }
   std::string error_message;
   auto compile_dbase = clang::tooling::CompilationDatabase::loadFromDirectory(
       build_dir, error_message);
@@ -71,10 +74,17 @@ std::string TranspileDir(std::string_view build_dir, Model model,
 
   std::string rs_code;
   FrontendActionFactory factory(rs_code, model, rules_dir);
-  Tool.run(&factory);
+  // Tool.run() is non-zero if clang failed on ANY file, and its failures are
+  // not all recoverable: a `#include` that cannot be opened is fatal, yet the
+  // action still runs over the truncated AST and still produces Rust. Report it
+  // rather than letting a non-empty output speak for success.
+  const bool tool_ok = Tool.run(&factory) == 0;
   Converter::EmitOpaqueRecords(rs_code);
   Converter::EmitMethodsOnPtr(rs_code);
   Converter::EmitGlobalInits(model, rs_code);
+  if (ok) {
+    *ok = tool_ok;
+  }
   return rs_code;
 }
 } // namespace cpp2rust

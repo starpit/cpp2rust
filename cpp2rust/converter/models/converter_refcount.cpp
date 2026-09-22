@@ -1720,8 +1720,37 @@ bool ConverterRefCount::VisitInitListExpr(clang::InitListExpr *expr) {
 
   if (qual_type->isRecordType()) {
     const auto *record = qual_type->getAsRecordDecl();
+
+    // `g({v})` where `g` takes `const std::vector<T> &`. The braced list holds
+    // one element of the parameter's own type, so no initializer_list can be
+    // formed from it and the reference binds DIRECTLY to that element: clang
+    // builds no temporary and marks the InitListExpr a glvalue. The braces are
+    // then pure syntax, and the translation is the element.
+    //
+    // This has to be caught before BOTH paths below. The field walk names the
+    // C++ RECORD's fields -- and for a type a rule replaced those are the
+    // standard library implementation's, not the Rust type's. It spelt this copy
+    // as `Vec<T> { __begin_: v.clone(), __end_: null, anon_3: default }`: three
+    // of libc++'s private members, one of them anonymous, assigned to a `Vec`
+    // that has none of them. Nothing downstream could recover -- the `<` is read
+    // as a comparison and rustfmt rejects the file, which is how the whole TU
+    // was lost. The std::array path was separately wrong in SILENCE, emitting a
+    // default-filled array and dropping the element.
+    //
+    // The test used to be `isLValue()`, which missed `g({std::move(v)})`: that
+    // one is an XVALUE, and it still binds directly with no copy and no move
+    // (verified against clang-compiled C++). `IsRedundantBraceAroundReference`
+    // accepts both.
+    if (IsRedundantBraceAroundReference(expr)) {
+      Convert(expr->getInit(0));
+      return false;
+    }
+
     if (record->getQualifiedNameAsString() == "std::array") {
-      if (auto init = clang::dyn_cast<clang::InitListExpr>(expr->getInit(0))) {
+      if (expr->getNumInits() == 0) {
+        StrCat(GetArrayDefaultAsString(qual_type));
+      } else if (auto init =
+                     clang::dyn_cast<clang::InitListExpr>(expr->getInit(0))) {
         StrCat("vec!");
         PushConversionKind push(*this, ConversionKind::Unboxed);
         ConverterRefCount::VisitInitListExpr(init);
@@ -1732,23 +1761,27 @@ bool ConverterRefCount::VisitInitListExpr(clang::InitListExpr *expr) {
       return false;
     }
 
-    // `g({v})` where `g` takes `const std::vector<T> &`. The braced list holds
-    // one element of the parameter's own type, so no initializer_list can be
-    // formed from it and the reference binds DIRECTLY to that element: clang
-    // marks the InitListExpr an LVALUE and builds no temporary. The braces are
-    // then pure syntax, and the translation is the element.
-    //
-    // This has to be caught before the field walk below, because that walk
-    // names the C++ RECORD's fields -- and for a type a rule replaced those
-    // are the standard library implementation's, not the Rust type's. It spelt
-    // this copy as `Vec<T> { __begin_: v.clone(), __end_: null, anon_3:
-    // default }`: three of libc++'s private members, one of them anonymous,
-    // assigned to a `Vec` that has none of them. Nothing downstream could
-    // recover -- the `<` is read as a comparison and rustfmt rejects the file,
-    // which is how the whole TU was lost.
-    if (expr->isLValue() && expr->getNumInits() == 1) {
-      Convert(expr->getInit(0));
-      return false;
+    // Short of one init per field this is not an aggregate init of this record,
+    // and the walk below would default-pad fields the Rust type may not even
+    // have -- silently, since unlike the base converter it bounds-checks. Say so
+    // instead; a union brace-init reached here and produced `U { a: .., b: .. }`
+    // for a `U` whose only Rust field is `__bytes`.
+    if (HasTooFewInitsForFieldWalk(expr)) {
+      auto detail = std::format("{} initializer(s) for {} field(s) of '{}'",
+                                expr->getNumInits(),
+                                std::distance(record->field_begin(),
+                                              record->field_end()),
+                                qual_type.getAsString());
+      if (ReportUnsupported("InitListExpr", detail, expr->getBeginLoc(), ctx_)) {
+        StrCat(UnsupportedPlaceholder("InitListExpr", detail));
+        computed_expr_type_ = ComputedExprType::FreshValue;
+        return false;
+      }
+      llvm::errs() << "ERROR: unsupported braced initializer: " << detail
+                   << "\n  at "
+                   << expr->getBeginLoc().printToString(ctx_.getSourceManager())
+                   << '\n';
+      llvm::report_fatal_error("unsupported braced initializer");
     }
 
     StrCat(GetUnsafeTypeAsString(qual_type));

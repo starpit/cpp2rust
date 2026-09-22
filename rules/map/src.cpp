@@ -172,3 +172,72 @@ template <typename T1, typename T2>
 std::map<T1, T2> f32(std::initializer_list<std::pair<const T1, T2>> a0) {
   return std::map<T1, T2>(a0);
 }
+
+// ---------------------------------------------------------------------------
+// The POSTFIX ++ on a map iterator: `it++`, as opposed to f28/f29's `++it`.
+//
+// libc++ prints the two distinctly -- the prefix returns `__map_iterator &`
+// and the postfix returns `__map_iterator` and takes an int -- so f28/f29 do
+// not cover the postfix form, and `it++` in dsc/dims.cpp:736 died at
+// converter.cpp:3455 with "unsupported CXXOperatorCallExpr: ++".
+//
+// Postfix semantics are the ones the C++ standard specifies and the call site
+// relies on: ADVANCE the receiver, RETURN the value it had before. Getting
+// that backwards would be silent -- the loop would still terminate, on the
+// wrong element. libcc2rs already implements exactly this as
+// `PostfixInc for MapIter` (iterators.rs), which both models reuse; the
+// prefix rules call `inc()` then `clone()`, so the two are not interchangeable.
+// ---------------------------------------------------------------------------
+
+template <typename T1, typename T2>
+typename std::map<T1, T2>::iterator
+f33(typename std::map<T1, T2>::iterator &it, int a1) {
+  return it.operator++(a1);
+}
+
+template <typename T1, typename T2>
+typename std::map<T1, T2>::const_iterator
+f34(typename std::map<T1, T2>::const_iterator &it, int a1) {
+  return it.operator++(a1);
+}
+
+// ---------------------------------------------------------------------------
+// The four RELATIONAL operators on std::map.
+//
+// f30/f31 already cover == and !=; `<`, `<=`, `>` and `>=` had no rule, and
+// `new_sp.bigDimToSize_ >= new_sp.dimToSize_` in
+// dcg/dcg_fe/pcfg_gen/stcdpOp.cpp:90 (both std::map<std::string, double>,
+// inside a DT_CHECK) died at converter.cpp:3455.
+//
+// This is only sound because Rust's derived Ord on BTreeMap agrees with C++'s
+// std::lexicographical_compare over the (key, value) SEQUENCE, which is what
+// std::map's relational operators are specified to do. That was not assumed --
+// it was measured: six discriminating pairs (same keys/different values, one
+// map a strict PREFIX of another, a differing KEY, and equal maps) give
+// identical answers from clang-compiled std::map and from BTreeMap:
+// `10 01 01 11 01 01` for both.
+//
+// NOTE the receiver, and why `>=` here is not the `>=` a scalar would get: the
+// elements are compared through Box<T2>/Value<T2>, whose Ord forwards to T2,
+// so the comparison reaches the mapped values rather than the handles.
+// ---------------------------------------------------------------------------
+
+template <typename T1, typename T2>
+bool f35(const std::map<T1, T2> &a, const std::map<T1, T2> &b) {
+  return operator<(a, b);
+}
+
+template <typename T1, typename T2>
+bool f36(const std::map<T1, T2> &a, const std::map<T1, T2> &b) {
+  return operator<=(a, b);
+}
+
+template <typename T1, typename T2>
+bool f37(const std::map<T1, T2> &a, const std::map<T1, T2> &b) {
+  return operator>(a, b);
+}
+
+template <typename T1, typename T2>
+bool f38(const std::map<T1, T2> &a, const std::map<T1, T2> &b) {
+  return operator>=(a, b);
+}

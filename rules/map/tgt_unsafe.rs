@@ -149,3 +149,31 @@ unsafe fn f32<T1: Ord + Clone, T2>(a0: Vec<(T1, T2)>, a1: Option<()>) -> BTreeMa
         .map(|(__k, __v): (T1, T2)| (__k, Box::new(__v)))
         .collect()
 }
+
+unsafe fn f33<T1: Ord + Clone, T2>(
+    a0: &mut UnsafeMapIterator<T1, T2>,
+) -> UnsafeMapIterator<T1, T2> {
+    a0.postfix_inc()
+}
+
+unsafe fn f34<T1: Ord + Clone, T2>(
+    a0: &mut UnsafeMapIterator<T1, T2>,
+) -> UnsafeMapIterator<T1, T2> {
+    a0.postfix_inc()
+}
+
+unsafe fn f35<T1: Ord, T2: Ord>(a0: BTreeMap<T1, Box<T2>>, a1: BTreeMap<T1, Box<T2>>) -> bool {
+    a0 < a1
+}
+
+unsafe fn f36<T1: Ord, T2: Ord>(a0: BTreeMap<T1, Box<T2>>, a1: BTreeMap<T1, Box<T2>>) -> bool {
+    a0 <= a1
+}
+
+unsafe fn f37<T1: Ord, T2: Ord>(a0: BTreeMap<T1, Box<T2>>, a1: BTreeMap<T1, Box<T2>>) -> bool {
+    a0 > a1
+}
+
+unsafe fn f38<T1: Ord, T2: Ord>(a0: BTreeMap<T1, Box<T2>>, a1: BTreeMap<T1, Box<T2>>) -> bool {
+    a0 >= a1
+}

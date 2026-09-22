@@ -708,3 +708,25 @@ typename std::vector<T1>::iterator
 f126(const typename std::vector<T1>::reverse_iterator &it) {
   return it.base();
 }
+
+// ---------------------------------------------------------------------------
+// Contiguous-iterator operator-(long): `v.begin() + n - k` and `v.end() - k`.
+//
+// f25/f84 already cover operator+(long) on the same std::__wrap_iter<T1 *>
+// receiver; the subtracting half had no rule at all, so `foldParams.begin() +
+// i - 1` in ddc/ddc_fold.cpp:424 died at converter.cpp:3455 with
+// "unsupported CXXOperatorCallExpr: -".  Note the operator- SPELLING matters:
+// `long std::operator-(const __wrap_iter &, const __wrap_iter &)` is the
+// iterator-DIFFERENCE and is already rules/vector f33/f88; this is the member
+// `__wrap_iter __wrap_iter::operator-(long) const`, a different signature.
+//
+// The parameter is spelled std::size_t rather than long to match f25's
+// spelling, which is what makes the two sides of `begin() + i - 1` agree on
+// one Rust integer type at the call site.
+// ---------------------------------------------------------------------------
+
+template <typename T1>
+typename std::vector<T1>::iterator f128(typename std::vector<T1>::iterator it,
+                                        std::size_t n) {
+  return it.operator-(n);
+}

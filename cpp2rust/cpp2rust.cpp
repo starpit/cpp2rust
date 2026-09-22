@@ -32,6 +32,15 @@ llvm::cl::opt<bool> Verbose("verbose", llvm::cl::desc("Enable verbose logging"),
                             llvm::cl::init(false),
                             llvm::cl::cat(cpp2rust_cmdargs));
 
+llvm::cl::opt<bool> StrictDir(
+    "strict-dir",
+    llvm::cl::desc(
+        "With --dir, fail if clang reported an error for any file. Output is "
+        "still written; without this a truncated AST -- an unopenable #include "
+        "is fatal to clang but not to the run -- yields Rust that looks fine "
+        "and exits zero. Measurement should always pass this"),
+    llvm::cl::init(false), llvm::cl::cat(cpp2rust_cmdargs));
+
 llvm::cl::opt<std::string>
     Survey("survey",
            llvm::cl::desc("Do not abort on an unsupported construct: record it, "
@@ -193,14 +202,33 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
+  bool dir_ok = true;
   auto rs_code =
       BuildDir.empty()
           ? cpp2rust::TranspileSrc(cc_code, model, cxx_flags, RulesDir, CcFile)
-          : cpp2rust::TranspileDir(BuildDir, model, RulesDir);
+          : cpp2rust::TranspileDir(BuildDir, model, RulesDir, &dir_ok);
 
   if (rs_code.empty()) {
     llvm::errs() << "ERROR: empty output file\n";
     return EXIT_FAILURE;
+  }
+
+  // A clang failure in --dir mode is not survivable even though output exists:
+  // an unopenable `#include` is fatal, the AST is truncated, and whatever Rust
+  // came out is translated from an incomplete program. Exiting zero here is what
+  // let survey.py score such TUs as OK.
+  //
+  // Warn always, fail only under --strict-dir. Making it fatal by default would
+  // be the honest thing, but clang also reports errors that this converter has
+  // always translated through, so flipping the default silently reclassifies
+  // every such TU. Measurement wants the strict reading; pass the flag there.
+  if (!dir_ok) {
+    llvm::errs() << (StrictDir ? "ERROR" : "WARNING")
+                 << ": clang reported errors for at least one file in "
+                 << BuildDir << "; the Rust output is not trustworthy\n";
+    if (StrictDir) {
+      return EXIT_FAILURE;
+    }
   }
 
   std::ofstream file(RsFile);

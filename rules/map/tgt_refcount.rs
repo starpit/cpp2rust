@@ -201,3 +201,31 @@ fn f32<T1: Ord + Clone, T2>(
         .map(|(__k, __v): (Value<T1>, Value<T2>)| (__k.borrow().clone(), __v))
         .collect()
 }
+
+fn f33<T1: Ord + Clone + 'static, T2: 'static>(
+    a0: &mut RefcountMapIter<T1, T2>,
+) -> RefcountMapIter<T1, T2> {
+    a0.postfix_inc()
+}
+
+fn f34<T1: Ord + Clone + 'static, T2: 'static>(
+    a0: &mut RefcountMapIter<T1, T2>,
+) -> RefcountMapIter<T1, T2> {
+    a0.postfix_inc()
+}
+
+fn f35<T1: Ord, T2: Ord>(a0: BTreeMap<T1, Value<T2>>, a1: BTreeMap<T1, Value<T2>>) -> bool {
+    a0 < a1
+}
+
+fn f36<T1: Ord, T2: Ord>(a0: BTreeMap<T1, Value<T2>>, a1: BTreeMap<T1, Value<T2>>) -> bool {
+    a0 <= a1
+}
+
+fn f37<T1: Ord, T2: Ord>(a0: BTreeMap<T1, Value<T2>>, a1: BTreeMap<T1, Value<T2>>) -> bool {
+    a0 > a1
+}
+
+fn f38<T1: Ord, T2: Ord>(a0: BTreeMap<T1, Value<T2>>, a1: BTreeMap<T1, Value<T2>>) -> bool {
+    a0 >= a1
+}

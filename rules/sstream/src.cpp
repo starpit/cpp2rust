@@ -110,6 +110,40 @@ std::istream &f28(std::istringstream &o, double &v) {
 }
 
 // Free extraction operators and std::getline.
+//
+// These take std::istream, not std::istringstream, so the ONE rule each
+// signature admits also fires on std::ifstream and std::cin -- exactly the
+// collision that moved the state predicates out to rules/basic_ios.  The
+// representations differ: this module maps string streams to Box<Vec<u8>>,
+// while rules/fstream and rules/iostream map file streams and std::cin to
+// ::std::fs::File, which has neither .len() nor .drain() nor indexing.  A body
+// written against the drain buffer therefore emitted non-compiling Rust on
+// every file stream ("no method named `len` found for struct `File`").
+//
+// All four are fixed the same way rules/basic_ios fixes the predicates: each
+// body declares a private trait with one method, implements it for Vec<u8>
+// (drain the buffer) and for ::std::fs::File (read a byte at a time, which
+// leaves the file position where C++ leaves it), and calls it on the receiver,
+// so Rust resolves the impl statically from the receiver's type.  Verified in
+// both models against clang-compiled C++ on an ifstream and an istringstream in
+// the same program.
+//
+// One extra step was needed here that the predicates did not need: each
+// refcount body's receiver had to be respelled from `Ptr<Box<Vec<u8>>>` to
+// `&mut Box<Vec<u8>>`.  A Ptr-typed parameter makes the converter emit
+// `f.as_pointer()` typed as `Ptr<Box<Vec<u8>>>` at the CALL SITE -- outside the
+// body, where no trait can reach it -- which is `Ptr<File>` on a file stream
+// and a type error.  Spelling the parameter as a borrow removes the cast.
+//
+// The File impls differ in exactly one respect, and it is the subtle part.
+// getline (f30, f31) CONSUMES its delimiter, so its loop can simply stop on it.
+// operator>> for a token (f29) does NOT: C++ skips the leading run of
+// whitespace, consumes the token, and leaves the file position AT the
+// terminating whitespace, so the next getline on the same stream sees it.  A
+// File has no pushback buffer, so f29's impl seeks back one byte after reading
+// the terminator -- without that it over-consumes and `f >> tok; getline(f, r);`
+// loses a character.  operator>> for a single char (f32) consumes exactly the
+// char it returns, so it needs no pushback at all.
 std::istream &f29(std::istream &o, std::string &v) { return operator>>(o, v); }
 
 std::istream &f30(std::istream &o, std::string &v, char d) {

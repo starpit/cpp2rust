@@ -195,3 +195,198 @@ unsafe fn f32<T1>(a0: Option<std::rc::Weak<std::cell::RefCell<T1>>>) -> i64 {
 unsafe fn f33<T1>(a0: &mut Option<std::rc::Weak<std::cell::RefCell<T1>>>) {
     *a0 = None
 }
+
+// --- std::shared_ptr<T[]> and std::shared_ptr<void> -------------------------
+//
+// t3 is a POINTER, not Option<Value<Box<[T1]>>>, and the reason is that this
+// model cannot build the latter. `new T[n]` lowers here to
+// `Box::leak(..).as_mut_ptr()`, i.e. a bare *mut T1 with the length thrown
+// away, and the only route back to a length is malloc_usable_size -- measured
+// on this pod as OVER-approximating for 18 of 21 sizes (n=1 reports 24, n=64
+// reports 72). A Box<[T1]> rebuilt from that has the wrong len(), so `.len()`
+// and every bounds check over it would be quietly wrong. A pointer has no
+// length to get wrong, and it is what the surrounding generated code already
+// passes to snprintf and copy_nonoverlapping.
+//
+// t4 is the same *mut c_void the converter already emits for a plain `void *`
+// struct field, so a ProgramFrame carrying a shared_ptr<void> and one carrying
+// a void* have the same Rust shape and the cast between them is a no-op rather
+// than a conversion that could disagree.
+//
+// What this gives up, deliberately: the reference count. Nothing in dt_src
+// calls use_count() on either type, and in C++ the owner that outlives the
+// scope IS the shared_ptr<void> stored in the frame -- so "alive for the rest
+// of the program" is the faithful behaviour, and it is exactly what the
+// Box::leak the converter already emits for `new T[n]` gives. The array is
+// LEAKED, not dropped. That is a resource bug; the alternative -- dropping
+// when the local handle dies -- would leave the frame reading freed memory,
+// which is the silent-wrongness class this project ranks worst.
+
+fn t3<T1>() -> *mut T1 {
+    ::std::ptr::null_mut()
+}
+
+fn t4() -> *mut ::libc::c_void {
+    ::std::ptr::null_mut()
+}
+
+// The ctor from `new T[n]`. Its argument does NOT always arrive as a raw
+// pointer, and that is the one real friction point of this sub-model.
+// VisitCXXNewExpr emits `Box::leak(..)`, i.e. a `&mut [T1]`, and only appends
+// `.as_mut_ptr()` when the DECLARED C++ type is itself a pointer type
+// (converter.cpp:3844). `std::shared_ptr<char[]>` is a class type, so the
+// suffix is absent and the body receives `&mut [T1]`; written as
+// `shared_ptr<T1[]> p(some_raw_ptr)` it receives `*mut T1`. Both are legal
+// C++ spellings of this same constructor.
+//
+// So dispatch on the Rust representation with a private trait -- bodies may
+// contain items, and this is the same device rules/basic_ios uses to serve one
+// C++ signature from several Rust types. It is static, so a representation
+// nobody handled is a compile error naming the trait rather than a silent
+// coercion. The whole body is wrapped in `({ .. })` because an unparenthesised
+// block is a parse error the moment the rule lands in a condition.
+unsafe fn f34<T1>(a0: *mut T1) -> *mut T1 {
+    ({
+        trait ArrayNewResult<T> {
+            fn __elem_ptr(self) -> *mut T;
+        }
+        impl<T> ArrayNewResult<T> for *mut T {
+            fn __elem_ptr(self) -> *mut T {
+                self
+            }
+        }
+        impl<T> ArrayNewResult<T> for &mut [T] {
+            fn __elem_ptr(self) -> *mut T {
+                <[T]>::as_mut_ptr(self)
+            }
+        }
+        a0.__elem_ptr()
+    })
+}
+
+unsafe fn f35<T1>() -> *mut T1 {
+    ::std::ptr::null_mut::<T1>()
+}
+
+unsafe fn f36<T1>(a0: *mut T1) -> *mut T1 {
+    a0
+}
+
+unsafe fn f37<T1>(a0: *mut T1) -> *mut ::libc::c_void {
+    a0 as *mut ::libc::c_void
+}
+
+unsafe fn f38(a0: *mut ::libc::c_void) -> *mut ::libc::c_void {
+    a0
+}
+
+unsafe fn f39() -> *mut ::libc::c_void {
+    ::std::ptr::null_mut()
+}
+
+unsafe fn f40(a0: *mut ::libc::c_void) -> bool {
+    a0.is_null()
+}
+
+unsafe fn f41(a0: *mut ::libc::c_void) -> bool {
+    !a0.is_null()
+}
+
+unsafe fn f42(a0: &mut *mut ::libc::c_void, a1: *mut ::libc::c_void) {
+    *a0 = a1
+}
+
+unsafe fn f43(a0: &mut *mut ::libc::c_void, a1: *mut ::libc::c_void) {
+    *a0 = a1
+}
+
+// No f44: see src.cpp for why reinterpret_pointer_cast OUT of
+// std::shared_ptr<void> is deliberately left unmapped. A cast back out has to
+// produce an OWNING Option<Value<T1>>, and this model cannot build an Rc from
+// a raw pointer without either deep-copying (silently wrong for any writing
+// caller) or double-owning.
+
+// --- std::shared_ptr<T[]> and std::shared_ptr<void> -------------------------
+//
+// t3 is a POINTER, not Option<Value<Box<[T1]>>>, and the reason is that this
+// model cannot build the latter. `new T[n]` lowers here to
+// `Box::leak(..).as_mut_ptr()`, i.e. a bare *mut T1 with the length thrown
+// away, and the only way back to a length is malloc_usable_size -- which this
+// pod measured as OVER-approximating for 18 of 21 sizes (n=1 reports 24,
+// n=64 reports 72). A Box<[T1]> rebuilt from that has the wrong len(), so
+// `.len()` and any bounds check on it would be quietly wrong. A pointer has
+// no length to get wrong.
+//
+// t4 is the same *mut c_void the converter already emits for a plain `void *`
+// field, so a ProgramFrame carrying a shared_ptr<void> and one carrying a
+// void* have the same Rust shape, and the cast between them is a no-op rather
+// than a conversion that could disagree.
+//
+// What this gives up, deliberately: the reference count. Nothing in the tree
+// calls use_count() on either type, and the C++ owner of the array is the
+// shared_ptr<void> stored in the frame -- so the faithful behaviour is "stays
+// alive for the rest of the program", which is exactly what Box::leak already
+// did before this rule existed. The array is LEAKED, not dropped. That is a
+// resource bug, not a correctness one; the alternative (drop when the local
+// handle dies) would leave the frame reading freed memory, which is the
+// silent-wrongness class this project ranks worst.
+
+fn t3<T1>() -> *mut T1 {
+    ::std::ptr::null_mut()
+}
+
+fn t4() -> *mut ::libc::c_void {
+    ::std::ptr::null_mut()
+}
+
+unsafe fn f34<T1>(a0: *mut T1) -> *mut T1 {
+    a0
+}
+
+unsafe fn f35<T1>() -> *mut T1 {
+    ::std::ptr::null_mut::<T1>()
+}
+
+unsafe fn f36<T1>(a0: *mut T1) -> *mut T1 {
+    a0
+}
+
+unsafe fn f37<T1>(a0: *mut T1) -> *mut ::libc::c_void {
+    a0 as *mut ::libc::c_void
+}
+
+unsafe fn f38(a0: *mut ::libc::c_void) -> *mut ::libc::c_void {
+    a0
+}
+
+unsafe fn f39() -> *mut ::libc::c_void {
+    ::std::ptr::null_mut()
+}
+
+unsafe fn f40(a0: *mut ::libc::c_void) -> bool {
+    a0.is_null()
+}
+
+unsafe fn f41(a0: *mut ::libc::c_void) -> bool {
+    !a0.is_null()
+}
+
+unsafe fn f42(a0: &mut *mut ::libc::c_void, a1: *mut ::libc::c_void) {
+    *a0 = a1
+}
+
+unsafe fn f43(a0: &mut *mut ::libc::c_void, a1: *mut ::libc::c_void) {
+    *a0 = a1
+}
+
+unsafe fn f44<T1>(a0: *mut ::libc::c_void) -> *mut T1 {
+    a0 as *mut T1
+}
+
+// operator[]. With t3 a pointer this is plain pointer arithmetic on the
+// ELEMENTS, which is what the C++ does -- and is precisely the lowering
+// rules/carray predicted would go wrong if only an element-type alias were
+// added, because then the offset would be applied to the handle instead.
+unsafe fn f45<T1>(a0: *mut T1, a1: isize) -> *mut T1 {
+    a0.offset(a1)
+}

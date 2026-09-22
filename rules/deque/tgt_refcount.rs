@@ -138,3 +138,63 @@ fn f39<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
 fn f40<T1>(a0: Ptr<T1>) -> Ptr<T1> {
     a0.offset(1_isize)
 }
+
+// ---------------------------------------------------------------------------
+// The forward iterator: the rules/vector bodies. See the note in src.cpp.
+// ---------------------------------------------------------------------------
+
+fn f46<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0
+}
+
+fn f47<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0.to_end()
+}
+
+fn f48<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0
+}
+
+fn f49<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0.to_end()
+}
+
+fn f50<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
+    a0 == a1
+}
+
+fn f51<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
+    a0 != a1
+}
+
+fn f52<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
+    a0 == a1
+}
+
+fn f53<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
+    a0 != a1
+}
+
+fn f54<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0
+}
+
+fn f55<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0
+}
+
+fn f56<T1>(a0: Ptr<T1>, a1: usize) -> Ptr<T1> {
+    a0.offset(a1 as isize)
+}
+
+fn f57<T1>(a0: Ptr<T1>, a1: usize) -> Ptr<T1> {
+    a0.offset(-(a1 as isize))
+}
+
+fn f58<T1>(a0: &mut Ptr<T1>) -> Ptr<T1> {
+    a0.prefix_inc()
+}
+
+fn f59<T1>(a0: &mut Ptr<T1>) -> Ptr<T1> {
+    a0.postfix_inc()
+}

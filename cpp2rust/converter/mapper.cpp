@@ -51,6 +51,30 @@ clang::PrintingPolicy getPrintPolicy() {
   return policy;
 }
 
+// The overloaded operators whose NAME contains a '<' or a '>'.
+//
+// matchTemplate counts those two characters to track template-argument depth,
+// so an operator name carrying one corrupts the count. Every such operator must
+// therefore be printed under an alphabetic alias -- see the switch in
+// GetTranslationRuleName, which is the single place both the rule IR and the
+// call-site lookup are spelled, so they cannot drift apart.
+bool IsAngleBracketOperator(clang::OverloadedOperatorKind op) {
+  switch (op) {
+  case clang::OverloadedOperatorKind::OO_Less:
+  case clang::OverloadedOperatorKind::OO_Greater:
+  case clang::OverloadedOperatorKind::OO_LessEqual:
+  case clang::OverloadedOperatorKind::OO_GreaterEqual:
+  case clang::OverloadedOperatorKind::OO_LessLess:
+  case clang::OverloadedOperatorKind::OO_GreaterGreater:
+  case clang::OverloadedOperatorKind::OO_LessLessEqual:
+  case clang::OverloadedOperatorKind::OO_GreaterGreaterEqual:
+  case clang::OverloadedOperatorKind::OO_Spaceship:
+    return true;
+  default:
+    return false;
+  }
+}
+
 std::string GetExprMapKey(const std::string &str) {
   // Extract the function name from something like
   // const T1 & std::foo<T1, T2>::fn_name(args)
@@ -698,14 +722,34 @@ void addRulesFromDirectory(const std::filesystem::path &dir, Model model) {
     for (auto &[_, rule] : type_rules) {
       auto key = GetTypeMapKey(rule.src);
       auto [begin, end] = types_.equal_range(key);
+      bool dup = false;
       for (auto it = begin; it != end; ++it) {
-        if (it->second.src == rule.src) {
-          llvm::errs() << "ERROR: duplicate type rule for C++ type '"
-                       << rule.src << "': maps to both '"
-                       << it->second.type_info.type << "' and '"
-                       << rule.type_info.type << "'\n";
-          std::exit(EXIT_FAILURE);
+        if (it->second.src != rule.src) {
+          continue;
         }
+        // Two rules for the same C++ type that AGREE are redundant, not
+        // contradictory: drop the second, exactly as AddTypeRule below already
+        // does ("registering a type twice is normal"). Whether two rules
+        // collide depends on how the standard library in use PRINTS a type, so
+        // a module cannot always avoid it from the source side. rules/vector
+        // declares t2 = vector<T1>::iterator and, under #if defined(__linux__),
+        // t6 = vector<T1, T2>::iterator: libstdc++ prints those distinctly
+        // (__gnu_cxx::__normal_iterator<T1 *, std::vector<T1>> vs ...,
+        // std::vector<T1, T2>>) and needs both, while libc++ prints both as
+        // std::__wrap_iter<T1 *>. Only a rule that maps the same C++ type to a
+        // DIFFERENT Rust type is a real conflict, and that still aborts.
+        if (it->second.type_info.type == rule.type_info.type &&
+            it->second.initializer == rule.initializer) {
+          dup = true;
+          break;
+        }
+        llvm::errs() << "ERROR: duplicate type rule for C++ type '" << rule.src
+                     << "': maps to both '" << it->second.type_info.type
+                     << "' and '" << rule.type_info.type << "'\n";
+        std::exit(EXIT_FAILURE);
+      }
+      if (dup) {
+        continue;
       }
       types_.emplace(std::move(key), std::move(rule));
     }
@@ -1592,9 +1636,31 @@ std::string ToString(const clang::NamedDecl *decl, TemplateArgs targs) {
 
   os << ToString(func_decl->getReturnType()) << ' ';
   if (const auto op = func_decl->getOverloadedOperator();
-      op >= clang::OverloadedOperatorKind::OO_LessLess &&
-      op <= clang::OverloadedOperatorKind::OO_GreaterGreaterEqual) {
+      IsAngleBracketOperator(op)) {
     // ensure matchTemplate does not consider these operator names when matching
+    //
+    // matchTemplate and its findNextLiteralSameDepth helper track template
+    // depth by counting '<' and '>' characters, so a '<' or '>' that is part of
+    // an OPERATOR NAME is mistaken for a bracket. `>` is the damaging
+    // direction: `bool std::operator>(const std::map<T1, T2> &, ...)` drives
+    // the depth to -1 at the very first character of the parameter list and
+    // trips `assert(ang >= 0 && ...)` in findNextLiteralSameDepth, aborting the
+    // whole TU. `<` merely leaves the count one too high, so it silently fails
+    // to match -- the rule is never consulted and the call falls through.
+    //
+    // This was already true for the shift operators, which is why they are
+    // renamed here; the single-token comparisons need exactly the same
+    // treatment and had been left out. Reached from
+    // dcg/dcg_fe/pcfg_gen/stcdpOp.cpp:90 (`>=` on two std::map<std::string,
+    // double>) the moment rules/map gained a `>=` rule, and latent before that
+    // only because no rule in the tree spelled `operator>`; `rules/compare`
+    // f8/f10 already do, and those signatures would have hit the same abort.
+    //
+    // The spelling chosen is a NAME, not a symbol, so it can never re-enter the
+    // bracket counting: `operator gt` and friends, matching `operator shl`.
+    // Both sides of the comparison -- the rule IR produced by
+    // cpp-rule-preprocessor and the call site resolved in cpp2rust -- go
+    // through this one function, so the two spellings cannot disagree.
     func_decl->getQualifier().print(os, getPrintPolicy());
     os << "operator ";
     switch (op) {
@@ -1609,6 +1675,21 @@ std::string ToString(const clang::NamedDecl *decl, TemplateArgs targs) {
       break;
     case clang::OverloadedOperatorKind::OO_GreaterGreaterEqual:
       os << "shreq";
+      break;
+    case clang::OverloadedOperatorKind::OO_Less:
+      os << "lt";
+      break;
+    case clang::OverloadedOperatorKind::OO_Greater:
+      os << "gt";
+      break;
+    case clang::OverloadedOperatorKind::OO_LessEqual:
+      os << "le";
+      break;
+    case clang::OverloadedOperatorKind::OO_GreaterEqual:
+      os << "ge";
+      break;
+    case clang::OverloadedOperatorKind::OO_Spaceship:
+      os << "cmp";
       break;
     default:
       if (!ReportUnsupported("OverloadedOperatorKind",

@@ -3670,8 +3670,29 @@ bool Converter::VisitInitListExpr(clang::InitListExpr *expr) {
     }
   } else if (qual_type->isRecordType()) {
     const auto *record = qual_type->getAsRecordDecl();
+
+    // Catch `f({v})`, where the braces are pure syntax and the reference binds
+    // straight to `v`, BEFORE either path below. Both would otherwise treat the
+    // element as aggregate input to this record:
+    //   - the field walk names the C++ RECORD's fields, and for a type a rule
+    //     replaced those are the standard library implementation's, not the Rust
+    //     type's. It spelt the copy as `Vec<i32> { __begin_: .., __end_: .. }`
+    //     over a `Vec` that has none of those members -- and with only one init
+    //     for three fields it also ran `getInit()` off the end, which is the
+    //     out-of-bounds read this whole path used to segfault on.
+    //   - the std::array path silently emitted a DEFAULT-filled array, dropping
+    //     the element entirely. That one compiled and ran, and was wrong: real
+    //     C++ gives `f({r})` the contents of `r`.
+    if (IsRedundantBraceAroundReference(expr)) {
+      Convert(expr->getInit(0));
+      return false;
+    }
+
     if (record->getQualifiedNameAsString() == "std::array") {
-      if (auto init = clang::dyn_cast<clang::InitListExpr>(expr->getInit(0))) {
+      if (expr->getNumInits() == 0) {
+        StrCat(GetArrayDefaultAsString(qual_type));
+      } else if (auto init =
+                     clang::dyn_cast<clang::InitListExpr>(expr->getInit(0))) {
         StrCat("vec!");
         VisitInitListExpr(init);
       } else {
@@ -3679,6 +3700,29 @@ bool Converter::VisitInitListExpr(clang::InitListExpr *expr) {
       }
       SetFreshType(qual_type);
       return false;
+    }
+
+    // Anything still short of one init per field is not an aggregate init of
+    // this record, and the walk below would read past the end of the list. In a
+    // Release build that assert is compiled out and the out-of-bounds read
+    // segfaults with no diagnostic -- and `--survey` segfaulted with it, so the
+    // whole class was invisible to every gap inventory. Report it instead.
+    if (HasTooFewInitsForFieldWalk(expr)) {
+      auto detail = std::format("{} initializer(s) for {} field(s) of '{}'",
+                                expr->getNumInits(),
+                                std::distance(record->field_begin(),
+                                              record->field_end()),
+                                qual_type.getAsString());
+      if (ReportUnsupported("InitListExpr", detail, expr->getBeginLoc(), ctx_)) {
+        StrCat(UnsupportedPlaceholder("InitListExpr", detail));
+        SetFreshType(qual_type);
+        return false;
+      }
+      llvm::errs() << "ERROR: unsupported braced initializer: " << detail
+                   << "\n  at "
+                   << expr->getBeginLoc().printToString(ctx_.getSourceManager())
+                   << '\n';
+      llvm::report_fatal_error("unsupported braced initializer");
     }
 
     StrCat(GetUnsafeTypeAsString(qual_type));
