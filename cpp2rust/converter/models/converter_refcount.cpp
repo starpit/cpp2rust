@@ -673,6 +673,98 @@ ConverterRefCount::GetSelfMaybeWithMut(const clang::CXXMethodDecl *decl) {
   return "&self";
 }
 
+namespace {
+// A constness fingerprint for one parameter: one character per level of
+// indirection the refcount model flattens away, outermost first.
+//
+// `Ptr<T>` is spelled for `T *`, `const T *`, `T &` and `const T &` alike, and
+// the erasure is recursive: `std::vector<const T *> &` and
+// `std::vector<T *> &` both become `Ptr<Vec<Ptr<T>>>`.  So the fingerprint
+// walks pointers, references and the template arguments of a class template
+// specialization, recording `c` for a const pointee and `m` for a mutable one.
+// Anything with no indirection at all contributes nothing, which is what keeps
+// the suffix off the overwhelming majority of names.
+void AppendConstnessFingerprint(clang::QualType type, std::string &out) {
+  if (type.isNull()) {
+    return;
+  }
+  if (const auto *ref = type->getAs<clang::ReferenceType>()) {
+    auto pointee = ref->getPointeeType();
+    out += pointee.isConstQualified() ? 'c' : 'm';
+    AppendConstnessFingerprint(pointee, out);
+    return;
+  }
+  if (const auto *ptr = type->getAs<clang::PointerType>()) {
+    // A function pointer keeps its whole signature in the mangled name
+    // already, and its parameter types are not flattened, so descending into
+    // one would only add noise.
+    auto pointee = ptr->getPointeeType();
+    if (pointee->getAs<clang::FunctionProtoType>()) {
+      return;
+    }
+    out += pointee.isConstQualified() ? 'c' : 'm';
+    AppendConstnessFingerprint(pointee, out);
+    return;
+  }
+  if (const auto *spec = llvm::dyn_cast_or_null<
+          clang::ClassTemplateSpecializationDecl>(type->getAsRecordDecl())) {
+    for (const auto &arg : spec->getTemplateArgs().asArray()) {
+      if (arg.getKind() == clang::TemplateArgument::Type) {
+        AppendConstnessFingerprint(arg.getAsType(), out);
+      }
+    }
+  }
+}
+
+std::string ConstnessFingerprint(const clang::FunctionDecl *decl) {
+  std::string out;
+  for (const auto *parameter : decl->parameters()) {
+    AppendConstnessFingerprint(parameter->getType(), out);
+  }
+  return out;
+}
+} // namespace
+
+std::string
+ConverterRefCount::GetOverloadedFunctionName(const clang::FunctionDecl *decl) {
+  if (auto it = overload_name_cache_.find(decl);
+      it != overload_name_cache_.end()) {
+    return it->second;
+  }
+
+  auto base = Converter::GetOverloadedFunctionName(decl);
+
+  // Only a real collision earns a suffix.  Scan the overload set the name came
+  // out of: if some OTHER member mangles to the same string, constness is the
+  // only thing left that could still tell them apart, so disambiguate with the
+  // fingerprint.  Every name that is already unique is left byte-identical,
+  // which is what keeps this from churning the expected .rs files.
+  const auto *method = clang::dyn_cast<clang::CXXMethodDecl>(decl);
+  bool collides = false;
+  if (method != nullptr) {
+    for (const auto *sibling : method->getParent()->methods()) {
+      if (sibling == method ||
+          sibling->getDeclName() != method->getDeclName()) {
+        continue;
+      }
+      if (Converter::GetOverloadedFunctionName(sibling) == base) {
+        collides = true;
+        break;
+      }
+    }
+  }
+
+  auto name = base;
+  if (collides) {
+    if (auto fingerprint = ConstnessFingerprint(decl); !fingerprint.empty()) {
+      name += '_';
+      name += fingerprint;
+    }
+  }
+  overload_name_cache_.emplace(decl, name);
+  return name;
+}
+
 bool ConverterRefCount::VisitCXXConstructorDecl(
     clang::CXXConstructorDecl *decl) {
   PushConversionKind push(*this, ConversionKind::FullRefCount);
@@ -1993,8 +2085,21 @@ bool ConverterRefCount::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
   const bool is_set =
       range_class == "std::set" || range_class == "std::unordered_set";
   if (is_set) {
-    StrCat(keyword::kLet, loop_var_name, token::kAssign,
-           loop_var_name + ".second().as_pointer()", token::kSemiColon);
+    // `for (auto &e : s)` aliases the element, so the loop variable is the
+    // element cell.  `for (auto e : s)` COPIES it, and binding a Ptr there
+    // would both fail to compile (a Ptr has no `.borrow()`) and, once it did,
+    // alias an element the C++ says is a private copy -- so spell the copy.
+    if (loop_var->getType()->isReferenceType()) {
+      StrCat(keyword::kLet, loop_var_name, token::kAssign,
+             loop_var_name + ".second().as_pointer()", token::kSemiColon);
+    } else {
+      PushConversionKind push(*this, ConversionKind::FullRefCount);
+      StrCat(keyword::kLet, loop_var_name, token::kColon,
+             ToString(loop_var->getType()), token::kAssign,
+             BoxValue(std::format("(*{}.second().borrow()).clone()",
+                                  loop_var_name)),
+             token::kSemiColon);
+    }
   } else {
     EmitByValueShadow(
         loop_var_name, loop_var->getType(), std::string(loop_var_name),
@@ -3164,6 +3269,7 @@ void ConverterRefCount::ConvertCXXConstructorBody(
     clang::CXXConstructorDecl *decl) {
   EmitFunctionPreamble(decl);
   auto record_name = GetRecordName(decl->getParent());
+  auto deferred = CollectThisDependentFieldInits(decl);
   StrCat(keyword::kLet, "__this", token::kColon,
          std::format("Value<{}>", record_name), token::kAssign,
          "Rc::new(RefCell::new(");
@@ -3178,6 +3284,8 @@ void ConverterRefCount::ConvertCXXConstructorBody(
   StrCat(keyword::kLet, "this", token::kColon,
          std::format("Ptr<{}>", record_name), token::kAssign,
          "__this.as_pointer()", token::kSemiColon);
+  // After `this` is bound, and before the body, which is where C++ runs them.
+  EmitDeferredFieldInits(decl, deferred);
   ConvertBodyStmts(decl->getBody());
   StrCat("Rc::try_unwrap(__this).ok().unwrap().into_inner()");
 }

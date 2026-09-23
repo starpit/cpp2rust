@@ -60,6 +60,18 @@ public:
 
   std::string GetSelfMaybeWithMut(const clang::CXXMethodDecl *decl) override;
 
+  // The refcount model erases constness -- `const T *`, `T *`, `const T &` and
+  // `T &` all spell `Ptr<T>` -- so two C++ overloads differing ONLY in a
+  // pointee's constness mangle to one Rust name and collide (E0428/E0201).
+  // The unsafe model is spared because it keeps `*const` vs `*mut`.
+  std::string
+  GetOverloadedFunctionName(const clang::FunctionDecl *decl) override;
+
+  // Memo for the above: the collision scan walks the whole overload set and
+  // mangles every member of it, which is O(n^2) per record without this.
+  std::unordered_map<const clang::FunctionDecl *, std::string>
+      overload_name_cache_;
+
   bool ShouldConvertMethod(const clang::CXXMethodDecl *decl) override;
 
   bool ConvertOutOfLineMethod(clang::CXXMethodDecl *decl) override;
