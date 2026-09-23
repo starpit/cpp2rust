@@ -8,6 +8,31 @@
 // std::set is modelled as a map to unit: it reuses BTreeMap and the existing
 // RefcountMapIter, which is also what makes the converter treat a set iterator
 // as bidirectional without any special casing.
+//
+// There is deliberately NO rule for std::set<T, Comparator>, and the reason is
+// NOT the one the port playbook gives (it says a derived Ord would change dedup
+// and iteration order, which is true of a naive attempt but is fixable).  The
+// blocker is mechanical and lives in the RULE FORMAT:
+//
+//   1. libc++ prints set<T>::iterator and set<T, C>::iterator as the SAME
+//      string -- std::__tree_const_iterator<T1, std::__tree_node<T1, void *> *,
+//      long> -- because the comparator is not part of the iterator type.  So a
+//      `t4 = set<T1, T2>::iterator` rule collides with `t2` on the src side.
+//      Two rules for one C++ spelling are accepted only when they map to the
+//      SAME Rust type (mapper.cpp:781); a comparator-aware iterator is by
+//      definition a different Rust type, so adding one makes the converter exit
+//      with "duplicate type rule" on EVERY translation, not just the set ones.
+//
+//   2. Attaching the comparator's logic to the element type needs an
+//      `impl Ord`-like item mentioning BOTH the project's element type and the
+//      project's comparator type.  A rule target is a type expression plus
+//      inlined expression bodies; the "private trait inside the rule body"
+//      trick cannot carry it, because a trait impl is coherence-checked
+//      globally and the body is inlined once per call site (E0119 on the second
+//      site).  Emitting it is converter work, not rule work.
+//
+// So std::set<T, Comparator> stays a loud UnmappedType abort.  See the port
+// playbook for the three dt_src TUs this blocks.
 template <typename T1> using t1 = std::set<T1>;
 
 // In libc++ std::set<T>::iterator and ::const_iterator are the same type, so

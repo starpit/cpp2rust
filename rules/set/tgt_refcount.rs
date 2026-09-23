@@ -65,7 +65,11 @@ fn f11<T1: Ord + Clone + 'static>(
     a1: T1,
 ) -> (Value<RefcountMapIter<T1, T1>>, Value<bool>) {
     let __inserted = a0.with_mut(|__v: &mut BTreeMap<T1, Value<T1>>| {
-        __v.insert(a1.clone(), Rc::new(RefCell::new(a1.clone()))).is_none()
+        let __new = !__v.contains_key(&a1);
+        if __new {
+            __v.insert(a1.clone(), Rc::new(RefCell::new(a1.clone())));
+        }
+        __new
     });
     (
         Rc::new(RefCell::new(RefcountMapIter::find_key(a0, &a1))),
@@ -117,7 +121,11 @@ fn f19<T1: Ord + Clone + 'static>(
     a1: T1,
 ) -> (Value<RefcountMapIter<T1, T1>>, Value<bool>) {
     let __inserted = a0.with_mut(|__v: &mut BTreeMap<T1, Value<T1>>| {
-        __v.insert(a1.clone(), Rc::new(RefCell::new(a1.clone()))).is_none()
+        let __new = !__v.contains_key(&a1);
+        if __new {
+            __v.insert(a1.clone(), Rc::new(RefCell::new(a1.clone())));
+        }
+        __new
     });
     (
         Rc::new(RefCell::new(RefcountMapIter::find_key(a0, &a1))),
@@ -150,7 +158,11 @@ fn f23<T1: PartialEq>(a0: BTreeMap<T1, Value<T1>>, a1: BTreeMap<T1, Value<T1>>) 
 }
 
 fn f24<T1: Ord + Clone>(a0: Vec<T1>, a1: Option<()>) -> BTreeMap<T1, Value<T1>> {
-    a0.into_iter()
-        .map(|__k: T1| (__k.clone(), Rc::new(RefCell::new(__k))))
-        .collect()
+    let mut __m: BTreeMap<T1, Value<T1>> = BTreeMap::new();
+    for __k in a0.into_iter() {
+        if !__m.contains_key(&__k) {
+            __m.insert(__k.clone(), Rc::new(RefCell::new(__k)));
+        }
+    }
+    __m
 }

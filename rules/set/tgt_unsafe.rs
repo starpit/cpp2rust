@@ -58,11 +58,20 @@ unsafe fn f10<T1: Ord + Clone>(a0: BTreeMap<T1, Box<T1>>) -> UnsafeMapIterator<T
     UnsafeMapIterator::end(&a0 as *const BTreeMap<T1, Box<T1>>)
 }
 
+// Probe-and-insert, NOT BTreeMap::insert, because the two disagree whenever the
+// element's Ord calls two DISTINCT values equal (an operator< that compares a
+// subset of the fields).  C++ set::insert rejects the newcomer and KEEPS the
+// incumbent; BTreeMap::insert overwrites the value and keeps the old key, so the
+// surviving element was a blend of both and every later read of an
+// order-irrelevant field got the wrong one -- silently.
 unsafe fn f11<T1: Ord + Clone>(
     a0: &mut BTreeMap<T1, Box<T1>>,
     a1: T1,
 ) -> (UnsafeMapIterator<T1, T1>, bool) {
-    let __inserted = a0.insert(a1.clone(), Box::new(a1.clone())).is_none();
+    let __inserted = !a0.contains_key(&a1);
+    if __inserted {
+        a0.insert(a1.clone(), Box::new(a1.clone()));
+    }
     (
         UnsafeMapIterator::find_key(&*a0 as *const BTreeMap<T1, Box<T1>>, &a1),
         __inserted,
@@ -107,7 +116,10 @@ unsafe fn f19<T1: Ord + Clone>(
     a0: &mut BTreeMap<T1, Box<T1>>,
     a1: T1,
 ) -> (UnsafeMapIterator<T1, T1>, bool) {
-    let __inserted = a0.insert(a1.clone(), Box::new(a1.clone())).is_none();
+    let __inserted = !a0.contains_key(&a1);
+    if __inserted {
+        a0.insert(a1.clone(), Box::new(a1.clone()));
+    }
     (
         UnsafeMapIterator::find_key(&*a0 as *const BTreeMap<T1, Box<T1>>, &a1),
         __inserted,
@@ -138,7 +150,11 @@ unsafe fn f23<T1: PartialEq>(a0: BTreeMap<T1, Box<T1>>, a1: BTreeMap<T1, Box<T1>
 }
 
 unsafe fn f24<T1: Ord + Clone>(a0: Vec<T1>, a1: Option<()>) -> BTreeMap<T1, Box<T1>> {
-    a0.into_iter()
-        .map(|__k: T1| (__k.clone(), Box::new(__k)))
-        .collect()
+    let mut __m: BTreeMap<T1, Box<T1>> = BTreeMap::new();
+    for __k in a0.into_iter() {
+        if !__m.contains_key(&__k) {
+            __m.insert(__k.clone(), Box::new(__k));
+        }
+    }
+    __m
 }
