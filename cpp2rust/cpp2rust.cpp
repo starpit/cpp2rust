@@ -41,6 +41,15 @@ llvm::cl::opt<bool> StrictDir(
         "and exits zero. Measurement should always pass this"),
     llvm::cl::init(false), llvm::cl::cat(cpp2rust_cmdargs));
 
+llvm::cl::opt<bool> DirFailFast(
+    "dir-fail-fast",
+    llvm::cl::desc(
+        "With --dir, let a converter abort or fault kill the process instead of "
+        "containing it at the translation-unit boundary. By default one bad TU "
+        "is recorded as failed and the remaining TUs still run. Pass this when "
+        "you want the core dump"),
+    llvm::cl::init(false), llvm::cl::cat(cpp2rust_cmdargs));
+
 llvm::cl::opt<std::string>
     Survey("survey",
            llvm::cl::desc("Do not abort on an unsupported construct: record it, "
@@ -203,10 +212,47 @@ int main(int argc, char *argv[]) {
   }
 
   bool dir_ok = true;
+  std::vector<cpp2rust::TuStatus> tus;
+  cpp2rust::SetDirContainCrashes(!DirFailFast);
   auto rs_code =
       BuildDir.empty()
           ? cpp2rust::TranspileSrc(cc_code, model, cxx_flags, RulesDir, CcFile)
-          : cpp2rust::TranspileDir(BuildDir, model, RulesDir, &dir_ok);
+          : cpp2rust::TranspileDir(BuildDir, model, RulesDir, &dir_ok, &tus);
+
+  // The per-TU summary of a --dir run.
+  //
+  // A multi-TU run used to have exactly one outcome for all of its TUs: the
+  // process exit status. One converter assert in one TU aborted the process,
+  // the output was whatever had been written before it, and the
+  // alphabetically-later TUs were absent with nothing saying so -- which is how
+  // "27 of 58 translate" was believed when the truth was 50 of 58. Printing
+  // one line per TU is the fix for the measurement; containing the crash is
+  // only what makes the later lines exist.
+  bool any_tu_crashed = false;
+  if (!tus.empty()) {
+    size_t translated = 0;
+    for (const auto &tu : tus) {
+      if (tu.state == cpp2rust::TuStatus::State::kTranslated) {
+        ++translated;
+      } else if (tu.state == cpp2rust::TuStatus::State::kCrashed) {
+        any_tu_crashed = true;
+      }
+    }
+    llvm::errs() << "\n=== per-TU status: " << translated << '/' << tus.size()
+                 << " translated ===\n";
+    for (const auto &tu : tus) {
+      if (tu.state == cpp2rust::TuStatus::State::kTranslated) {
+        continue;
+      }
+      llvm::errs() << "  " << cpp2rust::TuStateName(tu.state) << '\t' << tu.file
+                   << '\t' << tu.reason << '\n';
+    }
+    if (translated != tus.size()) {
+      llvm::errs() << "  (" << (tus.size() - translated)
+                   << " TU(s) did not translate; the Rust output is missing "
+                      "their contents)\n";
+    }
+  }
 
   if (rs_code.empty()) {
     llvm::errs() << "ERROR: empty output file\n";
@@ -222,14 +268,17 @@ int main(int argc, char *argv[]) {
   // be the honest thing, but clang also reports errors that this converter has
   // always translated through, so flipping the default silently reclassifies
   // every such TU. Measurement wants the strict reading; pass the flag there.
+  //
+  // The exit is deferred until after the file is written. Returning here threw
+  // away the TUs that DID translate, which is the same loss this change exists
+  // to stop -- and it contradicted this flag's own documented "Output is still
+  // written".
   if (!dir_ok) {
     llvm::errs() << (StrictDir ? "ERROR" : "WARNING")
                  << ": clang reported errors for at least one file in "
                  << BuildDir << "; the Rust output is not trustworthy\n";
-    if (StrictDir) {
-      return EXIT_FAILURE;
-    }
   }
+  const bool strict_dir_failed = !dir_ok && StrictDir;
 
   std::ofstream file(RsFile);
   if (!file) {
@@ -241,14 +290,29 @@ int main(int argc, char *argv[]) {
   file.close();
 
   // call rustfmt. A survey run emits placeholders where it could not
-  // translate, so its output is not expected to parse.
-  if (Survey.empty()) {
+  // translate, so its output is not expected to parse. Neither does the output
+  // of a run that lost a TU to a crash: it is missing that TU's items, so
+  // anything referring to them does not resolve. Skip rustfmt there rather than
+  // reporting its failure as the problem.
+  if (Survey.empty() && !any_tu_crashed) {
     std::string rustfmt_command =
         "rustfmt +" RUST_STABLE_VERSION " --edition 2024 " + RsFile;
     if (std::system(rustfmt_command.c_str()) != 0) {
       llvm::errs() << "ERROR: failed to run rustfmt\n";
       return EXIT_FAILURE;
     }
+  }
+
+  // A contained crash is fatal unconditionally: the whole point is that the run
+  // reports it instead of dying silently, and an exit status of 0 with a TU
+  // missing from the output would be a worse lie than the abort it replaced.
+  if (any_tu_crashed) {
+    llvm::errs() << "ERROR: at least one TU crashed during conversion; the "
+                    "output is incomplete (see the per-TU status above)\n";
+    return EXIT_FAILURE;
+  }
+  if (strict_dir_failed) {
+    return EXIT_FAILURE;
   }
 
   return EXIT_SUCCESS;
