@@ -28,8 +28,26 @@ if (APPLE)
   target_compile_definitions(cpp2rust_core PUBLIC "-DMACOS_SDK_PATH=\"${MACOS_SDK_PATH}\"")
 endif()
 
-llvm_map_components_to_libnames(llvm_libs support)
-target_link_libraries(cpp2rust_core PUBLIC ${llvm_libs})
+# Do NOT link the static LLVMSupport archive on top of a SHARED clang-cpp:
+# libclang-cpp.so already contains all of LLVMSupport and exports those symbols.
+# Linking the archive as well puts a SECOND copy of LLVMSupport in the
+# executable, and because ELF resolves each translation unit's calls to whichever
+# definition its own link edit picked, the process ends up running two
+# independent copies of the Support-level state. The observable symptom is that
+# `--dir` mis-resolves #includes: clang's header search finds a name in the
+# FIRST existing -I directory regardless of whether the file is there, and
+# reports clang's `err_cannot_open_file` ("cannot open file '<first -I>/b.h'")
+# for a header that actually lives in a later -I directory. A single -I hides
+# it, so it only shows up on a real compilation database. `-file` mode is
+# unaffected because it never consults a search path built from several -I dirs.
+#
+# Add the archive only when clang-cpp is NOT the shared dylib, i.e. when nothing
+# else is already supplying LLVMSupport.
+get_target_property(_clang_cpp_type clang-cpp TYPE)
+if (NOT _clang_cpp_type STREQUAL "SHARED_LIBRARY")
+  llvm_map_components_to_libnames(llvm_libs support)
+  target_link_libraries(cpp2rust_core PUBLIC ${llvm_libs})
+endif()
 
 add_clang_executable(cpp2rust PARTIAL_SOURCES_INTENDED cpp2rust.cpp)
 target_link_libraries(cpp2rust PRIVATE cpp2rust_core)
