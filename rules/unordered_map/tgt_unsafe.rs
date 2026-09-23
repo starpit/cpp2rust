@@ -376,3 +376,22 @@ unsafe fn f49<T1: Ord + Clone, T2>(a0: Vec<(T1, T2)>) -> BTreeMap<T1, Box<T2>> {
         .map(|(__k, __v): (T1, T2)| (__k, Box::new(__v)))
         .collect()
 }
+
+unsafe fn f50<T1: Ord + Clone, T2>(
+    a0: &mut BTreeMap<T1, Box<T2>>,
+    a1: T1,
+    a2: T2,
+) -> (UnsafeMapIterator<T1, T2>, bool) {
+    let __key: T1 = a1;
+    let __value: T2 = a2;
+    let __inserted = if a0.contains_key(&__key) {
+        false
+    } else {
+        a0.insert(__key.clone(), Box::new(__value));
+        true
+    };
+    (
+        UnsafeMapIterator::find_key(&*a0 as *const BTreeMap<T1, Box<T2>>, &__key),
+        __inserted,
+    )
+}

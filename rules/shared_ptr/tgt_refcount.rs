@@ -34,9 +34,25 @@ fn f16<T1>(a0: Option<Value<T1>>) -> Ptr<T1> {
     a0.as_pointer()
 }
 
-fn f20<T1>(a0: &mut Option<Value<T1>>, a1: Ptr<T1>) {
-    let _p: Ptr<_> = a1;
-    *a0 = _p.to_owned_opt()
+// std::shared_ptr::reset, both overloads, taking the receiver as a Ptr rather
+// than a `&mut`.  This is the same defect rules/unique_ptr f5 was fixed for in
+// 23edfaa and the same one-line shape of fix: in this model a reference
+// receiver is stashed as a PENDING DEREF, and a `&mut` parameter never
+// consumes it, so `std::shared_ptr<int>& p = q; p.reset(..);` aborted the
+// translator outright at converter_refcount.h "pending_deref_ not consumed".
+// `Ptr<Option<Value<T1>>>` + `.write(..)` consumes it, and is exactly what f12
+// and f13 (operator=) on this same type already do.
+//
+// f19 had no refcount overlay at all and therefore inherited tgt_unsafe's
+// `&mut` spelling; both overloads need the Ptr form, since either one can be
+// reached through a reference.
+fn f19<T1: ByteRepr>(a0: Ptr<Option<Value<T1>>>) {
+    a0.write(None)
+}
+
+fn f20<T1: ByteRepr>(a0: Ptr<Option<Value<T1>>>, a1: Ptr<T1>) {
+    let _p: Ptr<T1> = a1;
+    a0.write(_p.to_owned_opt())
 }
 
 // --- std::shared_ptr<T[]> and std::shared_ptr<void> -------------------------

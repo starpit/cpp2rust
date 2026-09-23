@@ -301,3 +301,24 @@ std::unordered_map<T1, T2>
 f49(std::initializer_list<std::pair<const T1, T2>> a0) {
   return std::unordered_map<T1, T2>(a0);
 }
+
+// The NON-CONST lvalue emplace.  f39 covers `emplace(T1 &&, T2 &&)` and f40
+// `emplace(const T1 &, const T2 &)`, but clang resolves `m.emplace(k, v)` for
+// two plain lvalues to `emplace(T1 &, T2 &)`, matching neither -- so the
+// converter emitted a nonexistent `BTreeMap::emplace` (translator rc=0, then
+// E0599).  Confirmed with the --verbose oracle, which prints exactly this
+// signature with an empty result.  rules/map had the identical hole and fixed
+// it as its f41; this is that same third spelling, and it is the one real
+// dt_src code uses (it was dsc/dsc2.cpp:179 and :255 for std::map).
+//
+// COPY semantics, as f40: emplace forwards to T's copy constructor for an
+// lvalue.  The contains_key guard in the target body is load bearing, not
+// defensive -- C++ emplace on an existing key KEEPS THE INCUMBENT whereas
+// BTreeMap::insert OVERWRITES and returns the old value.  Same discrepancy
+// rules/set was fixed for in 8e0a2d6 and rules/map in 23edfaa; the probe has a
+// duplicate-key case precisely so its absence could not pass.
+template <typename T1, typename T2>
+std::pair<typename std::unordered_map<T1, T2>::iterator, bool>
+f50(std::unordered_map<T1, T2> &o, T1 &key, T2 &value) {
+  return o.emplace(key, value);
+}

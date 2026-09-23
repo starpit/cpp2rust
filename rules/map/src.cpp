@@ -272,3 +272,163 @@ std::pair<typename std::map<T1, T2>::iterator, bool>
 f41(std::map<T1, T2> &o, T1 &key, T2 &value) {
   return o.emplace(key, value);
 }
+
+// ---------------------------------------------------------------------------
+// count, erase-by-key, and empty.  All three had NO rule at all on std::map,
+// even though rules/unordered_map has carried them since it was written
+// (f31, f34, f4 there).  The converter emitted `BTreeMap::count`,
+// `BTreeMap::erase_<mangled>` and `BTreeMap::empty`, none of which exist:
+// translator rc=0, then three E0599s from rustc.  Modelled exactly as
+// rules/unordered_map already models the same three members, since both
+// modules share the same BTreeMap representation.
+//
+// The RETURN TYPES are the part that is easy to get silently wrong, so they
+// were read off the standard and confirmed against clang-compiled C++ rather
+// than assumed from the member name:
+//
+//   * std::map::count(k) is NOT multimap's -- a map holds at most one element
+//     per key, so it answers 0 or 1 and never more.  `contains_key` mapped to
+//     1_usize / 0_usize is therefore exact, not an approximation.
+//   * std::map::erase(k) returns the NUMBER ERASED (0 or 1), not an iterator.
+//     The iterator-returning erase is the one that takes an iterator, and that
+//     is f3, a different overload with a different signature.  Returning an
+//     iterator here would have been silently wrong at every arithmetic use.
+//
+// Both are read-only about the missing-key case, which the probe covers:
+// count(absent)=0 and erase(absent)=0, with the map otherwise unchanged.
+// ---------------------------------------------------------------------------
+
+template <typename T1, typename T2>
+std::size_t f42(const std::map<T1, T2> &o, const T1 &key) {
+  return o.count(key);
+}
+
+template <typename T1, typename T2>
+std::size_t f43(std::map<T1, T2> &o, const T1 &key) {
+  return o.erase(key);
+}
+
+template <typename T1, typename T2> bool f44(const std::map<T1, T2> &o) {
+  return o.empty();
+}
+
+// ---------------------------------------------------------------------------
+// insert and swap.  Added ON EVIDENCE of use, not speculatively: the six
+// std::map::insert sites and the one swap site were found by resolving the
+// declared type of every receiver in dcg/ ddc/ dsc/ dbo/, and each produced a
+// real E0599 before this.  `dsc/pcfg.cpp:3968` is the braced form
+// (`regs.insert({std::stoi(reg.first), ids})`), and
+// `dsc/sdsc-perfmodel/perfmodel.cpp:1000` and `:1006` are the range form
+// (`dtNode->dtInfo.insert(other.begin(), other.end())`).
+//
+// NOTE the key type on f45: the braced argument materialises a
+// std::pair<const T1, T2> -- value_type, with the const -- not a
+// std::pair<T1, T2>, so this is the `insert(value_type &&)` overload rather
+// than the forwarding one rules/unordered_map's f41 covers.  As in f32, the
+// `const T1` spelling appears only INSIDE a std::map<T1, T2> signature, so T1
+// and T2 are already pinned and the `const T *` ambiguity that killed an
+// earlier standalone std::pair<const T1, T2> type rule cannot arise.
+//
+// DUPLICATE-KEY SEMANTICS, the part that would have been silent: C++ insert
+// KEEPS THE INCUMBENT and reports false, whereas BTreeMap::insert OVERWRITES
+// and returns the old value.  That holds for the RANGE form too -- every
+// element already present is skipped, not assigned -- which is why f46's body
+// tests contains_key per element rather than calling extend() or append().
+// Measured against clang-compiled C++: inserting {"q":2.5,"p":9.9} into
+// {"p":1.5} leaves p at 1.5, and the probe asserts exactly that.
+//
+// f46 returns void: the two-iterator insert has no return value in C++, unlike
+// the single-element form.
+// ---------------------------------------------------------------------------
+
+template <typename T1, typename T2>
+std::pair<typename std::map<T1, T2>::iterator, bool>
+f45(std::map<T1, T2> &o, std::pair<const T1, T2> &&v) {
+  return o.insert(std::move(v));
+}
+
+template <typename T1, typename T2>
+void f46(std::map<T1, T2> &o, typename std::map<T1, T2>::iterator first,
+         typename std::map<T1, T2>::iterator last) {
+  return o.insert(first, last);
+}
+
+template <typename T1, typename T2>
+void f47(std::map<T1, T2> &o, std::map<T1, T2> &a0) {
+  return o.swap(a0);
+}
+
+// std::map::clear.  This one is NOT an E0599, which is why it hid: BTreeMap has
+// a `clear` of its own, so with no rule the call fell through to it and the
+// unsafe model happened to compile.  The refcount model did not -- the receiver
+// is emitted as `(*a.borrow()).clear()`, an immutable borrow, giving
+// E0596 "cannot borrow data in dereference of Ref<..> as mutable".  Confirmed
+// pre-existing against the pristine rules, not introduced by the rules above.
+//
+// A rule is the fix because it is what makes the receiver arrive as a Ptr, so
+// the body can take the mutable borrow through with_mut -- exactly what
+// rules/unordered_map's f30 already does for the same member.  33 sites in
+// dcg/ ddc/ dsc/ dbo/ (e.g. dsc/dataOpDsc.cpp:612, ddc/ddc.h:530).
+template <typename T1, typename T2> void f48(std::map<T1, T2> &o) {
+  return o.clear();
+}
+
+// ---------------------------------------------------------------------------
+// try_emplace and insert_or_assign.  Added on evidence: ten try_emplace sites
+// (dsc/dsc2Pcfg.cpp:49, :79, :83, :2250, :2301, dsc/superdsc.cpp:1270, :1285,
+// :1291 -- receivers std::map<int, std::map<SenComponents, uint64_t>> and
+// std::map<int, SenPcfg>) and insert_or_assign at dsc/superdsc.cpp:812 and
+// ddc/ddcv1.cpp:2770/:2773.  Both were nonexistent BTreeMap methods before:
+// translator rc=0, then E0599.
+//
+// THESE TWO ARE OPPOSITES ON A DUPLICATE KEY AND THE DIFFERENCE IS SILENT.
+// Measured against clang-compiled C++ rather than assumed:
+//
+//     m[1] = 10;
+//     m.insert_or_assign(1, 111) -> reports false, and ASSIGNS: m.at(1) == 111
+//     m.try_emplace(1, 999)      -> reports false, and DOES NOT: stays 111
+//
+// So insert_or_assign is the one operation in this file whose body must NOT be
+// guarded by contains_key -- a plain BTreeMap::insert is exactly right, and
+// adding the guard would have been the silent bug.  try_emplace is the reverse
+// and does need the guard.  Both report `false` for an existing key, so the
+// bool alone does not distinguish them and a probe that only checked the bool
+// would pass either way; the probes therefore read the VALUE back.
+//
+// f51 is the one-argument try_emplace (`pcfgMap.try_emplace(c)`), which is the
+// form every dt_src site actually uses: it default-constructs the mapped value,
+// and on a duplicate must leave the incumbent untouched -- the probe mutates
+// the incumbent between two calls and asserts the mutation survives.
+// ---------------------------------------------------------------------------
+
+template <typename T1, typename T2>
+std::pair<typename std::map<T1, T2>::iterator, bool>
+f49(std::map<T1, T2> &o, const T1 &key, T2 &value) {
+  return o.insert_or_assign(key, value);
+}
+
+template <typename T1, typename T2>
+std::pair<typename std::map<T1, T2>::iterator, bool>
+f50(std::map<T1, T2> &o, const T1 &key, T2 &value) {
+  return o.try_emplace(key, value);
+}
+
+template <typename T1, typename T2>
+std::pair<typename std::map<T1, T2>::iterator, bool>
+f51(std::map<T1, T2> &o, const T1 &key) {
+  return o.try_emplace(key);
+}
+
+// insert of a std::pair<T1, T2> -- WITHOUT the const on the key, so it binds to
+// the forwarding insert() overload rather than to f45's insert(value_type &&).
+// This is what `.insert(std::make_pair(k, v))` spells, and it is used at
+// ddc/transformations/automatic_shuffle/shuffle.cpp:723, :932 and :949
+// (receivers std::map<AbstractLayout, std::shared_ptr<GraphNode>> and
+// std::map<uint32_t, EdgeType>).  rules/unordered_map carries the identical
+// rule as its f41; std::map had no equivalent, so those three sites emitted a
+// nonexistent BTreeMap method.  Same keep-the-incumbent guard as f45.
+template <typename T1, typename T2>
+std::pair<typename std::map<T1, T2>::iterator, bool>
+f52(std::map<T1, T2> &o, std::pair<T1, T2> &&v) {
+  return o.insert(std::move(v));
+}

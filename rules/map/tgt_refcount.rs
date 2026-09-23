@@ -292,3 +292,157 @@ fn f41<T1: Ord + Clone + 'static, T2: 'static>(
         Rc::new(RefCell::new(__inserted)),
     )
 }
+
+fn f42<T1: Ord, T2>(a0: BTreeMap<T1, Value<T2>>, a1: T1) -> usize {
+    if a0.contains_key(&a1) {
+        1_usize
+    } else {
+        0_usize
+    }
+}
+
+fn f43<T1: Ord + 'static, T2: 'static>(a0: Ptr<BTreeMap<T1, Value<T2>>>, a1: T1) -> usize {
+    a0.with_mut(|__v: &mut BTreeMap<T1, Value<T2>>| {
+        if __v.remove(&a1).is_some() {
+            1_usize
+        } else {
+            0_usize
+        }
+    })
+}
+
+fn f44<T1, T2>(a0: BTreeMap<T1, Value<T2>>) -> bool {
+    a0.is_empty()
+}
+
+fn f45<T1: Ord + Clone + 'static, T2: 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T2>>>,
+    a1: &mut (Value<T1>, Value<T2>),
+) -> (Value<RefcountMapIter<T1, T2>>, Value<bool>) {
+    let __pair = a1;
+    let __key: T1 = <T1>::clone(&*__pair.0.borrow());
+    let __value: Value<T2> = __pair.1.clone();
+    let __inserted = a0.with_mut(|__v: &mut BTreeMap<T1, Value<T2>>| {
+        if __v.contains_key(&__key) {
+            false
+        } else {
+            __v.insert(__key.clone(), __value);
+            true
+        }
+    });
+    (
+        Rc::new(RefCell::new(RefcountMapIter::find_key(a0, &__key))),
+        Rc::new(RefCell::new(__inserted)),
+    )
+}
+
+fn f46<T1: Ord + Clone + 'static, T2: Clone + 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T2>>>,
+    a1: RefcountMapIter<T1, T2>,
+    a2: RefcountMapIter<T1, T2>,
+) {
+    let mut __it = a1;
+    let __end = a2;
+    while __it != __end {
+        let __key: T1 = <T1>::clone(&*__it.first().borrow());
+        let __value: T2 = <T2>::clone(&*__it.second().borrow());
+        a0.with_mut(|__v: &mut BTreeMap<T1, Value<T2>>| {
+            if !__v.contains_key(&__key) {
+                __v.insert(__key.clone(), Rc::new(RefCell::new(__value)));
+            }
+        });
+        __it.inc();
+    }
+}
+
+fn f47<T1: 'static, T2: 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T2>>>,
+    a1: Ptr<BTreeMap<T1, Value<T2>>>,
+) {
+    let __lhs = a0.with_mut(|__v: &mut BTreeMap<T1, Value<T2>>| std::mem::take(__v));
+    let __rhs = a1.with_mut(|__v: &mut BTreeMap<T1, Value<T2>>| std::mem::take(__v));
+    a0.write(__rhs);
+    a1.write(__lhs)
+}
+
+fn f48<T1: 'static, T2: 'static>(a0: Ptr<BTreeMap<T1, Value<T2>>>) {
+    a0.with_mut(|__v: &mut BTreeMap<T1, Value<T2>>| __v.clear())
+}
+
+fn f49<T1: Ord + Clone + 'static, T2: 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T2>>>,
+    a1: T1,
+    a2: T2,
+) -> (Value<RefcountMapIter<T1, T2>>, Value<bool>) {
+    let __key: T1 = a1;
+    let __value: T2 = a2;
+    let __inserted = a0.with_mut(|__v: &mut BTreeMap<T1, Value<T2>>| {
+        __v.insert(__key.clone(), Rc::new(RefCell::new(__value)))
+            .is_none()
+    });
+    (
+        Rc::new(RefCell::new(RefcountMapIter::find_key(a0, &__key))),
+        Rc::new(RefCell::new(__inserted)),
+    )
+}
+
+fn f50<T1: Ord + Clone + 'static, T2: 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T2>>>,
+    a1: T1,
+    a2: T2,
+) -> (Value<RefcountMapIter<T1, T2>>, Value<bool>) {
+    let __key: T1 = a1;
+    let __value: T2 = a2;
+    let __inserted = a0.with_mut(|__v: &mut BTreeMap<T1, Value<T2>>| {
+        if __v.contains_key(&__key) {
+            false
+        } else {
+            __v.insert(__key.clone(), Rc::new(RefCell::new(__value)));
+            true
+        }
+    });
+    (
+        Rc::new(RefCell::new(RefcountMapIter::find_key(a0, &__key))),
+        Rc::new(RefCell::new(__inserted)),
+    )
+}
+
+fn f51<T1: Ord + Clone + 'static, T2: Default + 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T2>>>,
+    a1: T1,
+) -> (Value<RefcountMapIter<T1, T2>>, Value<bool>) {
+    let __key: T1 = a1;
+    let __inserted = a0.with_mut(|__v: &mut BTreeMap<T1, Value<T2>>| {
+        if __v.contains_key(&__key) {
+            false
+        } else {
+            __v.insert(__key.clone(), Rc::new(RefCell::new(<T2>::default())));
+            true
+        }
+    });
+    (
+        Rc::new(RefCell::new(RefcountMapIter::find_key(a0, &__key))),
+        Rc::new(RefCell::new(__inserted)),
+    )
+}
+
+fn f52<T1: Ord + Clone + 'static, T2: 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T2>>>,
+    a1: &mut (Value<T1>, Value<T2>),
+) -> (Value<RefcountMapIter<T1, T2>>, Value<bool>) {
+    let __pair = a1;
+    let __key: T1 = <T1>::clone(&*__pair.0.borrow());
+    let __value: Value<T2> = __pair.1.clone();
+    let __inserted = a0.with_mut(|__v: &mut BTreeMap<T1, Value<T2>>| {
+        if __v.contains_key(&__key) {
+            false
+        } else {
+            __v.insert(__key.clone(), __value);
+            true
+        }
+    });
+    (
+        Rc::new(RefCell::new(RefcountMapIter::find_key(a0, &__key))),
+        Rc::new(RefCell::new(__inserted)),
+    )
+}

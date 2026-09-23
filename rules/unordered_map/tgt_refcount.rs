@@ -446,3 +446,24 @@ fn f49<T1: Ord + Clone, T2>(a0: Vec<(Value<T1>, Value<T2>)>) -> BTreeMap<T1, Val
         .map(|(__k, __v): (Value<T1>, Value<T2>)| (__k.borrow().clone(), __v))
         .collect()
 }
+
+fn f50<T1: Ord + Clone + 'static, T2: 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T2>>>,
+    a1: T1,
+    a2: T2,
+) -> (Value<RefcountMapIter<T1, T2>>, Value<bool>) {
+    let __key: T1 = a1;
+    let __value: T2 = a2;
+    let __inserted = a0.with_mut(|__v: &mut BTreeMap<T1, Value<T2>>| {
+        if __v.contains_key(&__key) {
+            false
+        } else {
+            __v.insert(__key.clone(), Rc::new(RefCell::new(__value)));
+            true
+        }
+    });
+    (
+        Rc::new(RefCell::new(RefcountMapIter::find_key(a0, &__key))),
+        Rc::new(RefCell::new(__inserted)),
+    )
+}
