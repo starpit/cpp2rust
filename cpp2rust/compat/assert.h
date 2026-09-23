@@ -5,17 +5,19 @@
 
 #undef assert
 
-#ifndef __cplusplus
-#include <stdbool.h>
-#endif
-
-void cpp2rust_assert_fail(bool condition) __attribute__((noreturn));
-
 #ifdef __cplusplus
-// assert() contextually converts its operand, so a plain bool parameter
-// rejects types with an *explicit* operator bool (mlir::Value, llvm::Error,
-// iterators, ...). Convert explicitly to match the real assert().
+#ifndef CPP2RUST_ASSERT_FAIL_DEFINED
+#define CPP2RUST_ASSERT_FAIL_DEFINED
+constexpr bool cpp2rust_assert_fail(bool condition) {
+  if (!condition) {
+    __builtin_trap();
+  }
+  return false;
+}
+#endif // CPP2RUST_ASSERT_FAIL_DEFINED
 #define assert(expr) cpp2rust_assert_fail(static_cast<bool>(expr))
 #else
+#include <stdbool.h>
+bool cpp2rust_assert_fail(bool condition) __attribute__((noreturn));
 #define assert(expr) cpp2rust_assert_fail(expr)
-#endif
+#endif // __cplusplus

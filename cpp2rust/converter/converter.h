@@ -62,7 +62,7 @@ public:
   static void NoteOpaqueRecord(std::string name);
   static void EmitGlobalInits(Model model, std::string &out);
 
-  static void EmitMethodsOnPtr(std::string &out);
+  static void EmitVirtualMethods(std::string &out);
 
   virtual bool VisitBuiltinType(clang::BuiltinType *type);
 
@@ -320,6 +320,8 @@ public:
 
   virtual void
   ConvertFunctionToFunctionPointer(const clang::FunctionDecl *fn_decl);
+
+  std::string GetFunctionRefName(const clang::FunctionDecl *fn_decl);
 
   std::string ConvertFnPtrCallee(clang::Expr *arg);
   virtual std::string ConvertFnPtrPlaceholder(clang::Expr *arg);
@@ -683,6 +685,10 @@ protected:
                              const std::string_view signature,
                              bool (*predicate)(clang::CXXMethodDecl *));
 
+  void ConvertVirtualMethods(clang::CXXRecordDecl *decl);
+
+  bool ConvertOutOfLineVirtualMethod(clang::CXXMethodDecl *decl);
+
   void AddOrdTrait(const clang::CXXRecordDecl *decl);
 
   void ConvertOrdAndPartialOrdTraits(const clang::CXXRecordDecl *decl,
@@ -694,10 +700,17 @@ protected:
                                          std::string_view eq_body,
                                          std::string_view record_name);
 
-  virtual std::string GetComparisonCall(const clang::FunctionDecl *op,
-                                        const clang::CXXRecordDecl *decl,
-                                        std::string_view lhs,
-                                        std::string_view rhs);
+  std::string GetComparisonCall(const clang::FunctionDecl *op,
+                                const clang::CXXRecordDecl *decl,
+                                std::string_view lhs, std::string_view rhs);
+
+  virtual std::string
+  GetComparisonReferenceArg(const clang::CXXRecordDecl *decl,
+                            std::string_view value);
+
+  virtual std::string GetComparisonReceiver(const clang::CXXMethodDecl *method,
+                                            const clang::CXXRecordDecl *decl,
+                                            std::string_view lhs);
 
   virtual void AddCloneTrait(const clang::RecordDecl *decl);
 
@@ -987,15 +1000,15 @@ protected:
     std::unordered_map<std::string, bool> entries_;
   };
   static RecordIndex record_decls_;
-  struct MethodsOnPtr {
-    std::string trait_header;
-    std::string trait_body;
-    std::string impl_header;
-    std::string impl_body;
+  struct DeferredBlock {
+    std::string header;
+    std::string body;
   };
-  // record name -> trait and impl for Ptr<record>, emitted after all
-  // translation units.
-  static std::map<std::string, MethodsOnPtr> methods_on_ptr_;
+  static std::map<std::string, DeferredBlock> virtual_methods_;
+
+  static void EmitDeferredBlock(const DeferredBlock &block, std::string &out);
+
+  DeferredBlock &VirtualMethodsFor(const clang::CXXRecordDecl *decl);
 
   std::string hoisted_records_;
 
@@ -1097,7 +1110,10 @@ protected:
   ConvertFreshRValue(clang::Expr *expr,
                      std::optional<clang::QualType> implicit_convert_to = {});
   virtual std::string ConvertFreshPointer(clang::Expr *expr);
-  virtual std::string ConvertFreshObject(clang::Expr *expr);
+  // target_ptr_type, when known (e.g. a translation rule's parameter type),
+  // is the Rust pointer type the result will be used as.
+  virtual std::string ConvertFreshObject(clang::Expr *expr,
+                                         std::string_view target_ptr_type = {});
   std::string ConvertPointer(clang::Expr *expr, int line = __builtin_LINE());
 
   /// Materialize a temporary for a prvalue bound to a reference parameter.

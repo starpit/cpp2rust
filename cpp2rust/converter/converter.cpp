@@ -31,7 +31,7 @@ std::unordered_set<std::string> Converter::globals_;
 std::vector<std::string> Converter::global_inits_;
 std::unordered_set<std::string> Converter::abstract_structs_;
 Converter::RecordIndex Converter::record_decls_;
-std::map<std::string, Converter::MethodsOnPtr> Converter::methods_on_ptr_;
+std::map<std::string, Converter::DeferredBlock> Converter::virtual_methods_;
 
 void Converter::ConvertUniquePtrDeref(clang::CXXOperatorCallExpr *expr) {
   bool is_star = expr->getOperator() == clang::OverloadedOperatorKind::OO_Star;
@@ -62,16 +62,17 @@ use std::rc::Rc;
 )");
 }
 
-void Converter::EmitMethodsOnPtr(std::string &out) {
-  for (const auto &[name, methods] : methods_on_ptr_) {
-    out += methods.trait_header;
-    out += " {\n";
-    out += methods.trait_body;
-    out += "}\n";
-    out += methods.impl_header;
-    out += " {\n";
-    out += methods.impl_body;
-    out += "}\n";
+void Converter::EmitDeferredBlock(const DeferredBlock &block,
+                                  std::string &out) {
+  out += block.header;
+  out += " {\n";
+  out += block.body;
+  out += "}\n";
+}
+
+void Converter::EmitVirtualMethods(std::string &out) {
+  for (const auto &[name, impl] : virtual_methods_) {
+    EmitDeferredBlock(impl, out);
   }
 }
 
@@ -355,7 +356,7 @@ std::string Converter::ConvertFreshPointer(clang::Expr *expr) {
   return str;
 }
 
-std::string Converter::ConvertFreshObject(clang::Expr *expr) {
+std::string Converter::ConvertFreshObject(clang::Expr *expr, std::string_view) {
   return ConvertFreshPointer(expr);
 }
 
@@ -688,8 +689,7 @@ bool Converter::ConvertVarDeclSkipInit(clang::VarDecl *decl) {
 
   bool is_parm_with_default_value = false;
   if (auto parm = clang::dyn_cast<clang::ParmVarDecl>(decl)) {
-    is_parm_with_default_value =
-        parm->hasDefaultArg() && !parm->hasUninstantiatedDefaultArg();
+    is_parm_with_default_value = HasUsableDefaultArg(parm);
   }
 
   if (is_parm_with_default_value) {
@@ -773,6 +773,9 @@ void Converter::ConvertGlobalVarDecl(clang::VarDecl *decl) {
 }
 
 bool Converter::VisitVarDecl(clang::VarDecl *decl) {
+  if (clang::isa<clang::VarTemplatePartialSpecializationDecl>(decl)) {
+    return false;
+  }
   if (ConvertLambdaVarDecl(decl)) {
     return false;
   }
@@ -961,6 +964,12 @@ void Converter::EmitRustStructOrUnion(clang::RecordDecl *decl) {
         }
       }
     }
+    if (auto *nested_tmpl = clang::dyn_cast<clang::ClassTemplateDecl>(d)) {
+      for (auto *spec : nested_tmpl->specializations()) {
+        inner_structs_[GetID(spec)] = GetRecordName(spec);
+        VisitCXXRecordDecl(spec);
+      }
+    }
   }
 
   if (decl->isUnion()) {
@@ -995,20 +1004,8 @@ void Converter::EmitRustStructOrUnion(clang::RecordDecl *decl) {
 
   // C++ method decls
   if (auto *cxx = clang::dyn_cast<clang::CXXRecordDecl>(decl)) {
-    auto struct_name = GetRecordName(cxx);
-
     ConvertCXXRecordMethods(cxx);
-
-    if (cxx->bases_begin() != cxx->bases_end()) {
-      ConvertCXXMethodDecls(
-          cxx,
-          std::format("{} impl {} for {}", keyword_unsafe_,
-                      GetUnsafeTypeAsString(cxx->bases_begin()->getType()),
-                      struct_name),
-          [](auto *method) {
-            return !method->isImplicit() && method->isVirtual();
-          });
-    }
+    ConvertVirtualMethods(cxx);
   }
 
   // Traits
@@ -1095,6 +1092,9 @@ void Converter::EmitRustUnion(clang::RecordDecl *decl) {
   StrCat(keyword::kPub, keyword::kUnion, GetRecordName(decl));
   {
     PushBrace brace(*this);
+    if (decl->field_empty()) {
+      StrCat("__empty: u8,");
+    }
     for (auto *field : decl->fields()) {
       VisitFieldDecl(field);
     }
@@ -1174,16 +1174,24 @@ void Converter::DefineImplicitMembers(clang::CXXRecordDecl *decl) {
       sema_->DefineImplicitMoveAssignment(decl->getLocation(), method);
     }
   }
-  for (auto *method : decl->methods()) {
-    if (IsComparisonOperator(method) && method->isDefaulted() &&
-        !method->doesThisDeclarationHaveABody()) {
-#if CLANG_VERSION_MAJOR >= 24
-      auto kind = method->getDefaultedComparisonKind();
-#else
-      auto kind = sema_->getDefaultedComparisonKind(method);
-#endif
-      sema_->DefineDefaultedComparison(decl->getLocation(), method, kind);
+  auto define_defaulted_comparison = [&](clang::FunctionDecl *fn) {
+    if (!fn || !IsComparisonOperator(fn) || !fn->isDefaulted() ||
+        fn->doesThisDeclarationHaveABody()) {
+      return;
     }
+#if CLANG_VERSION_MAJOR >= 24
+    auto kind = fn->getDefaultedComparisonKind();
+#else
+    auto kind = sema_->getDefaultedComparisonKind(fn);
+#endif
+    sema_->DefineDefaultedComparison(decl->getLocation(), fn, kind);
+  };
+  for (auto *method : decl->methods()) {
+    define_defaulted_comparison(method);
+  }
+  for (auto *friend_decl : decl->friends()) {
+    define_defaulted_comparison(clang::dyn_cast_or_null<clang::FunctionDecl>(
+        friend_decl->getFriendDecl()));
   }
   sema_->TUScope = saved_tu_scope;
 }
@@ -1209,7 +1217,7 @@ bool Converter::VisitCXXMethodDecl(clang::CXXMethodDecl *decl) {
   PushCurrFunction push_fn(*this, decl);
 
   if (decl->isOutOfLine() && !decl->overridden_methods().empty()) {
-    return false;
+    return ConvertOutOfLineVirtualMethod(decl);
   }
   if (decl->isOutOfLine() && !decl->isTemplateInstantiation()) {
     return ConvertOutOfLineMethod(decl);
@@ -1381,9 +1389,7 @@ void Converter::EmitFunctionPreamble(clang::FunctionDecl *decl) {
   auto params = decl->getDefinition() ? decl->getDefinition()->parameters()
                                       : decl->parameters();
   for (auto *param : params) {
-    // hasDefaultArg() is true for a default clang has not instantiated yet
-    // (a template's), and getDefaultArg() asserts on those. Nothing to emit.
-    if (param->hasDefaultArg() && !param->hasUninstantiatedDefaultArg()) {
+    if (HasUsableDefaultArg(param)) {
       auto name = GetNamedDeclAsString(param);
       auto type = ToString(param->getType());
       auto init = std::format("{}.unwrap_or({})", name,
@@ -2031,7 +2037,7 @@ bool Converter::VisitCallExpr(clang::CallExpr *expr) {
     return false;
   }
 
-  if (expr->isCallToStdMove()) {
+  if (IsTransparentStdCall(expr)) {
     Convert(expr->getArg(0));
     return false;
   }
@@ -2074,9 +2080,18 @@ void Converter::EmitFnPtrCall(clang::Expr *callee) {
   StrCat(".unwrap()");
 }
 
+std::string Converter::GetFunctionRefName(const clang::FunctionDecl *fn_decl) {
+  if (auto *method = clang::dyn_cast<clang::CXXMethodDecl>(fn_decl);
+      method && method->isStatic()) {
+    return std::format("{}::{}", GetRecordName(method->getParent()),
+                       GetMethodName(method));
+  }
+  return Mapper::MapFunctionName(fn_decl);
+}
+
 void Converter::ConvertFunctionToFunctionPointer(
     const clang::FunctionDecl *fn_decl) {
-  StrCat(std::format("Some({})", Mapper::MapFunctionName(fn_decl)));
+  StrCat(std::format("Some({})", GetFunctionRefName(fn_decl)));
   computed_expr_type_ = ComputedExprType::FreshPointer;
 }
 
@@ -2149,16 +2164,15 @@ Converter::CallInfo Converter::CollectCallInfo(clang::CallExpr *expr) {
   for (unsigned i = 0; i < num_named_params && i < num_args; ++i) {
     auto *arg = expr->getArg(i + arg_begin);
     CallArg ca{
-        .param_name = function && !function->getParamDecl(i)->getName().empty()
-                          ? ("_" + function->getParamDecl(i)->getNameAsString())
-                          : ("_arg" + std::to_string(i)),
+        .param_name =
+            function && !function->getParamDecl(i)->getName().empty()
+                ? ("_" + GetNamedDeclAsString(function->getParamDecl(i)))
+                : ("_arg" + std::to_string(i)),
         .param_type = function ? function->getParamDecl(i)->getType()
                                : proto->getParamType(i),
         .expr = arg,
-        .has_default = function &&
-                       function->getParamDecl(i)->hasDefaultArg() &&
-                       !function->getParamDecl(i)
-                            ->hasUninstantiatedDefaultArg(),
+        .has_default =
+            function && HasUsableDefaultArg(function->getParamDecl(i)),
         .kind = (IsLiteral(arg) || info.is_libc_passthrough) ? Kind::Inline
                                                              : Kind::Hoisted,
     };
@@ -2391,7 +2405,7 @@ Converter::ConvertCallExpr(clang::CallExpr *expr) {
   if (auto fn = Mapper::ToString(callee);
       fn.starts_with("int printf") || fn.starts_with("int fprintf")) {
     ConvertPrintf(expr);
-  } else if (expr->isCallToStdMove()) {
+  } else if (IsTransparentStdCall(expr)) {
     Convert(expr->getArg(0));
   } else if (IsBuiltinConstantP(callee)) {
     StrCat(expr->getArg(0)->isCXX11ConstantExpr(ctx_) ? token::kOne
@@ -2684,7 +2698,10 @@ bool Converter::VisitImplicitCastExpr(clang::ImplicitCastExpr *expr) {
     }
     bool dest_pointee_const =
         expr->getType()->getPointeeType().isConstQualified();
-    Convert(sub_expr);
+    {
+      PushExprKind push(*this, ExprKind::LValue);
+      Convert(sub_expr);
+    }
     if (IsStringLiteralExpr(sub_expr)) {
       StrCat(".as_ptr()");
       if (!dest_pointee_const) {
@@ -3066,7 +3083,7 @@ void Converter::ConvertGenericBinaryOperator(clang::BinaryOperator *expr) {
 }
 
 bool Converter::IsReferenceType(const clang::Expr *expr) const {
-  const auto *e = IgnoreStdMove(expr->IgnoreCasts())->IgnoreCasts();
+  const auto *e = IgnoreTransparentStdCall(expr->IgnoreCasts())->IgnoreCasts();
   if (const auto *call = clang::dyn_cast<clang::CallExpr>(e)) {
     return !clang::isa<clang::CXXOperatorCallExpr>(call) &&
            GetReturnTypeOfFunction(call)->isReferenceType();
@@ -3131,6 +3148,7 @@ bool Converter::VisitUnaryOperator(clang::UnaryOperator *expr) {
   }
   switch (opcode) {
   case clang::UO_Extension:
+  case clang::UO_Plus:
     Convert(sub_expr);
     break;
   case clang::UO_AddrOf: {
@@ -3208,10 +3226,11 @@ bool Converter::VisitConditionalOperator(clang::ConditionalOperator *expr) {
   ConvertCondition(expr->getCond());
   bool branch_is_addr =
       expr->isLValue() && !isRValue() && !expr->getType()->isFunctionType();
+  bool branch_is_mut = curr_init_type_.empty() || IsMut(curr_init_type_.back());
   {
     PushBrace then_brace(*this);
     if (branch_is_addr) {
-      StrCat(token::kRef, keyword_mut_);
+      StrCat(token::kRef, branch_is_mut ? keyword_mut_ : "");
     }
     PushExplicitAutoref no_autoref(*this, branch_is_addr ? std::nullopt
                                                          : autoref_mut_);
@@ -3223,7 +3242,7 @@ bool Converter::VisitConditionalOperator(clang::ConditionalOperator *expr) {
   {
     PushBrace else_brace(*this);
     if (branch_is_addr) {
-      StrCat(token::kRef, keyword_mut_);
+      StrCat(token::kRef, branch_is_mut ? keyword_mut_ : "");
     }
     PushExplicitAutoref no_autoref(*this, branch_is_addr ? std::nullopt
                                                          : autoref_mut_);
@@ -3281,8 +3300,7 @@ std::string Converter::ConvertDeclRefExpr(clang::DeclRefExpr *expr) {
   if (auto *function = decl->getAsFunction()) {
     if (auto method = clang::dyn_cast<clang::CXXMethodDecl>(function)) {
       if (method->isStatic()) {
-        return std::format("{}::{}", GetRecordName(method->getParent()),
-                           GetNamedDeclAsString(method));
+        return GetFunctionRefName(method);
       }
     }
     // MapFunctionName, not GetNamedDeclAsString: a std:: function that HAS a
@@ -3382,13 +3400,10 @@ bool Converter::VisitDeclRefExpr(clang::DeclRefExpr *expr) {
 }
 
 bool Converter::VisitParenExpr(clang::ParenExpr *expr) {
-  // Comma operator becomes (A, B, C) -> { A; B; C }
-  if (auto *bin = clang::dyn_cast<clang::BinaryOperator>(expr->getSubExpr())) {
-    if (bin->isCommaOp()) {
-      PushBrace push(*this);
-      Convert(expr->getSubExpr());
-      return false;
-    }
+  if (auto *bin = clang::dyn_cast<clang::BinaryOperator>(expr->getSubExpr());
+      bin && (bin->isCommaOp() || (bin->isAssignmentOp() && isVoid()))) {
+    Convert(expr->getSubExpr());
+    return false;
   }
 
   {
@@ -4002,8 +4017,7 @@ void Converter::ConvertCXXConstructExprArgs(clang::CXXConstructExpr *expr) {
   for (unsigned param_idx = 0; param_idx < ctor->getNumParams(); ++param_idx) {
     auto param = ctor->getParamDecl(param_idx);
     auto param_type = param->getType();
-    bool has_default =
-        param->hasDefaultArg() && !param->hasUninstantiatedDefaultArg();
+    bool has_default = HasUsableDefaultArg(param);
 
     if (arg_idx < expr->getNumArgs() &&
         clang::isa<clang::CXXDefaultArgExpr>(expr->getArg(arg_idx))) {
@@ -4491,6 +4505,10 @@ std::string Converter::GetArrayDefaultAsString(clang::QualType qual_type) {
 }
 
 std::string Converter::GetDefaultAsString(clang::QualType qual_type) {
+  if (qual_type->isVoidType()) {
+    return "()";
+  }
+
   if (IsVaListType(qual_type)) {
     computed_expr_type_ = ComputedExprType::FreshValue;
     return "VaList::default()";
@@ -4703,6 +4721,18 @@ void Converter::ConvertVarInit(clang::QualType qual_type, clang::Expr *expr) {
   if (qual_type->isReferenceType() && !IsReferenceType(expr)) {
     if (llvm::isa<clang::MaterializeTemporaryExpr>(expr->IgnoreImpCasts())) {
       StrCat(EmitMaterializedTempBinding(qual_type, expr));
+      return;
+    }
+    if (auto *cond = clang::dyn_cast<clang::ConditionalOperator>(
+            expr->IgnoreParenImpCasts());
+        cond && cond->isLValue()) {
+      {
+        PushExprKind push(*this, ExprKind::LValue);
+        PushInitType init_type(*this, qual_type);
+        Convert(cond);
+      }
+      StrCat(keyword::kAs);
+      Convert(qual_type);
       return;
     }
     StrCat(token::kRef);
@@ -4962,6 +4992,48 @@ void Converter::ConvertCXXMethodDecls(
   }
 }
 
+Converter::DeferredBlock &
+Converter::VirtualMethodsFor(const clang::CXXRecordDecl *decl) {
+  auto name = GetRecordName(decl);
+  auto [it, inserted] = virtual_methods_.try_emplace(name);
+  if (inserted) {
+    it->second.header = std::format(
+        "{} impl {} for {}", keyword_unsafe_,
+        GetUnsafeTypeAsString(decl->bases_begin()->getType()), name);
+  }
+  return it->second;
+}
+
+void Converter::ConvertVirtualMethods(clang::CXXRecordDecl *decl) {
+  if (decl->bases_begin() == decl->bases_end()) {
+    return;
+  }
+  bool any = false;
+  Buffer buf(*this);
+  for (auto *method : decl->methods()) {
+    if (!method->isImplicit() && method->isVirtual()) {
+      any = true;
+      VisitCXXMethodDecl(method);
+    }
+  }
+  auto body = std::move(buf).str();
+  if (!any) {
+    return;
+  }
+  VirtualMethodsFor(decl).body += body;
+}
+
+bool Converter::ConvertOutOfLineVirtualMethod(clang::CXXMethodDecl *decl) {
+  auto *record = decl->getParent();
+  if (record->bases_begin() == record->bases_end()) {
+    return false;
+  }
+  Buffer buf(*this);
+  auto emitted = ConvertCXXMethodDecl(decl);
+  VirtualMethodsFor(record).body += std::move(buf).str();
+  return emitted;
+}
+
 void Converter::ConvertOrdAndPartialOrdTraitsBase(
     std::string_view cmp_body, std::string_view eq_body,
     std::string_view record_name) {
@@ -4993,18 +5065,34 @@ std::string Converter::GetComparisonCall(const clang::FunctionDecl *op,
                                          const clang::CXXRecordDecl *decl,
                                          std::string_view lhs,
                                          std::string_view rhs) {
-  auto record = GetRecordName(decl);
-  auto arg = std::format("{} as *const {}", rhs, record);
+  auto arg = [&](unsigned i, std::string_view value) {
+    if (op->getParamDecl(i)->getType()->isReferenceType()) {
+      return GetComparisonReferenceArg(decl, value);
+    }
+    return std::format("{}.clone()", value);
+  };
   if (const auto *method = clang::dyn_cast<clang::CXXMethodDecl>(op)) {
-    auto recv = !MethodNeedsMutableReceiver(method)
-                    ? std::string(lhs)
-                    : std::format("&mut *(&raw const *{}).cast_mut()", lhs);
     return std::format("{}::{}({}, {})", GetUFCSName(method),
-                       GetMethodName(method), recv, arg);
+                       GetMethodName(method),
+                       GetComparisonReceiver(method, decl, lhs), arg(0, rhs));
   }
-  return std::format("{}({} as *const {}, {})",
-                     GetNamedDeclAsString(op->getCanonicalDecl()), lhs, record,
-                     arg);
+  return std::format("{}({}, {})", GetNamedDeclAsString(op->getCanonicalDecl()),
+                     arg(0, lhs), arg(1, rhs));
+}
+
+std::string
+Converter::GetComparisonReferenceArg(const clang::CXXRecordDecl *decl,
+                                     std::string_view value) {
+  return std::format("{} as *const {}", value, GetRecordName(decl));
+}
+
+std::string Converter::GetComparisonReceiver(const clang::CXXMethodDecl *method,
+                                             const clang::CXXRecordDecl *,
+                                             std::string_view lhs) {
+  if (!MethodNeedsMutableReceiver(method)) {
+    return std::string(lhs);
+  }
+  return std::format("&mut *(&raw const *{}).cast_mut()", lhs);
 }
 
 void Converter::ConvertOrdAndPartialOrdTraits(const clang::CXXRecordDecl *decl,
@@ -5060,13 +5148,28 @@ void Converter::AddOrdTrait(const clang::CXXRecordDecl *decl) {
       break;
     }
   };
+  auto consider_decl = [&](const clang::NamedDecl *found) {
+    if (const auto *tmpl =
+            clang::dyn_cast<clang::FunctionTemplateDecl>(found)) {
+      for (const auto *spec : tmpl->specializations()) {
+        consider(spec);
+      }
+      return;
+    }
+    consider(clang::dyn_cast<clang::FunctionDecl>(found));
+  };
   for (const auto *method : decl->methods()) {
     consider(method);
   }
   for (auto op : {clang::OO_EqualEqual, clang::OO_Less, clang::OO_Spaceship}) {
     auto name = ctx_.DeclarationNames.getCXXOperatorName(op);
     for (const auto *found : decl->getDeclContext()->lookup(name)) {
-      consider(clang::dyn_cast<clang::FunctionDecl>(found));
+      consider_decl(found);
+    }
+  }
+  for (const auto *friend_decl : decl->friends()) {
+    if (const auto *found = friend_decl->getFriendDecl()) {
+      consider_decl(found);
     }
   }
 
@@ -5336,9 +5439,10 @@ std::string Converter::ConvertPlaceholder(clang::Expr *expr, clang::Expr *arg,
   }
 
   if (ph_ctx.needs_pointer_receiver()) {
-    return std::format(
-        "({} as {})", ConvertFreshObject(arg),
-        Mapper::GetParamType(GetCalleeOrExpr(expr), ph_ctx.arg_idx));
+    auto param_type =
+        Mapper::GetParamType(GetCalleeOrExpr(expr), ph_ctx.arg_idx);
+    return std::format("({} as {})", ConvertFreshObject(arg, param_type),
+                       param_type);
   }
 
   if (ph_ctx.needs_object_receiver()) {

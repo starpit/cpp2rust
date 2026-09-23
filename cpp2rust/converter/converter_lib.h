@@ -141,6 +141,8 @@ unsigned GetCtorIndex(clang::CXXConstructorDecl *ctor);
 clang::CXXConstructorDecl *
 GetUserDefinedDefaultConstructor(const clang::CXXRecordDecl *decl);
 
+bool HasUsableDefaultArg(const clang::ParmVarDecl *param);
+
 std::string GetMainFileName(const clang::ASTContext &ctx);
 
 std::string GetFileName(const clang::Decl *decl);
@@ -269,7 +271,9 @@ bool IsBuiltinVaEnd(const clang::CallExpr *expr);
 
 bool IsBuiltinVaCopy(const clang::CallExpr *expr);
 
-const clang::Expr *IgnoreStdMove(const clang::Expr *expr);
+bool IsTransparentStdCall(const clang::CallExpr *expr);
+
+const clang::Expr *IgnoreTransparentStdCall(const clang::Expr *expr);
 
 bool IsTemporaryObject(const clang::Expr *expr);
 

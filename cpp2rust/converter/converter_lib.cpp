@@ -411,6 +411,7 @@ bool HasCallableCopyConstructor(const clang::RecordDecl *decl) {
 
 bool IsRValueConvertingConstructor(const clang::CXXConstructorDecl *ctor) {
   return !ctor->isCopyOrMoveConstructor() &&
+         !IsUserDefinedDecl(ctor->getParent()) &&
          ctor->isConvertingConstructor(false) && ctor->getNumParams() == 1 &&
          ctor->getParamDecl(0)->getType()->isRValueReferenceType();
 }
@@ -574,11 +575,15 @@ unsigned GetCtorIndex(clang::CXXConstructorDecl *ctor) {
 clang::CXXConstructorDecl *
 GetUserDefinedDefaultConstructor(const clang::CXXRecordDecl *decl) {
   for (auto c : decl->ctors()) {
-    if (c->isUserProvided() && c->isDefaultConstructor()) {
+    if (c->isUserProvided() && c->isDefaultConstructor() && c->hasBody()) {
       return c;
     }
   }
   return nullptr;
+}
+
+bool HasUsableDefaultArg(const clang::ParmVarDecl *param) {
+  return param->hasDefaultArg() && !param->hasUninstantiatedDefaultArg();
 }
 
 std::string GetMainFileName(const clang::ASTContext &ctx) {
@@ -647,6 +652,10 @@ static std::string GetLexicalSpecializationID(const clang::Decl *decl) {
   if (const auto *var =
           clang::dyn_cast<clang::VarTemplateSpecializationDecl>(decl)) {
     id += clang::ASTNameGenerator(var->getASTContext()).getName(var);
+  }
+  if (const auto *self =
+          clang::dyn_cast<clang::ClassTemplateSpecializationDecl>(decl)) {
+    id += Mapper::ToString(Mapper::GetTypeForDecl(self));
   }
   if (const auto *spec =
           clang::dyn_cast<clang::ClassTemplateSpecializationDecl>(
@@ -794,7 +803,7 @@ std::string GetNamedDeclAsString(const clang::NamedDecl *decl) {
         llvm::dyn_cast<clang::FunctionDecl>(pdecl->getDeclContext());
     const auto *ctor = llvm::dyn_cast_or_null<clang::CXXConstructorDecl>(fn);
     if (pdecl->isExplicitObjectParameter() ||
-        (ctor && ctor->isCopyConstructor())) {
+        (ctor && ctor->isCopyConstructor() && ctor->isDefaulted())) {
       name = "self";
     } else {
       name = std::format("_a{}", pdecl->getFunctionScopeIndex());
@@ -976,9 +985,12 @@ bool IsUserOperatorCall(const clang::CXXOperatorCallExpr *expr) {
   if (!callee) {
     return false;
   }
-  if (const auto *method = clang::dyn_cast<clang::CXXMethodDecl>(callee);
-      method && method->isDefaulted() && IsComparisonOperator(method)) {
-    return IsUserDefinedDecl(method->getParent());
+  if (callee->isDefaulted() && IsComparisonOperator(callee)) {
+    const clang::Decl *owner = callee;
+    if (const auto *method = clang::dyn_cast<clang::CXXMethodDecl>(callee)) {
+      owner = method->getParent();
+    }
+    return IsUserDefinedDecl(owner);
   }
   if (const auto *method = clang::dyn_cast<clang::CXXMethodDecl>(callee);
       method && IsConvertibleMoveAssignment(method)) {
@@ -1500,19 +1512,39 @@ bool IsBuiltinVaCopy(const clang::CallExpr *expr) {
   return false;
 }
 
-const clang::Expr *IgnoreStdMove(const clang::Expr *expr) {
+bool IsTransparentStdCall(const clang::CallExpr *expr) {
+  const auto *callee = expr->getDirectCallee();
+  if (!callee) {
+    return false;
+  }
+  switch (callee->getBuiltinID()) {
+  case clang::Builtin::BImove:
+  case clang::Builtin::BImove_if_noexcept:
+  case clang::Builtin::BIforward:
+  case clang::Builtin::BIforward_like:
+  case clang::Builtin::BIas_const:
+    return true;
+  default:
+    return false;
+  }
+}
+
+const clang::Expr *IgnoreTransparentStdCall(const clang::Expr *expr) {
   if (const auto *call =
           clang::dyn_cast<clang::CallExpr>(expr->IgnoreParenImpCasts());
-      call && call->isCallToStdMove()) {
+      call && IsTransparentStdCall(call)) {
     return call->getArg(0);
   }
   return expr;
 }
 
 bool IsTemporaryObject(const clang::Expr *expr) {
-  const auto *operand = IgnoreStdMove(expr);
+  const auto *operand = IgnoreTransparentStdCall(expr);
   if (operand != expr) {
     return !operand->isGLValue();
+  }
+  if (clang::isa<clang::MaterializeTemporaryExpr>(expr->IgnoreImpCasts())) {
+    return true;
   }
   return !expr->isLValue();
 }
