@@ -241,3 +241,34 @@ template <typename T1, typename T2>
 bool f38(const std::map<T1, T2> &a, const std::map<T1, T2> &b) {
   return operator>=(a, b);
 }
+
+// std::map::emplace.  Had no rule at all, so `m.emplace(k, v)` fell through to
+// a mangled `BTreeMap::emplace` that does not exist -- rc=0 from the
+// translator and E0599 from rustc.  Modelled exactly as rules/unordered_map
+// f39/f40 already model the same two spellings.  emplace KEEPS THE INCUMBENT on
+// a duplicate key, which BTreeMap::insert does not: the same discrepancy
+// rules/set was fixed for in 8e0a2d6, so the contains_key guard is load
+// bearing, not defensive.
+template <typename T1, typename T2>
+std::pair<typename std::map<T1, T2>::iterator, bool>
+f39(std::map<T1, T2> &o, T1 &&key, T2 &&value) {
+  return o.emplace(std::move(key), std::move(value));
+}
+
+template <typename T1, typename T2>
+std::pair<typename std::map<T1, T2>::iterator, bool>
+f40(std::map<T1, T2> &o, const T1 &key, const T2 &value) {
+  return o.emplace(key, value);
+}
+
+// The NON-CONST lvalue spelling.  f39 covers `emplace(T1 &&, T2 &&)` and f40
+// `emplace(const T1 &, const T2 &)`, but clang resolves `m.emplace(k, v)` for
+// two plain lvalues to `emplace(T1 &, T2 &)`, which matches neither -- and that
+// is the spelling dsc/dsc2.cpp:179 and :255 actually use.  Verified with the
+// --verbose oracle, which prints exactly this signature with an empty result.
+// Same COPY semantics as f40: emplace forwards to T's copy constructor here.
+template <typename T1, typename T2>
+std::pair<typename std::map<T1, T2>::iterator, bool>
+f41(std::map<T1, T2> &o, T1 &key, T2 &value) {
+  return o.emplace(key, value);
+}

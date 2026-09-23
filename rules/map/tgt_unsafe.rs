@@ -177,3 +177,60 @@ unsafe fn f37<T1: Ord, T2: Ord>(a0: BTreeMap<T1, Box<T2>>, a1: BTreeMap<T1, Box<
 unsafe fn f38<T1: Ord, T2: Ord>(a0: BTreeMap<T1, Box<T2>>, a1: BTreeMap<T1, Box<T2>>) -> bool {
     a0 >= a1
 }
+
+unsafe fn f39<T1: Ord + Clone, T2>(
+    a0: &mut BTreeMap<T1, Box<T2>>,
+    a1: T1,
+    a2: T2,
+) -> (UnsafeMapIterator<T1, T2>, bool) {
+    let __key: T1 = a1;
+    let __value: T2 = a2;
+    let __inserted = if a0.contains_key(&__key) {
+        false
+    } else {
+        a0.insert(__key.clone(), Box::new(__value));
+        true
+    };
+    (
+        UnsafeMapIterator::find_key(&*a0 as *const BTreeMap<T1, Box<T2>>, &__key),
+        __inserted,
+    )
+}
+
+unsafe fn f40<T1: Ord + Clone, T2>(
+    a0: &mut BTreeMap<T1, Box<T2>>,
+    a1: T1,
+    a2: T2,
+) -> (UnsafeMapIterator<T1, T2>, bool) {
+    let __key: T1 = a1;
+    let __value: T2 = a2;
+    let __inserted = if a0.contains_key(&__key) {
+        false
+    } else {
+        a0.insert(__key.clone(), Box::new(__value));
+        true
+    };
+    (
+        UnsafeMapIterator::find_key(&*a0 as *const BTreeMap<T1, Box<T2>>, &__key),
+        __inserted,
+    )
+}
+
+unsafe fn f41<T1: Ord + Clone, T2>(
+    a0: &mut BTreeMap<T1, Box<T2>>,
+    a1: T1,
+    a2: T2,
+) -> (UnsafeMapIterator<T1, T2>, bool) {
+    let __key: T1 = a1;
+    let __value: T2 = a2;
+    let __inserted = if a0.contains_key(&__key) {
+        false
+    } else {
+        a0.insert(__key.clone(), Box::new(__value));
+        true
+    };
+    (
+        UnsafeMapIterator::find_key(&*a0 as *const BTreeMap<T1, Box<T2>>, &__key),
+        __inserted,
+    )
+}

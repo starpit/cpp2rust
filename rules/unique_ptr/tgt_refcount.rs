@@ -31,9 +31,9 @@ fn f4<T1>(a0: Ptr<T1>) -> Option<Value<T1>> {
     a0.to_owned_opt()
 }
 
-fn f5<T1>(a0: &mut Option<Value<T1>>, a1: Ptr<T1>) {
-    let _p: Ptr<_> = a1;
-    *a0 = _p.to_owned_opt()
+fn f5<T1: ByteRepr>(a0: Ptr<Option<Value<T1>>>, a1: Ptr<T1>) {
+    let _p: Ptr<T1> = a1;
+    a0.write(_p.to_owned_opt())
 }
 
 fn f6<T1>(a0: &mut Option<Value<Box<[T1]>>>, a1: Ptr<T1>) {

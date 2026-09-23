@@ -229,3 +229,66 @@ fn f37<T1: Ord, T2: Ord>(a0: BTreeMap<T1, Value<T2>>, a1: BTreeMap<T1, Value<T2>
 fn f38<T1: Ord, T2: Ord>(a0: BTreeMap<T1, Value<T2>>, a1: BTreeMap<T1, Value<T2>>) -> bool {
     a0 >= a1
 }
+
+fn f39<T1: Ord + Clone + 'static, T2: 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T2>>>,
+    a1: T1,
+    a2: T2,
+) -> (Value<RefcountMapIter<T1, T2>>, Value<bool>) {
+    let __key: T1 = a1;
+    let __value: T2 = a2;
+    let __inserted = a0.with_mut(|__v: &mut BTreeMap<T1, Value<T2>>| {
+        if __v.contains_key(&__key) {
+            false
+        } else {
+            __v.insert(__key.clone(), Rc::new(RefCell::new(__value)));
+            true
+        }
+    });
+    (
+        Rc::new(RefCell::new(RefcountMapIter::find_key(a0, &__key))),
+        Rc::new(RefCell::new(__inserted)),
+    )
+}
+
+fn f40<T1: Ord + Clone + 'static, T2: 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T2>>>,
+    a1: T1,
+    a2: T2,
+) -> (Value<RefcountMapIter<T1, T2>>, Value<bool>) {
+    let __key: T1 = a1;
+    let __value: T2 = a2;
+    let __inserted = a0.with_mut(|__v: &mut BTreeMap<T1, Value<T2>>| {
+        if __v.contains_key(&__key) {
+            false
+        } else {
+            __v.insert(__key.clone(), Rc::new(RefCell::new(__value)));
+            true
+        }
+    });
+    (
+        Rc::new(RefCell::new(RefcountMapIter::find_key(a0, &__key))),
+        Rc::new(RefCell::new(__inserted)),
+    )
+}
+
+fn f41<T1: Ord + Clone + 'static, T2: 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T2>>>,
+    a1: T1,
+    a2: T2,
+) -> (Value<RefcountMapIter<T1, T2>>, Value<bool>) {
+    let __key: T1 = a1;
+    let __value: T2 = a2;
+    let __inserted = a0.with_mut(|__v: &mut BTreeMap<T1, Value<T2>>| {
+        if __v.contains_key(&__key) {
+            false
+        } else {
+            __v.insert(__key.clone(), Rc::new(RefCell::new(__value)));
+            true
+        }
+    });
+    (
+        Rc::new(RefCell::new(RefcountMapIter::find_key(a0, &__key))),
+        Rc::new(RefCell::new(__inserted)),
+    )
+}
