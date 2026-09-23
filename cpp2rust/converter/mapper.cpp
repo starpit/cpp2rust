@@ -11,6 +11,7 @@
 #include <llvm/ADT/SmallString.h>
 #include <llvm/Support/ThreadPool.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <format>
@@ -513,6 +514,35 @@ std::vector<std::string> eastConstVariants(const std::string &src,
   return variants;
 }
 
+// Whether `rust_type` may be spelled bare as the base of a `::` path.
+//
+// Rust only accepts a plain path there: `i32::default()` and `Outer::default()`
+// parse, but `Vec<i32>::default()`, `Ptr<N>::default()` and `(A, B)::default()`
+// do not -- the first two are "comparison operators cannot be chained", because
+// the parser reads `<` as less-than. Anything that is not a bare path has to go
+// through the qualified form `<T>::default()`.
+//
+// A rule body writes the placeholder bare (`T1::default()`), which is correct
+// for every scalar binding and only breaks once T1 binds to a generic or
+// compound type, so the defect stayed hidden until std::pair<N *, N *> made T1
+// bind to Ptr<N>.
+bool isBarePathBase(std::string_view rust_type) {
+  return std::all_of(rust_type.begin(), rust_type.end(), [](unsigned char c) {
+    return std::isalnum(c) || c == '_' || c == ':';
+  });
+}
+
+// Spells `rust_type` so it can be the base of a `::` path, adding the qualified
+// form's angle brackets only when the bare spelling would not parse.  Keeping
+// the bare spelling where it is legal is what makes this change a no-op for
+// every already-passing rule instantiation.
+std::string asPathBase(const std::string &rust_type) {
+  if (isBarePathBase(rust_type)) {
+    return rust_type;
+  }
+  return '<' + rust_type + '>';
+}
+
 // Substitutes concrete types into a target template string using the provided
 // type mapping. Each template parameter in `tgt_template` is replaced with its
 // corresponding instantiated type from `types`.
@@ -545,7 +575,12 @@ std::string instantiateTgt(const std::vector<std::optional<std::string>> &types,
     }
     unsigned idx = std::stoul(instantiated_template.substr(pos + 1,
                                                            end - pos - 1));
-    const auto &repl = types.at(idx - 1).value();
+    // `T1::default()` in the template puts the substituted type in path-base
+    // position, where a generic or compound Rust type has to be qualified.
+    std::string repl = types.at(idx - 1).value();
+    if (instantiated_template.compare(end, 2, "::") == 0) {
+      repl = asPathBase(repl);
+    }
     instantiated_template.replace(pos, end - pos, repl);
     pos += repl.length();
   }
@@ -1121,6 +1156,10 @@ std::string Map(clang::QualType qual_type) {
     return instantiateTgt(subs, rule->type_info.type);
   }
   return {};
+}
+
+std::string AsPathBase(const std::string &rust_type) {
+  return asPathBase(rust_type);
 }
 
 std::string MapInitializer(clang::QualType qual_type) {

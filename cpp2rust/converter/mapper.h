@@ -33,6 +33,11 @@ const TranslationRule::ExprRule *GetExprRule(const clang::Expr *expr);
 bool IsLibcPassthrough(const clang::Expr *expr);
 std::string MapFunctionName(const clang::FunctionDecl *decl);
 std::string InstantiateTemplate(const clang::Expr *expr, unsigned n);
+// Spells a Rust type so it can be the base of a `::` path: bare where that
+// parses (`i32`, `Outer`), qualified where it does not (`<Vec<i32>>`,
+// `<Ptr<N>>`, `<(A, B)>`). A rule body writes `T1::default()` bare, which is
+// only legal while T1 binds to a plain path.
+std::string AsPathBase(const std::string &rust_type);
 bool ReturnsPointer(const clang::Expr *expr);
 std::string GetParamType(const clang::Expr *expr, unsigned index);
 bool ParamIsPointer(const clang::Expr *expr, unsigned index);

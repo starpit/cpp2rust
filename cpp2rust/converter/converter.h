@@ -474,6 +474,7 @@ public:
 
 protected:
   const clang::Expr *GetParentExpr(const clang::Expr *expr);
+  bool CommaNeedsOwnBlock(const clang::Expr *expr);
 
 #define StrCat(...) _StrCat(__FUNCTION__, __LINE__, __VA_ARGS__)
 

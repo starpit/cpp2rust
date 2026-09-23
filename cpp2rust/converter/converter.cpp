@@ -1726,6 +1726,33 @@ bool Converter::Convert(clang::Expr *expr,
   return result;
 }
 
+// Whether a comma operator has to emit its own `{ a; b }` block.
+//
+// `a, b` evaluates a and yields b, which as an EXPRESSION is `{ a; b }` in
+// Rust. Two cases do not need the block:
+//
+//   * the value is discarded (`isVoid()`) -- a `for` increment `++i, --j` or a
+//     bare `f(), g();` statement. There `a; b` is two statements, already
+//     correct, and already what every expected output records. It is also the
+//     LHS of a longer chain: `a, b, c` converts its LHS in Void kind, so one
+//     block wraps the whole chain instead of one per node.
+//   * a ParenExpr directly around it -- VisitParenExpr braces a parenthesized
+//     comma itself, so `(a, b)` and `if ((a = 1, b = 2, a + b > 0))` keep the
+//     single block they have always had rather than nesting `{{ a; b }}`.
+//
+// What is left is a comma whose value IS used and whose braces nobody else
+// supplies: an unparenthesized comma in a `for`/`while`/`if` condition, a
+// `return`, an initializer. That is exactly where the bug was -- with braces
+// from nowhere, `{ a; b }` degenerated to `a ; b` and the statement separator
+// escaped into the surrounding syntax, taking the loop body with it.
+bool Converter::CommaNeedsOwnBlock(const clang::Expr *expr) {
+  if (isVoid()) {
+    return false;
+  }
+  const auto *parent = GetParentExpr(expr);
+  return !parent || !clang::isa<clang::ParenExpr>(parent);
+}
+
 const clang::Expr *Converter::GetParentExpr(const clang::Expr *expr) {
   if (!expr) {
     return nullptr;
@@ -2895,6 +2922,19 @@ void Converter::ConvertBinaryOperator(clang::BinaryOperator *expr) {
       ConvertCast(lhs_type);
     }
   } else if (expr->isCommaOp()) {
+    // `a, b` evaluates a for its side effects and yields b, which in Rust is
+    // the block `{ a; b }`. The block is NOT optional: the statement separator
+    // alone only happens to work where the surrounding syntax already supplies
+    // braces, and C++ allows a bare comma wherever it allows an `expression` --
+    // a `for` condition, a `return`, an `if`/`while` condition. `for (..; i <=
+    // e, j >= 0; ..)` lowered to `while ( i <= e ) ; ( j >= 0 ) { .. }`, which
+    // is not parseable Rust: the loop body went missing and `j >= 0` -- the
+    // operand that actually decides the loop -- became a stray statement.
+    //
+    // VisitParenExpr already braces a parenthesized comma and flattens a chain
+    // of them, so bracing again there would only nest `{{ a; b }}`; skip the
+    // brace when the enclosing syntax is one of those two cases.
+    PushBrace brace(*this, CommaNeedsOwnBlock(expr));
     {
       PushExprKind push(*this, ExprKind::Void);
       Convert(lhs);
@@ -3218,7 +3258,13 @@ std::string Converter::ConvertDeclRefExpr(clang::DeclRefExpr *expr) {
                            GetNamedDeclAsString(method));
       }
     }
-    return GetNamedDeclAsString(function->getCanonicalDecl());
+    // MapFunctionName, not GetNamedDeclAsString: a std:: function that HAS a
+    // rule has no translated definition to refer to, so naming it by its C++
+    // spelling would emit an undefined symbol.  MapFunctionName spells it as
+    // the `libcc2rs::<name>_<model>` shim the rule compiles to and falls back
+    // to the plain name for everything else, so this is a no-op for every
+    // function without a rule.
+    return Mapper::MapFunctionName(function->getCanonicalDecl());
   }
 
   if (auto enum_constant = clang::dyn_cast<clang::EnumConstantDecl>(decl)) {
@@ -5314,11 +5360,25 @@ std::string Converter::ConvertIRFragment(
   auto all_args = BuildUnifiedArgs(expr, args, num_args);
 
   std::string result;
-  for (auto &frag : fragments) {
+  for (size_t frag_idx = 0, frag_end = fragments.size(); frag_idx < frag_end;
+       ++frag_idx) {
+    auto &frag = fragments[frag_idx];
     if (auto *t = std::get_if<TextFragment>(&frag)) {
       result += t->text;
     } else if (auto *g = std::get_if<GenericFragment>(&frag)) {
-      result += Mapper::InstantiateTemplate(GetCalleeOrExpr(expr), g->n);
+      auto instantiated =
+          Mapper::InstantiateTemplate(GetCalleeOrExpr(expr), g->n);
+      // A body that writes `T1::default()` leaves the substituted type in
+      // path-base position, where Rust accepts only a plain path: `Ptr<N>::`
+      // parses `<` as less-than and dies with "comparison operators cannot be
+      // chained". Qualify it when the bare spelling would not parse.
+      if (frag_idx + 1 < frag_end) {
+        if (auto *next = std::get_if<TextFragment>(&fragments[frag_idx + 1]);
+            next && next->text.starts_with("::")) {
+          instantiated = Mapper::AsPathBase(instantiated);
+        }
+      }
+      result += instantiated;
     } else if (auto *ph = std::get_if<PlaceholderFragment>(&frag)) {
       auto arg_idx = ph->n;
       assert(arg_idx < all_args.size());
@@ -5421,6 +5481,28 @@ bool Converter::isCallee() const {
 
 bool Converter::ShouldReplaceWithMappedBody(clang::DeclRefExpr *expr) const {
   if (clang::isa<clang::FunctionDecl>(expr->getDecl()) && isAddrOf()) {
+    return false;
+  }
+  // A DeclRefExpr naming a mapped FUNCTION, reached with no call arguments in
+  // hand, is the function as a VALUE -- `std::hex` handed to
+  // `operator>>(std::ios_base &(*)(std::ios_base &))`, which is how a stream
+  // manipulator arrives.  Inlining the rule BODY here is wrong twice over: the
+  // body expects that function's arguments and there are none at this site (it
+  // asserted `arg_idx < all_args.size()` with all_args empty, and in a build
+  // without assertions it segfaulted instead), and what the site wants is a
+  // pointer to the function, not the result of applying it.
+  //
+  // The test is on the DeclRefExpr being a function reference rather than on
+  // expression kind, because a function pointer ARGUMENT is converted through
+  // ConvertFnPtrCallee, which pushes ExprKind::Callee -- so `isCallee()` is
+  // true here for the manipulator too and cannot distinguish the two.  A real
+  // call never reaches this function for its callee: CallExpr conversion
+  // resolves the rule itself, with the arguments, in GetMappedAsString.
+  //
+  // Mapper::MapFunctionName in the `decl->getAsFunction()` branch below then
+  // spells the mapped function as the shim the rule compiles to.
+  if (auto *fn = expr->getDecl()->getAsFunction();
+      fn != nullptr && Mapper::Contains(expr)) {
     return false;
   }
   return true;
