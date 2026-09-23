@@ -1321,6 +1321,7 @@ bool Converter::VisitCXXConstructorDecl(clang::CXXConstructorDecl *decl) {
 
 void Converter::ConvertCXXConstructorBody(clang::CXXConstructorDecl *decl) {
   EmitFunctionPreamble(decl);
+  auto deferred = CollectThisDependentFieldInits(decl);
   StrCat(keyword::kLet, "mut", "this", token::kAssign);
   if (decl->isDelegatingConstructor()) {
     Convert((*decl->init_begin())->getInit());
@@ -1331,33 +1332,161 @@ void Converter::ConvertCXXConstructorBody(clang::CXXConstructorDecl *decl) {
   }
 
   StrCat(token::kSemiColon);
+  EmitDeferredFieldInits(decl, deferred);
   ConvertBodyStmts(decl->getBody());
   StrCat("this");
 }
 
-void Converter::EmitConstructorFieldInits(clang::CXXConstructorDecl *decl) {
-  const auto *record_decl = decl->getParent();
+const clang::Expr *
+Converter::GetFieldInitExpr(clang::CXXConstructorDecl *decl,
+                            const clang::FieldDecl *field) {
   auto *definition_or_null = decl->getDefinition();
   assert(definition_or_null);
   auto *definition = clang::cast<clang::CXXConstructorDecl>(definition_or_null);
+  for (const auto *init : definition->inits()) {
+    if (init->isMemberInitializer() && init->getMember() == field) {
+      return init->getInit();
+    }
+  }
+  return field->getInClassInitializer();
+}
+
+// Does `expr` read the object under construction?  A mem-initializer may name
+// an earlier member (`y_(x_ + 5)`) or take its address (`pmap_{{1, &N_.a}}`);
+// clang spells both with an implicit CXXThisExpr base.
+static bool ReadsThis(const clang::Stmt *stmt) {
+  if (!stmt) {
+    return false;
+  }
+  if (clang::isa<clang::CXXThisExpr>(stmt)) {
+    return true;
+  }
+  // CXXDefaultInitExpr::children() is deliberately EMPTY -- the wrapped
+  // expression belongs to the FieldDecl, not to this node -- so a plain child
+  // walk cannot see an in-class initializer's body at all. That is exactly the
+  // shape this predicate exists for (`std::map<..> m_ = {{1, &N_.a}};`), so
+  // step through it explicitly.
+  if (const auto *dflt = clang::dyn_cast<clang::CXXDefaultInitExpr>(stmt)) {
+    return ReadsThis(dflt->getExpr());
+  }
+  for (const auto *child : stmt->children()) {
+    if (ReadsThis(child)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::vector<const clang::FieldDecl *>
+Converter::CollectThisDependentFieldInits(clang::CXXConstructorDecl *decl) {
+  std::vector<const clang::FieldDecl *> out;
+  if (decl->isDelegatingConstructor()) {
+    return out;
+  }
+  for (const auto *field : decl->getParent()->fields()) {
+    if (ReadsThis(GetFieldInitExpr(decl, field))) {
+      out.push_back(field);
+    }
+  }
+  return out;
+}
+
+// Does `stmt` take the ADDRESS of a member of the object under construction,
+// i.e. store an interior pointer into `*this`?
+static bool TakesAddrOfThisMember(const clang::Stmt *stmt) {
+  if (!stmt) {
+    return false;
+  }
+  if (const auto *dflt = clang::dyn_cast<clang::CXXDefaultInitExpr>(stmt)) {
+    return TakesAddrOfThisMember(dflt->getExpr());
+  }
+  if (const auto *un = clang::dyn_cast<clang::UnaryOperator>(stmt);
+      un && un->getOpcode() == clang::UO_AddrOf) {
+    if (ReadsThis(un->getSubExpr())) {
+      return true;
+    }
+  }
+  for (const auto *child : stmt->children()) {
+    if (TakesAddrOfThisMember(child)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void Converter::EmitDeferredFieldInits(
+    clang::CXXConstructorDecl *decl,
+    const std::vector<const clang::FieldDecl *> &fields) {
+  for (const auto *field : fields) {
+    // An initializer that stores the address of a member of `*this` makes the
+    // object self-referential. This model returns the record BY VALUE from the
+    // constructor, so the object is moved on return and any such pointer is
+    // left dangling -- reading through it gives garbage. There is no spelling
+    // of a self-referential value type in this model (the refcount model has
+    // one: every field is an `Rc`, so `as_pointer()` survives the move), so
+    // fail loudly rather than emit a program that quietly reads freed stack.
+    if (!ThisIsRustPtr() && TakesAddrOfThisMember(GetFieldInitExpr(decl,
+                                                                   field))) {
+      auto why = std::format(
+          "field '{}' stores the address of a member of the object under "
+          "construction; this model returns the record by value, so the "
+          "pointer would dangle once the constructor returns",
+          field->getNameAsString());
+      if (ReportUnsupported("SelfReferentialFieldInit", why,
+                            field->getLocation(), ctx_)) {
+        StrCat(UnsupportedPlaceholder("SelfReferentialFieldInit", why),
+               token::kSemiColon);
+        continue;
+      }
+      llvm::errs() << "unsupported self-referential field initializer: " << why
+                   << " at "
+                   << field->getLocation().printToString(
+                          ctx_.getSourceManager())
+                   << '\n';
+      assert(0 && "self-referential field initializer");
+      continue;
+    }
+    // Synthesize `this->field = <init>` and convert it as an ordinary
+    // statement, so each model emits exactly what it already emits for the
+    // same assignment written in the constructor BODY -- a path both models
+    // are already exercised on -- rather than a second hand-spelled form.
+    auto *this_expr = clang::CXXThisExpr::Create(
+        ctx_, decl->getLocation(),
+        ctx_.getPointerType(ctx_.getCanonicalTagType(decl->getParent())),
+        /*IsImplicit=*/true);
+    auto *lhs = clang::MemberExpr::CreateImplicit(
+        ctx_, this_expr, /*IsArrow=*/true,
+        const_cast<clang::FieldDecl *>(field), field->getType(),
+        clang::VK_LValue, clang::OK_Ordinary);
+    auto *init = const_cast<clang::Expr *>(GetFieldInitExpr(decl, field));
+    auto *assign = clang::BinaryOperator::Create(
+        ctx_, lhs, init, clang::BO_Assign, field->getType(), clang::VK_PRValue,
+        clang::OK_Ordinary, decl->getLocation(), {});
+    Convert(static_cast<clang::Stmt *>(assign));
+  }
+}
+
+void Converter::EmitConstructorFieldInits(clang::CXXConstructorDecl *decl) {
+  const auto *record_decl = decl->getParent();
+  auto deferred = CollectThisDependentFieldInits(decl);
+  auto is_deferred = [&](const clang::FieldDecl *f) {
+    return std::find(deferred.begin(), deferred.end(), f) != deferred.end();
+  };
 
   for (const auto *field : record_decl->fields()) {
     auto field_name = GetNamedDeclAsString(field);
     auto field_type = field->getType();
-    const clang::CXXCtorInitializer *ctor_initializer = nullptr;
-    for (const auto *init : definition->inits()) {
-      if (init->isMemberInitializer() && init->getMember() == field) {
-        ctor_initializer = init;
-        break;
-      }
+    // A `this`-reading initializer is emitted after `this` is bound; the
+    // literal gets the default so the field is initialized either way.
+    if (is_deferred(field)) {
+      StrCat(field_name, token::kColon, GetDefaultAsString(field_type),
+             token::kComma);
+      continue;
     }
-
-    if (ctor_initializer) {
+    const auto *init = GetFieldInitExpr(decl, field);
+    if (init) {
       StrCat(field_name, token::kColon);
-      ConvertVarInit(field_type, ctor_initializer->getInit());
-    } else if (auto *init = field->getInClassInitializer()) {
-      StrCat(field_name, token::kColon);
-      ConvertVarInit(field_type, init);
+      ConvertVarInit(field_type, const_cast<clang::Expr *>(init));
     } else {
       StrCat(field_name, token::kColon, GetDefaultAsString(field_type));
     }
@@ -2431,6 +2560,15 @@ static std::string getTypedLiteral(const char *num, std::string_view type) {
   if (type.contains("::")) {
     // Not a builtin type
     return std::format("({} as {})", num, type);
+  }
+  // `bool` is not a Rust numeric type, so it has no literal suffix: `1_bool`
+  // is `error: invalid suffix 'bool' for number literal`. A bool-typed value
+  // reaches here whenever an integral constant is folded to its value and
+  // re-spelled with its type -- e.g. `std::is_same_v<T, int>` in an
+  // `if constexpr`, which is a library VarDecl of type `const bool` that
+  // FoldLibraryConstant evaluates to 1. Spell it as the Rust bool literal.
+  if (type == "bool") {
+    return std::string_view(num) == "0" ? "false" : "true";
   }
   return std::format("{}_{}", num, type);
 }

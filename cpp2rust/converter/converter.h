@@ -161,6 +161,20 @@ public:
   virtual void ConvertCXXConstructorBody(clang::CXXConstructorDecl *decl);
   void EmitConstructorFieldInits(clang::CXXConstructorDecl *decl);
 
+  // A field initializer that reads `this` cannot be spelled inside the `Self
+  // { .. }` literal that both models build the object with: at that point
+  // `this` does not exist yet. Such an initializer is deferred -- the literal
+  // gets the field's default and the initializer is re-emitted as an
+  // assignment after `this` is bound. Returns the fields deferred, in
+  // declaration order.
+  std::vector<const clang::FieldDecl *>
+  CollectThisDependentFieldInits(clang::CXXConstructorDecl *decl);
+  void EmitDeferredFieldInits(clang::CXXConstructorDecl *decl,
+                              const std::vector<const clang::FieldDecl *> &f);
+  // The initializer of `field` in `decl`, from the definition, or null.
+  static const clang::Expr *GetFieldInitExpr(clang::CXXConstructorDecl *decl,
+                                             const clang::FieldDecl *field);
+
   virtual bool VisitCXXConstructorDecl(clang::CXXConstructorDecl *decl);
 
   virtual bool VisitFieldDecl(clang::FieldDecl *decl);
