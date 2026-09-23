@@ -1,6 +1,35 @@
 // Copyright (c) 2022-present INESC-ID.
 // Distributed under the MIT license that can be found in the LICENSE file.
 
+// std::ifstream / std::ofstream, mapped to ::std::fs::File.
+//
+// EVERY RULE HERE THAT PRODUCES A File ALSO RESETS ITS FORMAT STATE.
+// ------------------------------------------------------------------
+// A file stream's conversion base (what std::hex/dec/oct set, and what a later
+// `>>` on the same stream reads -- see rules/sstream f33 and
+// libcc2rs/src/stream_fmt.rs) cannot be a field, because this model's stream IS
+// a bare ::std::fs::File and several modules name that type directly.  It
+// therefore lives in a thread-local table keyed by FILE DESCRIPTOR.
+//
+// A descriptor number is only unique among LIVE streams.  Close fd 7 with hex
+// set, open an unrelated file that the kernel hands the same fd 7, and the new
+// stream would read a base its C++ counterpart never had.  In C++ every fresh
+// stream starts at dec, so the divergence is silent and wrong:
+//
+//     { std::ifstream f(p); f >> std::hex; f >> a; }   // 16 from "10", correct
+//     { std::ifstream f(p); f >> a; }                  // C++ 10; inherited 16
+//
+// That was measured end to end (probe case A9b), not theorised.  The fix is at
+// the root: every way a File is born in this model -- f1, f5, f9, f10, the two
+// default constructors f11/f12, the two open()s f13/f14 and the two close()s
+// f17/f18 -- routes through libcc2rs::fresh_file, which clears the entry for
+// that descriptor.  "No entry" and "freshly reset" both mean dec, which is what
+// a fresh C++ stream reports, so a stream nobody manipulated is unaffected.
+//
+// A NEW RULE THAT RETURNS A File MUST DO THE SAME.  Omitting it does not fail to
+// compile and does not fail any test that only touches one stream; it shows up
+// only as a wrong number on the second stream to reuse a descriptor.
+
 #include <fstream>
 #include <iostream>
 #include <iterator>

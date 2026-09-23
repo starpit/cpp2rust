@@ -150,6 +150,63 @@ std::istream &f30(std::istream &o, std::string &v, char d) {
   return std::getline(o, v, d);
 }
 
+// f31 is the one-argument getline, and it had been MISSED when f29/f30/f32 were
+// converted to the private-trait dispatch: its refcount receiver was still
+// spelled `Ptr<Box<..>>`, so the converter emitted `f.as_pointer()` typed as
+// `Ptr<Box<StringStream>>` at the call site, which on a std::ifstream is
+// `Ptr<File>` -- E0631 on the with_mut closure and E0308 on the returned
+// pointer.  Now it has f30's shape exactly, so `std::getline(f, line)` as a
+// STATEMENT works on a file stream in both models.
+//
+// `while (std::getline(f, line))` -- how dcg/tools/mda/memDumpAnalyzer.h,
+// dsc/pcfg.cpp, dsc/superdsc.cpp, dsc/dataOpDsc.cpp and
+// dsc/designSpaceConfig.cpp all drive an input file -- is STILL NOT SUPPORTED,
+// deliberately, and it fails at rustc rather than silently.  Making it compile
+// needs the rule to return the stream so `operator bool` can be applied to the
+// result, and that was tried and reverted: rules/basic_ios answers
+// `operator bool` on a ::std::fs::File from position-vs-length, which is
+// "not at end" rather than "the last read succeeded", so the loop never
+// terminates -- a HANG, measured (run_rc=124, the probe's timeout). C++ sets
+// failbit when getline reads nothing, and neither representation carries a
+// failbit that a read can set. Doing this properly means the File side growing
+// real stream state, which is the same thing the format flags needed and is a
+// bigger change than this one; until then a loud rustc error beats an infinite
+// loop. The `while (!f.eof()) { getline(..); .. }` spelling, which is what
+// memDumpAnalyzer.h actually uses, is unaffected and works.
 std::istream &f31(std::istream &o, std::string &v) { return std::getline(o, v); }
 
 std::istream &f32(std::istream &o, char &v) { return operator>>(o, v); }
+
+// ---------------------------------------------------------------------------
+// operator>>(std::ios_base &(*)(std::ios_base &)) -- applying a manipulator.
+//
+// This is the rule that makes `inFile >> std::hex >> lineno` mean what C++
+// means by it, and the reason it has to exist at all is that the radix is
+// STICKY PER STREAM.  Measured against clang-compiled C++:
+//
+//     std::istringstream ss("ff 10");
+//     ss >> std::hex >> a;   // a == 255
+//     ss >> b;               // b == 16  -- still hex, no manipulator here
+//
+// so a fix that inspected the extraction site and emitted a base-16 parse for
+// the operand next to `std::hex` would be right for the first line and silently
+// WRONG for the second.  That is the exact failure this whole change exists to
+// remove: before the assertions build turned it into an abort, this construct
+// translated to a decimal parse of hexadecimal input with no diagnostic at all,
+// and `DT_CHECK(lineno != -1)` then passed on the wrong number.  So the state
+// has to live on the stream, and this rule's only job is to put it there.
+//
+// `std::hex` is NOT a value that can be pattern-matched: it arrives as a
+// FUNCTION POINTER, which is why the parameter here is spelled as one and why
+// rules/ios_base has to map `std::ios_base` itself (to the flags word) and give
+// hex/dec/oct real function bodies.  This rule then simply CALLS whatever
+// manipulator it was handed on the receiving stream's flags word, so nothing
+// here knows the names hex/dec/oct and a user-written manipulator with the same
+// signature works unchanged.
+//
+// A null manipulator pointer is a no-op rather than a panic: C++ cannot produce
+// one, so the Option is an artefact of how the converter spells a function
+// pointer, not a case with C++ semantics to reproduce.
+std::istream &f33(std::istream &o, std::ios_base &(*m)(std::ios_base &)) {
+  return o.operator>>(m);
+}

@@ -14,7 +14,9 @@ fn t3() -> ::std::fs::File {
 }
 
 unsafe fn f1(a0: *const libc::c_char) -> ::std::fs::File {
-    ::std::fs::File::create(::std::ffi::CStr::from_ptr(a0).to_str().unwrap()).unwrap()
+    libcc2rs::fresh_file(
+        ::std::fs::File::create(::std::ffi::CStr::from_ptr(a0).to_str().unwrap()).unwrap(),
+    )
 }
 
 unsafe fn f2(a0: ::std::fs::File) -> ::std::fs::File {
@@ -27,7 +29,9 @@ unsafe fn f4(a0: ::std::fs::File) -> ::std::fs::File {
     a0
 }
 unsafe fn f5(a0: *const libc::c_char) -> ::std::fs::File {
-    ::std::fs::File::open(::std::ffi::CStr::from_ptr(a0).to_str().unwrap()).unwrap()
+    libcc2rs::fresh_file(
+        ::std::fs::File::open(::std::ffi::CStr::from_ptr(a0).to_str().unwrap()).unwrap(),
+    )
 }
 
 unsafe fn f6(a0: ::std::fs::File) -> ::std::fs::File {
@@ -43,11 +47,15 @@ unsafe fn f8(a0: ::std::fs::File) -> ::std::fs::File {
 }
 
 unsafe fn f9(a0: Vec<libc::c_char>) -> ::std::fs::File {
-    ::std::fs::File::create(::std::ffi::CStr::from_ptr(a0.as_ptr()).to_str().unwrap()).unwrap()
+    libcc2rs::fresh_file(
+        ::std::fs::File::create(::std::ffi::CStr::from_ptr(a0.as_ptr()).to_str().unwrap()).unwrap(),
+    )
 }
 
 unsafe fn f10(a0: Vec<libc::c_char>) -> ::std::fs::File {
-    ::std::fs::File::open(::std::ffi::CStr::from_ptr(a0.as_ptr()).to_str().unwrap()).unwrap()
+    libcc2rs::fresh_file(
+        ::std::fs::File::open(::std::ffi::CStr::from_ptr(a0.as_ptr()).to_str().unwrap()).unwrap(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -56,14 +64,16 @@ unsafe fn f10(a0: Vec<libc::c_char>) -> ::std::fs::File {
 // ---------------------------------------------------------------------------
 
 unsafe fn f11() -> ::std::fs::File {
-    ::std::fs::OpenOptions::new()
-        .write(true)
-        .open("/dev/null")
-        .unwrap()
+    libcc2rs::fresh_file(
+        ::std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/null")
+            .unwrap(),
+    )
 }
 
 unsafe fn f12() -> ::std::fs::File {
-    ::std::fs::File::open("/dev/null").unwrap()
+    libcc2rs::fresh_file(::std::fs::File::open("/dev/null").unwrap())
 }
 
 unsafe fn f13(a0: &mut ::std::fs::File, a1: Vec<libc::c_char>, a2: u32) {
@@ -78,7 +88,7 @@ unsafe fn f13(a0: &mut ::std::fs::File, a1: Vec<libc::c_char>, a2: u32) {
     } else {
         __o.truncate(true);
     }
-    *a0 = __o.open(__p).unwrap();
+    *a0 = libcc2rs::fresh_file(__o.open(__p).unwrap());
 }
 
 unsafe fn f14(a0: &mut ::std::fs::File, a1: Vec<libc::c_char>) {
@@ -86,7 +96,7 @@ unsafe fn f14(a0: &mut ::std::fs::File, a1: Vec<libc::c_char>) {
         .to_str()
         .unwrap()
         .to_owned();
-    *a0 = ::std::fs::File::open(__p).unwrap();
+    *a0 = libcc2rs::fresh_file(::std::fs::File::open(__p).unwrap());
 }
 
 unsafe fn f15(a0: ::std::fs::File) -> bool {
@@ -102,12 +112,16 @@ unsafe fn f16(a0: ::std::fs::File) -> bool {
 }
 
 unsafe fn f17(a0: &mut ::std::fs::File) {
-    *a0 = ::std::fs::OpenOptions::new()
-        .write(true)
-        .open("/dev/null")
-        .unwrap();
+    libcc2rs::reset_file_fmt(a0);
+    *a0 = libcc2rs::fresh_file(
+        ::std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/null")
+            .unwrap(),
+    );
 }
 
 unsafe fn f18(a0: &mut ::std::fs::File) {
-    *a0 = ::std::fs::File::open("/dev/null").unwrap();
+    libcc2rs::reset_file_fmt(a0);
+    *a0 = libcc2rs::fresh_file(::std::fs::File::open("/dev/null").unwrap());
 }

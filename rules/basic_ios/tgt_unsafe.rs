@@ -10,12 +10,12 @@
 //   badbit = 1, eofbit = 2, failbit = 4, goodbit = 0.
 
 // std::basic_ios<char>::good() -- state == goodbit.
-unsafe fn f1(a0: Box<Vec<u8>>) -> bool {
+unsafe fn f1(a0: Box<libcc2rs::StringStream>) -> bool {
     ({
         trait __Cc2Ios {
             fn __cc2_iostate(&self) -> u32;
         }
-        impl __Cc2Ios for Vec<u8> {
+        impl __Cc2Ios for libcc2rs::StringStream {
             fn __cc2_iostate(&self) -> u32 {
                 if self.is_empty() { 6 } else { 0 }
             }
@@ -39,12 +39,12 @@ unsafe fn f1(a0: Box<Vec<u8>>) -> bool {
 }
 
 // std::basic_ios<char>::eof() -- state & eofbit.
-unsafe fn f2(a0: Box<Vec<u8>>) -> bool {
+unsafe fn f2(a0: Box<libcc2rs::StringStream>) -> bool {
     ({
         trait __Cc2Ios {
             fn __cc2_iostate(&self) -> u32;
         }
-        impl __Cc2Ios for Vec<u8> {
+        impl __Cc2Ios for libcc2rs::StringStream {
             fn __cc2_iostate(&self) -> u32 {
                 if self.is_empty() { 6 } else { 0 }
             }
@@ -68,12 +68,12 @@ unsafe fn f2(a0: Box<Vec<u8>>) -> bool {
 }
 
 // std::basic_ios<char>::fail() -- state & (failbit | badbit).
-unsafe fn f3(a0: Box<Vec<u8>>) -> bool {
+unsafe fn f3(a0: Box<libcc2rs::StringStream>) -> bool {
     ({
         trait __Cc2Ios {
             fn __cc2_iostate(&self) -> u32;
         }
-        impl __Cc2Ios for Vec<u8> {
+        impl __Cc2Ios for libcc2rs::StringStream {
             fn __cc2_iostate(&self) -> u32 {
                 if self.is_empty() { 6 } else { 0 }
             }
@@ -97,12 +97,12 @@ unsafe fn f3(a0: Box<Vec<u8>>) -> bool {
 }
 
 // std::basic_ios<char>::bad() -- state & badbit.
-unsafe fn f4(a0: Box<Vec<u8>>) -> bool {
+unsafe fn f4(a0: Box<libcc2rs::StringStream>) -> bool {
     ({
         trait __Cc2Ios {
             fn __cc2_iostate(&self) -> u32;
         }
-        impl __Cc2Ios for Vec<u8> {
+        impl __Cc2Ios for libcc2rs::StringStream {
             fn __cc2_iostate(&self) -> u32 {
                 if self.is_empty() { 6 } else { 0 }
             }
@@ -128,12 +128,12 @@ unsafe fn f4(a0: Box<Vec<u8>>) -> bool {
 // std::basic_ios<char>::clear() -- neither representation carries an error
 // state, so resetting it is a no-op.  The receiver is still read, because the
 // converter must keep evaluating the receiver expression.
-unsafe fn f5(a0: Box<Vec<u8>>) {
+unsafe fn f5(a0: Box<libcc2rs::StringStream>) {
     ({
         trait __Cc2Ios {
             fn __cc2_iostate(&self) -> u32;
         }
-        impl __Cc2Ios for Vec<u8> {
+        impl __Cc2Ios for libcc2rs::StringStream {
             fn __cc2_iostate(&self) -> u32 {
                 if self.is_empty() { 6 } else { 0 }
             }
@@ -157,12 +157,12 @@ unsafe fn f5(a0: Box<Vec<u8>>) {
 }
 
 // std::basic_ios<char>::operator bool() -- !fail().
-unsafe fn f6(a0: Box<Vec<u8>>) -> bool {
+unsafe fn f6(a0: Box<libcc2rs::StringStream>) -> bool {
     ({
         trait __Cc2Ios {
             fn __cc2_iostate(&self) -> u32;
         }
-        impl __Cc2Ios for Vec<u8> {
+        impl __Cc2Ios for libcc2rs::StringStream {
             fn __cc2_iostate(&self) -> u32 {
                 if self.is_empty() { 6 } else { 0 }
             }
@@ -186,12 +186,12 @@ unsafe fn f6(a0: Box<Vec<u8>>) -> bool {
 }
 
 // std::basic_ios<char>::operator!() -- fail().
-unsafe fn f7(a0: Box<Vec<u8>>) -> bool {
+unsafe fn f7(a0: Box<libcc2rs::StringStream>) -> bool {
     ({
         trait __Cc2Ios {
             fn __cc2_iostate(&self) -> u32;
         }
-        impl __Cc2Ios for Vec<u8> {
+        impl __Cc2Ios for libcc2rs::StringStream {
             fn __cc2_iostate(&self) -> u32 {
                 if self.is_empty() { 6 } else { 0 }
             }

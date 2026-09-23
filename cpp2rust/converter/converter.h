@@ -452,6 +452,32 @@ public:
 
   virtual bool VisitLambdaExpr(clang::LambdaExpr *expr);
 
+  // Which `operator()` body to translate for `expr`. For a non-generic lambda
+  // that is simply the call operator; for a generic one it is the
+  // specialization the call site being converted selected, falling back to the
+  // sole instantiation when there is exactly one. Null means no specialization
+  // could be chosen -- the caller must report that rather than guess.
+  clang::CXXMethodDecl *SelectLambdaCallOperator(clang::LambdaExpr *expr);
+
+  // The generic-lambda `operator()` specialization named by the call currently
+  // being converted, or null. Set for the duration of converting a call's
+  // callee so the LambdaExpr that the callee expands to can be emitted at that
+  // call's argument types.
+  clang::CXXMethodDecl *pending_lambda_call_op_ = nullptr;
+
+  struct PushPendingLambdaCallOp {
+    Converter &c;
+    clang::CXXMethodDecl *prev;
+    PushPendingLambdaCallOp(Converter &c, clang::CXXMethodDecl *op)
+        : c(c), prev(c.pending_lambda_call_op_) {
+      c.pending_lambda_call_op_ = op;
+    }
+    ~PushPendingLambdaCallOp() { c.pending_lambda_call_op_ = prev; }
+    PushPendingLambdaCallOp(const PushPendingLambdaCallOp &) = delete;
+    PushPendingLambdaCallOp &
+    operator=(const PushPendingLambdaCallOp &) = delete;
+  };
+
   virtual bool VisitImplicitValueInitExpr(clang::ImplicitValueInitExpr *expr);
   virtual bool VisitCXXScalarValueInitExpr(clang::CXXScalarValueInitExpr *expr);
 
@@ -485,10 +511,48 @@ protected:
   }
   template <typename T> inline bool is_empty(const T &s) { return s.empty(); }
 
+  // StrCat puts a space after every value it appends, because most consecutive
+  // values are adjacent tokens that would otherwise run together. When the next
+  // thing appended opens a new line that space separates nothing -- the newline
+  // already does -- and it is left behind as trailing whitespace. rustfmt
+  // rejects such a file outright (`error[internal]: left behind trailing
+  // whitespace`), which loses the whole TU, so drop the dead separator AT THE
+  // JOIN rather than scrubbing the finished output: the bytes are then never
+  // emitted in the first place.
+  //
+  // Popping the whole run of spaces, not just one, because two consecutive
+  // values can each contribute one. Only spaces: the converter emits no tabs,
+  // and no emitted string literal can span this join, since every literal is
+  // escaped (`\n` as two characters) and so never contains a real newline.
+  static void DropDeadSeparator(std::string &out) {
+    while (!out.empty() && out.back() == ' ') {
+      out.pop_back();
+    }
+  }
+  // Whether the value about to be appended opens a fresh line. Overloaded the
+  // same way `is_empty` is, and for the same reason: StrCat is called with
+  // `char`, string literals, `std::string`, `std::string_view` and
+  // `llvm::SmallString`, and only some of those have `.front()`.
+  static bool StartsNewLine(char c) { return c == '\n'; }
+  static bool StartsNewLine(const char *s) { return s != nullptr && *s == '\n'; }
+  template <size_t N> static bool StartsNewLine(const char (&s)[N]) {
+    return s[0] == '\n';
+  }
+  template <typename T> static bool StartsNewLine(const T &v) {
+    return !v.empty() && v.front() == '\n';
+  }
+
+  template <typename T> static void AppendCode(std::string &out, const T &v) {
+    if (StartsNewLine(v)) {
+      DropDeadSeparator(out);
+    }
+    out += v;
+  }
+
   template <typename... Ts>
   inline void _StrCat(const char *func, int line, const Ts &...vals) {
     log() << '[' << func << ':' << line << "] ";
-    ((log() << vals << '\n', *rs_code_ += vals,
+    ((log() << vals << '\n', AppendCode(*rs_code_, vals),
       (is_empty(vals) ? void() : void(*rs_code_ += ' '))),
      ...);
   }

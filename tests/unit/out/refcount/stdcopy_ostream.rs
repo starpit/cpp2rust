@@ -19,10 +19,10 @@ fn main_0() -> i32 {
     ));
     let file: Value<Box<[u8]>> = Rc::new(RefCell::new(Box::from(*b"test_stdcopy_ostream.txt\0")));
     {
-        let ofs: Value<::std::fs::File> = Rc::new(RefCell::new(
+        let ofs: Value<::std::fs::File> = Rc::new(RefCell::new(libcc2rs::fresh_file(
             ::std::fs::File::create((file.as_pointer() as Ptr<u8>).to_string())
                 .expect("Failed to open file"),
-        ));
+        )));
         {
             (*ofs.borrow_mut()).write_all(
                 (str.as_pointer() as Ptr<u8>)

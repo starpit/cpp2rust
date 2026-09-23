@@ -6,25 +6,29 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 fn f1(a0: Ptr<u8>) -> ::std::fs::File {
-    ::std::fs::File::create(a0.to_string()).expect("Failed to open file")
+    libcc2rs::fresh_file(::std::fs::File::create(a0.to_string()).expect("Failed to open file"))
 }
 
 fn f5(a0: Ptr<u8>) -> ::std::fs::File {
-    ::std::fs::File::open(a0.to_string()).expect("Failed to open file")
+    libcc2rs::fresh_file(::std::fs::File::open(a0.to_string()).expect("Failed to open file"))
 }
 
 fn f9(a0: Vec<u8>) -> ::std::fs::File {
-    ::std::fs::File::create(String::from_utf8_lossy(
-        &a0[..a0.iter().position(|&__c| __c == 0).unwrap_or(a0.len())],
-    ).into_owned())
-    .expect("Failed to open file")
+    libcc2rs::fresh_file(
+        ::std::fs::File::create(String::from_utf8_lossy(
+            &a0[..a0.iter().position(|&__c| __c == 0).unwrap_or(a0.len())],
+        ).into_owned())
+        .expect("Failed to open file"),
+    )
 }
 
 fn f10(a0: Vec<u8>) -> ::std::fs::File {
-    ::std::fs::File::open(String::from_utf8_lossy(
-        &a0[..a0.iter().position(|&__c| __c == 0).unwrap_or(a0.len())],
-    ).into_owned())
-    .expect("Failed to open file")
+    libcc2rs::fresh_file(
+        ::std::fs::File::open(String::from_utf8_lossy(
+            &a0[..a0.iter().position(|&__c| __c == 0).unwrap_or(a0.len())],
+        ).into_owned())
+        .expect("Failed to open file"),
+    )
 }
 
 // Only the two open() rules need an overlay: they are the only ones of the
@@ -43,7 +47,7 @@ fn f13(a0: &mut ::std::fs::File, a1: Vec<u8>, a2: u32) {
     } else {
         __o.truncate(true);
     }
-    *a0 = __o.open(__p).expect("Failed to open file");
+    *a0 = libcc2rs::fresh_file(__o.open(__p).expect("Failed to open file"));
 }
 
 fn f14(a0: &mut ::std::fs::File, a1: Vec<u8>) {
@@ -51,5 +55,5 @@ fn f14(a0: &mut ::std::fs::File, a1: Vec<u8>) {
         &a1[..a1.iter().position(|&__c| __c == 0).unwrap_or(a1.len())],
     )
     .into_owned();
-    *a0 = ::std::fs::File::open(__p).expect("Failed to open file");
+    *a0 = libcc2rs::fresh_file(::std::fs::File::open(__p).expect("Failed to open file"));
 }

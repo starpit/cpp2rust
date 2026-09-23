@@ -13,6 +13,12 @@ fn t3() -> u32 {
     0
 }
 
+// std::ios_base itself -- the flags word.  See the long note in src.cpp for why
+// the class collapses to the same u32 as its fmtflags typedef.
+fn t4() -> u32 {
+    0
+}
+
 unsafe fn f1() {
     ()
 }
@@ -155,4 +161,29 @@ unsafe fn f28() -> u32 {
 // std::ios_base::failbit
 unsafe fn f29() -> u32 {
     4
+}
+
+// ---------------------------------------------------------------------------
+// The base manipulators.  Each is a real function, so `std::hex` used as a
+// VALUE -- which is how it arrives, as a function pointer -- resolves to
+// `libcc2rs::f30_unsafe`-shaped callable rather than an undefined symbol.
+// `with_basefield` keeps the non-base flags, matching setf(base, basefield).
+// ---------------------------------------------------------------------------
+
+// std::hex
+unsafe fn f30(a0: *mut u32) -> *mut u32 {
+    (*a0) = libcc2rs::with_basefield(*a0, libcc2rs::CC2_HEX);
+    a0
+}
+
+// std::dec
+unsafe fn f31(a0: *mut u32) -> *mut u32 {
+    (*a0) = libcc2rs::with_basefield(*a0, libcc2rs::CC2_DEC);
+    a0
+}
+
+// std::oct
+unsafe fn f32(a0: *mut u32) -> *mut u32 {
+    (*a0) = libcc2rs::with_basefield(*a0, libcc2rs::CC2_OCT);
+    a0
 }

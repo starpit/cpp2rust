@@ -301,14 +301,22 @@ bool Converter::VisitRecordType(clang::RecordType *type) {
         // the program actually uses, as VisitLambdaExpr does.
         const clang::FunctionDecl *call_op = lambda->getLambdaCallOperator();
         if (auto *tmpl = call_op->getDescribedFunctionTemplate()) {
-          const clang::FunctionDecl *only = nullptr;
-          unsigned count = 0;
-          for (auto *spec : tmpl->specializations()) {
-            ++count;
-            only = spec;
-          }
-          if (count == 1) {
-            call_op = only;
+          // Same selection VisitLambdaExpr makes, so a signature and the body
+          // it describes cannot disagree: the specialization the enclosing
+          // call named, else the sole instantiation.
+          if (pending_lambda_call_op_ &&
+              pending_lambda_call_op_->getParent() == lambda) {
+            call_op = pending_lambda_call_op_;
+          } else {
+            const clang::FunctionDecl *only = nullptr;
+            unsigned count = 0;
+            for (auto *spec : tmpl->specializations()) {
+              ++count;
+              only = spec;
+            }
+            if (count == 1) {
+              call_op = only;
+            }
           }
         }
         StrCat(ConvertFunctionPointerType(
@@ -2311,6 +2319,24 @@ void Converter::EmitArgList(const CallInfo &info) {
   }
 }
 
+// The lambda `operator()` specialization this call resolved to, if the call is
+// a call of a generic lambda. `f(5)` on `auto f = [](auto x){..}` is a
+// CXXOperatorCallExpr whose direct callee is the *instantiated* method, which
+// is exactly the body that call means; the callee expression itself is only a
+// DeclRefExpr to `f`, which names the closure type and not any one
+// specialization.
+static clang::CXXMethodDecl *GenericLambdaCallee(clang::CallExpr *expr) {
+  auto *method =
+      clang::dyn_cast_or_null<clang::CXXMethodDecl>(expr->getDirectCallee());
+  if (!method || !method->getParent()->isLambda() ||
+      method->getOverloadedOperator() != clang::OO_Call) {
+    return nullptr;
+  }
+  // Only an instantiation carries the resolved parameter types; the primary
+  // template's parameters are still `auto`.
+  return method->isTemplateInstantiation() ? method : nullptr;
+}
+
 void Converter::EmitCall(CallInfo &&info) {
   EmitHoistedArgs(info);
 
@@ -2322,6 +2348,7 @@ void Converter::EmitCall(CallInfo &&info) {
     StrCat("libc::", direct_callee->getName());
   } else {
     PushExprKind push(*this, ExprKind::Callee);
+    PushPendingLambdaCallOp lambda_spec(*this, GenericLambdaCallee(info.expr));
     Convert(GetCallee(info.expr));
   }
 
@@ -4153,7 +4180,8 @@ bool Converter::VisitConstantExpr(clang::ConstantExpr *expr) {
   return false;
 }
 
-bool Converter::VisitLambdaExpr(clang::LambdaExpr *expr) {
+clang::CXXMethodDecl *
+Converter::SelectLambdaCallOperator(clang::LambdaExpr *expr) {
   clang::CXXMethodDecl *call_op =
       expr->getLambdaClass()->getLambdaCallOperator();
 
@@ -4161,29 +4189,77 @@ bool Converter::VisitLambdaExpr(clang::LambdaExpr *expr) {
   // are `auto` and its body is dependent, so nothing in it has a resolved
   // callee. A Rust closure has one concrete signature, so translate the
   // instantiation the program actually uses.
-  if (auto *tmpl = call_op->getDescribedFunctionTemplate()) {
-    clang::FunctionDecl *only = nullptr;
-    unsigned count = 0;
-    for (auto *spec : tmpl->specializations()) {
-      if (spec->hasBody()) {
-        ++count;
-        only = spec;
-      }
-    }
-    if (count == 1) {
-      call_op = llvm::cast<clang::CXXMethodDecl>(only);
-    } else {
-      const char *why = count == 0 ? "never instantiated"
-                                   : "instantiated at several types";
-      if (ReportUnsupported("GenericLambda", why, expr->getExprLoc(), ctx_)) {
-        StrCat(UnsupportedPlaceholder("GenericLambda", why));
-        computed_expr_type_ = ComputedExprType::FreshValue;
-        return false;
-      }
-      llvm::errs() << "unsupported generic lambda: " << why << '\n';
-      assert(0 && "generic lambda");
+  auto *tmpl = call_op->getDescribedFunctionTemplate();
+  if (!tmpl) {
+    return call_op;
+  }
+
+  // Preferred: the call site being converted already named ONE specialization
+  // (the callee of its `operator()` CXXOperatorCallExpr), and a lambda is
+  // inlined at its call site -- ConvertLambdaVarDecl emits nothing for the
+  // `auto f = [](auto x){..}` declaration itself and VisitDeclRefExpr
+  // re-expands the LambdaExpr at each use. So each site can be given its own
+  // closure at its own type, and a lambda instantiated at several types is
+  // translated correctly rather than collapsed onto one specialization.
+  if (pending_lambda_call_op_ && pending_lambda_call_op_->getParent() ==
+                                     expr->getLambdaClass()) {
+    return pending_lambda_call_op_;
+  }
+
+  // No call site in scope: the lambda is being converted for its own sake
+  // (e.g. in_function_formals_, or a use that is not a call). Only a single
+  // instantiation has an unambiguous answer there.
+  clang::FunctionDecl *only = nullptr;
+  unsigned count = 0;
+  for (auto *spec : tmpl->specializations()) {
+    if (spec->hasBody()) {
+      ++count;
+      only = spec;
     }
   }
+  if (count == 1) {
+    return llvm::cast<clang::CXXMethodDecl>(only);
+  }
+  return nullptr;
+}
+
+bool Converter::VisitLambdaExpr(clang::LambdaExpr *expr) {
+  clang::CXXMethodDecl *call_op = SelectLambdaCallOperator(expr);
+
+  if (!call_op) {
+    // Loud, and named: no specialization could be chosen for this generic
+    // lambda. Either it was never instantiated, or it has several
+    // instantiations and this occurrence is not a call, so nothing says which
+    // one is meant. Emitting any single specialization here would be silently
+    // wrong for the others.
+    unsigned count = 0;
+    for (auto *spec : expr->getLambdaClass()
+                          ->getLambdaCallOperator()
+                          ->getDescribedFunctionTemplate()
+                          ->specializations()) {
+      count += spec->hasBody() ? 1 : 0;
+    }
+    auto why =
+        count == 0
+            ? std::string("never instantiated")
+            : std::format("instantiated at {} types, and this occurrence is "
+                          "not a call so no one of them is selected",
+                          count);
+    if (ReportUnsupported("GenericLambda", why, expr->getExprLoc(), ctx_)) {
+      StrCat(UnsupportedPlaceholder("GenericLambda", why));
+      computed_expr_type_ = ComputedExprType::FreshValue;
+      return false;
+    }
+    llvm::errs() << "unsupported generic lambda: " << why << " at "
+                 << expr->getExprLoc().printToString(ctx_.getSourceManager())
+                 << '\n';
+    assert(0 && "generic lambda");
+    return false;
+  }
+
+  // The selection is consumed here: a nested lambda inside this body must not
+  // inherit this call site's specialization.
+  PushPendingLambdaCallOp clear_pending(*this, nullptr);
 
   if (isAddrOf() && expr->capture_size() == 0) {
     StrCat("Some");
@@ -5333,8 +5409,9 @@ std::string Converter::ConvertPlaceholder(clang::Expr *expr, clang::Expr *arg,
 std::string Converter::ConvertMappedMethodCall(
     clang::Expr *expr, const TranslationRule::MethodCallFragment &mc,
     clang::Expr **args, unsigned num_args, TempMaterializationCtx *ctx) {
-  return ConvertIRFragment(mc.receiver, expr, args, num_args, ctx) +
-         ConvertIRFragment(mc.body, expr, args, num_args, ctx);
+  auto out = ConvertIRFragment(mc.receiver, expr, args, num_args, ctx);
+  AppendCode(out, ConvertIRFragment(mc.body, expr, args, num_args, ctx));
+  return out;
 }
 
 std::string Converter::GetMappedAsString(clang::Expr *expr, clang::Expr **args,
@@ -5363,8 +5440,15 @@ std::string Converter::ConvertIRFragment(
   for (size_t frag_idx = 0, frag_end = fragments.size(); frag_idx < frag_end;
        ++frag_idx) {
     auto &frag = fragments[frag_idx];
+    // Every append goes through AppendCode: a rule body is multi-line text and
+    // the piece before it (a placeholder, or a nested method call) came back
+    // from StrCat with a token separator on the end. When the next fragment
+    // starts a fresh line that separator separates nothing and survives as
+    // trailing whitespace, which rustfmt refuses to format -- see
+    // DropDeadSeparator in converter.h. `rules/string`'s `substr` and
+    // `rules/algorithm`'s `find` are exactly this shape.
     if (auto *t = std::get_if<TextFragment>(&frag)) {
-      result += t->text;
+      AppendCode(result, t->text);
     } else if (auto *g = std::get_if<GenericFragment>(&frag)) {
       auto instantiated =
           Mapper::InstantiateTemplate(GetCalleeOrExpr(expr), g->n);
@@ -5378,7 +5462,7 @@ std::string Converter::ConvertIRFragment(
           instantiated = Mapper::AsPathBase(instantiated);
         }
       }
-      result += instantiated;
+      AppendCode(result, instantiated);
     } else if (auto *ph = std::get_if<PlaceholderFragment>(&frag)) {
       auto arg_idx = ph->n;
       assert(arg_idx < all_args.size());
@@ -5399,12 +5483,13 @@ std::string Converter::ConvertIRFragment(
               Mapper::ParamIsPointer(GetCalleeOrExpr(expr), arg_idx),
           .is_index_base = ph->is_index_base,
       };
-      result += ConvertPlaceholder(expr, arg, ph_ctx);
+      AppendCode(result, ConvertPlaceholder(expr, arg, ph_ctx));
     } else if (std::get_if<TranslationRule::VaArgsFragment>(&frag)) {
-      result += ConvertVariadicTail(expr, all_args);
+      AppendCode(result, ConvertVariadicTail(expr, all_args));
     } else if (auto *mc =
                    std::get_if<std::unique_ptr<MethodCallFragment>>(&frag)) {
-      result += ConvertMappedMethodCall(expr, **mc, args, num_args, ctx);
+      AppendCode(result,
+                 ConvertMappedMethodCall(expr, **mc, args, num_args, ctx));
     }
   }
 

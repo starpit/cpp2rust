@@ -54,4 +54,7 @@ pub use fd::*;
 mod format;
 pub use format::*;
 
+mod stream_fmt;
+pub use stream_fmt::*;
+
 pub use libcc2rs_macros::{ByteRepr, goto, goto_block, switch};
