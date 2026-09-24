@@ -1332,18 +1332,112 @@ void PreRegisterUserDefinedTypes(clang::DeclContext *dc) {
       }
       continue;
     }
-    // Namespaces and records only: recursing into function bodies would cost
-    // a full extra walk of the TU for the rare function-local type.
+    // Function bodies too. This used to be skipped on the grounds that a
+    // function-local type is rare and the walk costs an extra pass -- but the
+    // walk is over DECLS, not statements, and a function body's decls are only
+    // its parameters and any local tags, so the cost is a handful of pointer
+    // compares per function rather than a second traversal of the TU. Skipping
+    // it is what left `Interval`, `ConditionInfo`, `dataflowInfo` and `padType`
+    // unmapped: each is declared inside a function body, so no route reached it.
     if (llvm::isa<clang::NamespaceDecl, clang::RecordDecl,
-                  clang::LinkageSpecDecl>(d)) {
+                  clang::LinkageSpecDecl, clang::FunctionDecl>(d)) {
       PreRegisterUserDefinedTypes(llvm::cast<clang::DeclContext>(d));
     }
   }
 }
 
+namespace {
+
+// Removes every type rule registered under the exact spelling `src`.
+//
+// Used only to retract a function-local tag's bare-name alias once a second tag
+// with the same bare name proves the spelling ambiguous. Retracting is the
+// whole point: a wrong alias is silent, a missing one is loud.
+void EraseTypeRule(const std::string &src) {
+  auto key = GetTypeMapKey(src);
+  auto [begin, end] = types_.equal_range(key);
+  for (auto it = begin; it != end;) {
+    it = it->second.src == src ? types_.erase(it) : std::next(it);
+  }
+}
+
+// Bare name -> Rust name, for tags declared inside a function body. A name
+// mapping to the empty string is POISONED: two different local tags share it, so
+// no alias can be sound and the type must fail loudly instead.
+std::unordered_map<std::string, std::string> local_tag_aliases_;
+
+// Registers a function-local tag under its BARE C++ name as well as its
+// id-suffixed one.
+//
+// A tag declared in a function body is spelled two different ways and the
+// converter needs both. ToString gives it the id-suffixed name
+// (`Interval_1`) because two functions in one TU may each declare their own
+// `Interval` and the Rust output has one flat namespace. But when such a tag
+// appears as a container's element, the spelling comes from clang printing the
+// ENCLOSING type, which knows nothing of that renaming and prints the element
+// bare: `std::map<int, Interval>`. The container's recursive element lookup then
+// asks for `Interval`, which nothing registered, and the type is reported
+// unmapped even though its declaration is right there in the TU. Four of
+// dt_src's scheduler blockers are exactly this (`Interval`, `ConditionInfo`,
+// `dataflowInfo`, `padType`).
+//
+// The bare name is registered as an ALIAS to the same Rust type, not as a
+// second type. Where it is ambiguous -- two local tags in one TU sharing a bare
+// name, which the container spelling genuinely cannot tell apart -- the alias is
+// retracted and the name poisoned, so those sites keep failing loudly rather
+// than silently resolving to whichever tag was seen first.
+void AddLocalTagBareAlias(const clang::TagDecl *tag,
+                          const std::string &suffixed_cpp_name,
+                          const std::string &rs_name) {
+  if (tag->getIdentifier() == nullptr ||
+      !tag->getDeclContext()->isFunctionOrMethod()) {
+    return;
+  }
+  auto bare = tag->getName().str();
+  // Nothing to alias when the suffixed spelling already IS the bare name.
+  if (bare.empty() || bare == suffixed_cpp_name) {
+    return;
+  }
+  auto [it, inserted] = local_tag_aliases_.try_emplace(bare, rs_name);
+  if (!inserted) {
+    if (it->second == rs_name || it->second.empty()) {
+      return; // Same tag reached twice, or already poisoned.
+    }
+    // A DIFFERENT local tag with the same bare name. Retract the alias.
+    it->second.clear();
+    for (const auto &spelling : {bare, "const " + bare, bare + " *",
+                                 "const " + bare + " *", bare + " *const"}) {
+      EraseTypeRule(spelling);
+    }
+    return;
+  }
+  AddTypeRule(bare, TranslationRule::TypeRule::Plain(rs_name));
+  AddTypeRule("const " + bare, TranslationRule::TypeRule::Plain(rs_name));
+  switch (model_) {
+  case Model::kUnsafe:
+    AddTypeRule(bare + " *",
+                TranslationRule::TypeRule::UnsafePtr("*mut " + rs_name));
+    AddTypeRule("const " + bare + " *",
+                TranslationRule::TypeRule::UnsafePtr("*const " + rs_name));
+    break;
+  case Model::kRefCount:
+    AddTypeRule(bare + " *",
+                TranslationRule::TypeRule::RefcountPtr("Ptr<" + rs_name + '>'));
+    AddTypeRule("const " + bare + " *",
+                TranslationRule::TypeRule::RefcountPtr("Ptr<" + rs_name + '>'));
+    break;
+  }
+}
+
+} // namespace
+
 void AddRuleForUserDefinedType(clang::NamedDecl *decl) {
   auto cpp_name = ToString(GetTypeForDecl(decl));
   auto rs_name = ToRustName(cpp_name);
+
+  if (const auto *tag = llvm::dyn_cast<clang::TagDecl>(decl)) {
+    AddLocalTagBareAlias(tag, cpp_name, rs_name);
+  }
 
   // A class template specialization registers under the spelling that keeps
   // defaulted template arguments -- FoldFunction<std::vector<long long,
