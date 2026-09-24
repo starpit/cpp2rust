@@ -11,6 +11,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -69,6 +70,21 @@ public:
   // Declares every boundary enum constant recorded so far. Without this they
   // were emitted as bare undefined identifiers.
   static void EmitOpaqueEnumConstants(std::string &out);
+
+  // True when `decl` is googletest's TEST_F/TEST registration static -- the
+  // `TestInfo *const X::test_info_` that the macro defines to hand the test to
+  // gtest's runtime registry. See the definition for why the predicate cannot
+  // match a static that has a real side effect.
+  bool IsGTestRegistrationStatic(const clang::VarDecl *decl) const;
+  // True for gtest's RUN_ALL_TESTS(), whose job cargo test does. See the
+  // definition for the four conditions that keep it from matching user code.
+  bool IsGTestRunAllTests(const clang::FunctionDecl *decl) const;
+  // Records the test class whose registration static was suppressed, so a
+  // #[test] wrapper can be emitted for it and the count is reportable.
+  void NoteSuppressedGTestRegistration(const clang::VarDecl *info);
+  // Emits one #[test] wrapper per suppressed registration: construct the
+  // fixture, SetUp, TestBody, TearDown.
+  static void EmitGTestHarness(std::string &out);
   static void EmitGlobalInits(Model model, std::string &out);
 
   static void EmitVirtualMethods(std::string &out);
@@ -140,6 +156,46 @@ public:
 
   virtual void EmitRustStructOrUnion(clang::RecordDecl *decl);
   void EmitNestedEnums(clang::RecordDecl *decl);
+  // Nested classes/structs/unions, which in Rust live outside the enclosing
+  // record. Needed on the abstract/trait path too, where there is no struct body
+  // to hang them off -- and they carry their own nested enums.
+  void EmitNestedRecords(clang::RecordDecl *decl);
+
+  // Fields of `decl` preceded by those of every base lowered to a trait. A Rust
+  // trait has no fields, so the derived struct is the only home for a
+  // polymorphic base's data. See the definition for the trade-offs accepted.
+  static std::vector<clang::FieldDecl *>
+  FieldsIncludingTraitBases(const clang::RecordDecl *decl);
+
+  // Per flattened trait-base field, the initializer this constructor gives it,
+  // resolved through the base mem-initializer and its arguments.
+  std::vector<std::pair<const clang::FieldDecl *, const clang::Expr *>>
+  CollectTraitBaseFieldInits(clang::CXXConstructorDecl *decl);
+
+  // Rust name of the generated accessor a trait body uses to read a field that
+  // only its implementors have.
+  static std::string TraitFieldAccessorName(const clang::FieldDecl *field);
+
+  // Writes `fn __f_x(&self) -> T { self.x }` for every accessor a trait above
+  // `decl` requires, into that trait's impl block for `decl`.
+  void EmitTraitFieldAccessorImpls(const clang::CXXRecordDecl *decl);
+
+  // True while converting the default method bodies of a trait, where the
+  // receiver is the type parameter `Self` and therefore has no fields.
+  bool in_trait_body_ = false;
+  struct PushTraitBody {
+    Converter &c;
+    bool prev;
+    explicit PushTraitBody(Converter &c) : c(c), prev(c.in_trait_body_) {
+      c.in_trait_body_ = true;
+    }
+    ~PushTraitBody() { c.in_trait_body_ = prev; }
+  };
+  // Fields the trait currently being emitted reads through `self`.
+  std::set<const clang::FieldDecl *> trait_field_reads_;
+  // Per abstract class, the field accessors its trait declared as required.
+  static std::map<std::string, std::vector<const clang::FieldDecl *>>
+      trait_accessors_;
 
   void EmitReprC(clang::RecordDecl *decl);
   virtual void EmitRustUnion(clang::RecordDecl *decl);
@@ -289,6 +345,17 @@ public:
 
   void ConvertCallToOstream(clang::CallExpr *expr);
   virtual std::string ConvertStream(clang::Expr *expr);
+
+  // Stream insertion with the format state on the stream. See the long comment
+  // above ConvertOstreamItem in converter.cpp for why the state cannot live in
+  // the format string or in the Converter.
+  bool ConvertOstreamItem(clang::Expr *arg, const std::string &stream_str);
+  virtual const char *StreamManipFn() const;
+  virtual std::string StreamReceiver(const std::string &stream_str) const;
+  // How a base manipulator reaches the helper as a value: the two models spell
+  // a function pointer differently.
+  virtual std::string StreamManipArg(clang::Expr *arg);
+  std::string StreamManipName(clang::Expr *arg);
 
   struct TempMaterializationCtx {
     std::vector<std::optional<clang::QualType>> materialized_args;
@@ -785,7 +852,10 @@ protected:
 
   virtual void ConvertAbstractClass(clang::CXXRecordDecl *decl);
 
-  void ConvertCXXMethodDecls(const clang::CXXRecordDecl *decl,
+  // True if a `signature { .. }` item was actually emitted, i.e. at least one
+  // member passed `predicate`. False means no item by that name exists in the
+  // output, so nothing may name it.
+  bool ConvertCXXMethodDecls(const clang::CXXRecordDecl *decl,
                              const std::string_view signature,
                              bool (*predicate)(clang::CXXMethodDecl *));
 
@@ -891,6 +961,10 @@ protected:
   virtual bool IsReferenceType(const clang::Expr *expr) const;
 
   virtual bool RecordDerivesDefault(const clang::RecordDecl *decl);
+
+  // Whether any field has a default member initializer (`int k = 7;`), which
+  // `#[derive(Default)]` cannot express -- it would zero the field instead.
+  static bool RecordHasFieldInitializer(const clang::RecordDecl *decl);
 
   bool RecordDerivesCopy(const clang::RecordDecl *decl) const;
 
@@ -1083,6 +1157,14 @@ protected:
   };
   static std::unordered_set<std::string> decl_ids_;
   static std::unordered_set<std::string> abstract_structs_;
+  // Abstract classes for which ConvertAbstractClass actually emitted a `trait`
+  // item. A strict subset of `abstract_structs_`: that set records "we took the
+  // trait PATH for this class", which is what the `dyn` and pointer-shape
+  // decisions want, while this one records "a trait by this NAME exists in the
+  // output", which is the only sound basis for writing `impl <name> for T` or a
+  // `: <name>` supertrait bound. They diverge because the trait's member
+  // predicate can reject every member, leaving no item at all.
+  static std::unordered_set<std::string> trait_records_;
 
   class RecordIndex {
   public:
@@ -1116,6 +1198,16 @@ protected:
   // Boundary enum constant name -> the C++ enumerator's value. Ordered so the
   // emitted declarations are in a stable order run to run.
   static std::map<std::string, int64_t> opaque_enum_constants_;
+  // One entry per suppressed TEST_F/TEST registration static, in source order so
+  // the emitted #[test] functions appear in the order the file declares them.
+  struct GTestCase {
+    std::string test_struct; // the Rust name of the per-test class
+    std::string suite;       // the fixture/suite name, for the #[test] name
+    std::string test;        // the test name
+    bool has_set_up = false;
+    bool has_tear_down = false;
+  };
+  static std::vector<GTestCase> gtest_cases_;
   struct DeferredBlock {
     std::string header;
     std::string body;

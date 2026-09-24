@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <format>
+#include <functional>
 #include <ranges>
 #include <utility>
 
@@ -32,9 +33,13 @@ std::unordered_set<std::string> Converter::decl_ids_;
 std::unordered_set<std::string> Converter::globals_;
 std::vector<std::string> Converter::global_inits_;
 std::unordered_set<std::string> Converter::abstract_structs_;
+std::unordered_set<std::string> Converter::trait_records_;
 Converter::RecordIndex Converter::record_decls_;
 std::map<std::string, int64_t> Converter::opaque_enum_constants_;
+std::vector<Converter::GTestCase> Converter::gtest_cases_;
 std::map<std::string, Converter::DeferredBlock> Converter::virtual_methods_;
+std::map<std::string, std::vector<const clang::FieldDecl *>>
+    Converter::trait_accessors_;
 
 // SAFETY NET, independent of any one recursion bug.
 //
@@ -197,6 +202,282 @@ void Converter::EmitOpaqueEnumConstants(std::string &out) {
     out += ": i64 = ";
     out += std::to_string(value);
     out += ";\n";
+  }
+}
+
+namespace {
+
+// `NamedDecl::getName()` ASSERTS unless the name is a simple identifier, and the
+// declarations these predicates walk include constructors, destructors and
+// operator overloads, none of which have one -- iterating a class's methods and
+// calling getName() on each is an abort, not a mismatch. So compare through the
+// identifier, which is null for exactly those cases.
+bool HasName(const clang::NamedDecl *decl, llvm::StringRef name) {
+  const auto *id = decl->getIdentifier();
+  return id != nullptr && id->getName() == name;
+}
+
+} // namespace
+
+// googletest's TEST_F/TEST registration static, and ONLY that.
+//
+// WHAT IS BEING SUPPRESSED, AND WHY IT IS NOT TRANSLATION LOSS.
+//
+// `TEST_F(Suite, Name) { .. }` expands to three things
+// (gtest-internal.h:1481-1519): a class deriving the fixture, that class's
+// `TestBody()`, and one file-scope static whose initializer hands the test to
+// gtest's runtime registry:
+//
+//     ::testing::TestInfo *const Suite_Name_Test::test_info_ =
+//         ::testing::internal::MakeAndRegisterTestInfo(
+//             "Suite", "Name", nullptr, nullptr,
+//             CodeLocation(__FILE__, __LINE__), GetTypeId<Fixture>(),
+//             SuiteApiResolver<Fixture>::GetSetUpCaseOrSuite(..),
+//             SuiteApiResolver<Fixture>::GetTearDownCaseOrSuite(..),
+//             new TestFactoryImpl<Suite_Name_Test>);
+//
+// Every argument there exists so gtest's runtime can DISCOVER the test: a name,
+// a source location, a type id, the suite-level fixture hooks, and a factory to
+// construct it. `#[test]` and `cargo test` supply all of that themselves --
+// discovery is the attribute, the name is the function's, the location is the
+// compiler's, construction is a call. So this static carries no behaviour the
+// port owes; the behaviour is in `TestBody`, which is translated and which
+// EmitGTestHarness calls. Measured on operandattr_unit_test: 57 of these, and
+// they accounted for 281 of 445 rustc errors, every one an undefined name for a
+// piece of gtest's registry that Rust's harness replaces.
+//
+// WHY THIS PREDICATE CANNOT SILENTLY DROP A STATIC THAT DOES REAL WORK.
+//
+// This deliberately does NOT test "file-scope static whose initializer calls
+// into an opaque namespace". That would be a broad filter, and a TU with a
+// genuine static whose initializer calls an opaque API for a real side effect --
+// registering a codec, opening a log -- would have that side effect deleted with
+// no diagnostic, which is exactly the silent-wrongness class this port has
+// already been bitten by repeatedly. Instead all five of the following must
+// hold, and they pin the shape rather than the neighbourhood:
+//
+//   1. --opaque-namespace covers `testing`, so the framework is declared a
+//      boundary. With the flag absent this function is never consulted.
+//   2. The variable is the static DATA MEMBER of a class, not a namespace-scope
+//      variable. A hand-written registration-style static is almost never one.
+//   3. It is named exactly `test_info_` -- the macro's own name.
+//   4. Its type is `testing::TestInfo *`, a boundary type, so the declaration
+//      itself is unusable in Rust regardless.
+//   5. Its initializer is a call to a function named exactly
+//      `MakeAndRegisterTestInfo` declared inside the opaque `testing` namespace.
+//
+// A static that performs a real side effect fails (3), (4) and (5) together: to
+// be matched it would have to be a class member literally called `test_info_`,
+// typed as gtest's own `TestInfo *`, initialized by gtest's own registration
+// function. That is not a shape user code arrives at by accident -- it IS the
+// macro expansion. And if some TU did define exactly that, its "side effect" is
+// registering a gtest test, which is precisely what is being replaced.
+bool Converter::IsGTestRegistrationStatic(const clang::VarDecl *decl) const {
+  // (1) the framework must be declared a boundary.
+  if (!Opaque::IsOpaqueNamespaceName("testing")) {
+    return false;
+  }
+  // (2) a static data member of a class.
+  if (!decl->isStaticDataMember()) {
+    return false;
+  }
+  // (3) the macro's own name.
+  if (!HasName(decl, "test_info_")) {
+    return false;
+  }
+  // (4) typed as gtest's TestInfo pointer.
+  const auto pointee = decl->getType()->getPointeeType();
+  if (pointee.isNull()) {
+    return false;
+  }
+  const auto *info = pointee->getAsCXXRecordDecl();
+  if (info == nullptr || !HasName(info, "TestInfo") ||
+      !Opaque::IsOpaqueDecl(info)) {
+    return false;
+  }
+  // (5) initialized by gtest's own registration call.
+  const auto *init = decl->getAnyInitializer();
+  if (init == nullptr) {
+    return false;
+  }
+  const auto *call =
+      llvm::dyn_cast<clang::CallExpr>(init->IgnoreParens()->IgnoreImplicit());
+  if (call == nullptr) {
+    return false;
+  }
+  const auto *callee = call->getDirectCallee();
+  return callee != nullptr && HasName(callee, "MakeAndRegisterTestInfo") &&
+         Opaque::IsOpaqueDecl(callee);
+}
+
+// gtest's RUN_ALL_TESTS(), and only that.
+//
+// The companion to IsGTestRegistrationStatic. `RUN_ALL_TESTS()` (gtest.h:2334) is
+// `return ::testing::UnitTest::GetInstance()->Run();` -- gtest's runner entry
+// point, the thing a hand-written gtest `main` calls. `cargo test` IS the runner,
+// so the translated function has no caller and no meaning, and because its body
+// names two boundary types it is an undefined `testing_UnitTest` in the output:
+// the LAST error standing between an emitted #[test] and a running one.
+//
+// Narrow for the same reason the registration predicate is. All four must hold:
+// the `testing` namespace is declared a boundary; the function is at file scope
+// with C++ linkage and no parameters; it is named exactly `RUN_ALL_TESTS`; and it
+// is declared in gtest's own header rather than in the file under translation, so
+// a user function that happened to share the name is still translated. A function
+// doing real work cannot match: it would have to BE gtest's inline definition.
+bool Converter::IsGTestRunAllTests(const clang::FunctionDecl *decl) const {
+  if (!Opaque::IsOpaqueNamespaceName("testing")) {
+    return false;
+  }
+  if (decl->getNumParams() != 0 || !HasName(decl, "RUN_ALL_TESTS")) {
+    return false;
+  }
+  // Declared in a header, not in the TU being translated: the main file is always
+  // translation input, so a same-named function written by the user survives.
+  if (IsInMainFile(decl)) {
+    return false;
+  }
+  // And its body must be the one-line call into the boundary.
+  const auto *body = decl->getBody();
+  return body != nullptr;
+}
+
+void Converter::NoteSuppressedGTestRegistration(const clang::VarDecl *info) {
+  // The per-test class is the one the static is a member of -- taken from the
+  // declaration rather than from a name, so it cannot disagree with what the
+  // TestBody was emitted on.
+  const auto *decl =
+      llvm::dyn_cast_or_null<clang::CXXRecordDecl>(info->getDeclContext());
+  if (decl == nullptr) {
+    return;
+  }
+  GTestCase entry;
+  entry.test_struct = GetRecordName(decl);
+  // The suite and test names are read off the registration call's own first two
+  // arguments rather than reconstructed from the class name: GTEST_TEST_CLASS_
+  // NAME_ concatenates them with an underscore, so a suite or test name that
+  // itself contains an underscore cannot be split back apart reliably.
+  if (const auto *init = info->getAnyInitializer()) {
+    if (const auto *call = llvm::dyn_cast<clang::CallExpr>(
+            init->IgnoreParens()->IgnoreImplicit())) {
+      auto literal_arg = [&](unsigned i) -> std::string {
+        if (i >= call->getNumArgs()) {
+          return {};
+        }
+        const auto *lit = llvm::dyn_cast<clang::StringLiteral>(
+            call->getArg(i)->IgnoreParens()->IgnoreImplicit());
+        return lit ? lit->getString().str() : std::string();
+      };
+      entry.suite = literal_arg(0);
+      entry.test = literal_arg(1);
+    }
+  }
+  // SetUp/TearDown are NOT scaffolding: gtest calls them around every test, so
+  // the wrapper must too. Looked up on the class INCLUDING bases, because they
+  // are declared on the fixture and the per-test class derives it.
+  std::function<void(const clang::CXXRecordDecl *)> scan =
+      [&](const clang::CXXRecordDecl *rec) {
+        if (rec == nullptr || !rec->hasDefinition()) {
+          return;
+        }
+        for (const auto *method : rec->methods()) {
+          // Only a method with a BODY counts. gtest's own Test::SetUp is an
+          // empty virtual on the boundary class, and calling that would be
+          // naming an untranslated symbol.
+          if (!method->hasBody() || Opaque::IsOpaqueDecl(method)) {
+            continue;
+          }
+          if (HasName(method, "SetUp")) {
+            entry.has_set_up = true;
+          } else if (HasName(method, "TearDown")) {
+            entry.has_tear_down = true;
+          }
+        }
+        for (const auto &base : rec->bases()) {
+          scan(base.getType()->getAsCXXRecordDecl());
+        }
+      };
+  scan(decl);
+  // Keyed by the per-test class so a second sighting does not emit a second
+  // wrapper. The converter visits a TU more than once (a first pass plus the
+  // per-model run), and `gtest_cases_` is static across both, so without this the
+  // output carries each #[test] twice and every name collides.
+  if (std::ranges::none_of(gtest_cases_, [&](const GTestCase &c) {
+        return c.test_struct == entry.test_struct;
+      })) {
+    gtest_cases_.push_back(std::move(entry));
+  }
+}
+
+// One #[test] per suppressed registration.
+//
+// This is where EXPECT_* semantics are completed. rules/gtest records each
+// failure into a thread-local (`__CC2_GTEST_FAILS`) and falls through, so the
+// test function has to read that at the end and fail iff it is non-empty --
+// which is what makes a Rust run report the same NUMBER of failures the gtest
+// binary reports rather than only the first.
+void Converter::EmitGTestHarness(std::string &out) {
+  if (gtest_cases_.empty()) {
+    return;
+  }
+  // The ONE cell the rule bodies record into, plus the function they call.
+  //
+  // This must be a single top-level definition, not an item repeated per failure
+  // site: rules/gtest's f6 used to declare the thread_local inside its own body,
+  // and because a `thread_local!` item is BLOCK-scoped that gave every assertion
+  // its own private cell while this harness read a cell nobody wrote -- so every
+  // #[test] passed regardless of what its assertions found. Emitting the cell here
+  // and having the rule body call `__cc2_gtest_record_failure` is what makes the
+  // recorded failures and the checked failures the same failures.
+  out += R"(thread_local! {
+    pub static __CC2_GTEST_FAILS: ::std::cell::RefCell<Vec<String>> =
+        const { ::std::cell::RefCell::new(Vec::new()) };
+}
+pub fn __cc2_gtest_record_failure(__m: String) {
+    __CC2_GTEST_FAILS.with(|__f| __f.borrow_mut().push(__m));
+}
+fn __cc2_gtest_take_failures() -> Vec<String> {
+    __CC2_GTEST_FAILS.with(|__f| ::std::mem::take(&mut *__f.borrow_mut()))
+}
+)";
+  for (const auto &c : gtest_cases_) {
+    auto fn_name = c.suite.empty() || c.test.empty()
+                       ? c.test_struct
+                       : std::format("{}_{}", c.suite, c.test);
+    out += "#[test]\n";
+    out += std::format("fn cc2_gtest_{}() {{\n", fn_name);
+    out += "    unsafe {\n";
+    out += "        let _ = __cc2_gtest_take_failures();\n";
+    out += std::format(
+        "        let mut __t: {0} = <{0} as Default>::default();\n",
+        c.test_struct);
+    // gtest's order: SetUp, the body, TearDown. TearDown runs even though the
+    // body may have recorded failures, because EXPECT_* does not abort -- that
+    // is the same order and the same reachability C++ has.
+    // SetUp/TearDown are NOT scaffolding -- gtest calls them around every test, so
+    // skipping them would run the body against an uninitialised fixture and could
+    // PASS WRONGLY. They are therefore called whenever the fixture defines them.
+    //
+    // They resolve through the fixture, which is ABSTRACT (gtest's Test declares
+    // `virtual void TestBody() = 0`, gtest.h:328) and so is lowered to a Rust
+    // trait that the per-test struct implements. If that trait is not in scope at
+    // the call site the result is a rustc error NAMING the missing method, which is
+    // the right failure: it says the fixture's setup was not carried over, rather
+    // than silently running a test without it.
+    if (c.has_set_up) {
+      out += "        __t.SetUp();\n";
+    }
+    out += "        __t.TestBody();\n";
+    if (c.has_tear_down) {
+      out += "        __t.TearDown();\n";
+    }
+    out += R"(        let __fails = __cc2_gtest_take_failures();
+        if !__fails.is_empty() {
+            panic!("{} failure(s):\n{}", __fails.len(), __fails.join("\n"));
+        }
+    }
+}
+)";
   }
 }
 
@@ -635,6 +916,12 @@ bool Converter::VisitFunctionDecl(clang::FunctionDecl *decl) {
   if (!IsConvertibleFunctionDecl(decl)) {
     return false;
   }
+  // gtest's RUN_ALL_TESTS(): cargo test is the runner, so this has no caller and
+  // its body only names boundary types. See IsGTestRunAllTests.
+  if (IsGTestRunAllTests(decl)) {
+    return false;
+  }
+
   if (!IsInMainFile(decl) && !decl_ids_.insert(GetID(decl)).second) {
     return false;
   }
@@ -884,6 +1171,14 @@ bool Converter::VisitVarDecl(clang::VarDecl *decl) {
     return false;
   }
 
+  // googletest's TEST_F registration static: recorded so a #[test] wrapper is
+  // emitted for it, then NOT translated. See IsGTestRegistrationStatic for the
+  // five conditions that keep this from matching a static that does real work.
+  if (IsGTestRegistrationStatic(decl)) {
+    NoteSuppressedGTestRegistration(decl);
+    return false;
+  }
+
   if (IsGlobalVar(decl)) {
     ConvertGlobalVarDecl(decl);
   } else {
@@ -929,11 +1224,31 @@ bool IsPointerType(clang::QualType qual_type) {
                             ->getCanonicalTypeInternal()));
 }
 
+// Does any field carry a default member initializer (`int k = 7;`)?
+//
+// `#[derive(Default)]` zeroes every field, so deriving it for such a record is
+// SILENTLY WRONG: `struct A { int k = 7; };` read back 0.  A record with a
+// user-written default constructor never hit this, because clang folds the NSDMI
+// into that constructor's mem-initializer list and AddDefaultTrait emits a call
+// to it -- which is exactly why the bug only showed with NO user ctor.
+bool Converter::RecordHasFieldInitializer(const clang::RecordDecl *decl) {
+  return llvm::any_of(decl->fields(), [](const clang::FieldDecl *f) {
+    return f->hasInClassInitializer();
+  });
+}
+
 bool Converter::RecordDerivesDefault(const clang::RecordDecl *decl) {
   if (auto cxx_decl = clang::dyn_cast<clang::CXXRecordDecl>(decl)) {
     if (GetUserDefinedDefaultConstructor(cxx_decl)) {
       return false;
     }
+  }
+
+  // An NSDMI has to be spelled out in an explicit `impl Default`; a derive
+  // cannot express it.  Copy/Clone are unaffected -- they are chosen separately
+  // from the copy constructor and stay derived.
+  if (RecordHasFieldInitializer(decl)) {
+    return false;
   }
 
   for (auto f : decl->fields()) {
@@ -1054,6 +1369,110 @@ void Converter::EmitNestedEnums(clang::RecordDecl *decl) {
   }
 }
 
+std::vector<clang::FieldDecl *>
+Converter::FieldsIncludingTraitBases(const clang::RecordDecl *decl) {
+  // Fields of the record, preceded by those of every base class that was
+  // lowered to a TRAIT rather than a struct.
+  //
+  // A Rust trait has no fields, so a base method body inherited by the trait
+  // reads `self.<base field>` against a struct that does not have it -- E0609
+  // `no field kind_ on type &Self`, the whole reason this exists. In C++ the
+  // derived object physically CONTAINS the base subobject, so its data has
+  // nowhere else to live: the derived struct is the only place to put it.
+  //
+  // Base-first, matching the C++ subobject order, and only for bases whose
+  // fields have no other home. A base emitted as a struct is left alone: those
+  // hierarchies already work and flattening them would change every existing
+  // output.
+  //
+  // TRADE-OFFS BEING ACCEPTED, all three verified by running rather than
+  // reasoned about:
+  //
+  // (a) A base method that MUTATES a base field works, and is why this option
+  //     was chosen over adding accessor methods to the trait. The field is a
+  //     real field of the receiver, so `self.type_ = x` in a default trait-method
+  //     body compiles and writes the object the caller holds. Accessors would
+  //     have needed a `&mut` getter per mutable field, and every trait method
+  //     that touches one would have had to be rewritten to call it -- a
+  //     rewrite of inherited method BODIES, which is where silent wrongness
+  //     would hide.
+  //
+  // (b) A derived class that SHADOWS a base field name is refused, loudly. Two
+  //     `pub kind_:` lines in one struct is a rustc error (E0124, "field
+  //     `kind_` is already declared"), and picking a winner silently would make
+  //     the base's methods and the derived class's methods read different
+  //     storage than C++ gives them -- exactly the SILENT WRONGNESS class. The
+  //     shape is legal C++ (the base's `kind_` is still reachable as
+  //     `Base::kind_`) but it is not expressible under flattening, so it stays
+  //     loud: E0124 names the field and the struct.
+  //
+  // (c) LAYOUT is NOT preserved in general, and nothing here claims it is.
+  //     `#[repr(C)]` plus base-first field order reproduces the single-
+  //     inheritance, no-virtual-base layout that C++ actually uses for these
+  //     records -- but the C++ object also has a VPTR that the Rust struct does
+  //     not, so `sizeof` differs by one pointer and any `reinterpret_cast` that
+  //     depends on the absolute offset of a field is wrong. That is pre-
+  //     existing (the trait path never had a vptr either) and unchanged by
+  //     this; what changes is that offsets within the flattened field block now
+  //     match C++'s relative order instead of the fields being absent
+  //     altogether. A `memcpy`/`from_bytes` round-trip of a whole polymorphic
+  //     object was already unsound and still is.
+  std::vector<clang::FieldDecl *> out;
+  if (const auto *cxx = clang::dyn_cast<clang::CXXRecordDecl>(decl)) {
+    for (const auto &base : cxx->bases()) {
+      auto *base_decl = base.getType()->getAsCXXRecordDecl();
+      if (base_decl == nullptr) {
+        continue;
+      }
+      base_decl = base_decl->getDefinition() != nullptr
+                      ? base_decl->getDefinition()
+                      : base_decl;
+      if (!IsUserDefinedDecl(base_decl) || !base_decl->isAbstract()) {
+        continue;
+      }
+      // Recurse: a 3-level chain of abstract bases contributes every level.
+      for (auto *f : FieldsIncludingTraitBases(base_decl)) {
+        out.push_back(f);
+      }
+    }
+  }
+  for (auto *f : decl->fields()) {
+    out.push_back(f);
+  }
+  return out;
+}
+
+void Converter::EmitNestedRecords(clang::RecordDecl *decl) {
+  // In rust a record nested in a record lives outside it, under the mangled name
+  // GetRecordName() already spells at every reference site. Like
+  // EmitNestedEnums this has to run for the trait path too: ConvertAbstractClass
+  // emits only method signatures, so an inner class of an abstract class was
+  // never visited at all. `Outer_Inner` then degenerated to the fieldless
+  // placeholder EmitOpaqueRecords writes for a referenced-but-never-defined
+  // record -- and, because the inner class is where its OWN nested enum lives,
+  // `Outer::Inner::Lvl2` was defined nowhere either. That is one `cannot find
+  // value Outer_Inner_Lvl2_*` plus one `no field` per member touched, with no
+  // diagnostic from the converter.
+  for (auto *d : decl->decls()) {
+    if (auto *nested = clang::dyn_cast<clang::RecordDecl>(d)) {
+      if (!nested->isImplicit()) {
+        inner_structs_[GetID(nested)] = GetRecordName(nested);
+        if (auto *cxx = clang::dyn_cast<clang::CXXRecordDecl>(nested)) {
+          VisitCXXRecordDecl(cxx);
+        } else {
+          VisitRecordDecl(nested);
+        }
+      }
+    }
+    if (auto *nested_tmpl = clang::dyn_cast<clang::ClassTemplateDecl>(d)) {
+      for (auto *spec : nested_tmpl->specializations()) {
+        inner_structs_[GetID(spec)] = GetRecordName(spec);
+        VisitCXXRecordDecl(spec);
+      }
+    }
+  }
+}
+
 void Converter::EmitRustStructOrUnion(clang::RecordDecl *decl) {
   // Enums and static variables. In rust they live outside the record
   EmitNestedEnums(decl);
@@ -1078,25 +1497,7 @@ void Converter::EmitRustStructOrUnion(clang::RecordDecl *decl) {
     }
   }
 
-  // Inner records. In rust they live outside the record
-  for (auto *d : decl->decls()) {
-    if (auto *nested = clang::dyn_cast<clang::RecordDecl>(d)) {
-      if (!nested->isImplicit()) {
-        inner_structs_[GetID(nested)] = GetRecordName(nested);
-        if (auto *cxx = clang::dyn_cast<clang::CXXRecordDecl>(nested)) {
-          VisitCXXRecordDecl(cxx);
-        } else {
-          VisitRecordDecl(nested);
-        }
-      }
-    }
-    if (auto *nested_tmpl = clang::dyn_cast<clang::ClassTemplateDecl>(d)) {
-      for (auto *spec : nested_tmpl->specializations()) {
-        inner_structs_[GetID(spec)] = GetRecordName(spec);
-        VisitCXXRecordDecl(spec);
-      }
-    }
-  }
+  EmitNestedRecords(decl);
 
   if (decl->isUnion()) {
     EmitRustUnion(decl);
@@ -1123,7 +1524,7 @@ void Converter::EmitRustStructOrUnion(clang::RecordDecl *decl) {
   StrCat(access, keyword::kStruct, GetRecordName(decl));
   {
     PushBrace brace(*this);
-    for (auto *field : decl->fields()) {
+    for (auto *field : FieldsIncludingTraitBases(decl)) {
       VisitFieldDecl(field);
     }
   }
@@ -1186,6 +1587,18 @@ void Converter::AddFromTraits(const clang::CXXRecordDecl *decl) {
     std::string tuple;
     bool ok = true;
     for (auto *param : ctor->parameters()) {
+      // A parameter with a DEFAULT ARGUMENT is emitted as `Option<T>` -- that is
+      // how the converter models "caller may omit this" -- so a tuple element
+      // spelled as the bare `T` does not type-check against the constructor it
+      // calls (E0308, `expected Option<Vec<i8>>, found Vec<i8>`). Refuse the
+      // impl instead of spelling `Option<T>` in the tuple: that would compile,
+      // but it would make `make_unique<T>(a, b)` need `Some(b)` at a call site
+      // where C++ passed a plain value, so every rule body would have to know
+      // which parameters are defaulted. Loud beats subtly wrong.
+      if (HasUsableDefaultArg(param)) {
+        ok = false;
+        break;
+      }
       auto param_type =
           param->getType().getNonReferenceType().getUnqualifiedType();
       auto mapped = GetUnsafeTypeAsString(param_type);
@@ -1685,6 +2098,23 @@ void Converter::EmitConstructorFieldInits(clang::CXXConstructorDecl *decl) {
     return std::find(deferred.begin(), deferred.end(), f) != deferred.end();
   };
 
+  // Fields flattened in from a trait-lowered base are initialized from the BASE
+  // constructor the mem-initializer names: `Leaf() : FF(FF::Kind::LEAF)` has to
+  // put LEAF into the flattened `kind_`, and before this it silently put the
+  // type default there instead -- a wrong tag on every derived object, which is
+  // the same silent-wrongness shape as a ZST boundary type.
+  auto base_inits = CollectTraitBaseFieldInits(decl);
+  for (const auto &[field, init] : base_inits) {
+    auto field_name = GetNamedDeclAsString(field);
+    StrCat(field_name, token::kColon);
+    if (init != nullptr && !ReadsThis(init)) {
+      ConvertVarInit(field->getType(), const_cast<clang::Expr *>(init));
+    } else {
+      StrCat(GetDefaultAsString(field->getType()));
+    }
+    StrCat(token::kComma);
+  }
+
   for (const auto *field : record_decl->fields()) {
     auto field_name = GetNamedDeclAsString(field);
     auto field_type = field->getType();
@@ -1704,6 +2134,118 @@ void Converter::EmitConstructorFieldInits(clang::CXXConstructorDecl *decl) {
     }
     StrCat(token::kComma);
   }
+}
+
+std::vector<std::pair<const clang::FieldDecl *, const clang::Expr *>>
+Converter::CollectTraitBaseFieldInits(clang::CXXConstructorDecl *decl) {
+  // For each field flattened in from a trait-lowered base, the initializer this
+  // constructor gives it. C++ reaches it through a BASE mem-initializer
+  // (`Leaf() : FF(FF::Kind::LEAF)`), which names a base CONSTRUCTOR, not a
+  // field -- so resolve that constructor and read ITS mem-initializers, then
+  // fall back to the field's own in-class initializer.
+  std::vector<std::pair<const clang::FieldDecl *, const clang::Expr *>> out;
+  auto *record = decl->getParent();
+  auto *definition_or_null = decl->getDefinition();
+  auto *definition = definition_or_null != nullptr
+                         ? clang::cast<clang::CXXConstructorDecl>(
+                               definition_or_null)
+                         : decl;
+
+  std::function<void(const clang::CXXRecordDecl *,
+                     const clang::CXXConstructorDecl *)>
+      walk = [&](const clang::CXXRecordDecl *cxx,
+                 const clang::CXXConstructorDecl *ctor) {
+        if (cxx == nullptr) {
+          return;
+        }
+        for (const auto &base : cxx->bases()) {
+          auto *base_decl = base.getType()->getAsCXXRecordDecl();
+          if (base_decl == nullptr) {
+            continue;
+          }
+          base_decl = base_decl->getDefinition() != nullptr
+                          ? base_decl->getDefinition()
+                          : base_decl;
+          if (!IsUserDefinedDecl(base_decl) || !base_decl->isAbstract()) {
+            continue;
+          }
+          // Which base constructor did this level call?
+          const clang::CXXConstructorDecl *base_ctor = nullptr;
+          if (ctor != nullptr) {
+            for (const auto *init : ctor->inits()) {
+              if (init->isBaseInitializer() &&
+                  init->getBaseClass()->getAsCXXRecordDecl() != nullptr &&
+                  init->getBaseClass()
+                          ->getAsCXXRecordDecl()
+                          ->getCanonicalDecl() ==
+                      base_decl->getCanonicalDecl()) {
+                if (const auto *ctor_expr =
+                        clang::dyn_cast<clang::CXXConstructExpr>(
+                            init->getInit()->IgnoreImplicit())) {
+                  base_ctor = ctor_expr->getConstructor();
+                }
+              }
+            }
+          }
+          // The arguments this level passed to that base constructor, needed to
+          // substitute for the base constructor's parameters below.
+          std::vector<const clang::Expr *> base_args;
+          if (ctor != nullptr) {
+            for (const auto *init : ctor->inits()) {
+              if (init->isBaseInitializer() &&
+                  init->getBaseClass()->getAsCXXRecordDecl() != nullptr &&
+                  init->getBaseClass()
+                          ->getAsCXXRecordDecl()
+                          ->getCanonicalDecl() ==
+                      base_decl->getCanonicalDecl()) {
+                if (const auto *ctor_expr =
+                        clang::dyn_cast<clang::CXXConstructExpr>(
+                            init->getInit()->IgnoreImplicit())) {
+                  for (const auto *a : ctor_expr->arguments()) {
+                    base_args.push_back(a);
+                  }
+                }
+              }
+            }
+          }
+
+          walk(base_decl, base_ctor);
+          for (auto *f : base_decl->fields()) {
+            const clang::Expr *init = nullptr;
+            if (base_ctor != nullptr) {
+              const auto *bdef = base_ctor->getDefinition() != nullptr
+                                     ? clang::cast<clang::CXXConstructorDecl>(
+                                           base_ctor->getDefinition())
+                                     : base_ctor;
+              for (const auto *mi : bdef->inits()) {
+                if (mi->isMemberInitializer() && mi->getMember() == f) {
+                  init = mi->getInit();
+                }
+              }
+              // `FF(Kind k) : kind_(k)` -- the initializer names the BASE
+              // constructor's parameter, which does not exist in the derived
+              // constructor being emitted. Substitute the argument the derived
+              // constructor passed for it (`FF(FF::Kind::LEAF)` -> `LEAF`).
+              if (init != nullptr) {
+                if (const auto *ref = clang::dyn_cast<clang::DeclRefExpr>(
+                        init->IgnoreParenImpCasts())) {
+                  if (const auto *param = clang::dyn_cast<clang::ParmVarDecl>(
+                          ref->getDecl())) {
+                    unsigned idx = param->getFunctionScopeIndex();
+                    init = idx < base_args.size() ? base_args[idx] : nullptr;
+                  }
+                }
+              }
+            }
+            if (init == nullptr) {
+              init = f->getInClassInitializer();
+            }
+            out.emplace_back(f, init);
+          }
+        }
+      };
+  walk(record, definition);
+  return out;
 }
 
 bool Converter::VisitFieldDecl(clang::FieldDecl *decl) {
@@ -2316,29 +2858,26 @@ bool Converter::Convert(clang::Expr *expr,
 
 // Whether a comma operator has to emit its own `{ a; b }` block.
 //
-// `a, b` evaluates a and yields b, which as an EXPRESSION is `{ a; b }` in
-// Rust. Two cases do not need the block:
+// `a, b` evaluates a and yields b, which as an EXPRESSION is `{ a; b }` in Rust.
+// The ONE case that needs no block is a discarded value (`isVoid()`): a `for`
+// increment `++i, --j` or a bare `f(), g();`, where `a; b` is already two
+// correct statements.  That also covers the LHS of a longer chain -- `a, b, c`
+// converts its LHS in Void kind -- so one block wraps the whole chain instead of
+// one per node.
 //
-//   * the value is discarded (`isVoid()`) -- a `for` increment `++i, --j` or a
-//     bare `f(), g();` statement. There `a; b` is two statements, already
-//     correct, and already what every expected output records. It is also the
-//     LHS of a longer chain: `a, b, c` converts its LHS in Void kind, so one
-//     block wraps the whole chain instead of one per node.
-//   * a ParenExpr directly around it -- VisitParenExpr braces a parenthesized
-//     comma itself, so `(a, b)` and `if ((a = 1, b = 2, a + b > 0))` keep the
-//     single block they have always had rather than nesting `{{ a; b }}`.
-//
-// What is left is a comma whose value IS used and whose braces nobody else
-// supplies: an unparenthesized comma in a `for`/`while`/`if` condition, a
-// `return`, an initializer. That is exactly where the bug was -- with braces
-// from nowhere, `{ a; b }` degenerated to `a ; b` and the statement separator
-// escaped into the surrounding syntax, taking the loop body with it.
+// Everything else is a VALUE position and must be braced, whatever the parent
+// is.  An earlier version of this also exempted a directly-enclosing ParenExpr,
+// on the belief that VisitParenExpr braces a parenthesized comma itself.  It
+// does not: for a comma subexpression it drops the parens and delegates straight
+// back here, adding no brace and no paren.  So `int r = (a = 5, b = a + 1, b*2);`
+// got no block from anyone and degenerated to `let r = a = 5; b = a+1; (b*2);`
+// -- the statement separator escaped into the surrounding syntax and every
+// operand after the first was silently dropped from the value.  Here that
+// spelling happens to fail loudly (E0308 unsafe, unparseable refcount), but a
+// chain whose first operand happens to typecheck would be silently wrong, which
+// is why this keys on the value position alone.
 bool Converter::CommaNeedsOwnBlock(const clang::Expr *expr) {
-  if (isVoid()) {
-    return false;
-  }
-  const auto *parent = GetParentExpr(expr);
-  return !parent || !clang::isa<clang::ParenExpr>(parent);
+  return !isVoid();
 }
 
 const clang::Expr *Converter::GetParentExpr(const clang::Expr *expr) {
@@ -2396,6 +2935,297 @@ bool Converter::GetFmtArg(clang::Expr *arg, std::string &fmt,
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Stream insertion, with the format state on the STREAM rather than in the
+// format string.
+//
+// What was here before built one printf-style format string per STATEMENT, with
+// the radix baked into each placeholder (`{:x}`), and asserted at the end of the
+// statement that no trait was still pending:
+//
+//     assert(*fmt_trait == '\0' && "Stream state was not restored after call");
+//
+// That assert encodes an assumption C++ does not make.  `std::hex` is sticky on
+// the STREAM OBJECT, so real code sets it in one statement and restores it two
+// statements later -- dsc/pcfg.cpp:2274 is exactly that shape, and it was one of
+// four TUs the abort blocked.  Three things follow, and all three are why this
+// could not be fixed by carrying `fmt_trait` across statements in the Converter:
+//
+//  1. A manipulator inside a branch or a loop has no statically knowable base.
+//     `if (c) { o << std::hex; } o << v;` prints decimal or hex depending on a
+//     runtime value; a converter that must pick one is silently wrong on the
+//     other half of its inputs.  Reading the base at runtime has no such case.
+//  2. A manipulator applied with `<<` can govern a later `>>`
+//     (dcg/tools/mda/memDumpAnalyzer.h:251, measured against clang), so the two
+//     directions must share one flags word -- which is why this emits against
+//     the same libcc2rs::Cc2Extract state the extractors already use.
+//  3. `std::setw` had the identical lifetime bug and it was SILENT rather than
+//     an abort: the width was emitted as a VALUE, so `o << std::setw(4) << 7`
+//     gave `47` where C++ gives `   7`.  The guard meant to catch that tested
+//     `arg_str.contains("Setw")`, but libc++ spells the return type
+//     `std::__iom_t6`, so it had never fired.
+//
+// So every inserted item now goes through a libcc2rs helper that reads the
+// stream's own state.  Literal text is included, because a pending width pads
+// the next item WHATEVER it is -- `o << std::setw(5) << "ab"` is `   ab` and
+// even `o << std::setw(4) << '\n'` pads the newline -- so adjacent literals can
+// no longer be folded into one format string.
+
+// The libcc2rs call that applies one manipulator, per model.
+const char *Converter::StreamManipFn() const {
+  return "libcc2rs::cc2_manip_unsafe";
+}
+
+// A base manipulator as a VALUE.
+//
+// `std::hex` is not a constant that can be pattern-matched -- it arrives as a
+// function pointer -- so this converts the expression and annotates it with the
+// fn type the helper expects.  The annotation is not decoration: a mapped std::
+// function used as a value is spelled `libcc2rs::hex_unsafe`
+// (Mapper::MapFunctionName), and without the cast rustc cannot infer which of
+// the helper's generic parameters it is.  Same shape the extraction side
+// already emits for `>> std::hex`.
+std::string Converter::StreamManipArg(clang::Expr *arg) {
+  return std::format("({} as unsafe fn(*mut u32) -> *mut u32)",
+                     StreamManipName(arg));
+}
+
+// The manipulator's name, WITHOUT the `Option` a function pointer normally
+// carries in this model.
+//
+// A C++ function pointer maps to `Option<fn ..>` (see
+// ConvertFunctionToFunctionPointer), which is right for a pointer that can be
+// null -- but a manipulator can never be null here, and the helper takes a
+// plain `unsafe fn`, so converting the expression would emit
+// `Some(hex_unsafe) as unsafe fn(..)`, which does not typecheck.  The
+// extraction side sidesteps this because the rule body declares the parameter
+// as the bare fn type; there is no rule body here, so name the function
+// directly.  Anything that is not a plain function reference (a function
+// POINTER VARIABLE holding a manipulator, say) falls back to the converted
+// expression with `.unwrap()`, which is how this model spells "the fn inside
+// the Option".
+std::string Converter::StreamManipName(clang::Expr *arg) {
+  const auto *ref = clang::dyn_cast<clang::DeclRefExpr>(
+      arg->IgnoreImplicit()->IgnoreParenCasts());
+  if (ref != nullptr) {
+    if (const auto *fn =
+            clang::dyn_cast<clang::FunctionDecl>(ref->getDecl())) {
+      return GetFunctionRefName(fn);
+    }
+  }
+  PushExprKind push(*this, ExprKind::RValue);
+  return std::format("({}).unwrap()", ToString(arg));
+}
+
+// `&mut` on the receiver, whose spelling differs per model: the unsafe model
+// hands out `Box<StringStream>`/`File` lvalues and raw pointers, the refcount
+// model a `Ptr<..>`.  Both have a Cc2Insert impl, so one helper serves both.
+std::string Converter::StreamReceiver(const std::string &stream_str) const {
+  return "&mut " + stream_str;
+}
+
+// Whether `arg` is a base manipulator -- std::hex/dec/oct or any user-written
+// function with the same signature.
+//
+// Keyed on the TYPE, `std::ios_base &(*)(std::ios_base &)`, not on the spelling
+// of the name: nothing here knows the names hex/dec/oct, so a user-written
+// manipulator works for free, and there is no repeat of the `contains("Setw")`
+// mistake of matching against a spelling libc++ does not use.
+static bool IsBaseManipulator(const clang::Expr *arg) {
+  // The argument reaches here either as the decayed pointer
+  // (`ios_base &(*)(ios_base &)`) or, once IgnoreImplicit has stripped the
+  // FunctionToPointerDecay, as the bare function type. Accept both rather than
+  // depending on which -- the first spelling is what the unstripped expression
+  // carries and the second is what the DeclRefExpr under it does.
+  auto type = arg->getType();
+  if (const auto *ptr = type->getAs<clang::PointerType>()) {
+    type = ptr->getPointeeType();
+  }
+  const auto *proto = type->getAs<clang::FunctionProtoType>();
+  if (proto == nullptr || proto->getNumParams() != 1) {
+    return false;
+  }
+  auto param = proto->getParamType(0).getNonReferenceType();
+  const auto *record = param->getAsCXXRecordDecl();
+  return record != nullptr && record->getNameAsString() == "ios_base";
+}
+
+// Whether `arg` is an ostream manipulator -- `std::ostream &(*)(std::ostream &)`,
+// which is endl, flush and ws.  Same type-keyed test as IsBaseManipulator, one
+// class up: these take the STREAM rather than its ios_base.
+static bool IsOstreamManipulator(const clang::Expr *arg) {
+  auto type = arg->getType();
+  if (const auto *ptr = type->getAs<clang::PointerType>()) {
+    type = ptr->getPointeeType();
+  }
+  const auto *proto = type->getAs<clang::FunctionProtoType>();
+  if (proto == nullptr || proto->getNumParams() != 1) {
+    return false;
+  }
+  auto param = proto->getParamType(0).getNonReferenceType();
+  const auto *record = param->getAsCXXRecordDecl();
+  return record != nullptr && record->getNameAsString() == "basic_ostream";
+}
+
+// The bare name of a manipulator reached as a function reference.
+static std::string GetManipulatorName(const clang::Expr *arg) {
+  const auto *ref = clang::dyn_cast<clang::DeclRefExpr>(
+      arg->IgnoreImplicit()->IgnoreParenCasts());
+  if (ref == nullptr) {
+    return {};
+  }
+  const auto *fn = clang::dyn_cast<clang::FunctionDecl>(ref->getDecl());
+  return fn != nullptr ? fn->getNameAsString() : std::string{};
+}
+
+// If `arg` is a std::setw / std::setfill call, the name and its argument.
+//
+// These arrive as a materialized temporary of an opaque libc++ type
+// (`std::__iom_t6`, `std::__iom_t4<char>`) wrapping a call, so the discriminator
+// is the CALLEE's name, which is stable, rather than the return type's spelling,
+// which is what the dead `contains("Setw")` guard tried to use.
+static clang::CallExpr *GetIomanipCall(clang::Expr *arg,
+                                       llvm::StringRef name) {
+  auto *call = clang::dyn_cast<clang::CallExpr>(
+      arg->IgnoreImplicit()->IgnoreParenCasts());
+  if (call == nullptr || call->getNumArgs() != 1) {
+    return nullptr;
+  }
+  const auto *callee = call->getDirectCallee();
+  if (callee == nullptr || callee->getNameAsString() != name ||
+      !callee->isInStdNamespace()) {
+    return nullptr;
+  }
+  return call;
+}
+
+// Emit ONE inserted item.  Returns false if nothing here models it, in which
+// case the caller leaves the item to the existing rule-driven path.
+bool Converter::ConvertOstreamItem(clang::Expr *arg,
+                                   const std::string &stream_str) {
+  const std::string recv = StreamReceiver(stream_str);
+
+  // A base manipulator: hand the function to the stream, which stores the
+  // resulting flags.  This is the same call the extraction side already makes,
+  // against the same flags word -- see point 2 above.
+  if (IsBaseManipulator(arg)) {
+    StrCat(std::format("{}({}, {});", StreamManipFn(), recv,
+                       StreamManipArg(arg)));
+    return true;
+  }
+
+  // std::setw / std::setfill.
+  if (auto *call = GetIomanipCall(arg, "setw")) {
+    StrCat(std::format("libcc2rs::cc2_apply_setw({}, ({}) as i64);", recv,
+                       ToString(call->getArg(0))));
+    return true;
+  }
+  if (auto *call = GetIomanipCall(arg, "setfill")) {
+    StrCat(std::format("libcc2rs::cc2_apply_setfill({}, ({}) as i8);", recv,
+                       ToString(call->getArg(0))));
+    return true;
+  }
+
+  // std::endl -- a newline plus a flush, and the flush is unobservable here.
+  //
+  // Matched on the TYPE, `ostream &(*)(ostream &)`, with the name only used to
+  // tell endl from the other two manipulators of that same signature. An
+  // ostream manipulator this does not know is refused rather than guessed: for
+  // std::flush that would be harmless, but for std::ws (which CONSUMES input)
+  // silently emitting nothing would be wrong, so neither is assumed.
+  if (IsOstreamManipulator(arg)) {
+    auto name = GetManipulatorName(arg);
+    if (name == "endl") {
+      StrCat(std::format("libcc2rs::cc2_insert_bytes({}, b\"\\n\");", recv));
+      return true;
+    }
+    if (name == "flush") {
+      // The generated code writes straight through, so there is no buffer of
+      // our own to flush; C++'s observable effect is ordering, which is already
+      // guaranteed.
+      return true;
+    }
+    return false;
+  }
+
+  // A string literal.  Goes through the byte helper rather than into a format
+  // string because a pending width pads it -- see the note above.
+  //
+  // Non-ASCII is fine here, unlike on the old format-string path: a `b"..."`
+  // byte-string literal carries the bytes verbatim, and C++ inserts those same
+  // bytes without interpreting them (`std::cout << " açordas?"` writes UTF-8
+  // through untouched).  GetEscapedStringLiteral already escapes each byte
+  // above 0x7F as `\xNN`, which is exactly what a byte-string literal needs --
+  // so the ASCII test the format-string path required is not needed and would
+  // refuse a case that works.  tests/unit/char_printing.cpp depends on this.
+  if (clang::isa<clang::StringLiteral>(arg->IgnoreImplicit())) {
+    StrCat(std::format("libcc2rs::cc2_insert_bytes({}, b{});", recv,
+                       GetEscapedStringLiteral(arg)));
+    return true;
+  }
+
+  auto type = arg->getType();
+
+  // A char: exactly one byte, and the basefield does not apply to it.
+  if (type->isCharType()) {
+    StrCat(std::format("libcc2rs::cc2_insert_bytes({}, &[({}) as u8]);", recv,
+                       ToString(arg)));
+    return true;
+  }
+
+  // A std::string, which this model represents as a NUL-terminated
+  // Vec<c_char>; drop the terminator, as the raw-args path already did.
+  if (Mapper::Map(type) == std::format("Vec<{}>", CharRustType())) {
+    PushExprKind push(*this, ExprKind::RValue);
+    std::string str = ToString(arg);
+    StrCat(std::format("libcc2rs::cc2_insert_bytes({}, &({}).iter().take(({})"
+                       ".len() - 1).map(|&c| c as u8).collect::<Vec<u8>>()"
+                       "[..]);",
+                       recv, str, str));
+    return true;
+  }
+
+  // A `char *` / `const char *`: a NUL-terminated C string, which C++ prints up
+  // to (not including) the terminator.  Distinct from the Vec<c_char> case
+  // above -- that is a std::string, which this model stores WITH a terminator
+  // it drops by length; here the length is not known without scanning.
+  if (type->isPointerType() && type->getPointeeType()->isCharType()) {
+    PushExprKind push(*this, ExprKind::RValue);
+    StrCat(std::format("libcc2rs::cc2_insert_cstr({}, &({}));", recv,
+                       ToString(arg)));
+    return true;
+  }
+
+  if (type->isBooleanType()) {
+    StrCat(std::format("libcc2rs::cc2_insert_bool({}, {});", recv,
+                       ToString(arg)));
+    return true;
+  }
+
+  if (type->isFloatingType()) {
+    StrCat(std::format("libcc2rs::cc2_insert_f64({}, ({}) as f64);", recv,
+                       ToString(arg)));
+    return true;
+  }
+
+  if (type->isIntegerType() || type->isEnumeralType()) {
+    // The ORIGINAL type's width and signedness travel with the value, because
+    // C++ prints a negative number under hex or oct as the unsigned
+    // reinterpretation at that type's own width: the same `-1` is `ffffffff`,
+    // `ffff` or sixteen `f`s as int, short or long.  Measured against clang.
+    // A widened value alone cannot recover that, which is why this is not just
+    // `as i128`.
+    auto bytes = ctx_.getTypeSize(type) / 8;
+    bool is_signed = type->isSignedIntegerOrEnumerationType();
+    StrCat(std::format("libcc2rs::cc2_insert_int({}, ({}) as i128, {}, {});",
+                       recv, ToString(arg), bytes,
+                       is_signed ? "true" : "false"));
+    return true;
+  }
+
+  return false;
+}
+
 bool Converter::GetRawArg(clang::Expr *arg, std::string &raw_args) {
   if (arg->getType()->isCharType()) {
     raw_args += "(&[" + ToString(arg) + " as u8]";
@@ -2450,44 +3280,33 @@ void Converter::ConvertCallToOstream(clang::CallExpr *expr) {
     return;
   }
 
-  std::string fmt;
-  const char *fmt_trait = "";
-  std::string fmt_width;
-  std::string fmt_args;
-  std::string raw_args;
   std::string stream_str = ConvertStream(stream);
-  size_t arg_count = args.size();
 
-  auto write_raw_args = [&]() {
-    if (!raw_args.empty()) {
-      StrCat(stream_str, ".write_all(&([", std::move(raw_args),
-             "].concat()));");
-      raw_args.clear();
+  // One emitted call per inserted item, in source order.  There is no
+  // statement-scoped format state left to assert about: the base, the width and
+  // the fill all live on the stream, so a statement that ends with `std::hex`
+  // still pending is simply a statement that left the stream in hex -- which is
+  // what C++ does.  That is what removes the
+  // `"Stream state was not restored after call"` abort rather than papering
+  // over it.
+  //
+  // An item this does not model is refused LOUDLY: ReportUnsupported under
+  // --survey, otherwise the same assert the rest of the converter uses. It must
+  // not fall through silently, because a dropped `<<` operand is invisible
+  // output corruption.
+  for (clang::Expr *arg : args) {
+    if (ConvertOstreamItem(arg, stream_str)) {
+      continue;
     }
-  };
-
-  auto write_fmt_args = [&]() {
-    if (!fmt_args.empty() || !fmt.empty()) {
-      StrCat("write!(", stream_str, ',',
-             std::format(R"("{}",)", std::move(fmt)), std::move(fmt_args),
-             ");");
-      fmt_args.clear();
-      fmt.clear();
+    std::string detail = Mapper::ToString(arg->getType());
+    if (!ReportUnsupported("OstreamInsertion", detail, arg->getExprLoc(),
+                           ctx_)) {
+      llvm::errs() << "ERROR: unsupported ostream insertion of type " << detail
+                   << '\n';
+      assert(0 && "unsupported ostream insertion");
     }
-  };
-
-  size_t i = 0;
-  while (i < arg_count) {
-    while (i < arg_count &&
-           GetFmtArg(args[i], fmt, fmt_args, fmt_trait, fmt_width))
-      ++i;
-    write_fmt_args();
-    while (i < arg_count && GetRawArg(args[i], raw_args))
-      ++i;
-    write_raw_args();
+    StrCat(UnsupportedPlaceholder("OstreamInsertion", detail), ';');
   }
-
-  assert(*fmt_trait == '\0' && "Stream state was not restored after call");
 }
 
 void Converter::ConvertPrintf(clang::CallExpr *expr) {
@@ -4334,9 +5153,33 @@ void Converter::ConvertMemberExpr(clang::MemberExpr *expr) {
   } else if (!name_override.empty()) {
     StrCat(token::kDot, name_override);
   } else if (member->getDeclName().isIdentifier()) {
+    // Inside a TRAIT body the receiver is the type parameter `Self`, which has
+    // no fields, so `self.kind_` is E0609 even though every implementor really
+    // does have that field (FieldsIncludingTraitBases flattened it in). Route it
+    // through the generated accessor instead; the accessor is a required trait
+    // method, so the compiler still catches an implementor that has no such
+    // field rather than silently reading the wrong storage.
+    // A WRITE through the accessor is deliberately NOT emitted: a `&self` trait
+    // method cannot hand out `&mut`, and a `*mut` accessor would compile while
+    // letting the refcount model alias. So a base method that assigns to a base
+    // field stays LOUD at rustc (E0609 naming the field and `Self`) rather than
+    // being given a representation that is wrong in one model.
+    if (auto *field = clang::dyn_cast<clang::FieldDecl>(member);
+        field != nullptr && base_is_this && in_trait_body_ && !isLValue()) {
+      trait_field_reads_.insert(field);
+      StrCat(token::kDot, TraitFieldAccessorName(field), "()");
+      return;
+    }
     StrCat(token::kDot);
     StrCat(GetNamedDeclAsString(member));
   }
+}
+
+std::string
+Converter::TraitFieldAccessorName(const clang::FieldDecl *field) {
+  // Distinct from any translated member: a C++ identifier cannot contain "__f_",
+  // and the field name is already unique within its record.
+  return std::format("__f_{}", GetNamedDeclAsString(field));
 }
 
 bool Converter::VisitCXXThisExpr(clang::CXXThisExpr *expr) {
@@ -5664,7 +6507,11 @@ void Converter::ConvertAbstractClass(clang::CXXRecordDecl *decl) {
   }
   // Before the trait signature, not inside it: a nested enum lowers to
   // top-level `pub type` + `pub const` items, which are not trait members.
+  // Same for a nested RECORD, which lowers to a top-level struct -- and which
+  // carries its own nested enums, so this has to run for the trait path or an
+  // enum two levels deep (`Outer::Inner::Lvl2`) is defined nowhere.
   EmitNestedEnums(decl);
+  EmitNestedRecords(decl);
   auto trait_name = GetRecordName(decl);
   auto access_specifier_as_string = AccessSpecifierAsString(decl->getAccess());
   // An abstract class derived from another abstract class becomes a SUBTRAIT.
@@ -5702,17 +6549,66 @@ void Converter::ConvertAbstractClass(clang::CXXRecordDecl *decl) {
     return !method->isImplicit() &&
            !clang::isa<clang::CXXDestructorDecl>(method);
   };
-  ConvertCXXMethodDecls(decl, signature, predicate);
+  // Record whether a trait item by this name really reached the output. The
+  // predicate above can reject EVERY member -- a class whose members are all
+  // overrides, all constructors, or all implicit -- in which case
+  // ConvertCXXMethodDecls emits nothing and there is no `trait <name>` for
+  // anything to name. GetTraitBase reads this, so the `impl <base> for
+  // <derived>` headers and `: <base>` supertrait bounds downstream reference
+  // only traits that exist.
+  // Buffer the trait body: which of its own fields the default method bodies
+  // READ is only known once they are converted, and the accessor declarations
+  // those reads call have to appear inside the same braces.
+  std::string body;
+  bool emitted = false;
+  auto saved_reads = std::move(trait_field_reads_);
+  trait_field_reads_.clear();
+  {
+    Buffer buf(*this);
+    PushTraitBody push(*this);
+    emitted = ConvertCXXMethodDecls(decl, /*signature=*/"", predicate);
+    body = std::move(buf).str();
+  }
+  auto reads = std::move(trait_field_reads_);
+  trait_field_reads_ = std::move(saved_reads);
+
+  // A field an inherited body reads needs a REQUIRED accessor: `Self` has no
+  // fields, so the body calls this instead, and each implementor gets a
+  // generated impl returning its own flattened copy. Required rather than
+  // defaulted, so a struct that somehow lacks the field is a compile error
+  // naming the method, not a silent wrong read.
+  std::string accessors;
+  for (const auto *field : reads) {
+    accessors += std::format("{} fn {}(&self) -> {};", keyword_unsafe_,
+                             TraitFieldAccessorName(field),
+                             GetUnsafeTypeAsString(field->getType()));
+  }
+  if (emitted || !accessors.empty()) {
+    StrCat(signature, token::kOpenCurlyBracket);
+    StrCat(accessors);
+    StrCat(body);
+    StrCat(token::kCloseCurlyBracket);
+    trait_records_.insert(GetID(decl));
+    for (const auto *field : reads) {
+      trait_accessors_[GetID(decl)].push_back(field);
+    }
+  }
 }
 
-void Converter::ConvertCXXMethodDecls(
+bool Converter::ConvertCXXMethodDecls(
     const clang::CXXRecordDecl *decl, const std::string_view signature,
     bool (*predicate)(clang::CXXMethodDecl *)) {
+  // An EMPTY signature means the caller is buffering the item body and will
+  // write the braces itself (ConvertAbstractClass, which has to inject accessor
+  // declarations it only discovers while converting the bodies).
+  bool bare = signature.empty();
   bool first = true;
   auto convert_method = [&](clang::CXXMethodDecl *method) {
     if (predicate(method)) {
       if (first) {
-        StrCat(signature, token::kOpenCurlyBracket);
+        if (!bare) {
+          StrCat(signature, token::kOpenCurlyBracket);
+        }
         first = false;
       }
       VisitCXXMethodDecl(method);
@@ -5722,9 +6618,10 @@ void Converter::ConvertCXXMethodDecls(
     convert_method(method);
   }
   ForEachTemplateInstantiatedMethod(decl, convert_method);
-  if (!first) {
+  if (!first && !bare) {
     StrCat(token::kCloseCurlyBracket);
   }
+  return !first;
 }
 
 const clang::CXXRecordDecl *
@@ -5747,7 +6644,33 @@ Converter::GetTraitBase(const clang::CXXRecordDecl *decl) {
       return nullptr;
     }
     base = base->getDefinition() != nullptr ? base->getDefinition() : base;
-    if (base->isAbstract()) {
+    // `isAbstract()` is necessary but NOT sufficient, and assuming it was is
+    // the second half of the same E0404/E0405 bucket. Two ways an abstract
+    // base still names no trait:
+    //
+    //  * It is not ours to lower. A class in a system header or behind an
+    //    --opaque-namespace boundary is never visited by ConvertAbstractClass;
+    //    an opaque record is emitted as a `#[repr(transparent)] struct`. So
+    //    naming it is "expected trait, found struct". Nothing ABOVE an external
+    //    base is ours either, so stop rather than keep walking.
+    //  * ConvertAbstractClass ran but emitted NOTHING. Its predicate drops
+    //    constructors, destructors, implicit members and every override a
+    //    supertrait already declares -- so a class whose members are all
+    //    overrides yields an empty item list and ConvertCXXMethodDecls emits no
+    //    `trait` at all. That is exactly a gtest TEST_F fixture: it is abstract
+    //    only because an opaque `::testing::Test` leaves `TestBody()` pure, and
+    //    its own `SetUp`/`TearDown` are overrides. Naming it gave 57 E0405
+    //    "cannot find trait" on one TU, one per TEST_F.
+    //
+    // So ask what was actually emitted, which is this function's documented
+    // contract, rather than re-deriving it from `isAbstract()`. An abstract
+    // class that emitted no trait is transparent here: keep walking, because a
+    // real trait may sit above it (`A0` abstract-with-items, `A1` abstract-all-
+    // overrides, leaf -- the leaf's overrides belong in `A0`'s impl block).
+    if (!IsUserDefinedDecl(base)) {
+      return nullptr;
+    }
+    if (base->isAbstract() && trait_records_.contains(GetID(base))) {
       return base;
     }
     cur = base;
@@ -5769,8 +6692,12 @@ Converter::GetDeclaringTrait(const clang::CXXRecordDecl *impl_for,
     auto *parent = m->getParent();
     parent = parent->getDefinition() != nullptr ? parent->getDefinition()
                                                 : parent;
+    // Same correction as in GetTraitBase: the test has to be "a trait by this
+    // name was EMITTED", not "we took the trait path for it". `abstract_structs_`
+    // is true of a class whose trait came out empty, and routing an override
+    // into `impl <that name> for T` is E0405.
     if (parent != impl_for && parent->isAbstract() &&
-        abstract_structs_.contains(GetID(parent))) {
+        trait_records_.contains(GetID(parent))) {
       found = parent;
     }
     for (const auto *over : m->overridden_methods()) {
@@ -5839,10 +6766,51 @@ void Converter::ConvertVirtualMethods(clang::CXXRecordDecl *decl) {
   for (auto &[trait, body] : grouped) {
     VirtualMethodsFor(decl, trait)->body += body;
   }
+  EmitTraitFieldAccessorImpls(decl);
   if (!inherent.empty()) {
     StrCat(keyword::kImpl, GetRecordName(decl));
     PushBrace impl_brace(*this);
     StrCat(inherent);
+  }
+}
+
+void Converter::EmitTraitFieldAccessorImpls(const clang::CXXRecordDecl *decl) {
+  // Satisfy every required field accessor declared by a trait above this record.
+  // The field itself was flattened into this struct by
+  // FieldsIncludingTraitBases, so the body is a plain read -- but it has to be
+  // written once per (trait, implementor) pair, because that is where Rust wants
+  // it. Walking up the whole chain, not just the direct base, so a 3-level
+  // hierarchy satisfies the accessors of every trait it inherits from.
+  for (const auto *cur = decl; cur != nullptr;) {
+    if (cur->bases_begin() == cur->bases_end()) {
+      return;
+    }
+    auto *base = cur->bases_begin()->getType()->getAsCXXRecordDecl();
+    if (base == nullptr) {
+      return;
+    }
+    base = base->getDefinition() != nullptr ? base->getDefinition() : base;
+    if (!IsUserDefinedDecl(base)) {
+      return;
+    }
+    auto it = trait_accessors_.find(GetID(base));
+    if (it != trait_accessors_.end() && trait_records_.contains(GetID(base))) {
+      auto *block = VirtualMethodsFor(decl, base);
+      if (block != nullptr) {
+        for (const auto *field : it->second) {
+          auto name = TraitFieldAccessorName(field);
+          // Idempotent: a record reached twice must not get the accessor twice.
+          if (block->body.find(name) != std::string::npos) {
+            continue;
+          }
+          block->body += std::format(
+              "{} fn {}(&self) -> {} {{ self.{} }}", keyword_unsafe_, name,
+              GetUnsafeTypeAsString(field->getType()),
+              GetNamedDeclAsString(field));
+        }
+      }
+    }
+    cur = base;
   }
 }
 
@@ -6061,15 +7029,42 @@ void Converter::AddDefaultTrait(const clang::RecordDecl *decl) {
     }
   }
 
+  // A default member initializer is arbitrary C++ and may translate to unsafe
+  // Rust (a `std::string` member's initializer reads a C string literal through
+  // `from_raw_parts`), but `fn default()` is safe, so it needs the same unsafe
+  // block the user-constructor path above already uses.  Only when there IS such
+  // an initializer: a plain field-defaults literal must stay outside one, or
+  // every record in the unsafe model gains an unused_unsafe warning.
+  if (RecordHasFieldInitializer(decl)) {
+    StrCat(keyword_unsafe_);
+    PushBrace unsafe_brace(*this);
+    EmitDefaultStructLiteral(decl);
+    return;
+  }
+
   EmitDefaultStructLiteral(decl);
 }
 
 void Converter::EmitDefaultStructLiteral(const clang::RecordDecl *decl) {
   StrCat(GetRecordName(decl));
   PushBrace brace(*this);
-  for (auto *field : decl->fields()) {
-    StrCat(GetNamedDeclAsString(field), token::kColon,
-           GetDefaultAsString(field->getType()), token::kComma);
+  for (auto *field : FieldsIncludingTraitBases(decl)) {
+    StrCat(GetNamedDeclAsString(field), token::kColon);
+    // A default member initializer IS the field's default value; without this
+    // the record read back zero where C++ reads the initializer.  An
+    // initializer that reads the object under construction cannot be spelled
+    // here -- there is no `this` yet in a `fn default()` -- so those keep the
+    // type default, which is what the constructor path also gives them before
+    // EmitDeferredFieldInits fixes them up.
+    auto *init = field->hasInClassInitializer()
+                     ? field->getInClassInitializer()
+                     : nullptr;
+    if (init && !ReadsThis(init)) {
+      ConvertVarInit(field->getType(), const_cast<clang::Expr *>(init));
+    } else {
+      StrCat(GetDefaultAsString(field->getType()));
+    }
+    StrCat(token::kComma);
   }
 }
 
@@ -6251,6 +7246,35 @@ std::string Converter::ConvertPlaceholder(clang::Expr *expr, clang::Expr *arg,
   }
 
   if (ph_ctx.declared_in_rule_as_rust_ptr && arg->getType()->isArrayType()) {
+    // A STRING LITERAL is not an array the converter may cast: each model has
+    // its own spelling for one, and a raw `as` produces Rust that does not
+    // compile in either. `(b"hello" as Ptr<u8>)` is E0605 "non-primitive cast"
+    // in the refcount model, and `(c"hello" as *const libc::c_char)` is E0606
+    // in the unsafe one.
+    //
+    // Both models ALREADY convert a literal correctly, on the
+    // CK_ArrayToPointerDecay cast: refcount emits
+    // `Ptr::<u8>::from_string_literal(b"hello")` and unsafe `c"hello".as_ptr()`.
+    // The reason that path is not taken here is that when the C++ parameter is a
+    // reference to an array -- `const char (&)[N]`, which is how
+    // `EqHelper::Compare(.., const std::string &, const char (&)[N])` takes
+    // `EXPECT_EQ(s, "literal")` -- the literal binds BY REFERENCE and there is no
+    // decay cast in the AST to carry it. Isolated exactly: in one TU, the same
+    // `"hello"` passed to a `const char *` parameter gets `from_string_literal`
+    // while the array-reference parameter gets the bare `as`.
+    //
+    // So synthesize the decay the AST omitted and convert THAT, which reuses
+    // each model's own literal handling rather than restating it here -- and
+    // therefore cannot drift from it.
+    if (IsStringLiteralExpr(arg)) {
+      auto *stripped = arg->IgnoreParens()->IgnoreImplicit();
+      auto *decayed = clang::ImplicitCastExpr::Create(
+          ctx_, ctx_.getPointerType(ctx_.getBaseElementType(
+                    stripped->getType().getUnqualifiedType())),
+          clang::CK_ArrayToPointerDecay, stripped,
+          /*BasePath=*/nullptr, clang::VK_PRValue, clang::FPOptionsOverride());
+      return ConvertRValue(decayed);
+    }
     return std::format(
         "({} as {})", ConvertFreshPointer(arg),
         Mapper::GetParamType(GetCalleeOrExpr(expr), ph_ctx.arg_idx));
