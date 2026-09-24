@@ -161,7 +161,23 @@ std::istream &f30(std::istream &o, std::string &v, char d) {
 // `while (std::getline(f, line))` -- how dcg/tools/mda/memDumpAnalyzer.h,
 // dsc/pcfg.cpp, dsc/superdsc.cpp, dsc/dataOpDsc.cpp and
 // dsc/designSpaceConfig.cpp all drive an input file -- is STILL NOT SUPPORTED,
-// deliberately, and it fails at rustc rather than silently.  Making it compile
+// deliberately.
+//
+// WARNING, and this paragraph replaces a claim that is no longer true.  This
+// used to read "it fails at rustc rather than silently".  That holds only in the
+// unsafe model.  MEASURED 2026-09-24 on a six-line istringstream probe, against
+// the same source built with clang (which prints three lines and `total=3`):
+//   unsafe   -- E0614 at rustc.  Loud, as documented.
+//   refcount -- COMPILES, then panics at run time, `ub: null pointer` at
+//               libcc2rs/src/rc.rs:350, having printed nothing at all.
+// The refcount body below ends in `Ptr::<Box<StringStream>>::null()`, and using
+// that as a loop condition emits `.upgrade().deref()` on the null.  FOUR rules
+// in tgt_refcount.rs return that same null stream, so the trap is latent in all
+// of them rather than specific to getline.  A refuse-to-compile gap and a
+// runtime null deref are not the same risk, and the five files listed above are
+// exactly the ones this would reach.
+//
+// Making it compile
 // needs the rule to return the stream so `operator bool` can be applied to the
 // result, and that was tried and reverted: rules/basic_ios answers
 // `operator bool` on a ::std::fs::File from position-vs-length, which is

@@ -206,7 +206,7 @@ fn f28<'a>(
     }))
 }
 
-fn f29(a0: &mut Box<libcc2rs::StringStream>, a1: Ptr<Vec<u8>>) -> Ptr<Box<libcc2rs::StringStream>> {
+fn f29<'a>(a0: &'a mut Box<libcc2rs::StringStream>, a1: Ptr<Vec<u8>>) -> &'a mut Box<libcc2rs::StringStream> {
     ({
         trait __Cc2Tok {
             fn __cc2_token(&mut self) -> Vec<u8>;
@@ -257,92 +257,29 @@ fn f29(a0: &mut Box<libcc2rs::StringStream>, a1: Ptr<Vec<u8>>) -> Ptr<Box<libcc2
         let mut __out: Vec<u8> = a0.__cc2_token();
         __out.push(0);
         a1.write(__out);
-        Ptr::<Box<libcc2rs::StringStream>>::null()
+        libcc2rs::stream_mut(&mut *a0)
     })
 }
 
-fn f30(a0: &mut Box<libcc2rs::StringStream>, a1: Ptr<Vec<u8>>, a2: u8) -> Ptr<Box<libcc2rs::StringStream>> {
+fn f30(a0: Ptr<Box<libcc2rs::StringStream>>, a1: Ptr<Vec<u8>>, a2: u8) -> Ptr<Box<libcc2rs::StringStream>> {
     ({
-        trait __Cc2Line {
-            fn __cc2_getline(&mut self, __d: u8) -> Vec<u8>;
-        }
-        impl __Cc2Line for libcc2rs::StringStream {
-            fn __cc2_getline(&mut self, __d: u8) -> Vec<u8> {
-                let __pos = self.iter().position(|&c| c == __d);
-                let __keep = __pos.unwrap_or(self.len());
-                let __end = __pos.map(|__p| __p + 1).unwrap_or(self.len());
-                self.drain(..__end).take(__keep).collect()
-            }
-        }
-        impl __Cc2Line for ::std::fs::File {
-            fn __cc2_getline(&mut self, __d: u8) -> Vec<u8> {
-                use ::std::io::Read;
-                let mut __out: Vec<u8> = Vec::new();
-                let mut __b = [0u8; 1];
-                loop {
-                    match self.read(&mut __b) {
-                        Ok(0) => break,
-                        Ok(_) => {
-                            if __b[0] == __d {
-                                break;
-                            }
-                            __out.push(__b[0]);
-                        }
-                        Err(_) => break,
-                    }
-                }
-                __out
-            }
-        }
-        // The delimiter is this rule's own parameter, not a fixed newline.
-        let mut __out: Vec<u8> = a0.__cc2_getline(a2);
-        __out.push(0);
-        a1.write(__out);
-        Ptr::<Box<libcc2rs::StringStream>>::null()
+        let mut __line: Vec<u8> = libcc2rs::Cc2Extract::cc2_getline(&mut a0.clone(), a2);
+        __line.push(0);
+        a1.write(__line);
+        a0
     })
 }
 
-fn f31(a0: &mut Box<libcc2rs::StringStream>, a1: Ptr<Vec<u8>>) -> Ptr<Box<libcc2rs::StringStream>> {
+fn f31(a0: Ptr<Box<libcc2rs::StringStream>>, a1: Ptr<Vec<u8>>) -> Ptr<Box<libcc2rs::StringStream>> {
     ({
-        trait __Cc2Line1 {
-            fn __cc2_getline1(&mut self) -> Vec<u8>;
-        }
-        impl __Cc2Line1 for libcc2rs::StringStream {
-            fn __cc2_getline1(&mut self) -> Vec<u8> {
-                let __pos = self.iter().position(|&c| c == b'\n');
-                let __keep = __pos.unwrap_or(self.len());
-                let __end = __pos.map(|__p| __p + 1).unwrap_or(self.len());
-                self.drain(..__end).take(__keep).collect()
-            }
-        }
-        impl __Cc2Line1 for ::std::fs::File {
-            fn __cc2_getline1(&mut self) -> Vec<u8> {
-                use ::std::io::Read;
-                let mut __out: Vec<u8> = Vec::new();
-                let mut __b = [0u8; 1];
-                loop {
-                    match self.read(&mut __b) {
-                        Ok(0) => break,
-                        Ok(_) => {
-                            if __b[0] == b'\n' {
-                                break;
-                            }
-                            __out.push(__b[0]);
-                        }
-                        Err(_) => break,
-                    }
-                }
-                __out
-            }
-        }
-        let mut __out: Vec<u8> = a0.__cc2_getline1();
-        __out.push(0);
-        a1.write(__out);
-        Ptr::<Box<libcc2rs::StringStream>>::null()
+        let mut __line: Vec<u8> = libcc2rs::Cc2Extract::cc2_getline(&mut a0.clone(), b'\n');
+        __line.push(0);
+        a1.write(__line);
+        a0
     })
 }
 
-fn f32(a0: &mut Box<libcc2rs::StringStream>, a1: Ptr<u8>) -> Ptr<Box<libcc2rs::StringStream>> {
+fn f32<'a>(a0: &'a mut Box<libcc2rs::StringStream>, a1: Ptr<u8>) -> &'a mut Box<libcc2rs::StringStream> {
     ({
         trait __Cc2Ch {
             fn __cc2_char(&mut self) -> u8;
@@ -378,7 +315,7 @@ fn f32(a0: &mut Box<libcc2rs::StringStream>, a1: Ptr<u8>) -> Ptr<Box<libcc2rs::S
             }
         }
         a1.write(a0.__cc2_char());
-        Ptr::<Box<libcc2rs::StringStream>>::null()
+        libcc2rs::stream_mut(&mut *a0)
     })
 }
 

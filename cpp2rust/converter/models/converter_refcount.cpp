@@ -614,6 +614,30 @@ void ConverterRefCount::AddByteReprTrait(const clang::RecordDecl *decl) {
     return;
   }
 
+  // A record carrying fields FLATTENED IN from a trait-lowered base cannot have
+  // a byte-level representation written for it. Every offset below comes from
+  // `layout.getFieldOffset(idx)`, which indexes the C++ record's OWN fields --
+  // the flattened base fields are not in that layout at all, so there is no
+  // index to ask for. Emitting the trait over only the record's own fields
+  // would compile and then silently leave the base fields uninitialised on
+  // `from_bytes` (E0063 is what caught it; without the missing-field check it
+  // would have been a wrong value, not an error).
+  //
+  // This is trade-off (c) of FieldsIncludingTraitBases made concrete: the C++
+  // object has a vptr the Rust struct does not, so a whole-object byte
+  // round-trip of a polymorphic record was never sound. Emit an EMPTY ByteRepr
+  // impl -- the same thing this function already does for a type whose fields
+  // do not implement ByteRepr -- so any site that actually calls to_bytes or
+  // from_bytes on one of these fails loudly at rustc naming the method.
+  if (!FieldsIncludingTraitBases(decl).empty() &&
+      FieldsIncludingTraitBases(decl).size() !=
+          static_cast<size_t>(std::distance(decl->field_begin(),
+                                            decl->field_end()))) {
+    StrCat(std::format("impl ByteRepr for {}", struct_name));
+    PushBrace brace(*this);
+    return;
+  }
+
   StrCat("impl ByteRepr for ", struct_name);
   PushBrace impl_brace(*this);
 
@@ -2276,6 +2300,31 @@ void ConverterRefCount::ConvertArrayCXXConstructExpr(
 
 std::string ConverterRefCount::ConvertStream(clang::Expr *expr) {
   return ConvertPointer(expr);
+}
+
+const char *ConverterRefCount::StreamManipFn() const {
+  return "libcc2rs::cc2_manip_refcount";
+}
+
+// ConvertStream already yields a `Ptr<..>`, and libcc2rs implements Cc2Insert
+// for `Ptr<T>` directly (forwarding through with_mut, so each RefCell borrow is
+// scoped to one call rather than held across a whole helper body -- that is the
+// E0716 the extraction rules were rewritten to avoid). So the receiver needs no
+// borrow: taking `&mut` of it would make the helper's S = Ptr<..> anyway, but
+// only after an extra reborrow that a Ptr temporary cannot always provide.
+std::string
+ConverterRefCount::StreamReceiver(const std::string &stream_str) const {
+  // Borrowed, not moved. The receiver expression is sometimes a place that
+  // cannot be moved out of -- `*os1 << ..` on a `std::ostream *` becomes
+  // `(*os1.borrow())`, a `Ptr<File>` behind a `Ref`, which is E0507 if taken by
+  // value (measured on tests/unit/cout_alias.cpp). libcc2rs implements
+  // Cc2Insert for `&Ptr<T>` as well as `Ptr<T>`, and since a Ptr is a handle,
+  // operating through a shared borrow reaches the same underlying stream.
+  return "&" + stream_str;
+}
+
+std::string ConverterRefCount::StreamManipArg(clang::Expr *arg) {
+  return std::format("({} as fn(Ptr<u32>) -> Ptr<u32>)", StreamManipName(arg));
 }
 
 bool ConverterRefCount::VisitCXXConstructExpr(clang::CXXConstructExpr *expr) {
