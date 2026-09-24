@@ -31,9 +31,42 @@
 // carries every recorded failure -- so `cargo test` reports the same set of
 // failures the gtest binary reports, not merely the first.
 //
-// Each body repeats the declaration because rule bodies are inlined
-// independently; the items are identical in every body and `__CC2_GTEST_FAILS`
-// is one thread-local however many copies of the declaration the output holds.
+// The cell itself is NOT declared in the rule body. A `thread_local!` item inside
+// the body is BLOCK-scoped, so every failure site got a fresh cell of its own and
+// the harness that reads the total read one nobody had written -- every test would
+// have passed regardless of its assertions, which is the worst possible direction
+// to be wrong in. The body therefore calls `__cc2_gtest_record_failure`, and the
+// converter emits that function and the one cell behind it exactly once
+// (Converter::EmitGTestHarness).
+
+// f15 names `Ptr<u8>`, which is this model's spelling of a string literal --
+// `rules/` compiles each tgt_*.rs as its own module (see rules/build.rs), so the
+// import has to be here and not inherited, exactly as rules/string's own
+// tgt_refcount.rs does it.
+use libcc2rs::*;
+
+// The one cell every failure is recorded into, and the function the rule body
+// below calls. Both are at MODULE scope on purpose.
+//
+// f6 used to declare the `thread_local!` INSIDE its own body. A `thread_local!` is
+// an item and an item inside a block is block-scoped, so each of the 157 inlined
+// copies got a private cell, and the #[test] harness that reads the total read one
+// that nothing had ever written: every test passed regardless of what its
+// assertions actually found. That is silent wrongness of the worst kind for a
+// campaign whose entire purpose is detecting divergence, so the cell is single and
+// shared, and the rule body only CALLS into it.
+//
+// The converter emits an identical pair once into the translated output
+// (Converter::EmitGTestHarness), because a rule body is inlined verbatim and
+// carries no declarations with it.
+thread_local! {
+    pub static __CC2_GTEST_FAILS: ::std::cell::RefCell<Vec<String>> =
+        const { ::std::cell::RefCell::new(Vec::new()) };
+}
+
+pub fn __cc2_gtest_record_failure(__m: String) {
+    __CC2_GTEST_FAILS.with(|__f| __f.borrow_mut().push(__m));
+}
 
 // --- the types -------------------------------------------------------------
 
@@ -112,6 +145,82 @@ unsafe fn f4(a0: *const libc::c_char, a1: *const libc::c_char, a2: f32, a3: f32)
     })
 }
 
+// --- EqHelper::Compare, the remaining operand shapes -----------------------
+//
+// One body per shape because a generic rule cannot be written at all: see the
+// SFINAE explanation in src.cpp. Each drops a0/a1 (the stringified operand
+// text) for the same reason f1 does.
+
+// EXPECT_EQ(i64, i32). WIDENS rather than truncating: C++ applies the usual
+// arithmetic conversions, so `attr.asInt() == 42` compares as i64 there, and an
+// `a2 as i32 == a3` here would wrap any value above i32::MAX and disagree with
+// C++ on exactly the INT64_MIN/INT64_MAX cases these tests exist to check.
+unsafe fn f12(a0: *const libc::c_char, a1: *const libc::c_char, a2: i64, a3: i32) -> bool {
+    ({
+        let _ = (a0, a1);
+        a2 == a3 as i64
+    })
+}
+
+// EXPECT_EQ(u32, u32).
+unsafe fn f13(a0: *const libc::c_char, a1: *const libc::c_char, a2: u32, a3: u32) -> bool {
+    ({
+        let _ = (a0, a1);
+        a2 == a3
+    })
+}
+
+// EXPECT_EQ(String, String). This model represents `std::string` as `Vec<u8>`
+// (rules/string t1) rather than the unsafe model's `Vec<libc::c_char>`, and both
+// sides carry their NUL, so a plain `==` compares the same bytes C++ compares.
+unsafe fn f14(
+    a0: *const libc::c_char,
+    a1: *const libc::c_char,
+    a2: Vec<u8>,
+    a3: Vec<u8>,
+) -> bool {
+    ({
+        let _ = (a0, a1);
+        a2 == a3
+    })
+}
+
+// EXPECT_EQ(String, "literal"). A string literal is a `Ptr<u8>` here, not a raw
+// pointer, so this uses the same idiom rules/string f18 uses for exactly this
+// comparison: iterate a2 WITHOUT its trailing NUL (`saturating_sub(1)`) against
+// the literal's own NUL-terminated iterator. Materialising a Vec and comparing
+// whole would have to get the terminator on both sides to agree, and
+// `to_c_string_iterator` already stops at it -- so this both avoids that and
+// keeps the two string rules saying the same thing about the same shape.
+unsafe fn f15(
+    a0: *const libc::c_char,
+    a1: *const libc::c_char,
+    a2: Vec<u8>,
+    a3: Ptr<u8>,
+) -> bool {
+    ({
+        let _ = (a0, a1);
+        a2.iter()
+            .copied()
+            .take(a2.len().saturating_sub(1))
+            .eq(a3.to_c_string_iterator())
+    })
+}
+
+// EXPECT_EQ(u64, u32) -- a `.size()` against an unsigned literal. Widens for
+// the same reason f12 does. `u64` and NOT `usize`, matching f3's spelling of
+// the same C++ `unsigned long`: they agree in size on this target, but the
+// declared type is emitted as a literal cast at the call site, so `usize` here
+// gave `sz == 0_u32 as usize` against a `u64` receiver -- E0308. This is the
+// trap the porting playbook records as "a hand-written target signature must
+// match src.cpp's spelling, not merely a type that happens to agree today".
+unsafe fn f16(a0: *const libc::c_char, a1: *const libc::c_char, a2: u64, a3: u32) -> bool {
+    ({
+        let _ = (a0, a1);
+        a2 == a3 as u64
+    })
+}
+
 // --- the failure report ----------------------------------------------------
 
 // AssertHelper's constructor: builds the message. `a0` is the
@@ -120,14 +229,16 @@ unsafe fn f4(a0: *const libc::c_char, a1: *const libc::c_char, a2: f32, a3: f32)
 // failed. It does NOT change what this body does, and must not: the difference
 // between the two IS the early return, which is C++ control flow the converter
 // translates on its own, not something a rule may decide.
-unsafe fn f5(a0: i32, a1: *const libc::c_char, a2: i32, a3: *const libc::c_char) -> String {
+// In THIS model a `const char *` is a `Ptr<u8>`, not a raw pointer: the committed
+// signature said `*const libc::c_char` and every EXPECT_* site was then E0308
+// ("expected *const i8, found Ptr<u8>") the moment a #[test] tried to compile it --
+// the trap the playbook records as "a hand-written target signature must match
+// src.cpp's spelling". `to_c_string_iterator` stops at the NUL, which is what turns
+// the file name and gtest's message text back into Strings here.
+unsafe fn f5(a0: i32, a1: Ptr<u8>, a2: i32, a3: Ptr<u8>) -> String {
     ({
-        let __cstr = |__p: *const libc::c_char| -> String {
-            if __p.is_null() {
-                String::new()
-            } else {
-                ::std::ffi::CStr::from_ptr(__p).to_string_lossy().into_owned()
-            }
+        let __cstr = |__p: Ptr<u8>| -> String {
+            String::from_utf8_lossy(&__p.to_c_string_iterator().collect::<Vec<u8>>()).into_owned()
         };
         format!(
             "{}:{}: {} failure\n{}",
@@ -144,23 +255,26 @@ unsafe fn f5(a0: i32, a1: *const libc::c_char, a2: i32, a3: *const libc::c_char)
 // exactly as EXPECT_* does in C++.
 unsafe fn f6(a0: String, a1: ()) {
     ({
-        thread_local! {
-            pub static __CC2_GTEST_FAILS: ::std::cell::RefCell<Vec<String>> =
-                const { ::std::cell::RefCell::new(Vec::new()) };
-        }
         let _ = a1;
-        __CC2_GTEST_FAILS.with(|__f| __f.borrow_mut().push(a0));
+        __cc2_gtest_record_failure(a0);
     })
 }
 
 // --- AssertionResult -------------------------------------------------------
 
 // EXPECT_TRUE / EXPECT_FALSE: AssertionResult straight from a bool.
+//
+// a1 is gtest's unused `void *` overload disambiguator and is ALWAYS defaulted at
+// the call site, so the body must not mention it. This used to say `let _ = a1;`,
+// and because a defaulted pointer argument is emitted as a bare
+// `Default::default()` with no type to infer from, every EXPECT_TRUE/EXPECT_FALSE
+// site became E0790 "cannot call associated function on trait" -- two of the
+// playbook's recorded traps at once ("a rule body must not touch a receiver it
+// does not need", "a defaulted pointer arg arrives as Default::default() with no
+// type"). Not naming it means nothing is emitted for it.
+#[allow(unused_variables)]
 unsafe fn f7(a0: bool, a1: Option<()>) -> bool {
-    ({
-        let _ = a1;
-        a0
-    })
+    a0
 }
 
 // `if (gtest_ar)`.
@@ -170,10 +284,10 @@ unsafe fn f8(a0: bool) -> bool {
 
 // gtest_ar.failure_message() on a bool-represented result: the values are
 // printed by the harness, so there is no lazily built text to hand back.
-unsafe fn f9(a0: bool) -> *const libc::c_char {
+unsafe fn f9(a0: bool) -> Ptr<u8> {
     ({
         let _ = a0;
-        c"".as_ptr()
+        Ptr::<u8>::from_string_literal(b"")
     })
 }
 
@@ -185,20 +299,11 @@ unsafe fn f11() -> () {
 // GetBoolAssertionFailureMessage(result, expr_text, actual, expected). Unlike
 // f9 this one HAS the useful text -- gtest passes the stringified expression and
 // the two boolean spellings -- so it is reassembled instead of dropped.
-unsafe fn f10(
-    a0: bool,
-    a1: *const libc::c_char,
-    a2: *const libc::c_char,
-    a3: *const libc::c_char,
-) -> Vec<libc::c_char> {
+unsafe fn f10(a0: bool, a1: Ptr<u8>, a2: Ptr<u8>, a3: Ptr<u8>) -> Vec<u8> {
     ({
         let _ = a0;
-        let __cstr = |__p: *const libc::c_char| -> String {
-            if __p.is_null() {
-                String::new()
-            } else {
-                ::std::ffi::CStr::from_ptr(__p).to_string_lossy().into_owned()
-            }
+        let __cstr = |__p: Ptr<u8>| -> String {
+            String::from_utf8_lossy(&__p.to_c_string_iterator().collect::<Vec<u8>>()).into_owned()
         };
         let __s = format!(
             "Value of: {}\n  Actual: {}\nExpected: {}",
@@ -206,7 +311,7 @@ unsafe fn f10(
             __cstr(a2),
             __cstr(a3)
         );
-        let mut __v: Vec<libc::c_char> = __s.bytes().map(|__b| __b as libc::c_char).collect();
+        let mut __v: Vec<u8> = __s.into_bytes();
         __v.push(0);
         __v
     })

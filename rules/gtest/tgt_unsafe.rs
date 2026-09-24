@@ -31,9 +31,36 @@
 // carries every recorded failure -- so `cargo test` reports the same set of
 // failures the gtest binary reports, not merely the first.
 //
-// Each body repeats the declaration because rule bodies are inlined
-// independently; the items are identical in every body and `__CC2_GTEST_FAILS`
-// is one thread-local however many copies of the declaration the output holds.
+// The cell itself is NOT declared in the rule body. A `thread_local!` item inside
+// the body is BLOCK-scoped, so every failure site got a fresh cell of its own and
+// the harness that reads the total read one nobody had written -- every test would
+// have passed regardless of its assertions, which is the worst possible direction
+// to be wrong in. The body therefore calls `__cc2_gtest_record_failure`, and the
+// converter emits that function and the one cell behind it exactly once
+// (Converter::EmitGTestHarness).
+
+// The one cell every failure is recorded into, and the function the rule body
+// below calls. Both are at MODULE scope on purpose.
+//
+// f6 used to declare the `thread_local!` INSIDE its own body. A `thread_local!` is
+// an item and an item inside a block is block-scoped, so each of the 157 inlined
+// copies got a private cell, and the #[test] harness that reads the total read one
+// that nothing had ever written: every test passed regardless of what its
+// assertions actually found. That is silent wrongness of the worst kind for a
+// campaign whose entire purpose is detecting divergence, so the cell is single and
+// shared, and the rule body only CALLS into it.
+//
+// The converter emits an identical pair once into the translated output
+// (Converter::EmitGTestHarness), because a rule body is inlined verbatim and
+// carries no declarations with it.
+thread_local! {
+    pub static __CC2_GTEST_FAILS: ::std::cell::RefCell<Vec<String>> =
+        const { ::std::cell::RefCell::new(Vec::new()) };
+}
+
+pub fn __cc2_gtest_record_failure(__m: String) {
+    __CC2_GTEST_FAILS.with(|__f| __f.borrow_mut().push(__m));
+}
 
 // --- the types -------------------------------------------------------------
 
@@ -112,6 +139,83 @@ unsafe fn f4(a0: *const libc::c_char, a1: *const libc::c_char, a2: f32, a3: f32)
     })
 }
 
+// --- EqHelper::Compare, the remaining operand shapes -----------------------
+//
+// One body per shape because a generic rule cannot be written at all: see the
+// SFINAE explanation in src.cpp. Each drops a0/a1 (the stringified operand
+// text) for the same reason f1 does.
+
+// EXPECT_EQ(i64, i32). WIDENS rather than truncating: C++ applies the usual
+// arithmetic conversions, so `attr.asInt() == 42` compares as i64 there, and an
+// `a2 as i32 == a3` here would wrap any value above i32::MAX and disagree with
+// C++ on exactly the INT64_MIN/INT64_MAX cases these tests exist to check.
+unsafe fn f12(a0: *const libc::c_char, a1: *const libc::c_char, a2: i64, a3: i32) -> bool {
+    ({
+        let _ = (a0, a1);
+        a2 == a3 as i64
+    })
+}
+
+// EXPECT_EQ(u32, u32).
+unsafe fn f13(a0: *const libc::c_char, a1: *const libc::c_char, a2: u32, a3: u32) -> bool {
+    ({
+        let _ = (a0, a1);
+        a2 == a3
+    })
+}
+
+// EXPECT_EQ(String, String). `std::string` is `Vec<libc::c_char>` in this
+// representation and both sides carry their NUL, so a plain `==` compares the
+// same bytes C++ compares.
+unsafe fn f14(
+    a0: *const libc::c_char,
+    a1: *const libc::c_char,
+    a2: Vec<libc::c_char>,
+    a3: Vec<libc::c_char>,
+) -> bool {
+    ({
+        let _ = (a0, a1);
+        a2 == a3
+    })
+}
+
+// EXPECT_EQ(String, "literal"). The literal arrives as a pointer to a NUL-
+// terminated array, so it is materialised the way rules/string f18 does --
+// INCLUDING the terminator, because a2 carries one and comparing a Vec that
+// ends in 0 against one that does not would report every equal string unequal.
+unsafe fn f15(
+    a0: *const libc::c_char,
+    a1: *const libc::c_char,
+    a2: Vec<libc::c_char>,
+    a3: *const libc::c_char,
+) -> bool {
+    ({
+        let _ = (a0, a1);
+        a2 == {
+            let __s = a3;
+            ::std::slice::from_raw_parts(
+                __s,
+                (0..).take_while(|&__i| *__s.add(__i) != 0).count() + 1,
+            )
+            .to_vec()
+        }
+    })
+}
+
+// EXPECT_EQ(u64, u32) -- a `.size()` against an unsigned literal. Widens for
+// the same reason f12 does. `u64` and NOT `usize`, matching f3's spelling of
+// the same C++ `unsigned long`: they agree in size on this target, but the
+// declared type is emitted as a literal cast at the call site, so `usize` here
+// gave `sz == 0_u32 as usize` against a `u64` receiver -- E0308. This is the
+// trap the porting playbook records as "a hand-written target signature must
+// match src.cpp's spelling, not merely a type that happens to agree today".
+unsafe fn f16(a0: *const libc::c_char, a1: *const libc::c_char, a2: u64, a3: u32) -> bool {
+    ({
+        let _ = (a0, a1);
+        a2 == a3 as u64
+    })
+}
+
 // --- the failure report ----------------------------------------------------
 
 // AssertHelper's constructor: builds the message. `a0` is the
@@ -144,23 +248,26 @@ unsafe fn f5(a0: i32, a1: *const libc::c_char, a2: i32, a3: *const libc::c_char)
 // exactly as EXPECT_* does in C++.
 unsafe fn f6(a0: String, a1: ()) {
     ({
-        thread_local! {
-            pub static __CC2_GTEST_FAILS: ::std::cell::RefCell<Vec<String>> =
-                const { ::std::cell::RefCell::new(Vec::new()) };
-        }
         let _ = a1;
-        __CC2_GTEST_FAILS.with(|__f| __f.borrow_mut().push(a0));
+        __cc2_gtest_record_failure(a0);
     })
 }
 
 // --- AssertionResult -------------------------------------------------------
 
 // EXPECT_TRUE / EXPECT_FALSE: AssertionResult straight from a bool.
+//
+// a1 is gtest's unused `void *` overload disambiguator and is ALWAYS defaulted at
+// the call site, so the body must not mention it. This used to say `let _ = a1;`,
+// and because a defaulted pointer argument is emitted as a bare
+// `Default::default()` with no type to infer from, every EXPECT_TRUE/EXPECT_FALSE
+// site became E0790 "cannot call associated function on trait" -- two of the
+// playbook's recorded traps at once ("a rule body must not touch a receiver it
+// does not need", "a defaulted pointer arg arrives as Default::default() with no
+// type"). Not naming it means nothing is emitted for it.
+#[allow(unused_variables)]
 unsafe fn f7(a0: bool, a1: Option<()>) -> bool {
-    ({
-        let _ = a1;
-        a0
-    })
+    a0
 }
 
 // `if (gtest_ar)`.

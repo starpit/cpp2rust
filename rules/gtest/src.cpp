@@ -159,6 +159,90 @@ testing::AssertionResult f4(const char *a0, const char *a1, float a2,
 }
 
 // ---------------------------------------------------------------------------
+// EqHelper::Compare, the rest of the OPERAND SHAPES -- f12 to f18.
+//
+// WHY ONE RULE PER SHAPE AND NOT ONE GENERIC RULE.
+//
+// The obvious economy here is a single
+// `template <typename T1, typename T2> ... Compare(.., const T1 &, const T2 &)`,
+// and it CANNOT be written. `EqHelper::Compare`'s general overload
+// (gtest.h:1403) carries a defaulted SFINAE parameter --
+// `typename std::enable_if<!std::is_integral<T1>::value ||
+// !std::is_pointer<T2>::value>::type * = nullptr` -- so with T1/T2 still
+// dependent that condition is not yet decidable, no overload is viable, and
+// `cpp-rule-preprocessor` fails the rule outright:
+//
+//     No viable function
+//     Assertion `0 && "Rule resolution failed"' failed.    (cpp_rule_preprocessor.cpp:837)
+//
+// Measured on all three weakenings -- `(const T1 &, const T1 &)`,
+// `(const T1 &, const int &)` and `(const long &, const T1 &)`: every one fails
+// the same way, and every CONCRETE spelling below resolves. So the operand
+// types have to be spelled out, and the set below is what the four TUs actually
+// instantiate, read off `cpp2rust --verbose` rather than guessed:
+//
+//     const long &, const int &                125 searches ->  25 sites
+//     const unsigned int &, const unsigned int &  80          ->  16
+//     const std::string &, const char (&)[N]      40          ->   8
+//     const OperandAttr::Type &, same             25          ->   5
+//     const std::string &, const std::string &    10          ->   2
+//     const unsigned long &, const unsigned int &  5          ->   1
+//     const DataFormats &, same                    5          ->   1
+//
+// (five lookups per call site; f2's `const long &, const long &` already
+// covered the other 3.) 58 sites, and 58 was exactly the EqHelper E0433 count.
+//
+// The two PROJECT enum shapes are deliberately absent. A rule here would have
+// to name `OperandAttr::Type` and `DataFormats`, which are dt_src types, and a
+// translation rule module keyed on the code under port is the wrong direction
+// entirely -- `rules/` is for the library boundary. Those 6 sites are instead
+// the converter's job: both enums translate to a plain Rust type alias with
+// integer constants, so `==` on two of them is already expressible and the gap
+// is that the call never reaches a comparison at all. Left loud.
+
+// EXPECT_EQ(int64-ish, int literal) -- the single most common shape in these
+// TUs, e.g. `EXPECT_EQ(attr.asInt(), 42)` where asInt() returns int64_t and the
+// literal is int. C++ compares after the usual arithmetic conversions, which
+// widen the int; the Rust body must therefore widen too rather than truncate
+// the i64, or `EXPECT_EQ(attr.asInt(), 42)` on a value above i32::MAX would
+// silently answer differently from C++.
+testing::AssertionResult f12(const char *a0, const char *a1, const long &a2,
+                             const int &a3) {
+  return testing::internal::EqHelper::Compare(a0, a1, a2, a3);
+}
+
+// EXPECT_EQ on u32 -- `result[0]` against `1u` / `UINT32_MAX` in the int128
+// tests, where the array element and the literal are both unsigned.
+testing::AssertionResult f13(const char *a0, const char *a1,
+                             const unsigned int &a2, const unsigned int &a3) {
+  return testing::internal::EqHelper::Compare(a0, a1, a2, a3);
+}
+
+// EXPECT_EQ(std::string, std::string).
+testing::AssertionResult f14(const char *a0, const char *a1,
+                             const std::string &a2, const std::string &a3) {
+  return testing::internal::EqHelper::Compare(a0, a1, a2, a3);
+}
+
+// EXPECT_EQ(std::string, "literal"). The right operand is a reference to a
+// char ARRAY, not a `const char *`: `EXPECT_EQ(attr.asString(), "test_string")`
+// binds the literal by reference and its length is part of the type. The size
+// is written as a concrete 12 only so the rule resolves -- cpp2rust prints the
+// extent as `_` and keys on `const char (&)[_]`, so this one rule matches every
+// literal length, which is why there is no per-length family here.
+testing::AssertionResult f15(const char *a0, const char *a1,
+                             const std::string &a2, const char (&a3)[12]) {
+  return testing::internal::EqHelper::Compare(a0, a1, a2, a3);
+}
+
+// EXPECT_EQ(size_t, unsigned literal) -- a `.size()` against `4u`.
+testing::AssertionResult f16(const char *a0, const char *a1,
+                             const unsigned long &a2,
+                             const unsigned int &a3) {
+  return testing::internal::EqHelper::Compare(a0, a1, a2, a3);
+}
+
+// ---------------------------------------------------------------------------
 // the failure report
 //
 // `AssertHelper(type, file, line, message) = Message()` is how both EXPECT_ and
