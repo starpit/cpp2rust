@@ -97,10 +97,14 @@ fn f28<T1>(a0: &mut Ptr<T1>) -> Ptr<T1> {
     a0.postfix_inc()
 }
 
-fn f29<T1: Clone>(a0: Vec<Value<Vec<T1>>>) -> Vec<Value<Vec<T1>>> {
-    a0.iter()
-        .map(|inner_vec| Rc::new(RefCell::new(inner_vec.borrow().clone())))
-        .collect()
+// COPY IS DEEP, RECURSIVELY.  The old body unwrapped exactly ONE Value layer
+// (`Rc::new(RefCell::new(v.borrow().clone()))`), which is right for a scalar
+// element and WRONG the moment the element is itself a container: the inner
+// .clone() then copies Rc HANDLES and the copy ALIASES the original.  Measured
+// against clang-built C++: `map<int,map<int,long>> b(a); b[1][2]=22` gave
+// C++ a=11, refcount a=22.  DeepClone recurses, so it is correct at every depth.
+fn f29<T1: DeepClone>(a0: Vec<Value<Vec<T1>>>) -> Vec<Value<Vec<T1>>> {
+    a0.deep_clone()
 }
 
 fn f30<T1: Default + Clone>(a0: usize) -> Vec<Value<Vec<T1>>> {
@@ -460,4 +464,43 @@ fn f127(a0: Ptr<bool>, a1: usize) -> bool {
 // Contiguous-iterator operator-(long). The mirror of f25 (`a0.offset(a1)`).
 fn f128<T1>(a0: Ptr<T1>, a1: usize) -> Ptr<T1> {
     a0.offset(-(a1 as isize))
+}
+
+// std::vector's copy constructors need a REFCOUNT OVERLAY, which they did not
+// have: with only a tgt_unsafe body, the refcount model falls through to it and
+// gets its `a0.clone()`.  That is shallow, and a Vec whose element is itself a
+// container of `Value` cells is then ALIASED by its own copy.  Measured against
+// clang-built C++: `vector<map<int,long>> b(a); b[0][1] = 22` gave C++ a=11 and
+// refcount a=22.  This was the LAST site in the nine-case aliasing matrix still
+// wrong after the rule-level and converter-level deep_clone work, precisely
+// because a missing overlay is invisible -- the module looked already handled.
+//
+// rules/vector f29 (`vector<vector<T>>`) exists because someone hit exactly this
+// for ONE element type and wrote a rule for that shape.  These two rules are the
+// general case, so f29 is now redundant with them rather than load-bearing; it
+// is left in place because removing a rule is a separate, riskier change.
+fn f109<T1: DeepClone>(a0: Vec<T1>) -> Vec<T1> {
+    a0.deep_clone()
+}
+
+fn f110<T1: DeepClone>(a0: Vec<T1>) -> Vec<T1> {
+    a0.deep_clone()
+}
+
+// A REFCOUNT OVERLAY for the copying push_back, which this module did not have.
+// With only a tgt_unsafe body the refcount model falls through to it, and its
+// `a0.clone()` is SHALLOW: when the element is itself a container of `Value`
+// cells the copy shares those handles and aliases the original.  A missing
+// overlay is the invisible form of this bug -- the module reads as already
+// handled.  See libcc2rs/src/deep_clone.rs for the measurement.
+fn f21<T1: DeepClone>(a0: &mut Vec<T1>, a1: T1) {
+    a0.push(a1.deep_clone())
+}
+
+fn f80<T1: DeepClone>(a0: &mut Vec<T1>, a1: T1) {
+    a0.push(a1.deep_clone())
+}
+
+fn f100<T1: DeepClone>(a0: &mut Vec<Vec<T1>>, a1: Vec<T1>) {
+    a0.push(a1.deep_clone())
 }

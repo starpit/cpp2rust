@@ -101,25 +101,19 @@ fn f10<T1, T2>(a0: T1, a1: T2) -> (Value<T1>, Value<T2>) {
     )
 }
 
-fn f11<T1: Clone, T2: Clone>(a0: (Value<T1>, Value<T2>)) -> (Value<T1>, Value<T2>) {
-    (
-        Rc::new(RefCell::new(a0.0.borrow().clone())),
-        Rc::new(RefCell::new(a0.1.borrow().clone())),
-    )
+fn f11<T1: DeepClone, T2: DeepClone>(a0: (Value<T1>, Value<T2>)) -> (Value<T1>, Value<T2>) {
+    a0.deep_clone()
 }
 
 fn f12<T1: Default, T2: Default>(a0: &mut (Value<T1>, Value<T2>)) -> (Value<T1>, Value<T2>) {
     std::mem::take(&mut *a0)
 }
 
-fn f13<T1: Clone + ByteRepr, T2: Clone + ByteRepr>(
+fn f13<T1: DeepClone + ByteRepr, T2: DeepClone + ByteRepr>(
     a0: Ptr<(Value<T1>, Value<T2>)>,
     a1: (Value<T1>, Value<T2>),
 ) {
-    a0.write((
-        Rc::new(RefCell::new(a1.0.borrow().clone())),
-        Rc::new(RefCell::new(a1.1.borrow().clone())),
-    ))
+    a0.write(a1.deep_clone())
 }
 
 fn f14<T1: Default + ByteRepr, T2: Default + ByteRepr>(
@@ -448,27 +442,19 @@ fn f57<T1, T2, T3>(a0: T1, a1: T2, a2: T3) -> (Value<T1>, Value<T2>, Value<T3>) 
     )
 }
 
-fn f58<T1: Clone, T2: Clone, T3: Clone>(a0: (Value<T1>, Value<T2>, Value<T3>)) -> (Value<T1>, Value<T2>, Value<T3>) {
-    (
-        Rc::new(RefCell::new(a0.0.borrow().clone())),
-        Rc::new(RefCell::new(a0.1.borrow().clone())),
-        Rc::new(RefCell::new(a0.2.borrow().clone())),
-    )
+fn f58<T1: DeepClone, T2: DeepClone, T3: DeepClone>(a0: (Value<T1>, Value<T2>, Value<T3>)) -> (Value<T1>, Value<T2>, Value<T3>) {
+    a0.deep_clone()
 }
 
 fn f59<T1: Default, T2: Default, T3: Default>(a0: &mut (Value<T1>, Value<T2>, Value<T3>)) -> (Value<T1>, Value<T2>, Value<T3>) {
     std::mem::take(&mut *a0)
 }
 
-fn f60<T1: Clone + ByteRepr, T2: Clone + ByteRepr, T3: Clone + ByteRepr>(
+fn f60<T1: DeepClone + ByteRepr, T2: DeepClone + ByteRepr, T3: DeepClone + ByteRepr>(
     a0: Ptr<(Value<T1>, Value<T2>, Value<T3>)>,
     a1: (Value<T1>, Value<T2>, Value<T3>),
 ) {
-    a0.write((
-        Rc::new(RefCell::new(a1.0.borrow().clone())),
-        Rc::new(RefCell::new(a1.1.borrow().clone())),
-        Rc::new(RefCell::new(a1.2.borrow().clone())),
-    ))
+    a0.write(a1.deep_clone())
 }
 
 fn f61<T1: Default + ByteRepr, T2: Default + ByteRepr, T3: Default + ByteRepr>(
@@ -1472,29 +1458,19 @@ fn f178<T1, T2, T3, T4>(a0: T1, a1: T2, a2: T3, a3: T4) -> (Value<T1>, Value<T2>
     )
 }
 
-fn f179<T1: Clone, T2: Clone, T3: Clone, T4: Clone>(a0: (Value<T1>, Value<T2>, Value<T3>, Value<T4>)) -> (Value<T1>, Value<T2>, Value<T3>, Value<T4>) {
-    (
-        Rc::new(RefCell::new(a0.0.borrow().clone())),
-        Rc::new(RefCell::new(a0.1.borrow().clone())),
-        Rc::new(RefCell::new(a0.2.borrow().clone())),
-        Rc::new(RefCell::new(a0.3.borrow().clone())),
-    )
+fn f179<T1: DeepClone, T2: DeepClone, T3: DeepClone, T4: DeepClone>(a0: (Value<T1>, Value<T2>, Value<T3>, Value<T4>)) -> (Value<T1>, Value<T2>, Value<T3>, Value<T4>) {
+    a0.deep_clone()
 }
 
 fn f180<T1: Default, T2: Default, T3: Default, T4: Default>(a0: &mut (Value<T1>, Value<T2>, Value<T3>, Value<T4>)) -> (Value<T1>, Value<T2>, Value<T3>, Value<T4>) {
     std::mem::take(&mut *a0)
 }
 
-fn f181<T1: Clone + ByteRepr, T2: Clone + ByteRepr, T3: Clone + ByteRepr, T4: Clone + ByteRepr>(
+fn f181<T1: DeepClone + ByteRepr, T2: DeepClone + ByteRepr, T3: DeepClone + ByteRepr, T4: DeepClone + ByteRepr>(
     a0: Ptr<(Value<T1>, Value<T2>, Value<T3>, Value<T4>)>,
     a1: (Value<T1>, Value<T2>, Value<T3>, Value<T4>),
 ) {
-    a0.write((
-        Rc::new(RefCell::new(a1.0.borrow().clone())),
-        Rc::new(RefCell::new(a1.1.borrow().clone())),
-        Rc::new(RefCell::new(a1.2.borrow().clone())),
-        Rc::new(RefCell::new(a1.3.borrow().clone())),
-    ))
+    a0.write(a1.deep_clone())
 }
 
 fn f182<T1: Default + ByteRepr, T2: Default + ByteRepr, T3: Default + ByteRepr, T4: Default + ByteRepr>(

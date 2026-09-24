@@ -156,3 +156,13 @@ fn f40<T1>(a0: Ptr<T1>) -> Ptr<T1> {
 fn f41<T1>(a0: Ptr<T1>) -> Ptr<T1> {
     a0
 }
+
+// A REFCOUNT OVERLAY for the copy constructor, which this module did not have.
+// With only a tgt_unsafe body the refcount model falls through to it, and its
+// `a0.clone()` is SHALLOW: when the element is itself a container of `Value`
+// cells the copy shares those handles and aliases the original.  A missing
+// overlay is the invisible form of this bug -- the module reads as already
+// handled.  See libcc2rs/src/deep_clone.rs for the measurement.
+fn f21<T1: DeepClone>(a0: Vec<T1>) -> Vec<T1> {
+    a0.deep_clone()
+}

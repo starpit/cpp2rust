@@ -48,10 +48,16 @@ fn f5<T1, T2>() -> BTreeMap<T1, Value<T2>> {
     BTreeMap::new()
 }
 
-fn f6<T1: Ord + Clone, T2: Clone>(a0: BTreeMap<T1, Value<T2>>) -> BTreeMap<T1, Value<T2>> {
-    a0.iter()
-        .map(|(k, v)| (k.clone(), Rc::new(RefCell::new(v.borrow().clone()))))
-        .collect()
+// COPY IS DEEP, RECURSIVELY.  The old body unwrapped exactly ONE Value layer
+// (`Rc::new(RefCell::new(v.borrow().clone()))`), which is right for a scalar
+// element and WRONG the moment the element is itself a container: the inner
+// .clone() then copies Rc HANDLES and the copy ALIASES the original.  Measured
+// against clang-built C++: `map<int,map<int,long>> b(a); b[1][2]=22` gave
+// C++ a=11, refcount a=22.  DeepClone recurses, so it is correct at every depth.
+fn f6<T1: Ord + DeepClone, T2: DeepClone>(
+    a0: BTreeMap<T1, Value<T2>>,
+) -> BTreeMap<T1, Value<T2>> {
+    a0.deep_clone()
 }
 
 fn f7<T1: Ord, T2: Default>(a0: &mut BTreeMap<T1, Value<T2>>, a1: T1) -> Ptr<T2> {
@@ -164,15 +170,11 @@ fn f25<T1: 'static, T2: 'static>(
     a0.write(__src)
 }
 
-fn f26<T1: Ord + Clone + 'static, T2: Clone + 'static>(
+fn f26<T1: Ord + DeepClone + 'static, T2: DeepClone + 'static>(
     a0: Ptr<BTreeMap<T1, Value<T2>>>,
     a1: BTreeMap<T1, Value<T2>>,
 ) {
-    a0.write(
-        a1.iter()
-            .map(|(k, v)| (k.clone(), Rc::new(RefCell::new(v.borrow().clone()))))
-            .collect(),
-    )
+    a0.write(a1.deep_clone())
 }
 
 fn f27<T1: PartialEq, T2: PartialEq>(

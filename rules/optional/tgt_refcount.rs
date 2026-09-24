@@ -35,9 +35,14 @@ fn f5<T1>(a0: T1) -> Option<Value<T1>> {
     Some(Rc::new(RefCell::new(a0)))
 }
 
-fn f6<T1: Clone>(a0: Option<Value<T1>>) -> Option<Value<T1>> {
-    a0.as_ref()
-        .map(|v| Rc::new(RefCell::new(v.borrow().clone())))
+// COPY IS DEEP, RECURSIVELY.  The old body unwrapped exactly ONE Value layer
+// (`Rc::new(RefCell::new(v.borrow().clone()))`), which is right for a scalar
+// element and WRONG the moment the element is itself a container: the inner
+// .clone() then copies Rc HANDLES and the copy ALIASES the original.  Measured
+// against clang-built C++: `map<int,map<int,long>> b(a); b[1][2]=22` gave
+// C++ a=11, refcount a=22.  DeepClone recurses, so it is correct at every depth.
+fn f6<T1: DeepClone>(a0: Option<Value<T1>>) -> Option<Value<T1>> {
+    a0.deep_clone()
 }
 
 fn f7<T1>(a0: &mut Option<Value<T1>>) -> Option<Value<T1>> {
@@ -46,11 +51,8 @@ fn f7<T1>(a0: &mut Option<Value<T1>>) -> Option<Value<T1>> {
 
 // --- assignment ------------------------------------------------------------
 
-fn f8<T1: Clone + ByteRepr>(a0: Ptr<Option<Value<T1>>>, a1: Option<Value<T1>>) {
-    a0.write(
-        a1.as_ref()
-            .map(|v| Rc::new(RefCell::new(v.borrow().clone()))),
-    )
+fn f8<T1: DeepClone + ByteRepr>(a0: Ptr<Option<Value<T1>>>, a1: Option<Value<T1>>) {
+    a0.write(a1.deep_clone())
 }
 
 fn f9<T1: ByteRepr>(a0: Ptr<Option<Value<T1>>>, a1: &mut Option<Value<T1>>) {
