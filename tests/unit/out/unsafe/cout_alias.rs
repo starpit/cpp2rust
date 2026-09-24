@@ -19,7 +19,7 @@ unsafe fn main_0() -> i32 {
     } else {
         libcc2rs::cerr_unsafe()
     };
-    write!((*os1), "hello\n",);
+    libcc2rs::cc2_insert_bytes(&mut (*os1), b"hello\n");
     let os2: *mut std::fs::File = if cond {
         &mut std::fs::File::from_raw_fd(
             std::io::stdout()
@@ -37,7 +37,7 @@ unsafe fn main_0() -> i32 {
                 .into_raw_fd(),
         )
     } as *mut std::fs::File;
-    write!((*os2), "hello\n",);
+    libcc2rs::cc2_insert_bytes(&mut (*os2), b"hello\n");
     return 0;
 }
 pub unsafe fn __cpp2rust_init_globals() {}

@@ -17,13 +17,13 @@ fn main_0() -> i32 {
     } else {
         libcc2rs::cerr()
     }));
-    write!((*os1.borrow()), "hello\n",);
+    libcc2rs::cc2_insert_bytes(&(*os1.borrow()), b"hello\n");
     let os2: Ptr<std::fs::File> = if (*cond.borrow()) {
         libcc2rs::cout()
     } else {
         libcc2rs::cerr()
     };
-    write!(os2, "hello\n",);
+    libcc2rs::cc2_insert_bytes(&os2, b"hello\n");
     return 0;
 }
 pub fn __cpp2rust_init_globals() {}

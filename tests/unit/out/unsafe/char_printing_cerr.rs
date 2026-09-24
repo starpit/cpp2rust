@@ -19,100 +19,365 @@ unsafe fn main_0() -> i32 {
         let s = c"bar.".as_ptr();
         std::slice::from_raw_parts(s, (0..).take_while(|&i| *s.add(i) != 0).count() + 1).to_vec()
     };
-    write!(
-        std::fs::File::from_raw_fd(
+    libcc2rs::cc2_insert_int(
+        &mut std::fs::File::from_raw_fd(
             std::io::stderr()
                 .as_fd()
                 .try_clone_to_owned()
                 .unwrap()
                 .into_raw_fd(),
         ),
-        "{:} a",
-        i,
+        (i) as i128,
+        4,
+        true,
     );
-    std::fs::File::from_raw_fd(
-        std::io::stderr()
-            .as_fd()
-            .try_clone_to_owned()
-            .unwrap()
-            .into_raw_fd(),
-    )
-    .write_all(
-        &([
-            (&[vec_[(0_usize)] as u8] as &[u8]),
-            (&[vec_[(1_usize)] as u8] as &[u8]),
-            (&[('o' as libc::c_char) as u8] as &[u8]),
-            (&(str)
-                .iter()
-                .take((str).len() - 1)
-                .map(|&c| c as u8)
-                .collect::<Vec<u8>>()[..] as &[u8]),
-            (&[b'\n'] as &[u8]),
-        ]
-        .concat()),
-    );
-    write!(
-        std::fs::File::from_raw_fd(
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
             std::io::stderr()
                 .as_fd()
                 .try_clone_to_owned()
                 .unwrap()
                 .into_raw_fd(),
         ),
-        "0x{:x}",
-        27,
+        b" a",
     );
-    std::fs::File::from_raw_fd(
-        std::io::stderr()
-            .as_fd()
-            .try_clone_to_owned()
-            .unwrap()
-            .into_raw_fd(),
-    )
-    .write_all(
-        &([
-            (b" a\xc3\xa7ordas?" as &[u8]),
-            (&[('\n' as libc::c_char) as u8] as &[u8]),
-            (b"Sim, 0x" as &[u8]),
-        ]
-        .concat()),
-    );
-    write!(
-        std::fs::File::from_raw_fd(
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
             std::io::stderr()
                 .as_fd()
                 .try_clone_to_owned()
                 .unwrap()
                 .into_raw_fd(),
         ),
-        "{:x}.\n",
-        i,
+        &[(vec_[(0_usize)]) as u8],
     );
-    write!(
-        std::fs::File::from_raw_fd(
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
             std::io::stderr()
                 .as_fd()
                 .try_clone_to_owned()
                 .unwrap()
                 .into_raw_fd(),
         ),
-        "Hello, World!\n",
+        &[(vec_[(1_usize)]) as u8],
     );
-    std::fs::File::from_raw_fd(
-        std::io::stderr()
-            .as_fd()
-            .try_clone_to_owned()
-            .unwrap()
-            .into_raw_fd(),
-    )
-    .write_all(
-        &([
-            (&[vec_[(0_usize)] as u8] as &[u8]),
-            (&[('\n' as libc::c_char) as u8] as &[u8]),
-            (&[vec_[(1_usize)] as u8] as &[u8]),
-            (&[('\n' as libc::c_char) as u8] as &[u8]),
-        ]
-        .concat()),
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('o' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &(str)
+            .iter()
+            .take((str).len() - 1)
+            .map(|&c| c as u8)
+            .collect::<Vec<u8>>()[..],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        b"\n",
+    );
+    libcc2rs::cc2_manip_unsafe(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        (libcc2rs::hex_unsafe as unsafe fn(*mut u32) -> *mut u32),
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        b"0x",
+    );
+    libcc2rs::cc2_insert_int(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        (27) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        b" a\xc3\xa7ordas?",
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('\n' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        b"Sim, 0x",
+    );
+    libcc2rs::cc2_insert_int(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        (i) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('.' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        b"\n",
+    );
+    libcc2rs::cc2_manip_unsafe(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        (libcc2rs::dec_unsafe as unsafe fn(*mut u32) -> *mut u32),
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('H' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('e' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('l' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('l' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('o' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[(',' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[(' ' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('W' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('o' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('r' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('l' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('d' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('!' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('\n' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[(vec_[(0_usize)]) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('\n' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[(vec_[(1_usize)]) as u8],
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('\n' as libc::c_char) as u8],
     );
     return 0;
 }

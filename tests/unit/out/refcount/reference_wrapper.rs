@@ -59,26 +59,28 @@ fn main_0() -> i32 {
         let _ptr = i2.clone();
         _ptr.write(_ptr.read() + 5)
     };
-    write!(libcc2rs::cout(), "{:}\n", (*i1.borrow()),);
+    libcc2rs::cc2_insert_int(&libcc2rs::cout(), (*i1.borrow()) as i128, 4, true);
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[('\n' as u8) as u8]);
     let i3: Value<i32> = Rc::new(RefCell::new(1));
     let i4: Value<i32> = Rc::new(RefCell::new(2));
     let ref_3: Value<Ptr<i32>> = Rc::new(RefCell::new(i3.as_pointer()));
     let ref_4: Value<Ptr<i32>> = Rc::new(RefCell::new(i4.as_pointer()));
     let __rhs = ((*ref_4.borrow()).read());
     (*ref_3.borrow()).write(__rhs);
-    write!(
-        libcc2rs::cout(),
-        "{:} {:}\n",
-        (*i3.borrow()),
-        (*i4.borrow()),
-    );
+    libcc2rs::cc2_insert_int(&libcc2rs::cout(), (*i3.borrow()) as i128, 4, true);
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[(' ' as u8) as u8]);
+    libcc2rs::cc2_insert_int(&libcc2rs::cout(), (*i4.borrow()) as i128, 4, true);
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[('\n' as u8) as u8]);
     ({ set_0((*ref_1.borrow()).clone(), 99) });
-    write!(
-        libcc2rs::cout(),
-        "{:} {:}\n",
-        (*i1.borrow()),
-        ({ read_1((*ref_1.borrow()).clone(),) }),
+    libcc2rs::cc2_insert_int(&libcc2rs::cout(), (*i1.borrow()) as i128, 4, true);
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[(' ' as u8) as u8]);
+    libcc2rs::cc2_insert_int(
+        &libcc2rs::cout(),
+        ({ read_1((*ref_1.borrow()).clone()) }) as i128,
+        4,
+        true,
     );
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[('\n' as u8) as u8]);
     let point: Value<Point> = Rc::new(RefCell::new(Point {
         x: Rc::new(RefCell::new(3)),
         y: Rc::new(RefCell::new(4)),
@@ -86,12 +88,20 @@ fn main_0() -> i32 {
     let point_ref: Value<Ptr<Point>> = Rc::new(RefCell::new(point.as_pointer()));
     (*(*(*point_ref.borrow()).upgrade().deref()).x.borrow_mut()) = 30;
     (*(*(*point_ref.borrow()).upgrade().deref()).y.borrow_mut()) = 40;
-    write!(
-        libcc2rs::cout(),
-        "{:} {:}\n",
-        (*(*point.borrow()).x.borrow()),
-        (*(*point.borrow()).y.borrow()),
+    libcc2rs::cc2_insert_int(
+        &libcc2rs::cout(),
+        (*(*point.borrow()).x.borrow()) as i128,
+        4,
+        true,
     );
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[(' ' as u8) as u8]);
+    libcc2rs::cc2_insert_int(
+        &libcc2rs::cout(),
+        (*(*point.borrow()).y.borrow()) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[('\n' as u8) as u8]);
     return 0;
 }
 pub fn __cpp2rust_init_globals() {}

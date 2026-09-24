@@ -31,62 +31,169 @@ unsafe fn main_0() -> i32 {
     (*ref_1) = 20;
     let i2: *mut i32 = ref_1;
     (*i2) += 5;
-    write!(
-        std::fs::File::from_raw_fd(
+    libcc2rs::cc2_insert_int(
+        &mut std::fs::File::from_raw_fd(
             std::io::stdout()
                 .as_fd()
                 .try_clone_to_owned()
                 .unwrap()
                 .into_raw_fd(),
         ),
-        "{:}\n",
-        i1,
+        (i1) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('\n' as libc::c_char) as u8],
     );
     let mut i3: i32 = 1;
     let mut i4: i32 = 2;
     let mut ref_3: *mut i32 = &mut i3;
     let mut ref_4: *mut i32 = &mut i4;
     (*ref_3) = (*ref_4);
-    write!(
-        std::fs::File::from_raw_fd(
+    libcc2rs::cc2_insert_int(
+        &mut std::fs::File::from_raw_fd(
             std::io::stdout()
                 .as_fd()
                 .try_clone_to_owned()
                 .unwrap()
                 .into_raw_fd(),
         ),
-        "{:} {:}\n",
-        i3,
-        i4,
+        (i3) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[(' ' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_int(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        (i4) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('\n' as libc::c_char) as u8],
     );
     (unsafe { set_0(ref_1, 99) });
-    write!(
-        std::fs::File::from_raw_fd(
+    libcc2rs::cc2_insert_int(
+        &mut std::fs::File::from_raw_fd(
             std::io::stdout()
                 .as_fd()
                 .try_clone_to_owned()
                 .unwrap()
                 .into_raw_fd(),
         ),
-        "{:} {:}\n",
-        i1,
-        (unsafe { read_1(ref_1,) }),
+        (i1) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[(' ' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_int(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        (unsafe { read_1(ref_1) }) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('\n' as libc::c_char) as u8],
     );
     let mut point: Point = Point { x: 3, y: 4 };
     let mut point_ref: *mut Point = &mut point;
     (*point_ref).x = 30;
     (*point_ref).y = 40;
-    write!(
-        std::fs::File::from_raw_fd(
+    libcc2rs::cc2_insert_int(
+        &mut std::fs::File::from_raw_fd(
             std::io::stdout()
                 .as_fd()
                 .try_clone_to_owned()
                 .unwrap()
                 .into_raw_fd(),
         ),
-        "{:} {:}\n",
-        point.x,
-        point.y,
+        (point.x) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[(' ' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_int(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        (point.y) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('\n' as libc::c_char) as u8],
     );
     return 0;
 }

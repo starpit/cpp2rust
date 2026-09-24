@@ -27,42 +27,75 @@ pub fn main() {
 }
 unsafe fn main_0() -> i32 {
     let mut x: i32 = 0;
-    write!(
-        std::fs::File::from_raw_fd(
+    libcc2rs::cc2_insert_int(
+        &mut std::fs::File::from_raw_fd(
             std::io::stdout()
                 .as_fd()
                 .try_clone_to_owned()
                 .unwrap()
                 .into_raw_fd(),
         ),
-        "{:}\n",
-        x,
+        (x) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('\n' as libc::c_char) as u8],
     );
     let mut a: i32 = 1;
     let mut b: i32 = (unsafe { identity_0(a) });
-    write!(
-        std::fs::File::from_raw_fd(
+    libcc2rs::cc2_insert_int(
+        &mut std::fs::File::from_raw_fd(
             std::io::stdout()
                 .as_fd()
                 .try_clone_to_owned()
                 .unwrap()
                 .into_raw_fd(),
         ),
-        "{:}\n",
-        b,
+        (b) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('\n' as libc::c_char) as u8],
     );
     let mut c: i32 = 2;
     let mut p: *mut i32 = (&mut c as *mut i32);
-    write!(
-        std::fs::File::from_raw_fd(
+    libcc2rs::cc2_insert_int(
+        &mut std::fs::File::from_raw_fd(
             std::io::stdout()
                 .as_fd()
                 .try_clone_to_owned()
                 .unwrap()
                 .into_raw_fd(),
         ),
-        "{:}\n",
-        (*p),
+        (*p) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('\n' as libc::c_char) as u8],
     );
     let mut d: i32 = 3;
     let mut e: i32 = 4;
@@ -71,30 +104,73 @@ unsafe fn main_0() -> i32 {
     let mut g: i32 = 5;
     (unsafe { swap_by_ref_2(&mut f, &mut g) });
     let mut h: *mut i32 = (Box::leak(Box::new(6)) as *mut i32);
-    write!(
-        std::fs::File::from_raw_fd(
+    libcc2rs::cc2_insert_int(
+        &mut std::fs::File::from_raw_fd(
             std::io::stdout()
                 .as_fd()
                 .try_clone_to_owned()
                 .unwrap()
                 .into_raw_fd(),
         ),
-        "{:}\n",
-        (*h),
+        (*h) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('\n' as libc::c_char) as u8],
     );
     ::std::mem::drop(Box::from_raw(h));
     let mut i: *mut i32 = Box::leak(Box::new([7, 8, 0_i32])).as_mut_ptr();
-    write!(
-        std::fs::File::from_raw_fd(
+    libcc2rs::cc2_insert_int(
+        &mut std::fs::File::from_raw_fd(
             std::io::stdout()
                 .as_fd()
                 .try_clone_to_owned()
                 .unwrap()
                 .into_raw_fd(),
         ),
-        "{:} {:}\n",
-        (*i.offset((0) as isize)),
-        (*i.offset((1) as isize)),
+        (*i.offset((0) as isize)) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[(' ' as libc::c_char) as u8],
+    );
+    libcc2rs::cc2_insert_int(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        (*i.offset((1) as isize)) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('\n' as libc::c_char) as u8],
     );
 
     ::std::mem::drop(Box::from_raw(::std::slice::from_raw_parts_mut(
@@ -129,31 +205,53 @@ unsafe fn main_0() -> i32 {
     let mut k: *mut i32 = j
         .as_deref_mut()
         .map_or(::std::ptr::null_mut(), |v| v as *mut i32);
-    write!(
-        std::fs::File::from_raw_fd(
+    libcc2rs::cc2_insert_int(
+        &mut std::fs::File::from_raw_fd(
             std::io::stdout()
                 .as_fd()
                 .try_clone_to_owned()
                 .unwrap()
                 .into_raw_fd(),
         ),
-        "{:}\n",
-        (*k),
+        (*k) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('\n' as libc::c_char) as u8],
     );
     let mut l: Option<Box<i32>> = Some(Box::new(11));
     let mut m: *mut i32 = l
         .as_deref_mut()
         .map_or(::std::ptr::null_mut(), |v| v as *mut i32);
-    write!(
-        std::fs::File::from_raw_fd(
+    libcc2rs::cc2_insert_int(
+        &mut std::fs::File::from_raw_fd(
             std::io::stdout()
                 .as_fd()
                 .try_clone_to_owned()
                 .unwrap()
                 .into_raw_fd(),
         ),
-        "{:}\n",
-        (*m),
+        (*m) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(
+        &mut std::fs::File::from_raw_fd(
+            std::io::stdout()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap()
+                .into_raw_fd(),
+        ),
+        &[('\n' as libc::c_char) as u8],
     );
     assert!(((c) == (2)));
     return 0;

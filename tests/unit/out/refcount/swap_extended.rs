@@ -32,13 +32,16 @@ pub fn main() {
 }
 fn main_0() -> i32 {
     let x: Value<i32> = Rc::new(RefCell::new(0));
-    write!(libcc2rs::cout(), "{:}\n", (*x.borrow()),);
+    libcc2rs::cc2_insert_int(&libcc2rs::cout(), (*x.borrow()) as i128, 4, true);
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[('\n' as u8) as u8]);
     let a: Value<i32> = Rc::new(RefCell::new(1));
     let b: Value<i32> = Rc::new(RefCell::new(({ identity_0((*a.borrow())) })));
-    write!(libcc2rs::cout(), "{:}\n", (*b.borrow()),);
+    libcc2rs::cc2_insert_int(&libcc2rs::cout(), (*b.borrow()) as i128, 4, true);
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[('\n' as u8) as u8]);
     let c: Value<i32> = Rc::new(RefCell::new(2));
     let p: Value<Ptr<i32>> = Rc::new(RefCell::new((c.as_pointer())));
-    write!(libcc2rs::cout(), "{:}\n", ((*p.borrow()).read()),);
+    libcc2rs::cc2_insert_int(&libcc2rs::cout(), ((*p.borrow()).read()) as i128, 4, true);
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[('\n' as u8) as u8]);
     let d: Value<i32> = Rc::new(RefCell::new(3));
     let e: Value<i32> = Rc::new(RefCell::new(4));
     ({ swap_by_ptr_1((d.as_pointer()), (e.as_pointer())) });
@@ -46,19 +49,28 @@ fn main_0() -> i32 {
     let g: Value<i32> = Rc::new(RefCell::new(5));
     ({ swap_by_ref_2(f.as_pointer(), g.as_pointer()) });
     let h: Value<Ptr<i32>> = Rc::new(RefCell::new(Ptr::alloc(6)));
-    write!(libcc2rs::cout(), "{:}\n", ((*h.borrow()).read()),);
+    libcc2rs::cc2_insert_int(&libcc2rs::cout(), ((*h.borrow()).read()) as i128, 4, true);
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[('\n' as u8) as u8]);
     (*h.borrow()).delete();
     let i: Value<Ptr<i32>> = Rc::new(RefCell::new(Ptr::alloc_array(Box::new([
         7,
         8,
         <i32>::default(),
     ]))));
-    write!(
-        libcc2rs::cout(),
-        "{:} {:}\n",
-        ((*i.borrow()).offset((0) as isize).read()),
-        ((*i.borrow()).offset((1) as isize).read()),
+    libcc2rs::cc2_insert_int(
+        &libcc2rs::cout(),
+        ((*i.borrow()).offset((0) as isize).read()) as i128,
+        4,
+        true,
     );
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[(' ' as u8) as u8]);
+    libcc2rs::cc2_insert_int(
+        &libcc2rs::cout(),
+        ((*i.borrow()).offset((1) as isize).read()) as i128,
+        4,
+        true,
+    );
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[('\n' as u8) as u8]);
     (*i.borrow()).delete();
     ({ swap_by_ptr_1(Ptr::alloc(7), Ptr::alloc(8)) });
     ({
@@ -76,10 +88,12 @@ fn main_0() -> i32 {
     });
     let j: Value<Option<Value<i32>>> = Rc::new(RefCell::new(Ptr::alloc(11).to_owned_opt()));
     let k: Value<Ptr<i32>> = Rc::new(RefCell::new((*j.borrow()).as_pointer()));
-    write!(libcc2rs::cout(), "{:}\n", ((*k.borrow()).read()),);
+    libcc2rs::cc2_insert_int(&libcc2rs::cout(), ((*k.borrow()).read()) as i128, 4, true);
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[('\n' as u8) as u8]);
     let l: Value<Option<Value<i32>>> = Rc::new(RefCell::new(Some(Rc::new(RefCell::new(11)))));
     let m: Value<Ptr<i32>> = Rc::new(RefCell::new((*l.borrow()).as_pointer()));
-    write!(libcc2rs::cout(), "{:}\n", ((*m.borrow()).read()),);
+    libcc2rs::cc2_insert_int(&libcc2rs::cout(), ((*m.borrow()).read()) as i128, 4, true);
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[('\n' as u8) as u8]);
     assert!(((*c.borrow()) == 2));
     return 0;
 }

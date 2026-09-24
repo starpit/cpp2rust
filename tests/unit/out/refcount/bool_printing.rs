@@ -19,20 +19,18 @@ pub fn main() {
 fn main_0() -> i32 {
     let i1: Value<i32> = Rc::new(RefCell::new(0));
     let i2: Value<i32> = Rc::new(RefCell::new(1));
-    write!(libcc2rs::cout(), "{:}\n", (true as u8),);
-    write!(libcc2rs::cout(), "{:}\n", (false as u8),);
-    write!(
-        libcc2rs::cout(),
-        "{:}\n",
-        (((*i1.borrow()) != (*i2.borrow())) as u8),
-    );
-    write!(
-        libcc2rs::cout(),
-        "{:}\n",
-        (((*i1.borrow()) == (*i2.borrow())) as u8),
-    );
-    write!(libcc2rs::cout(), "{:}\n", (({ foo_0() }) as u8),);
-    write!(libcc2rs::cout(), "{:}\n", (({ bar_1() }) as u8),);
+    libcc2rs::cc2_insert_bool(&libcc2rs::cout(), true);
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[('\n' as u8) as u8]);
+    libcc2rs::cc2_insert_bool(&libcc2rs::cout(), false);
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[('\n' as u8) as u8]);
+    libcc2rs::cc2_insert_bool(&libcc2rs::cout(), ((*i1.borrow()) != (*i2.borrow())));
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[('\n' as u8) as u8]);
+    libcc2rs::cc2_insert_bool(&libcc2rs::cout(), ((*i1.borrow()) == (*i2.borrow())));
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[('\n' as u8) as u8]);
+    libcc2rs::cc2_insert_bool(&libcc2rs::cout(), ({ foo_0() }));
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[('\n' as u8) as u8]);
+    libcc2rs::cc2_insert_bool(&libcc2rs::cout(), ({ bar_1() }));
+    libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[('\n' as u8) as u8]);
     return 0;
 }
 pub fn __cpp2rust_init_globals() {}
