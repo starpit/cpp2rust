@@ -349,7 +349,10 @@ public:
   // Stream insertion with the format state on the stream. See the long comment
   // above ConvertOstreamItem in converter.cpp for why the state cannot live in
   // the format string or in the Converter.
-  bool ConvertOstreamItem(clang::Expr *arg, const std::string &stream_str);
+  bool ConvertOstreamItem(clang::Expr *arg, const std::string &stream_str,
+                          clang::CXXOperatorCallExpr *call);
+  // How a user-defined operator<< receives the stream, per model.
+  virtual std::string StreamInserterReceiver(const std::string &stream_str) const;
   virtual const char *StreamManipFn() const;
   virtual std::string StreamReceiver(const std::string &stream_str) const;
   // How a base manipulator reaches the helper as a value: the two models spell
@@ -1165,6 +1168,15 @@ protected:
   // `: <name>` supertrait bound. They diverge because the trait's member
   // predicate can reject every member, leaving no item at all.
   static std::unordered_set<std::string> trait_records_;
+  // Per emitted trait, the method NAMES its item actually declares. An override
+  // may only be routed into `impl <trait> for T` if the trait declares that
+  // name, or rustc says "method X is not a member of trait Y" (E0407). Knowing
+  // the trait exists is not enough: ConvertAbstractClass's predicate drops
+  // members, so a trait routinely exists while lacking the very method being
+  // routed -- e.g. a gtest fixture's trait carries SetUp/TearDown but never
+  // TestBody, which is declared only on the opaque `::testing::Test`.
+  static std::unordered_map<std::string, std::unordered_set<std::string>>
+      trait_method_names_;
 
   class RecordIndex {
   public:
@@ -1269,14 +1281,29 @@ protected:
 
   static void EmitDeferredBlock(const DeferredBlock &block, std::string &out);
 
+  // True if this class should be lowered to a Rust TRAIT rather than a struct.
+  // An abstract class only earns a trait when some pure virtual is visible to
+  // the Rust side; abstract purely via a non-emitted (opaque/system) base buys
+  // no dispatch and costs every field write in every inherited body.
+  static bool IsTraitLowerable(const clang::CXXRecordDecl *decl);
+
+  // Re-emits, as inherent methods of `decl`, the methods it inherits from a base
+  // that was lowered to a STRUCT. Rust has no inheritance and such a base
+  // delivers nothing through a trait impl, so without this every inherited call
+  // is E0599. Sound because the base's fields were flattened in alongside.
+  void EmitInheritedStructMethods(clang::CXXRecordDecl *decl);
+
   // Nearest transitive base that ConvertAbstractClass lowered to a trait, or
   // nullptr when every base up the chain is a concrete struct.
   static const clang::CXXRecordDecl *
   GetTraitBase(const clang::CXXRecordDecl *decl);
 
   // Trait whose impl block this override belongs in: the highest abstract
-  // ancestor declaring it. nullptr when no base became a trait at all.
-  static const clang::CXXRecordDecl *
+  // ancestor declaring it. nullptr when no base became a trait at all, and also
+  // when the nearest trait exists but does not declare THIS method -- routing it
+  // there would be E0407. Not static: it needs GetMethodName, which is
+  // model-dependent, to compare against what the trait declared.
+  const clang::CXXRecordDecl *
   GetDeclaringTrait(const clang::CXXRecordDecl *impl_for,
                     const clang::CXXMethodDecl *method);
 

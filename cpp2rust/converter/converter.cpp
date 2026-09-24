@@ -28,12 +28,16 @@
 #include "survey.h"
 
 namespace cpp2rust {
+
+
 std::unordered_map<std::string, std::string> Converter::inner_structs_;
 std::unordered_set<std::string> Converter::decl_ids_;
 std::unordered_set<std::string> Converter::globals_;
 std::vector<std::string> Converter::global_inits_;
 std::unordered_set<std::string> Converter::abstract_structs_;
 std::unordered_set<std::string> Converter::trait_records_;
+std::unordered_map<std::string, std::unordered_set<std::string>>
+    Converter::trait_method_names_;
 Converter::RecordIndex Converter::record_decls_;
 std::map<std::string, int64_t> Converter::opaque_enum_constants_;
 std::vector<Converter::GTestCase> Converter::gtest_cases_;
@@ -1038,12 +1042,39 @@ void Converter::ConvertVaListVarDecl(clang::VarDecl *decl) {
 
 bool Converter::NeedsMut(const clang::VarDecl *decl, clang::QualType type,
                          llvm::StringRef name) const {
-  auto *method_or_null =
-      curr_function_ ? clang::dyn_cast<clang::CXXMethodDecl>(curr_function_)
-                     : nullptr;
+  // Whether a LOCAL needs `mut` is a property of the local -- its type, and
+  // whether anything mutates it -- and has nothing to do with the enclosing
+  // function. An undocumented `!isVirtual()` term here suppressed `mut` on
+  // every local of every virtual method, so a non-const local whose only
+  // mutation is through a method call (`S s; s.set(7);`) came out as `let s`
+  // and the call needing `&mut s` was E0596 "cannot borrow as mutable".
+  //
+  // It looked gtest-specific because that is where the shape is dense -- 20 of
+  // operandattr_unit_test's errors, every site inside a TestBody -- but it is
+  // neither about gtest nor about traits. Isolated on one file: an override
+  // (`TestBody`, and equally a differently-named `SetUp` override) loses `mut`
+  // while a NON-override method on the same class, and a method on a plain
+  // class, both keep it. `TestBody` is simply always an override.
+  //
+  // What the term DID protect, found by running the abstract-class probes: a
+  // PARAMETER of a bodyless declaration. `unsafe fn get(&self, mut i: i32);` in
+  // a trait is "patterns aren't allowed in functions without bodies", a
+  // deny-by-default future-incompatibility error. So the correct predicate is
+  // about the declaration having no body, not about the method being virtual --
+  // a virtual method WITH a body has ordinary locals and parameters, and those
+  // need `mut` exactly as a non-virtual one's do.
+  // Mirrors the emission condition in VisitCXXMethodDecl exactly -- pure
+  // virtual, or forced bodyless by TraitDecl mode -- so the two cannot drift.
+  if (in_function_formals_ && curr_function_ != nullptr &&
+      (method_target_ == MethodTarget::TraitDecl ||
+       !curr_function_->doesThisDeclarationHaveABody())) {
+    return false;
+  }
+  // Over-qualifying a local is a warning (`unused_mut`); under-qualifying it is
+  // a hard error (E0596), so where the two directions differ this is the safe
+  // one as well as the correct one.
   return ((hoisted_decls_.contains(decl) ||
            (!type.isConstQualified() && !type->isReferenceType())) &&
-          ((method_or_null == nullptr) || !method_or_null->isVirtual()) &&
           !IsGlobalVar(decl) && name != "_");
 }
 
@@ -1232,9 +1263,20 @@ bool IsPointerType(clang::QualType qual_type) {
 // into that constructor's mem-initializer list and AddDefaultTrait emits a call
 // to it -- which is exactly why the bug only showed with NO user ctor.
 bool Converter::RecordHasFieldInitializer(const clang::RecordDecl *decl) {
-  return llvm::any_of(decl->fields(), [](const clang::FieldDecl *f) {
-    return f->hasInClassInitializer();
-  });
+  // Over the FLATTENED field list, not just this record's own. A field brought
+  // in from a trait-lowered base is a real field of this struct, so its
+  // initializer is this struct's business -- and EmitDefaultStructLiteral
+  // already walks the same flattened list and already honours the initializer.
+  // Scanning only `decl->fields()` made the two disagree: a derived class whose
+  // OWN fields have no initializer answered "no", `RecordDerivesDefault` then
+  // chose `#[derive(Default)]`, and every initialized base field silently read
+  // ZERO where C++ reads its initializer. That is the SILENT WRONGNESS class --
+  // a wrong value, no diagnostic -- and it is not gtest-specific: an abstract
+  // base with `int a_ = 7, b_ = 3` and a concrete leaf gave 0 against C++'s 21.
+  return llvm::any_of(FieldsIncludingTraitBases(decl),
+                      [](const clang::FieldDecl *f) {
+                        return f->hasInClassInitializer();
+                      });
 }
 
 bool Converter::RecordDerivesDefault(const clang::RecordDecl *decl) {
@@ -1642,6 +1684,108 @@ void Converter::AddFromTraits(const clang::CXXRecordDecl *decl) {
   }
 }
 
+// Methods a base contributes that Rust inheritance does not.
+//
+// Rust has no inheritance: a derived struct does not get its base's methods.
+// The converter's two existing answers both have a hole for the same shape.
+// Fields are handled -- FieldsIncludingTraitBases copies a trait-lowered base's
+// data into the derived struct, because a trait has nowhere to put it. Virtual
+// methods are handled when the base became a TRAIT, via a default trait method
+// the derived struct inherits by implementing it.
+//
+// Neither covers a base that is emitted as a STRUCT and whose methods the
+// derived class calls. `IsEmittableMethod` skips every virtual on the grounds
+// that "virtual methods go into the base trait impl" -- true only when there IS
+// a base trait. When there is not, the method is emitted on the base struct,
+// which the derived struct does not contain, and every call is an E0599 naming
+// a method that exists in the output on the wrong type.
+//
+// That is the gtest fixture, after IsTraitLowerable correctly makes it a struct:
+// `SetUp`/`TearDown` live on `impl FixTest`, while the per-test struct deriving
+// it is what `__t.SetUp()` is called on.
+//
+// So re-emit an inherited method as an inherent method of the derived struct.
+// This is sound precisely because the base's DATA was already flattened in, so
+// `self.counter_` in the copied body names a real field of this struct and reads
+// and writes the same storage C++ gives it. Base-first and skipping any name the
+// derived class itself defines, so a C++ override wins over the inherited copy,
+// which is what virtual dispatch on a concrete receiver does.
+void Converter::EmitInheritedStructMethods(clang::CXXRecordDecl *decl) {
+  if (decl->bases_begin() == decl->bases_end()) {
+    return;
+  }
+  // Names this record resolves on its own -- its own methods, plus anything a
+  // trait impl will carry -- must not be shadowed by a copy.
+  std::set<std::string> taken;
+  for (auto *method : decl->methods()) {
+    if (!method->isImplicit()) {
+      taken.insert(GetMethodName(method));
+    }
+  }
+  std::string body;
+  std::function<void(const clang::CXXRecordDecl *)> walk =
+      [&](const clang::CXXRecordDecl *rec) {
+        if (rec == nullptr || !rec->hasDefinition()) {
+          return;
+        }
+        for (const auto &base : rec->bases()) {
+          auto *base_decl = base.getType()->getAsCXXRecordDecl();
+          if (base_decl == nullptr) {
+            continue;
+          }
+          base_decl = base_decl->getDefinition() != nullptr
+                          ? base_decl->getDefinition()
+                          : base_decl;
+          // Only a base that is ours AND became a struct. A trait-lowered base
+          // already delivers its methods through the trait impl, and a boundary
+          // base has no body to copy.
+          if (!IsUserDefinedDecl(base_decl) || IsTraitLowerable(base_decl)) {
+            continue;
+          }
+          // And only when the base's DATA was flattened in alongside, which
+          // FieldsIncludingTraitBases does for an abstract base and not for a
+          // concrete one. Copying a method whose body reads `self.tag` into a
+          // struct that has no `tag` just moves the error from E0599 to E0609 --
+          // no better, and it would mask the real gap. So a concrete base is left
+          // alone: its fields not reaching the derived struct is a separate,
+          // pre-existing defect (probe p2_basedata), and until that is fixed the
+          // honest outcome is the untouched one.
+          if (!base_decl->isAbstract()) {
+            continue;
+          }
+          walk(base_decl);
+          for (auto *method : base_decl->methods()) {
+            if (method->isImplicit() || !method->hasBody() ||
+                clang::isa<clang::CXXConstructorDecl>(method) ||
+                clang::isa<clang::CXXDestructorDecl>(method)) {
+              continue;
+            }
+            auto name = GetMethodName(method);
+            if (!taken.insert(name).second) {
+              continue;
+            }
+            // ConvertCXXMethodDecl, not VisitCXXMethodDecl: the latter's
+            // `decl_ids_` guard allows one emission per DECLARATION, which is
+            // right for its usual job (don't emit the same method twice) and
+            // wrong here, where the point is to emit one C++ declaration into
+            // several Rust structs. The guard had already been spent by the base
+            // struct's own impl, so the copy was silently dropped.
+            PushCurrFunction push_fn(*this, method);
+            Buffer buf(*this);
+            ConvertCXXMethodDecl(method);
+            body += std::move(buf).str();
+          }
+        }
+      };
+  walk(decl);
+  if (body.empty()) {
+    return;
+  }
+  StrCat(keyword::kImpl, GetRecordName(decl));
+  PushBrace impl_brace(*this);
+  StrCat(body);
+}
+
 void Converter::ConvertLateInstantiatedMethods(clang::CXXRecordDecl *decl) {
   ConvertCXXMethodDecls(
       decl, std::format("{} {}", keyword::kImpl, GetRecordName(decl)),
@@ -1655,6 +1799,7 @@ void Converter::ConvertCXXRecordMethods(clang::CXXRecordDecl *decl) {
   ConvertCXXMethodDecls(
       decl, std::format("{} {}", keyword::kImpl, GetRecordName(decl)),
       IsEmittableMethod);
+  EmitInheritedStructMethods(decl);
 
   if (GetUserDefinedDestructor(decl) || !HasFieldsNeedingDestruction(decl)) {
     return;
@@ -1746,15 +1891,20 @@ bool Converter::VisitCXXRecordDecl(clang::CXXRecordDecl *decl) {
       }
     }
 
+    // Abstract is necessary but not sufficient for the trait path: see
+    // IsTraitLowerable. A class abstract only via a base the converter does not
+    // emit is concrete as far as the output is concerned.
+    const bool as_trait = decl->isAbstract() && IsTraitLowerable(decl);
+
     if (!record_decls_.MarkDefined(GetRecordName(decl))) {
       // Other translation units may instantiate members this one did not.
-      if (!decl->isAbstract()) {
+      if (!as_trait) {
         ConvertLateInstantiatedMethods(decl);
       }
       return false;
     }
 
-    if (decl->isAbstract()) {
+    if (as_trait) {
       ConvertAbstractClass(decl);
       return false;
     }
@@ -2392,6 +2542,11 @@ bool Converter::VisitDeclStmt(clang::DeclStmt *stmt) {
 
 bool Converter::VisitReturnStmt(clang::ReturnStmt *stmt) {
   auto return_type = curr_function_->getReturnType();
+  // A user-written inserter returns the generic stream borrow it was handed, so
+  // the return value is emitted verbatim. Going through ConvertVarInit would
+  // convert it against the DECLARED type (`std::ostream &`, i.e. a concrete
+  // pointer representation) and, in the refcount model, add a `.clone()` -- which
+  // is a Ptr operation and does not exist on a `&mut __S`.
   if (!return_type->isVoidType()) {
     HoistMaterializedTempBindings hoist_temps(*this);
     StrCat(keyword::kReturn);
@@ -2976,6 +3131,17 @@ const char *Converter::StreamManipFn() const {
   return "libcc2rs::cc2_manip_unsafe";
 }
 
+// How a user-defined `operator<<` receives the stream.
+//
+// Distinct from StreamReceiver, which is for the libcc2rs helpers: those take
+// the receiver generically, whereas a translated inserter has a DECLARED
+// parameter type -- the translation of `std::ostream &`, which is a raw pointer
+// in this model -- so the argument must match that spelling exactly.
+std::string
+Converter::StreamInserterReceiver(const std::string &stream_str) const {
+  return "&mut " + stream_str;
+}
+
 // A base manipulator as a VALUE.
 //
 // `std::hex` is not a constant that can be pattern-matched -- it arrives as a
@@ -3050,6 +3216,48 @@ static bool IsBaseManipulator(const clang::Expr *arg) {
   return record != nullptr && record->getNameAsString() == "ios_base";
 }
 
+// The project-defined `operator<<` that consumed this operand, if any.
+//
+// A user-written `std::ostream &operator<<(std::ostream &, const T &)` cannot
+// currently be called, and this returns it so the caller can refuse LOUDLY
+// rather than emit something plausible. The reason is a representation
+// collision that predates this code and cannot be fixed here:
+//
+//   * a translated inserter's parameter comes from its C++ declaration,
+//     `std::ostream &`, which this model lowers to `*mut std::fs::File`;
+//   * but a string stream is `Box<libcc2rs::StringStream>` (rules/sstream), and
+//     every one of the 9 measured call sites is on a stringstream --
+//     `dsc/designSpaceConfig.cpp:344` inserts a DataStructDims into `ss`.
+//
+// So the ONE translated function would have to accept both representations.
+// Passing the string stream anyway compiles only if the types are forced to
+// agree, and then the inserter writes through a File handle that is not the
+// stream the caller is building -- output silently lost. A loud refusal is
+// strictly better, and this is the same one-signature/two-representations
+// problem rules/basic_ios solves with a private trait; the fix here is for the
+// inserter's PARAMETER to become generic over Cc2Insert, which changes how every
+// translated function signature is emitted and so is not a local change.
+//
+// Keyed on whether the resolved callee is a user declaration, so nothing here
+// enumerates type names: a std:: overload (which the arms below model) is
+// excluded, and any project inserter is caught.
+static clang::FunctionDecl *
+GetUserDefinedInserter(clang::CXXOperatorCallExpr *call) {
+  if (call == nullptr) {
+    return nullptr;
+  }
+  auto *callee = call->getDirectCallee();
+  if (callee == nullptr || !IsUserDefinedDecl(callee)) {
+    return nullptr;
+  }
+  // Only a free two-argument inserter; a member operator<< has the stream as
+  // its receiver and is not this shape.
+  if (clang::isa<clang::CXXMethodDecl>(callee) || callee->getNumParams() != 2) {
+    return nullptr;
+  }
+  return callee;
+}
+
 // Whether `arg` is an ostream manipulator -- `std::ostream &(*)(std::ostream &)`,
 // which is endl, flush and ws.  Same type-keyed test as IsBaseManipulator, one
 // class up: these take the STREAM rather than its ios_base.
@@ -3102,7 +3310,8 @@ static clang::CallExpr *GetIomanipCall(clang::Expr *arg,
 // Emit ONE inserted item.  Returns false if nothing here models it, in which
 // case the caller leaves the item to the existing rule-driven path.
 bool Converter::ConvertOstreamItem(clang::Expr *arg,
-                                   const std::string &stream_str) {
+                                   const std::string &stream_str,
+                                   clang::CXXOperatorCallExpr *call) {
   const std::string recv = StreamReceiver(stream_str);
 
   // A base manipulator: hand the function to the stream, which stores the
@@ -3196,6 +3405,45 @@ bool Converter::ConvertOstreamItem(clang::Expr *arg,
     return true;
   }
 
+  // A USER-DEFINED operator<< is NOT modelled here, and stays loud.
+  //
+  // A LONE `os << x` never reaches this function: VisitCXXOperatorCallExpr routes
+  // it to the ordinary call path. This arm is the CHAINED spelling,
+  // `ss << "a" << x << ";"`, and it cannot be a call yet for the reason recorded
+  // in GetUserDefinedInserter: the inserter's parameter is the translation of
+  // `std::ostream &`, one concrete representation, so the call does not typecheck
+  // against a string stream. Making the parameter generic over Cc2Insert fixes
+  // it; that change is written up separately because it alters how translated
+  // signatures are emitted.
+  if (GetUserDefinedInserter(call) != nullptr) {
+    return false;
+  }
+
+  // Any OTHER pointer prints its address in hex -- `<<` on a pointer resolves to
+  // `operator<<(const void *)`.  This must come after the char-pointer arm
+  // above, because a `char *` is a string rather than an address.
+  //
+  // The address is taken with `libcc2rs::cc2_addr_of`, which is where the two
+  // models differ: a raw `*const T` is cast, while the refcount model's `Ptr<T>`
+  // is a checked handle with no numeric address, so it reports its identity
+  // instead (see the trait in stream_fmt.rs).  A member function pointer is left
+  // unmodelled and stays loud -- it is not one address in either C++ or this
+  // model.
+  if (type->isPointerType() && !type->isMemberPointerType()) {
+    PushExprKind push(*this, ExprKind::RValue);
+    // Convert the operand WITHOUT the implicit cast to `const void *` that
+    // overload resolution added.  In the refcount model that cast lowers to
+    // `.to_any()`, whose `to_int()` reinterprets through `Ptr<u8>` and panics
+    // `byte_size is not implemented for Ptr<u8>` -- measured, a crash rather
+    // than wrong output.  The typed pointer already knows its own identity, so
+    // the erasure is pure loss here; stripping it also keeps the unsafe model's
+    // cast to `*const c_void` from discarding provenance.
+    StrCat(std::format(
+        "libcc2rs::cc2_insert_ptr({}, libcc2rs::cc2_addr_of(&({})));", recv,
+        ToString(arg->IgnoreImpCasts())));
+    return true;
+  }
+
   if (type->isBooleanType()) {
     StrCat(std::format("libcc2rs::cc2_insert_bool({}, {});", recv,
                        ToString(arg)));
@@ -3252,15 +3500,19 @@ std::string Converter::ConvertStream(clang::Expr *expr) {
 
 void Converter::ConvertCallToOstream(clang::CallExpr *expr) {
   clang::Expr *stream = nullptr;
-  auto collect_args = [expr, &stream]() -> std::vector<clang::Expr *> {
-    std::vector<clang::Expr *> result;
+  // Each operand, paired with the `<<` call that consumed it. The call is what
+  // identifies a USER-DEFINED operator<<: the operand's type alone cannot, since
+  // a project type reached through the built-in path and one with its own
+  // inserter look identical at the operand.
+  std::vector<std::pair<clang::Expr *, clang::CXXOperatorCallExpr *>> arg_calls;
+  auto collect_args = [expr, &stream, &arg_calls]() {
     auto *current = clang::dyn_cast<clang::CXXOperatorCallExpr>(expr);
     if (!current) {
-      return {};
+      return;
     }
 
     while (current) {
-      result.push_back(current->getArg(1));
+      arg_calls.emplace_back(current->getArg(1), current);
       if (auto *next =
               clang::dyn_cast<clang::CXXOperatorCallExpr>(current->getArg(0));
           next && IsCallToOstream(next)) {
@@ -3271,11 +3523,15 @@ void Converter::ConvertCallToOstream(clang::CallExpr *expr) {
       }
     }
 
-    std::reverse(result.begin(), result.end());
-    return result;
+    std::reverse(arg_calls.begin(), arg_calls.end());
   };
 
-  std::vector<clang::Expr *> args = collect_args();
+  collect_args();
+  std::vector<clang::Expr *> args;
+  args.reserve(arg_calls.size());
+  for (auto &[a, _] : arg_calls) {
+    args.push_back(a);
+  }
   if (args.empty()) {
     return;
   }
@@ -3294,8 +3550,8 @@ void Converter::ConvertCallToOstream(clang::CallExpr *expr) {
   // --survey, otherwise the same assert the rest of the converter uses. It must
   // not fall through silently, because a dropped `<<` operand is invisible
   // output corruption.
-  for (clang::Expr *arg : args) {
-    if (ConvertOstreamItem(arg, stream_str)) {
+  for (auto &[arg, call] : arg_calls) {
+    if (ConvertOstreamItem(arg, stream_str, call)) {
       continue;
     }
     std::string detail = Mapper::ToString(arg->getType());
@@ -4925,7 +5181,27 @@ bool Converter::ConvertCXXOperatorCallExpr(clang::CXXOperatorCallExpr *expr) {
     break;
   }
   case clang::OverloadedOperatorKind::OO_LessLess:
-    if (IsCallToOstream(expr)) {
+    // A project-defined `operator<<` is an ordinary call and must NOT go down
+    // the ostream formatting path.
+    //
+    // IsCallToOstream only asks whether the result is a basic_ostream, which a
+    // user-written `std::ostream &operator<<(std::ostream &, const T &)` also
+    // satisfies -- so 16 such inserters in dt_src were being pulled into the
+    // formatter, which has no arm for a project type and (before this) emitted a
+    // placeholder for it. Routing them to the shared handler instead means they
+    // are translated as the calls they are, and the stream they receive still
+    // carries the format state, so a base or fill set by the enclosing statement
+    // reaches them.
+    //
+    // This also sidesteps the representation collision the formatter could not
+    // have solved: the inserter's parameter comes from its C++ declaration
+    // (`std::ostream &` -> `*mut std::fs::File`) while the argument at all 9
+    // measured call sites is a `Box<StringStream>`. As a plain call it goes
+    // through the same argument conversion every other translated call uses,
+    // rather than needing the formatter to bridge two stream representations.
+    if (IsCallToOstream(expr) &&
+        GetUserDefinedInserter(
+            clang::dyn_cast<clang::CXXOperatorCallExpr>(expr)) == nullptr) {
       ConvertCallToOstream(expr);
       return false;
     }
@@ -6414,6 +6690,9 @@ void Converter::ConvertAssignment(clang::Expr *lhs, clang::Expr *rhs,
   }
 }
 
+
+
+
 void Converter::ConvertFunctionParameters(clang::FunctionDecl *decl) {
   in_function_formals_ = true;
   auto *definition =
@@ -6543,7 +6822,33 @@ void Converter::ConvertAbstractClass(clang::CXXRecordDecl *decl) {
     // the subtrait becomes E0034 "multiple applicable items in scope". The
     // override still reaches the leaf, via GetDeclaringTrait routing it to the
     // supertrait's impl block.
-    if (!method->overridden_methods().empty()) {
+    //
+    // But that reasoning only holds if the overridden declaration really is in
+    // a trait this run EMITS. When it is not -- the base is in a system header,
+    // or behind an --opaque-namespace boundary -- there is no supertrait item to
+    // collide with and no impl block for GetDeclaringTrait to route to, so
+    // excluding the method DROPS IT ENTIRELY. Its body then exists nowhere in
+    // the output and every call is an E0599 naming a method that was silently
+    // discarded.
+    //
+    // That is exactly a gtest fixture's `SetUp`/`TearDown`: they override
+    // `::testing::Test`'s, `::testing::Test` is opaque, and the fixture is
+    // abstract only because that same opaque base leaves `TestBody()` pure. The
+    // fixture therefore took the trait path and then emitted nothing at all,
+    // which is why a TEST_F wrapper's `__t.SetUp()` had no method to call.
+    //
+    // So keep the exclusion, but only for an override whose declaration lands
+    // in a trait that exists. Dispatch is unaffected: there is no supertrait
+    // slot to reuse, so the method is genuinely first-declared here.
+    if (std::ranges::any_of(
+            method->overridden_methods(), [](const clang::CXXMethodDecl *over) {
+              const auto *parent = over->getParent();
+              parent = parent->getDefinition() != nullptr
+                           ? parent->getDefinition()
+                           : parent;
+              return IsUserDefinedDecl(parent) &&
+                     trait_records_.contains(GetID(parent));
+            })) {
       return false;
     }
     return !method->isImplicit() &&
@@ -6592,6 +6897,19 @@ void Converter::ConvertAbstractClass(clang::CXXRecordDecl *decl) {
     for (const auto *field : reads) {
       trait_accessors_[GetID(decl)].push_back(field);
     }
+    // Which method NAMES this trait item declares, so GetDeclaringTrait can tell
+    // "the trait exists" from "the trait declares this method". Recomputed from
+    // the same predicate that produced the body, so the two cannot disagree.
+    auto &names = trait_method_names_[GetID(decl)];
+    auto note = [&](clang::CXXMethodDecl *method) {
+      if (predicate(method)) {
+        names.insert(GetMethodName(method));
+      }
+    };
+    for (auto *method : decl->methods()) {
+      note(method);
+    }
+    ForEachTemplateInstantiatedMethod(decl, note);
   }
 }
 
@@ -6622,6 +6940,64 @@ bool Converter::ConvertCXXMethodDecls(
     StrCat(token::kCloseCurlyBracket);
   }
   return !first;
+}
+
+bool Converter::IsTraitLowerable(const clang::CXXRecordDecl *decl) {
+  // A class is lowered to a Rust TRAIT so that dynamic dispatch through it
+  // works: `*mut dyn Base` needs a trait, and a trait is the only Rust item that
+  // can declare a method without defining it. The cost is that a trait has no
+  // fields, so a method body that WRITES a member cannot be expressed (see
+  // ConvertMemberExpr: a read is routed through a generated accessor, a write is
+  // deliberately left loud rather than given a representation that is wrong in
+  // one model).
+  //
+  // That trade is right when the class really does declare an abstract method
+  // the Rust side must dispatch on. It is pure loss when the class is abstract
+  // ONLY because a base the converter does not emit left something pure: the
+  // abstract method has no Rust declaration anywhere, so no `dyn` can ever call
+  // it and the trait buys nothing -- while still costing every field write in
+  // every inherited body.
+  //
+  // A gtest fixture is exactly that class. `class OperandAttrTest : public
+  // ::testing::Test` declares no pure virtual of its own; it is abstract purely
+  // because opaque `::testing::Test` has `virtual void TestBody() = 0`
+  // (gtest.h:328). Its `SetUp()` exists to WRITE its data members, which the
+  // trait path cannot express -- so it came out as a trait whose bodies were
+  // E0609 against `&mut Self`, and the per-test struct that derives it had
+  // nothing to inherit SetUp/TearDown from.
+  //
+  // So: lower to a trait only if some pure virtual is visible to the Rust side,
+  // i.e. declared on this class or on a base the converter itself emits.
+  // Otherwise the class is concrete as far as the output is concerned, becomes a
+  // struct, and its methods -- writes included -- are ordinary inherent methods
+  // that the flattened fields make correct.
+  std::function<bool(const clang::CXXRecordDecl *)> owns_pure =
+      [&](const clang::CXXRecordDecl *rec) {
+        if (rec == nullptr || !rec->hasDefinition()) {
+          return false;
+        }
+        for (const auto *method : rec->methods()) {
+          if (method->isPureVirtual()) {
+            return true;
+          }
+        }
+        for (const auto &base : rec->bases()) {
+          auto *base_decl = base.getType()->getAsCXXRecordDecl();
+          if (base_decl == nullptr) {
+            continue;
+          }
+          base_decl = base_decl->getDefinition() != nullptr
+                          ? base_decl->getDefinition()
+                          : base_decl;
+          // A base the converter does not translate contributes no Rust
+          // declaration, so nothing below it can be dispatched on either.
+          if (IsUserDefinedDecl(base_decl) && owns_pure(base_decl)) {
+            return true;
+          }
+        }
+        return false;
+      };
+  return owns_pure(decl);
 }
 
 const clang::CXXRecordDecl *
@@ -6670,7 +7046,8 @@ Converter::GetTraitBase(const clang::CXXRecordDecl *decl) {
     if (!IsUserDefinedDecl(base)) {
       return nullptr;
     }
-    if (base->isAbstract() && trait_records_.contains(GetID(base))) {
+    if (base->isAbstract() && IsTraitLowerable(base) &&
+        trait_records_.contains(GetID(base))) {
       return base;
     }
     cur = base;
@@ -6705,10 +7082,31 @@ Converter::GetDeclaringTrait(const clang::CXXRecordDecl *impl_for,
     }
   };
   visit(visit, method);
+  if (found != nullptr) {
+    return found;
+  }
   // Nothing overridden and not itself in a trait: fall back to the nearest
   // trait base, which is what a first-declared virtual in a concrete leaf
   // derived from an abstract class wants.
-  return found != nullptr ? found : GetTraitBase(impl_for);
+  //
+  // But only if that trait actually DECLARES this method. Existing is not
+  // enough: ConvertAbstractClass's predicate drops members, so the nearest trait
+  // can exist and still lack this name, and `impl <trait> for T { fn <name> }`
+  // is then E0407 "not a member of trait". The gtest shape hits this exactly --
+  // the fixture's trait carries SetUp/TearDown, while TestBody is declared only
+  // on the opaque `::testing::Test` and so belongs in the per-test struct's own
+  // inherent impl. Returning nullptr is what puts it there; ConvertVirtualMethods
+  // already has that path and documents it.
+  const auto *base = GetTraitBase(impl_for);
+  if (base == nullptr) {
+    return nullptr;
+  }
+  auto it = trait_method_names_.find(GetID(base));
+  if (it == trait_method_names_.end() ||
+      !it->second.contains(GetMethodName(method))) {
+    return nullptr;
+  }
+  return base;
 }
 
 Converter::DeferredBlock *

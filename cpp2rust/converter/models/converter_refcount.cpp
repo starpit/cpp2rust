@@ -3326,6 +3326,11 @@ void ConverterRefCount::ConvertCXXRecordMethods(clang::CXXRecordDecl *decl) {
                           return IsEmittableMethod(method) &&
                                  !IsMethodOnPtr(method);
                         });
+  // Same reason as in the base model: Rust has no inheritance, so a base emitted
+  // as a struct delivers its methods to nothing. This model overrides
+  // ConvertCXXRecordMethods wholesale, so the call has to be repeated here or the
+  // fix is silently unsafe-only.
+  EmitInheritedStructMethods(decl);
 
   auto convert_method = [&](clang::CXXMethodDecl *method) {
     if (IsMethodOnPtr(method)) {

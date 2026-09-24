@@ -255,6 +255,25 @@ impl<T> Ptr<T> {
         matches!(self.kind, PtrKind::Null)
     }
 
+    /// A stable numeric identity for this pointer, for `operator<<` on a
+    /// pointer (which prints an address in C++).
+    ///
+    /// This model carries no machine address, so this is the address of the heap
+    /// cell plus the byte offset: equal for two `Ptr`s to the same place,
+    /// different for different places, and stable within one run. It is NOT the
+    /// address C++ would have printed -- see `cc2_insert_ptr` in stream_fmt.rs
+    /// for why nothing can depend on that.
+    pub fn cc2_identity(&self) -> usize {
+        let base = match &self.kind {
+            PtrKind::Null => return 0,
+            PtrKind::StackSingle(w) | PtrKind::HeapSingle(w) => w.as_ptr() as usize,
+            PtrKind::StackArray(w) | PtrKind::HeapArray(w) => w.as_ptr() as usize,
+            PtrKind::StackVec(w) | PtrKind::HeapVec(w) => w.as_ptr() as usize,
+            PtrKind::Reinterpreted(v) => Rc::as_ptr(v) as usize,
+        };
+        base.wrapping_add(self.byte_offset())
+    }
+
     // Normalize offset to bytes for cross-variant comparison.
     #[inline]
     fn byte_offset(&self) -> usize {

@@ -238,11 +238,67 @@ thread_local! {
 /// The whole format state of the stream behind `fd`, defaulting to a fresh
 /// C++ stream's (`dec`, no width, space fill) for a descriptor nobody has
 /// touched.
+/// The table key for a descriptor.
+///
+/// A CLONE of stdout is a different descriptor NUMBER but the same stream, and
+/// that distinction is the whole cout bug. `rules/iostream` f1/f2 build
+/// `std::cout` as `File::from_raw_fd(stdout().try_clone_to_owned())`, which the
+/// converter re-evaluates per statement, so:
+///
+/// ```text
+/// std::cout << std::hex;      // clone -> fd 3, state recorded for 3, fd 3 closed
+/// std::ofstream f("...");     // takes fd 3
+/// std::cout << 255;           // clone -> fd 4, finds no state
+/// ```
+///
+/// printed 255 where C++ prints ff -- measured. The value form cannot stop being
+/// a clone (a `std::ostream &os = std::cout;` binding needs a File, not a
+/// pointer), so instead every clone of a standard stream is keyed on the STREAM
+/// it duplicates. `same_stream_as` compares by device+inode, which is what makes
+/// a dup of fd 1 answer 1 while a genuine file keeps its own number.
+fn stream_key(fd: i32) -> i32 {
+    // Only the three standard streams need this: they are the ones the converter
+    // rematerialises per statement. A file stream's descriptor is held by the
+    // ofstream object for its whole lifetime, so its number is already stable,
+    // and reset_fd on every open/close covers reuse.
+    for std_fd in [0, 1, 2] {
+        if fd == std_fd {
+            return std_fd;
+        }
+        if same_stream_as(fd, std_fd) {
+            return std_fd;
+        }
+    }
+    fd
+}
+
+/// Whether two descriptors refer to the same open stream, by device and inode.
+///
+/// Uses `fstat` on a BORROWED descriptor -- no clone, so nothing can be closed by
+/// accident, which matters because getting that wrong here is exactly the class of
+/// bug this function exists to fix.
+fn same_stream_as(a: i32, b: i32) -> bool {
+    fn ino(fd: i32) -> Option<(u64, u64)> {
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: fstat only reads; it does not take ownership of the descriptor.
+        if unsafe { libc::fstat(fd, &mut st) } != 0 {
+            return None;
+        }
+        Some((st.st_dev as u64, st.st_ino as u64))
+    }
+    match (ino(a), ino(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
+}
+
 pub fn state_of_fd(fd: i32) -> Cc2FmtState {
+    let fd = stream_key(fd);
     FD_BASE.with(|m| m.borrow().get(&fd).copied().unwrap_or_default())
 }
 
 pub fn set_state_of_fd(fd: i32, state: Cc2FmtState) {
+    let fd = stream_key(fd);
     FD_BASE.with(|m| {
         m.borrow_mut().insert(fd, state);
     });
@@ -826,7 +882,16 @@ impl Default for Cc2FmtState {
 /// and `cc2_get_flags`/`cc2_put_flags` are inherited rather than redeclared, so
 /// the two sides cannot drift apart.  `Write` is required because every helper
 /// below ends by writing bytes.
-pub trait Cc2Insert: Cc2Extract + Write {
+pub trait Cc2Insert: Cc2Extract {
+    /// Append bytes to the stream.
+    ///
+    /// `Cc2Insert` does NOT require `io::Write`, deliberately: `rules/iostream`
+    /// hands back `*mut File` for std::cout (see the raw-pointer impls below for
+    /// why an owned File is not an option), and Rust's orphan rule forbids
+    /// `impl Write for *mut S` in this crate. So the byte sink is a method of
+    /// this trait, which every representation can implement.
+    fn cc2_write(&mut self, bytes: &[u8]);
+
     /// The width pending on this stream, taking it (C++ resets width after one
     /// inserted item).
     fn cc2_take_width(&mut self) -> usize;
@@ -852,9 +917,9 @@ pub trait Cc2Insert: Cc2Extract + Write {
             // `w$`.  Verified by compiling.  So the padding is built by hand.
             let fill = self.cc2_fill();
             let pad = vec![fill; width - body.len()];
-            let _ = self.write_all(&pad);
+            self.cc2_write(&pad);
         }
-        let _ = self.write_all(body);
+        self.cc2_write(body);
     }
 }
 
@@ -874,6 +939,118 @@ pub trait Cc2Insert: Cc2Extract + Write {
 #[inline]
 pub fn cc2_insert_bytes<S: Cc2Insert>(mut s: S, bytes: &[u8]) {
     s.cc2_pad_and_write(bytes);
+}
+
+/// Insert a POINTER -- what `<<` on any non-char pointer means in C++, i.e. the
+/// address, `%p` in printf terms.
+///
+/// The format is implementation-defined, so this is not a guess: it is what
+/// libstdc++ 15.2 -- the standard library the ground-truth oracle
+/// (`$TC/shim4/clang++`) links -- actually does.  `num_put::do_put(const void*)`
+/// at `bits/locale_facets.tcc:1205` REPLACES the stream's basefield:
+///
+/// ```text
+/// __io.flags((__flags & ~(basefield | uppercase)) | (hex | showbase));
+/// ```
+///
+/// Three consequences follow from that line, and all three were confirmed by
+/// running clang-compiled C++ rather than read off the standard:
+///
+///   * the stream's own base is IGNORED -- `o << std::dec << p` and
+///     `o << std::oct << p` both print hex, so this must not consult the flags
+///     word the way `cc2_insert_int` does;
+///   * the `0x` prefix comes from `showbase`, and showbase emits NO prefix for
+///     zero, so a null pointer prints `0` and not `0x0`.  Measured for
+///     `int *`, `void *` and `const void *` -- all three give `0`.  This is the
+///     part most likely to differ on another standard library, and the one the
+///     brief flagged; libc++ cannot be linked on this box, so it is not
+///     measurable here and only the libstdc++ answer is claimed;
+///   * `uppercase` is cleared too, so the digits are always lowercase.
+///
+/// The pending width still applies (`setw(24) << p` right-pads to 24 with the
+/// fill, measured), so this goes through `cc2_pad_and_write` like everything
+/// else.
+/// The numeric address of a pointer operand, per model.
+///
+/// The unsafe model has a real one.  The refcount model does NOT: a `Ptr<T>` is
+/// a `Weak` plus an element offset, deliberately carrying no machine address, so
+/// there is nothing to print that equals what C++ printed.  What it can supply
+/// is a stable IDENTITY -- the address of the heap cell it points at, plus the
+/// offset -- which reproduces the two properties a translated program can
+/// actually depend on: the same object prints the same text twice, and two
+/// different objects print differently.
+///
+/// The exact digits will not match a C++ run, but they do not match between two
+/// C++ runs either (ASLR), so no correct program can depend on them; anything
+/// that printed an address for a human to read still gets a usable address, and
+/// anything comparing two printed addresses still gets the right answer.  A null
+/// pointer is 0 in both models, which is the one address value that IS
+/// observable and portable.
+pub trait Cc2Addr {
+    fn cc2_addr(&self) -> usize;
+}
+
+impl<T> Cc2Addr for *const T {
+    #[inline]
+    fn cc2_addr(&self) -> usize {
+        *self as usize
+    }
+}
+
+impl<T> Cc2Addr for *mut T {
+    #[inline]
+    fn cc2_addr(&self) -> usize {
+        *self as usize
+    }
+}
+
+impl<T: crate::ByteRepr> Cc2Addr for crate::Ptr<T> {
+    #[inline]
+    fn cc2_addr(&self) -> usize {
+        if self.is_null() {
+            return 0;
+        }
+        // Identity, not a machine address -- see the note above.  The offset is
+        // folded in so that `p` and `p + 1` print differently, as C++ does.
+        self.cc2_identity()
+    }
+}
+
+/// The refcount model's `void *` / `const void *`, which is exactly the type a
+/// pointer insertion resolves to in C++.  `to_int` is the identity this type
+/// already uses for pointer-to-integer casts, so printing agrees with any
+/// comparison the translated program makes.
+impl Cc2Addr for crate::AnyPtr {
+    #[inline]
+    fn cc2_addr(&self) -> usize {
+        if self.is_null() { 0 } else { self.to_int() }
+    }
+}
+
+/// A reference to a pointer is a pointer -- the converter sometimes spells the
+/// operand as a place rather than a value.
+impl<P: Cc2Addr + ?Sized> Cc2Addr for &P {
+    #[inline]
+    fn cc2_addr(&self) -> usize {
+        (**self).cc2_addr()
+    }
+}
+
+/// Address of whatever pointer spelling the converter hands over.
+#[inline]
+pub fn cc2_addr_of<P: Cc2Addr + ?Sized>(p: &P) -> usize {
+    p.cc2_addr()
+}
+
+pub fn cc2_insert_ptr<S: Cc2Insert>(mut s: S, addr: usize) {
+    // hex | showbase, with showbase's "nothing for zero" rule -- NOT the
+    // stream's basefield.
+    let body = if addr == 0 {
+        "0".to_string()
+    } else {
+        format!("0x{:x}", addr)
+    };
+    s.cc2_pad_and_write(body.as_bytes());
 }
 
 /// Insert a NUL-terminated C string -- a `char *` / `const char *` operand.
@@ -1053,6 +1230,10 @@ pub fn cc2_apply_setfill<S: Cc2Insert>(mut s: S, fill: i8) {
 }
 
 impl Cc2Insert for StringStream {
+    fn cc2_write(&mut self, bytes: &[u8]) {
+        self.buf.extend_from_slice(bytes);
+    }
+
     #[inline]
     fn cc2_take_width(&mut self) -> usize {
         std::mem::replace(&mut self.width, 0)
@@ -1073,6 +1254,11 @@ impl Cc2Insert for StringStream {
 
 /// A boxed stream is still that stream -- see the `Cc2Extract` forwarding impl.
 impl<S: Cc2Insert + ?Sized> Cc2Insert for Box<S> {
+    #[inline]
+    fn cc2_write(&mut self, bytes: &[u8]) {
+        (**self).cc2_write(bytes)
+    }
+
     #[inline]
     fn cc2_take_width(&mut self) -> usize {
         (**self).cc2_take_width()
@@ -1173,18 +1359,12 @@ impl<T: Cc2Extract + crate::ByteRepr> Cc2Extract for &crate::Ptr<T> {
     }
 }
 
-impl<T: Cc2Insert + crate::ByteRepr> Write for &crate::Ptr<T> {
-    #[inline]
-    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-        self.with_mut(|s| s.write(data))
-    }
-    #[inline]
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.with_mut(|s| s.flush())
-    }
-}
-
 impl<T: Cc2Insert + crate::ByteRepr> Cc2Insert for &crate::Ptr<T> {
+    #[inline]
+    fn cc2_write(&mut self, bytes: &[u8]) {
+        self.with_mut(|s| s.cc2_write(bytes))
+    }
+
     #[inline]
     fn cc2_take_width(&mut self) -> usize {
         (*self).clone().cc2_take_width()
@@ -1203,18 +1383,12 @@ impl<T: Cc2Insert + crate::ByteRepr> Cc2Insert for &crate::Ptr<T> {
     }
 }
 
-impl<T: Cc2Insert + crate::ByteRepr> Write for crate::Ptr<T> {
-    #[inline]
-    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-        self.with_mut(|s| s.write(data))
-    }
-    #[inline]
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.with_mut(|s| s.flush())
-    }
-}
-
 impl<T: Cc2Insert + crate::ByteRepr> Cc2Insert for crate::Ptr<T> {
+    #[inline]
+    fn cc2_write(&mut self, bytes: &[u8]) {
+        self.with_mut(|s| s.cc2_write(bytes))
+    }
+
     #[inline]
     fn cc2_take_width(&mut self) -> usize {
         self.with_mut(|s| s.cc2_take_width())
@@ -1273,6 +1447,11 @@ impl<S: Cc2Extract + ?Sized> Cc2Extract for &mut S {
 
 impl<S: Cc2Insert + ?Sized> Cc2Insert for &mut S {
     #[inline]
+    fn cc2_write(&mut self, bytes: &[u8]) {
+        (**self).cc2_write(bytes)
+    }
+
+    #[inline]
     fn cc2_take_width(&mut self) -> usize {
         (**self).cc2_take_width()
     }
@@ -1290,7 +1469,81 @@ impl<S: Cc2Insert + ?Sized> Cc2Insert for &mut S {
     }
 }
 
+// A RAW POINTER to a stream is a stream.
+//
+// `rules/iostream` hands back `*mut File` for `std::cout`/`std::cerr` rather than
+// an owned `File`, and that spelling is forced: any owned File made from the
+// shared descriptor closes fd 1 when it drops, which showed up first as silently
+// printing `255` where C++ printed `ff` (the format state was recorded against a
+// descriptor that had already been recycled) and then, via `ptr::read`, as a
+// runtime abort, "IO Safety violation: owned file descriptor already closed".
+// Operating through the pointer materialises no owner, so nothing can drop one.
+//
+// # Safety
+//
+// The pointer must be valid for the duration of the call, which holds for the
+// thread-locals `cout_unsafe`/`cerr_unsafe` return.
+impl<S: Cc2Extract + ?Sized> Cc2Extract for *mut S {
+    #[inline]
+    fn cc2_get_flags(&self) -> u32 {
+        unsafe { (**self).cc2_get_flags() }
+    }
+    #[inline]
+    fn cc2_put_flags(&mut self, flags: u32) {
+        unsafe { (**self).cc2_put_flags(flags) }
+    }
+    #[inline]
+    fn cc2_int_token(&mut self) -> (String, u32) {
+        unsafe { (**self).cc2_int_token() }
+    }
+    #[inline]
+    fn cc2_float_token(&mut self) -> String {
+        unsafe { (**self).cc2_float_token() }
+    }
+    #[inline]
+    fn cc2_get_state(&self) -> u32 {
+        unsafe { (**self).cc2_get_state() }
+    }
+    #[inline]
+    fn cc2_put_state(&mut self, state: u32) {
+        unsafe { (**self).cc2_put_state(state) }
+    }
+    #[inline]
+    fn cc2_getline(&mut self, delim: u8) -> Vec<u8> {
+        unsafe { (**self).cc2_getline(delim) }
+    }
+}
+
+impl<S: Cc2Insert + ?Sized> Cc2Insert for *mut S {
+    #[inline]
+    fn cc2_write(&mut self, bytes: &[u8]) {
+        unsafe { (**self).cc2_write(bytes) }
+    }
+
+    #[inline]
+    fn cc2_take_width(&mut self) -> usize {
+        unsafe { (**self).cc2_take_width() }
+    }
+    #[inline]
+    fn cc2_set_width(&mut self, width: usize) {
+        unsafe { (**self).cc2_set_width(width) }
+    }
+    #[inline]
+    fn cc2_fill(&self) -> u8 {
+        unsafe { (**self).cc2_fill() }
+    }
+    #[inline]
+    fn cc2_set_fill(&mut self, fill: u8) {
+        unsafe { (**self).cc2_set_fill(fill) }
+    }
+}
+
 impl Cc2Insert for std::fs::File {
+    fn cc2_write(&mut self, bytes: &[u8]) {
+        use std::io::Write as _;
+        let _ = self.write_all(bytes);
+    }
+
     #[inline]
     fn cc2_take_width(&mut self) -> usize {
         let fd = self.as_raw_fd();
