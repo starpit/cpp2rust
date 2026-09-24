@@ -26,6 +26,26 @@ namespace cpp2rust {
 void SetSurvey(const std::string &path);
 bool IsSurvey();
 
+// Whether this run recorded at least one gap.
+//
+// Survey mode exists so that ONE run enumerates every gap, and to do that it
+// recovers past each one. But recovery makes the run EXIT ZERO, so a harness
+// that scores a TU by exit status counts a surveyed TU as a success -- and the
+// two errors compound in opposite directions:
+//
+//   * a census run with --survey inflates its OK count (measured: 9 TUs of 58
+//     scored OK while having recorded gaps);
+//   * and because recovery takes a different code path, the gap that is recorded
+//     is not always the one that would have been fatal -- a refusal site can be
+//     reached in the non-recovered run and MISSED by the survey. (Measured: the
+//     OstreamInsertion refusal on dsc/pcfg.cpp's DataFormats appears when the TU
+//     is translated normally and appears nowhere in its survey TSV.)
+//
+// So survey mode must enumerate gaps AND still report failure. This lets the
+// caller exit non-zero when anything was recorded, which keeps "what gaps are
+// there" and "does this TU translate" from being answered by the same number.
+bool SurveyFoundGaps();
+
 // Records one unsupported construct. `site` names the translator location (a
 // stable id, e.g. "CXXOperatorCallExpr"); `detail` describes the construct.
 // Returns true when the caller should recover and carry on, false when it

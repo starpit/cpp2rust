@@ -321,5 +321,16 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
+  // A survey run that recorded gaps did NOT translate this input, and must not
+  // report success -- see SurveyFoundGaps. The TSV is already written and
+  // flushed, so the enumeration is not lost by exiting non-zero; what changes is
+  // that a harness scoring by exit status can no longer count a surveyed TU as
+  // OK.
+  if (cpp2rust::SurveyFoundGaps()) {
+    llvm::errs() << "ERROR: survey recorded at least one unsupported construct; "
+                    "see " << Survey << "\n";
+    return EXIT_FAILURE;
+  }
+
   return EXIT_SUCCESS;
 }

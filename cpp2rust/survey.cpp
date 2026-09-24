@@ -11,6 +11,10 @@ namespace {
 
 std::unique_ptr<llvm::raw_fd_ostream> out_;
 
+// Whether any gap has been recorded. See SurveyFoundGaps in survey.h for why a
+// survey run has to report this rather than exit zero.
+bool found_gaps_ = false;
+
 // Tabs and newlines would break the one-line-per-gap format.
 std::string Sanitize(std::string_view s) {
   std::string out;
@@ -26,6 +30,7 @@ bool Record(std::string_view site, std::string_view detail,
   if (!out_) {
     return false;
   }
+  found_gaps_ = true;
   *out_ << Sanitize(site) << '\t' << Sanitize(detail) << '\t'
         << (loc.empty() ? "-" : Sanitize(loc)) << '\n';
   // A survey run is expected to die partway through, so pay for the flush.
@@ -36,6 +41,7 @@ bool Record(std::string_view site, std::string_view detail,
 } // namespace
 
 void SetSurvey(const std::string &path) {
+  found_gaps_ = false;
   if (path.empty()) {
     out_.reset();
     return;
@@ -51,6 +57,8 @@ void SetSurvey(const std::string &path) {
 }
 
 bool IsSurvey() { return out_ != nullptr; }
+
+bool SurveyFoundGaps() { return found_gaps_; }
 
 bool ReportUnsupported(std::string_view site, std::string_view detail) {
   return Record(site, detail, {});
