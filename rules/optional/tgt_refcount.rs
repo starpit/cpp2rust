@@ -139,22 +139,18 @@ fn f29<T1>(a0: Option<Value<T1>>) -> bool {
 // libc++ declares these two in private base classes of std::optional, so both
 // the type rules and the expression rules name the base class (see src.cpp).
 
-#[cfg(target_os = "macos")]
 fn t2<T1>() -> Option<Value<T1>> {
     None
 }
 
-#[cfg(target_os = "macos")]
 fn t3<T1>() -> Option<Value<T1>> {
     None
 }
 
-#[cfg(target_os = "macos")]
 fn f14<T1>(a0: Option<Value<T1>>) -> bool {
     a0.is_some()
 }
 
-#[cfg(target_os = "macos")]
 fn f25<T1>(a0: &mut Option<Value<T1>>) {
     *a0 = None
 }
