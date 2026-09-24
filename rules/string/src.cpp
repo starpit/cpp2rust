@@ -180,3 +180,13 @@ long long f56(const std::string &a0, std::size_t *a1, int a2) {
 double f57(const std::string &a0, std::size_t *a1) {
   return std::stod(a0, a1);
 }
+
+// operator+(char, const std::string &) -- a character on the LEFT.
+//
+// The mirror of f34 (`string + char`) and the char analogue of f38
+// (`const char * + string`), and the one concatenation form the module was
+// missing. It is not hypothetical: `sys-arch-spec/progir/progir.cpp:32` is
+// `out = '"' + out + '"'`, and without this rule that TU aborts at
+// `unsupported CXXOperatorCallExpr: +`. progir.cpp is the TU that DEFINES
+// `InstrInfo::empty`, so this rule is on the path to the gtest tests linking.
+std::string f58(char a0, const std::string &a1) { return a0 + a1; }

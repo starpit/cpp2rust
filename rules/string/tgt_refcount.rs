@@ -509,3 +509,11 @@ fn f57(a0: Vec<u8>, a1: Ptr<usize>) -> f64 {
     }
     __body[..__n].parse::<f64>().unwrap()
 }
+
+// operator+(char, const std::string &)
+fn f58(a0: u8, a1: Vec<u8>) -> Vec<u8> {
+    let mut r: Vec<u8> = ::std::vec![a0];
+    r.extend(a1.iter().copied().take_while(|&c| c != 0));
+    r.push(0);
+    r
+}

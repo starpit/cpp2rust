@@ -504,3 +504,11 @@ unsafe fn f57(a0: Vec<libc::c_char>, a1: *mut usize) -> f64 {
     }
     __body[..__n].parse::<f64>().unwrap()
 }
+
+// operator+(char, const std::string &)
+unsafe fn f58(a0: libc::c_char, a1: Vec<libc::c_char>) -> Vec<libc::c_char> {
+    let mut r: Vec<libc::c_char> = ::std::vec![a0];
+    r.extend(a1.iter().copied().take_while(|&c| c != 0));
+    r.push(0);
+    r
+}
