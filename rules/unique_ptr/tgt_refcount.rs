@@ -94,3 +94,19 @@ fn f18<T1: Clone>(a0: T1) -> Option<Value<T1>> {
 fn f19<T1: Clone>(a0: T1) -> Option<Value<T1>> {
     Some(Rc::new(RefCell::new(a0)))
 }
+
+fn f20<T1: From<(T2, T3)>, T2, T3>(a0: T2, a1: T3) -> Option<Value<T1>> {
+    Some(Rc::new(RefCell::new(<T1>::from((a0, a1)))))
+}
+
+fn f21<T1: From<(T2, T3)>, T2, T3>(a0: T2, a1: T3) -> Option<Value<T1>> {
+    Some(Rc::new(RefCell::new(<T1>::from((a0, a1)))))
+}
+
+fn f22<T1: From<(T2, T3)>, T2, T3>(a0: T2, a1: T3) -> Option<Value<T1>> {
+    Some(Rc::new(RefCell::new(<T1>::from((a0, a1)))))
+}
+
+fn f23<T1: Default>() -> Option<Value<T1>> {
+    Some(Rc::new(RefCell::new(<T1>::default())))
+}

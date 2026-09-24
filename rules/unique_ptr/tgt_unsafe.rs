@@ -86,3 +86,19 @@ unsafe fn f18<T1: Clone>(a0: T1) -> Option<Box<T1>> {
 unsafe fn f19<T1: Clone>(a0: T1) -> Option<Box<T1>> {
     Some(Box::new(a0))
 }
+
+unsafe fn f20<T1: From<(T2, T3)>, T2, T3>(a0: T2, a1: T3) -> Option<Box<T1>> {
+    Some(Box::new(<T1>::from((a0, a1))))
+}
+
+unsafe fn f21<T1: From<(T2, T3)>, T2, T3>(a0: T2, a1: T3) -> Option<Box<T1>> {
+    Some(Box::new(<T1>::from((a0, a1))))
+}
+
+unsafe fn f22<T1: From<(T2, T3)>, T2, T3>(a0: T2, a1: T3) -> Option<Box<T1>> {
+    Some(Box::new(<T1>::from((a0, a1))))
+}
+
+unsafe fn f23<T1: Default>() -> Option<Box<T1>> {
+    Some(Box::new(<T1>::default()))
+}

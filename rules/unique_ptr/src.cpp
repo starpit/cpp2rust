@@ -111,3 +111,38 @@ template <typename T1> T1 *f16(std::unique_ptr<T1> &o) { return o.release(); }
 template <typename T1> std::unique_ptr<T1> f17(std::nullptr_t a0) {
   return std::unique_ptr<T1>(a0);
 }
+
+// Two-argument std::make_unique. Mirrors rules/shared_ptr's f5/f6/f7 exactly,
+// including the reason there are three: `Args&&...` deduces a different
+// signature for rvalues, lvalues and const lvalues, so each value category
+// needs its own rule or the call matches nothing and falls back to an
+// undefined `libcc2rs::make_unique_<model>`.
+//
+// Rust has no variadic generics, so the target cannot call an arbitrary
+// constructor; it builds T1 with `From<(T2, T3)>`, which the converter now
+// emits for every translated constructor of arity >= 2 (Converter::
+// AddFromTraits). Before that impl existed this rule could only have produced
+// a type error, which is why shared_ptr's src.cpp documented the gap instead.
+template <typename T1, typename T2, typename T3>
+std::unique_ptr<T1> f20(T2 &&a0, T3 &&a1) {
+  return std::make_unique<T1>(std::move(a0), std::move(a1));
+}
+
+template <typename T1, typename T2, typename T3>
+std::unique_ptr<T1> f21(T2 &a0, T3 &a1) {
+  return std::make_unique<T1>(a0, a1);
+}
+
+template <typename T1, typename T2, typename T3>
+std::unique_ptr<T1> f22(const T2 &a0, const T3 &a1) {
+  return std::make_unique<T1>(a0, a1);
+}
+
+// Zero-argument std::make_unique. rules/shared_ptr has had the corresponding
+// f1 all along; unique_ptr's f10/f11 are the `unique_ptr<T>()` CONSTRUCTOR,
+// whose resolved signature is different, so `std::make_unique<T>()` matched
+// nothing and fell back to an undefined `libcc2rs::make_unique_<model>`.
+// Unlike the constructor it is NOT None -- it default-constructs a T.
+template <typename T1> std::unique_ptr<T1> f23() {
+  return std::make_unique<T1>();
+}
