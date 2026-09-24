@@ -170,6 +170,13 @@ public:
                          std::string box_expr,
                          const std::string &type_override = "");
 
+  void EmitOneTupleBinding(clang::VarDecl *holding_var,
+                           const std::string &holder, bool holder_is_pointer,
+                           unsigned index, bool aliases) override;
+
+  void EmitMapIterBindings(const clang::DecompositionDecl *decomp,
+                           const std::string &holder) override;
+
   std::string ConvertStream(clang::Expr *expr) override;
 
   bool VisitCXXConstructExpr(clang::CXXConstructExpr *expr) override;

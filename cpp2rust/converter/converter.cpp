@@ -5,6 +5,7 @@
 
 #include <clang/AST/APValue.h>
 #include <clang/AST/ParentMapContext.h>
+#include <clang/Basic/Stack.h>
 #include <clang/Basic/LangOptions.h>
 #include <clang/Basic/SourceManager.h>
 #include <clang/Basic/Version.h>
@@ -13,6 +14,7 @@
 #include <llvm/Support/ErrorHandling.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <format>
 #include <ranges>
 #include <utility>
@@ -31,7 +33,84 @@ std::unordered_set<std::string> Converter::globals_;
 std::vector<std::string> Converter::global_inits_;
 std::unordered_set<std::string> Converter::abstract_structs_;
 Converter::RecordIndex Converter::record_decls_;
+std::map<std::string, int64_t> Converter::opaque_enum_constants_;
 std::map<std::string, Converter::DeferredBlock> Converter::virtual_methods_;
+
+// SAFETY NET, independent of any one recursion bug.
+//
+// The converter recurses over the AST with no depth limit, so any unbounded
+// recursion in it -- present or future -- is a bare SIGSEGV: no message, no
+// location, exit 139, and on a box with no debugger nothing at all to go on.
+// clang solves the same problem for its own recursive frontend with
+// clang/Basic/Stack.h, which cpp2rust did not use.
+//
+// isStackNearlyExhausted() is the right half of that facility to use here.
+// runWithSufficientStackSpace, the other half, MOVES the work onto a fresh
+// stack when space runs low -- correct for clang, where deep-but-finite
+// template instantiation is normal, but for an infinite cycle it just buys
+// another stack and loops again. So: report the location and stop.
+//
+// This is NOT a fix for any recursion; it converts an undebuggable crash into a
+// diagnostic that names a source location. A real cycle still has to be found
+// and fixed, and the self-referential-lambda one is fixed separately.
+void Converter::CheckStackSpace(const clang::Expr *expr) {
+  if (!clang::isStackNearlyExhausted()) {
+    return;
+  }
+  llvm::errs() << "cpp2rust: converter stack nearly exhausted";
+  if (expr != nullptr) {
+    llvm::errs() << " while converting a " << expr->getStmtClassName() << " at "
+                 << expr->getExprLoc().printToString(ctx_.getSourceManager());
+  }
+  llvm::errs() << "\nThis is unbounded recursion in the converter, not a "
+                  "deep-but-finite input. Set CPP2RUST_TRACE_DEPTH=<n> to "
+                  "print the innermost frames and name the cycle.\n";
+  llvm::errs().flush();
+  std::exit(96);
+}
+
+// Recursion tracing -- see converter.h. CPP2RUST_TRACE_DEPTH.
+std::vector<Converter::TraceFrame> Converter::trace_stack_;
+long Converter::trace_limit_ = 0;
+signed char Converter::trace_enabled_ = -1;
+
+void Converter::TraceInit() {
+  trace_limit_ = 0;
+  if (const char *v = getenv("CPP2RUST_TRACE_DEPTH"); v != nullptr) {
+    trace_limit_ = strtol(v, nullptr, 10);
+  }
+  trace_enabled_ = trace_limit_ > 0 ? 1 : 0;
+}
+
+void Converter::TraceDump() {
+  constexpr size_t kInnermost = 40;
+  llvm::errs() << "\n=== CPP2RUST_TRACE: converter recursion depth "
+               << trace_stack_.size() << " exceeded " << trace_limit_
+               << "; innermost " << kInnermost << " frames ===\n";
+  size_t first =
+      trace_stack_.size() > kInnermost ? trace_stack_.size() - kInnermost : 0;
+  for (size_t i = first; i < trace_stack_.size(); ++i) {
+    llvm::errs() << "  #" << i << ' ' << trace_stack_[i].site << ' '
+                 << trace_stack_[i].kind << ' ' << trace_stack_[i].loc << '\n';
+  }
+  llvm::errs() << "=== end CPP2RUST_TRACE ===\n";
+  llvm::errs().flush();
+  std::exit(97);
+}
+
+void Converter::PushTrace::Push(Converter &c, const char *site,
+                                const clang::Expr *node) {
+  std::string loc;
+  if (node != nullptr) {
+    loc = node->getExprLoc().printToString(c.ctx_.getSourceManager());
+  }
+  trace_stack_.push_back(
+      {site, node ? node->getStmtClassName() : "<null>", std::move(loc)});
+  if (static_cast<long>(trace_stack_.size()) > trace_limit_) {
+    TraceDump();
+  }
+}
+
 
 void Converter::ConvertUniquePtrDeref(clang::CXXOperatorCallExpr *expr) {
   bool is_star = expr->getOperator() == clang::OverloadedOperatorKind::OO_Star;
@@ -94,6 +173,31 @@ void Converter::EmitGlobalInits(Model model, std::string &out) {
 void Converter::NoteOpaqueRecord(std::string name) {
   Opaque::NoteReferenced(name);
   record_decls_.MarkReferenced(std::move(name));
+}
+
+void Converter::NoteOpaqueEnumConstant(std::string name, int64_t value) {
+  // Keyed by name so that the same enumerator named from several sites is
+  // declared once. The value is the C++ enumerator's own, so this records a
+  // fact rather than inventing one; a second sighting must agree.
+  auto [it, inserted] = opaque_enum_constants_.emplace(std::move(name), value);
+  assert((inserted || it->second == value) &&
+         "same opaque enum constant seen with two different values");
+  (void)it;
+  (void)inserted;
+}
+
+void Converter::EmitOpaqueEnumConstants(std::string &out) {
+  // Typed `i64` and not as the boundary enum's own Rust type: the type is
+  // emitted for opaque enums as a plain name with no variants, so there is
+  // nothing to attach an associated constant to, and every use site either
+  // compares these to each other or casts to i32.
+  for (const auto &[name, value] : opaque_enum_constants_) {
+    out += "pub const ";
+    out += name;
+    out += ": i64 = ";
+    out += std::to_string(value);
+    out += ";\n";
+  }
 }
 
 void Converter::EmitOpaqueRecords(std::string &out) {
@@ -787,6 +891,17 @@ bool Converter::VisitVarDecl(clang::VarDecl *decl) {
   }
   EmitScopedDestructor(decl);
 
+  // A decomposition statement: `auto &[a, b, c] = t;`.  The holder has just been
+  // declared, so the bindings project straight off it.  A range-for's loop
+  // variable never reaches here -- VisitCXXForRangeStmt* returns false, so the
+  // walk does not descend into the head, and each of those paths declares the
+  // loop variable and emits its own bindings.
+  if (auto *decomp = llvm::dyn_cast<clang::DecompositionDecl>(decl)) {
+    StrCat(token::kSemiColon);
+    EmitTupleBindings(decomp, GetNamedDeclAsString(decl),
+                      decomp->getType()->isReferenceType());
+  }
+
   return false;
 }
 
@@ -926,12 +1041,23 @@ bool Converter::VisitRecordDecl(clang::RecordDecl *decl) {
   return false;
 }
 
-void Converter::EmitRustStructOrUnion(clang::RecordDecl *decl) {
-  // Enums and static variables. In rust they live outside the record
+void Converter::EmitNestedEnums(clang::RecordDecl *decl) {
+  // In rust an enum nested in a record lives outside it, under the mangled
+  // name EnumeratorName() already spells at every reference site. This runs
+  // for BOTH a translated struct and an abstract class lowered to a trait:
+  // the trait path emits no fields and no nested items, so without this an
+  // abstract class's nested enum is referenced everywhere and defined nowhere.
   for (auto *d : decl->decls()) {
     if (auto *enum_decl = llvm::dyn_cast<clang::EnumDecl>(d)) {
       VisitEnumDecl(enum_decl);
     }
+  }
+}
+
+void Converter::EmitRustStructOrUnion(clang::RecordDecl *decl) {
+  // Enums and static variables. In rust they live outside the record
+  EmitNestedEnums(decl);
+  for (auto *d : decl->decls()) {
     if (auto *var_decl = clang::dyn_cast<clang::VarDecl>(d)) {
       VisitVarDecl(var_decl);
     }
@@ -1011,10 +1137,96 @@ void Converter::EmitRustStructOrUnion(clang::RecordDecl *decl) {
   // Traits
   if (auto *cxx = clang::dyn_cast<clang::CXXRecordDecl>(decl)) {
     AddOrdTrait(cxx);
+    AddFromTraits(cxx);
   }
   AddCloneTrait(decl);
   AddDefaultTrait(decl);
   AddByteReprTrait(decl);
+}
+
+bool Converter::IsTraitTyped(clang::QualType qual_type) {
+  // True when the type's Rust spelling names a trait rather than a struct, i.e.
+  // it is (a pointer to) a class ConvertAbstractClass lowered to a trait.
+  auto stripped = qual_type;
+  while (stripped->isPointerType()) {
+    stripped = stripped->getPointeeType();
+  }
+  const auto *record = stripped->getAsCXXRecordDecl();
+  if (record == nullptr) {
+    return false;
+  }
+  record = record->getDefinition() != nullptr ? record->getDefinition() : record;
+  return record->isAbstract() || abstract_structs_.contains(GetID(record));
+}
+
+void Converter::AddFromTraits(const clang::CXXRecordDecl *decl) {
+  // `std::make_unique<T>(a, b)` / `make_shared<T>(a, b)` cannot be expressed by
+  // a rule body -- a rule cannot call an arbitrary C++ constructor and Rust has
+  // no variadic generics -- so rules/{unique_ptr,shared_ptr} spell the
+  // multi-argument forms as `<T1>::from((a0, a1))` and rules/shared_ptr's
+  // src.cpp documents the missing half: "cpp2rust does not (yet) emit From
+  // impls for translated constructors". This emits them.
+  //
+  // One impl per converting constructor of arity >= 2, keyed on the argument
+  // TUPLE, which is what those rule bodies call. Arity 0 is Default and arity 1
+  // would collide with the identity/`From<T>` blanket impls, so both are left
+  // alone -- the one-argument rule bodies do not use From anyway.
+  auto record_name = GetRecordName(decl);
+  std::unordered_set<std::string> emitted;
+  for (auto *ctor : decl->ctors()) {
+    if (ctor->isImplicit() || ctor->isDeleted() || ctor->isVariadic() ||
+        ctor->isCopyOrMoveConstructor() ||
+        ctor->getDescribedFunctionTemplate() != nullptr ||
+        ctor->getNumParams() < 2) {
+      continue;
+    }
+    // A parameter with a default argument makes the same ctor reachable at
+    // several arities; only the full one is emitted, matching what a rule body
+    // for that arity would call.
+    std::string tuple;
+    bool ok = true;
+    for (auto *param : ctor->parameters()) {
+      auto param_type =
+          param->getType().getNonReferenceType().getUnqualifiedType();
+      auto mapped = GetUnsafeTypeAsString(param_type);
+      // A parameter that is a pointer to an ABSTRACT class maps to a trait
+      // name, and a trait is not a type: naming it bare in the tuple is E0782.
+      // `*mut dyn Trait` would be the type, but it is a FAT pointer, so the
+      // `From` impl would be for a different tuple than the one a rule body
+      // built from a thin pointer -- and the `*mut dyn` side has its own
+      // unresolved Default/null_mut problem (E0271). Skip the impl rather than
+      // emit one that cannot compile; the make_unique/make_shared site then
+      // fails loudly on a missing From rather than on a malformed impl.
+      if (mapped.empty() || mapped.find(" dyn ") != std::string::npos ||
+          Converter::IsTraitTyped(param_type)) {
+        ok = false;
+        break;
+      }
+      if (!tuple.empty()) {
+        tuple += ", ";
+      }
+      tuple += mapped;
+    }
+    // Two constructors can map onto ONE Rust tuple (e.g. `(int, long)` and
+    // `(int, int64_t)`); a second impl for the same tuple is a coherence error,
+    // so keep the first and skip the rest rather than emit uncompilable Rust.
+    if (!ok || !emitted.insert(tuple).second) {
+      continue;
+    }
+    StrCat(std::format("impl From<({})> for {}", tuple, record_name));
+    PushBrace impl_brace(*this);
+    StrCat(std::format("fn from(__a: ({})) -> Self", tuple));
+    PushBrace fn_brace(*this);
+    std::string args;
+    for (unsigned i = 0; i < ctor->getNumParams(); ++i) {
+      if (i != 0) {
+        args += ", ";
+      }
+      args += std::format("__a.{}", i);
+    }
+    StrCat(std::format("unsafe {{ {}::{}({}) }}", record_name,
+                       GetCtorName(ctor), args));
+  }
 }
 
 void Converter::ConvertLateInstantiatedMethods(clang::CXXRecordDecl *decl) {
@@ -1548,6 +1760,30 @@ bool Converter::VisitTypeAliasTemplateDecl(clang::TypeAliasTemplateDecl *) {
   return false;
 }
 
+bool Converter::VisitStaticAssertDecl(clang::StaticAssertDecl *) {
+  // A `static_assert` has already been CHECKED by the compiler that produced
+  // this AST: if the condition were false there would be no AST to translate.
+  // It therefore carries no run-time meaning and emits nothing.
+  //
+  // There was no visitor at all before, so RecursiveASTVisitor descended into
+  // the condition and the converter emitted it as a bare expression. At block
+  // scope that is a harmless stray statement, but at namespace or class scope it
+  // lands where Rust expects an ITEM, and the output does not parse:
+  // `static_assert(sizeof(int) > 1, "");` became a top-level
+  // `((::std::mem::size_of::<i32>()) > (1_usize))`, i.e.
+  // `error: expected item, found '('`.
+  //
+  // This is why a translated gtest TU did not compile even with the framework
+  // opaque: TEST_F expands to two static_asserts per test
+  // (gtest-internal.h:1482), so the four test TUs emitted 23, 14, 114 and 18
+  // stray `true` tokens at item position -- the constant-folded conditions --
+  // and every one of those TUs failed to parse as Rust for that reason alone.
+  //
+  // Returning false stops the walk from descending, which is what keeps the
+  // condition from being emitted.
+  return false;
+}
+
 static bool IsaSemiColonStmt(const clang::Stmt *stmt) {
   switch (stmt->getStmtClass()) {
   case clang::Stmt::IfStmtClass:
@@ -1635,15 +1871,7 @@ void Converter::ConvertCondition(clang::Expr *cond) {
   Convert(NormalizeToBool(cond, ctx_));
 }
 
-bool Converter::VisitIfStmt(clang::IfStmt *stmt) {
-  if (auto *init = stmt->getInit()) {
-    PushBrace scope(*this);
-    Convert(init);
-    stmt->setInit(nullptr);
-    Convert(stmt);
-    stmt->setInit(init);
-    return false;
-  }
+void Converter::EmitIfStmtNoScope(clang::IfStmt *stmt) {
   StrCat(keyword::kIf);
   ConvertCondition(stmt->getCond());
   ConvertBody(stmt->getThen());
@@ -1655,10 +1883,50 @@ bool Converter::VisitIfStmt(clang::IfStmt *stmt) {
       ConvertBody(stmt->getElse());
     }
   }
+}
+
+bool Converter::VisitIfStmt(clang::IfStmt *stmt) {
+  // Two C++ forms declare a variable in the head of an `if`, and both need the
+  // declaration emitted BEFORE the `if` inside a block that matches the C++
+  // scope:
+  //
+  //   * the C++17 init-statement, `if (auto it = m.find(k); it != m.end())`;
+  //   * the condition variable, `if (const T v = init)`, whose scope is the
+  //     whole if statement -- condition, then-branch and else-branch.
+  //
+  // The init-statement was already handled. The condition variable was NOT: it
+  // was dropped entirely and every reference to `v` in the condition or in
+  // either branch became an undeclared name in the emitted Rust. That is how
+  // gtest's assertions came out: EXPECT_EQ / EXPECT_TRUE / ASSERT_* all expand
+  // to `if (const ::testing::AssertionResult gtest_ar = ..)`, so a translated
+  // gtest TU named `gtest_ar` in ~78 places and declared it in none.
+  //
+  // Emitted without mutating the AST: the tail is factored into
+  // EmitIfStmtNoScope rather than re-entering VisitIfStmt with fields cleared.
+  auto *init = stmt->getInit();
+  auto *cond_var_decl = stmt->getConditionVariableDeclStmt();
+  if (init != nullptr || cond_var_decl != nullptr) {
+    PushBrace scope(*this);
+    if (init != nullptr) {
+      Convert(init);
+    }
+    if (cond_var_decl != nullptr) {
+      Convert(cond_var_decl);
+    }
+    EmitIfStmtNoScope(stmt);
+    return false;
+  }
+  EmitIfStmtNoScope(stmt);
   return false;
 }
 
 bool Converter::VisitWhileStmt(clang::WhileStmt *stmt) {
+  // A condition variable on a `while` is re-declared and re-initialized on
+  // every iteration, so hoisting it out of the loop the way VisitIfStmt does
+  // would be wrong. Left unsupported and LOUD rather than silently dropped:
+  // no site in dcg/ ddc/ dsc/ dbo/ or in the four gtest test TUs uses it.
+  assert(stmt->getConditionVariableDeclStmt() == nullptr &&
+         "unsupported condition variable on a while statement");
   PushBreakTarget push(break_target_, BreakTarget::Loop);
   StrCat("'loop_:");
   StrCat(keyword::kWhile);
@@ -1744,6 +2012,130 @@ void Converter::ConvertForRangeBody(clang::CXXForRangeStmt *stmt,
   curr_for_inc_.pop_back();
 }
 
+// Whether the bindings of `decomp` read through an implicit holding variable.
+//
+// C++17 gives a decomposition three cases.  For an array and for a plain struct
+// whose members are all public, each BindingDecl's getBinding() is a
+// self-contained expression over the holder (`h[2]`, `h.field`) and converting
+// it in place of the name -- which is what VisitDeclRefExpr already did -- is
+// correct and needs no declaration.  For a TUPLE-LIKE type, which is
+// std::pair/std::tuple and therefore every `for (auto &[k, v] : map)` in the
+// tree, clang instead synthesises a holding VarDecl per binding, initialised
+// with `get<I>(holder)`, and getBinding() is a DeclRefExpr *to that variable*.
+// Converting it emitted the variable's name, and nothing declared it.
+bool Converter::IsTupleLikeDecomposition(
+    const clang::DecompositionDecl *decomp) {
+  return llvm::any_of(decomp->bindings(), [](const clang::BindingDecl *b) {
+    return b->getHoldingVar() != nullptr;
+  });
+}
+
+void Converter::EmitBindingLet(clang::VarDecl *holding_var,
+                               const std::string &init) {
+  // The holding var's own type is a reference (`T &`, or `T &&` for a by-value
+  // decomposition of a tuple-like); both models spell a reference as the
+  // pointer, and ConvertVarDeclSkipInit already does that -- so `let x: *mut T`
+  // / `let x: Ptr<T>` falls out of the ordinary path and the two models need no
+  // separate spelling here.
+  ConvertVarDeclSkipInit(holding_var);
+  StrCat(token::kAssign, init, token::kSemiColon);
+}
+
+void Converter::EmitOneTupleBinding(clang::VarDecl *holding_var,
+                                    const std::string &holder,
+                                    bool holder_is_pointer, unsigned index,
+                                    bool aliases) {
+  bool is_const =
+      holding_var->getType().getNonReferenceType().isConstQualified();
+  // `&raw`, not `&mut`: a plain `&mut (*p).0` on a raw-pointer base trips
+  // deny-by-default dangerous_implicit_autorefs, the same hazard the playbook
+  // records for a bare `(a0)[i]` in a Vec rule.
+  //
+  // `aliases` needs no separate treatment in this model: when the holder is a
+  // value it is already the converter's own copy (ConvertLoopVariable emitted
+  // `v[i].clone()`, and a decomposition statement's holder is its own `let`),
+  // so pointing into it is exactly the C++ semantics either way.
+  auto field = holder_is_pointer ? std::format("(*{}).{}", holder, index)
+                                 : std::format("{}.{}", holder, index);
+  EmitBindingLet(holding_var, std::format("&raw {} {}",
+                                          is_const ? "const" : "mut", field));
+}
+
+void Converter::EmitTupleBindings(const clang::DecompositionDecl *decomp,
+                                  const std::string &holder,
+                                  bool holder_is_pointer) {
+  if (!IsTupleLikeDecomposition(decomp)) {
+    return;
+  }
+  // `auto &[..]` aliases the decomposed object, `auto [..]` decomposes a copy.
+  bool aliases = decomp->getType()->isReferenceType();
+  unsigned index = 0;
+  for (auto *binding : decomp->bindings()) {
+    if (auto *holding_var = binding->getHoldingVar()) {
+      EmitOneTupleBinding(holding_var, holder, holder_is_pointer, index,
+                          aliases);
+    } else {
+      // A binding pack, which no arity of std::pair/std::tuple produces. Leave
+      // it undeclared and therefore loud rather than guess a projection.
+      ReportUnsupported("StructuredBinding", "binding without a holding var");
+    }
+    ++index;
+  }
+}
+
+std::array<clang::VarDecl *, 2>
+Converter::MapBindingHoldingVars(const clang::DecompositionDecl *decomp) {
+  static constexpr std::array<clang::VarDecl *, 2> kNone = {nullptr, nullptr};
+  if (!IsTupleLikeDecomposition(decomp)) {
+    return kNone;
+  }
+  auto bindings = decomp->bindings();
+  // A map iterator denotes exactly a key and a value; anything else is not a
+  // map decomposition and must not be guessed at.
+  if (bindings.size() != 2) {
+    ReportUnsupported(
+        "StructuredBinding",
+        std::format("map range-for with {} bindings", bindings.size()));
+    return kNone;
+  }
+  std::array<clang::VarDecl *, 2> vars = {bindings[0]->getHoldingVar(),
+                                         bindings[1]->getHoldingVar()};
+  if (!vars[0] || !vars[1]) {
+    return kNone;
+  }
+  return vars;
+}
+
+void Converter::EmitMapIterBindings(const clang::DecompositionDecl *decomp,
+                                    const std::string &holder) {
+  auto vars = MapBindingHoldingVars(decomp);
+  if (!vars[0]) {
+    return;
+  }
+  // `for (auto [k, v] : m)` decomposes a COPY of the pair, so a write through
+  // k/v must stay local; `for (auto &[k, v] : m)` aliases the element and a
+  // write must reach the container.  first()/second() are already *const K and
+  // *mut V, so the aliasing case needs nothing but the name.
+  bool by_value = !decomp->getType()->isReferenceType();
+  for (unsigned index = 0; index < 2; ++index) {
+    auto *holding_var = vars[index];
+    auto ptr =
+        std::format("{}.{}()", holder, index == 0 ? "first" : "second");
+    if (by_value) {
+      // The copy has to outlive the pointer for the whole body, so it is its
+      // own `let` rather than a temporary inside the initializer.
+      auto pointee = holding_var->getType().getNonReferenceType();
+      auto tmp = std::format("__bindval_{}", GetNamedDeclAsString(holding_var));
+      StrCat(keyword::kLet, keyword_mut_, tmp, token::kColon,
+             ToString(pointee.getUnqualifiedType()), token::kAssign,
+             std::format("(*{}).clone()", ptr), token::kSemiColon);
+      ptr = std::format("&raw {} {}",
+                        pointee.isConstQualified() ? "const" : "mut", tmp);
+    }
+    EmitBindingLet(holding_var, ptr);
+  }
+}
+
 bool Converter::VisitCXXForRangeStmt(clang::CXXForRangeStmt *stmt) {
   auto range_init_type = stmt->getRangeInit()->getType();
 
@@ -1769,6 +2161,11 @@ bool Converter::VisitCXXForRangeStmt(clang::CXXForRangeStmt *stmt) {
   return VisitCXXForRangeStmtVector(stmt);
 }
 
+bool Converter::IsSetRangeFor(const clang::CXXForRangeStmt *stmt) {
+  auto range_class = GetClassName(stmt->getRangeInit()->getType());
+  return range_class == "std::set" || range_class == "std::unordered_set";
+}
+
 bool Converter::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
   auto *loop_var = stmt->getLoopVariable();
   auto loop_var_name = GetNamedDeclAsString(loop_var);
@@ -1781,10 +2178,49 @@ bool Converter::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
   StrCat(std::format(" as *const {})", map_type));
   {
     PushBrace brace(*this);
-    ConvertForRangeBody(stmt, loop_var);
+    // A set yields its ELEMENT, not a key/value pair, so the loop variable has
+    // to be rebound off the iterator; without this the body used the ITERATOR
+    // wherever the source named the element.  A map's loop variable IS the
+    // iterator (`p.first`/`p.second` map onto its accessors), so it stays.
+    const bool is_set = IsSetRangeFor(stmt);
+    if (is_set) {
+      EmitSetElementShadow(loop_var, loop_var_name);
+    }
+    if (auto *decomp = llvm::dyn_cast<clang::DecompositionDecl>(loop_var)) {
+      if (is_set) {
+        // `for (auto &[a, b] : set_of_pairs)` decomposes the element, which the
+        // shadow above has already made an ordinary pointer-to-tuple.
+        EmitTupleBindings(decomp, loop_var_name,
+                          /*holder_is_pointer=*/decomp->getType()
+                              ->isReferenceType());
+      } else {
+        EmitMapIterBindings(decomp, loop_var_name);
+      }
+    }
+    // The set's loop variable is no longer an iterator, so uses of it are
+    // ordinary reads through a reference and need the usual deref.
+    ConvertForRangeBody(stmt, is_set ? nullptr : loop_var);
   }
 
   return false;
+}
+
+void Converter::EmitSetElementShadow(clang::VarDecl *loop_var,
+                                     const std::string &loop_var_name) {
+  // second() is the element pointer -- a set is a BTreeMap whose value is the
+  // element.  `for (auto &e : s)` aliases it; `for (auto e : s)` COPIES, and
+  // pointing at the map's own element there would let a write the C++ says is
+  // local reach the container, so spell the copy.
+  if (loop_var->getType()->isReferenceType()) {
+    StrCat(keyword::kLet, loop_var_name, token::kColon,
+           ToString(loop_var->getType()), token::kAssign,
+           std::format("{}.second()", loop_var_name), token::kSemiColon);
+  } else {
+    StrCat(keyword::kLet, keyword_mut_, loop_var_name, token::kColon,
+           ToString(loop_var->getType()), token::kAssign,
+           std::format("(*{}.second()).clone()", loop_var_name),
+           token::kSemiColon);
+  }
 }
 
 bool Converter::VisitCXXForRangeStmtString(clang::CXXForRangeStmt *stmt) {
@@ -1822,6 +2258,13 @@ bool Converter::VisitCXXForRangeStmtIndexBased(clang::CXXForRangeStmt *stmt,
     ConvertLoopVariable(loop_var, stmt->getRangeInit());
 
     StrCat(token::kSemiColon);
+    if (auto *decomp = llvm::dyn_cast<clang::DecompositionDecl>(loop_var)) {
+      // ConvertLoopVariable emits `&mut v.as_mut_ptr().add(i)` for `auto &[..]`
+      // and a `.clone()`d value for `auto [..]`, so the holder is a pointer in
+      // the first case and a value in the second.
+      EmitTupleBindings(decomp, loop_var_name,
+                        /*holder_is_pointer=*/loop_var_type->isReferenceType());
+    }
     ConvertForRangeBody(stmt);
   }
 
@@ -1848,6 +2291,8 @@ bool Converter::VisitContinueStmt([[maybe_unused]] clang::ContinueStmt *stmt) {
 
 bool Converter::Convert(clang::Expr *expr,
                         std::optional<clang::QualType> implicit_convert_to) {
+  PushTrace trace(*this, "Convert(Expr)", expr);
+  CheckStackSpace(expr);
   bool needs_conversion =
       expr && implicit_convert_to &&
       NeedsImplicitScalarCast(expr->IgnoreImplicit()->getType(),
@@ -3452,6 +3897,24 @@ std::string Converter::ConvertDeclRefExpr(clang::DeclRefExpr *expr) {
 
   if (auto enum_constant = clang::dyn_cast<clang::EnumConstantDecl>(decl)) {
     auto name = EnumeratorName(enum_constant);
+    // An enum constant on an opaque boundary needs DECLARING, not just naming.
+    // The enum's type is already declared (see Convert(QualType) above), but
+    // nothing ever emitted its enumerators, so each one was a bare undefined
+    // identifier -- the gap the porting playbook records as "opaque enum
+    // constants are emitted as bare undefined identifiers". It is the single
+    // largest one in a translated gtest TU: `testing::TestPartResult::
+    // kNonFatalFailure` is named 156 times in operandattr_unit_test alone,
+    // once per assertion.
+    //
+    // Unlike an opaque TYPE, an opaque enum CONSTANT has a value the compiler
+    // already knows, so this is not an approximation: the emitted constant
+    // carries the same integer the C++ enumerator has. That matters here
+    // because the value is load-bearing -- kNonFatalFailure(1) vs
+    // kFatalFailure(2) is exactly what distinguishes EXPECT_* from ASSERT_*.
+    if (Opaque::IsOpaqueDecl(enum_constant)) {
+      NoteOpaqueEnumConstant(name,
+                             enum_constant->getInitVal().getExtValue());
+    }
     if (!expr->getType()->isEnumeralType()) {
       return std::format("({} as i32)", name);
     }
@@ -3470,11 +3933,18 @@ std::string Converter::ConvertDeclRefExpr(clang::DeclRefExpr *expr) {
 }
 
 bool Converter::VisitDeclRefExpr(clang::DeclRefExpr *expr) {
+  PushTrace trace(*this, "VisitDeclRefExpr", expr);
   auto decl = expr->getDecl();
 
-  // A structured binding is not a variable: clang gives each name an
-  // expression reading it out of the holding object (a member access, or a
-  // get<I> call for tuple-likes). Convert that instead of the name.
+  // A structured binding is not a variable.  For an array or a plain struct,
+  // getBinding() is a self-contained expression reading the name out of the
+  // holder (`h[2]`, `h.field`), so converting it in place of the name is right
+  // and nothing needs declaring.  For a TUPLE-LIKE holder -- std::pair and
+  // std::tuple, hence every `auto &[k, v]` over a map -- it is instead a
+  // DeclRefExpr to an implicit HOLDING variable of reference type, so this same
+  // Convert emits that variable's name and derefs it.  Nothing used to DECLARE
+  // those, which made every such use an undefined identifier;
+  // EmitTupleBindings/EmitMapIterBindings now do.
   if (auto *binding = llvm::dyn_cast<clang::BindingDecl>(decl)) {
     if (auto *bound = binding->getBinding()) {
       Convert(bound);
@@ -3640,7 +4110,18 @@ bool Converter::ConvertCXXOperatorCallExpr(clang::CXXOperatorCallExpr *expr) {
       ConvertCallToOstream(expr);
       return false;
     }
-    break;
+    // NOT a std::ostream. A bare `break` here emitted NOTHING and left
+    // computed_expr_type_ unset, which is the worst of both outcomes: in an
+    // rvalue position the unset type trips the assert in Convert(Expr) (which
+    // is what stops `--opaque-namespace=mlir` on the generated dialect .inc
+    // files, at `op->emitOpError(k) << " #" << i`), and in a STATEMENT position
+    // nothing checks it, so the whole chain is silently dropped and the
+    // translated program loses the call. Measured on a three-line probe against
+    // clang-compiled C++: `mlir::Sink s{0}; s << 3 << 4;` gave 7 in C++ and
+    // emitted `;;;` in Rust. Fall through to the shared handler instead, which
+    // transliterates an operator on an opaque boundary type and otherwise
+    // reports the gap -- loud either way, never dropped.
+    return ConvertUnhandledOperatorCall(expr);
   case clang::OverloadedOperatorKind::OO_Call:
     ConvertGenericCallExpr(expr);
     break;
@@ -3665,22 +4146,31 @@ bool Converter::ConvertCXXOperatorCallExpr(clang::CXXOperatorCallExpr *expr) {
     }
     computed_expr_type_ = ComputedExprType::FreshValue;
     break;
-  default: {
-    const char *spelling = clang::getOperatorSpelling(expr->getOperator());
-    if (ConvertOpaqueOperatorCall(expr)) {
-      break;
-    }
-    if (ReportUnsupported("CXXOperatorCallExpr", spelling,
-                          expr->getExprLoc(), ctx_)) {
-      StrCat(UnsupportedPlaceholder("CXXOperatorCallExpr", spelling));
-      computed_expr_type_ = ComputedExprType::FreshValue;
-      break;
-    }
-    // FIXME: improve error handling
-    llvm::errs() << "unsupported CXXOperatorCallExpr: " << spelling << '\n';
-    assert(0);
+  default:
+    return ConvertUnhandledOperatorCall(expr);
   }
+  return false;
+}
+
+// The one place an operator with no dedicated handler is dealt with: try the
+// opaque-boundary transliteration, otherwise report the gap. Shared by the
+// switch's `default` and by `<<` once it is known not to be a std::ostream, so
+// the two cannot drift apart -- and so neither can reach the "emit nothing,
+// set nothing" state that silently deletes the call.
+bool Converter::ConvertUnhandledOperatorCall(clang::CXXOperatorCallExpr *expr) {
+  const char *spelling = clang::getOperatorSpelling(expr->getOperator());
+  if (ConvertOpaqueOperatorCall(expr)) {
+    return false;
   }
+  if (ReportUnsupported("CXXOperatorCallExpr", spelling, expr->getExprLoc(),
+                        ctx_)) {
+    StrCat(UnsupportedPlaceholder("CXXOperatorCallExpr", spelling));
+    computed_expr_type_ = ComputedExprType::FreshValue;
+    return false;
+  }
+  // FIXME: improve error handling
+  llvm::errs() << "unsupported CXXOperatorCallExpr: " << spelling << '\n';
+  assert(0);
   return false;
 }
 
@@ -4376,6 +4866,42 @@ Converter::SelectLambdaCallOperator(clang::LambdaExpr *expr) {
 }
 
 bool Converter::VisitLambdaExpr(clang::LambdaExpr *expr) {
+  PushTrace trace(*this, "VisitLambdaExpr", expr);
+
+  // A SELF-REFERENTIAL lambda. Because a lambda is inlined at every use rather
+  // than bound to a name, a body that names its own variable would inline into
+  // itself forever: unbounded recursion in the converter, which with no stack
+  // guard is a bare SIGSEGV with no diagnostic at all. This is not a rare
+  // shape -- `std::function<R(A)> f = [&f](A a){ .. f(..) .. }` is how C++
+  // spells a recursive local function, and three sites in dt_src use it.
+  //
+  // Refusing is the honest answer rather than a stopgap. Inlining CANNOT
+  // express this: the construct needs one named, callable item that can refer
+  // to itself, and "inline the body at each use" has no name to recur through.
+  // Stopping the expansion at depth N instead would emit N copies of the body
+  // with the innermost call silently deleted -- a program that returns a wrong
+  // answer with no diagnostic, which is the failure class the playbook ranks
+  // worst. So it is reported as the gap it is: a real converter gap whose fix
+  // is to emit a recursive lambda as a named `fn`/closure item rather than by
+  // inlining, which is a design change well beyond this call site.
+  if (IsInliningLambda(expr->getLambdaClass())) {
+    const auto why =
+        std::string("self-referential lambda: the body names its own variable, "
+                    "and lambdas are inlined at each use, so expanding it does "
+                    "not terminate");
+    if (ReportUnsupported("SelfReferentialLambda", why, expr->getExprLoc(),
+                          ctx_)) {
+      StrCat(UnsupportedPlaceholder("SelfReferentialLambda", why));
+      computed_expr_type_ = ComputedExprType::FreshValue;
+      return false;
+    }
+    llvm::errs() << "unsupported " << why << " at "
+                 << expr->getExprLoc().printToString(ctx_.getSourceManager())
+                 << '\n';
+    assert(0 && "self-referential lambda");
+    return false;
+  }
+
   clang::CXXMethodDecl *call_op = SelectLambdaCallOperator(expr);
 
   if (!call_op) {
@@ -4412,6 +4938,9 @@ bool Converter::VisitLambdaExpr(clang::LambdaExpr *expr) {
   // The selection is consumed here: a nested lambda inside this body must not
   // inherit this call site's specialization.
   PushPendingLambdaCallOp clear_pending(*this, nullptr);
+  // Scoped to the body only, so a lambda used twice in SEQUENCE still inlines
+  // twice; only a use NESTED inside its own expansion is a self-reference.
+  PushLambdaBeingInlined inlining(*this, expr->getLambdaClass());
 
   if (isAddrOf() && expr->capture_size() == 0) {
     StrCat("Some");
@@ -5062,6 +5591,42 @@ void Converter::ConvertFunctionQualifiers(clang::FunctionDecl *decl) {
 
 void Converter::ConvertFunctionReturnType(clang::FunctionDecl *decl) {
   auto return_type = decl->getReturnType();
+  // C++ allows an override to narrow a pointer return to a derived class
+  // (covariant return). Rust does not: the impl must repeat the trait's
+  // declared return type exactly, or E0053. Since the override goes into the
+  // trait's impl block, take the return type from the method it overrides --
+  // the value returned is a subtype, so widening the annotation is sound and
+  // is what the C++ caller through a base pointer sees anyway.
+  if (auto *method = clang::dyn_cast<clang::CXXMethodDecl>(decl);
+      method != nullptr && method->isVirtual()) {
+    if (const auto *trait = GetDeclaringTrait(method->getParent(), method);
+        trait != nullptr) {
+      // Only rewrite against the declaration the TRAIT actually carries. An
+      // override landing in an inherent impl has no trait signature to match,
+      // so it keeps its own narrower type. The trait's declaration can be
+      // several links up the overridden chain (InheritWithClone<Base,Derived>
+      // interposes one concrete link per level), so search the whole chain.
+      const clang::CXXMethodDecl *in_trait = nullptr;
+      auto find = [&](auto &&self, const clang::CXXMethodDecl *m) -> void {
+        auto *parent = m->getParent();
+        parent = parent->getDefinition() != nullptr ? parent->getDefinition()
+                                                    : parent;
+        if (parent == trait) {
+          in_trait = m;
+          return;
+        }
+        for (const auto *over : m->overridden_methods()) {
+          if (in_trait == nullptr) {
+            self(self, over);
+          }
+        }
+      };
+      find(find, method);
+      if (in_trait != nullptr) {
+        return_type = in_trait->getReturnType();
+      }
+    }
+  }
   if (!return_type->isVoidType()) {
     StrCat(token::kArrow);
     Convert(return_type);
@@ -5097,11 +5662,43 @@ void Converter::ConvertAbstractClass(clang::CXXRecordDecl *decl) {
   if (!abstract_structs_.insert(GetID(decl)).second) {
     return;
   }
+  // Before the trait signature, not inside it: a nested enum lowers to
+  // top-level `pub type` + `pub const` items, which are not trait members.
+  EmitNestedEnums(decl);
   auto trait_name = GetRecordName(decl);
   auto access_specifier_as_string = AccessSpecifierAsString(decl->getAccess());
-  auto signature = std::format("{} {} trait {}", access_specifier_as_string,
-                               keyword_unsafe_, trait_name);
+  // An abstract class derived from another abstract class becomes a SUBTRAIT.
+  // Without the supertrait bound, `A2 : A1 : A0` lowers to two unrelated traits
+  // and `impl A1 for A2` leaves `A2: A0` unsatisfied (E0277), so a `*mut dyn A0`
+  // to the leaf does not compile. `unsafe trait` needs the supertrait to be
+  // unsafe too, which it is: every trait on this path is emitted `unsafe`.
+  std::string supertraits;
+  if (const auto *base = GetTraitBase(decl); base != nullptr) {
+    supertraits = std::format(" : {}", GetRecordName(base));
+  }
+  auto signature =
+      std::format("{} {} trait {}{}", access_specifier_as_string,
+                  keyword_unsafe_, trait_name, supertraits);
   auto predicate = [](auto *method) {
+    // A constructor has no place in the trait. It lowers to an associated
+    // function with no `self` and a `-> Self` return whose body is
+    // `Self { <base fields> }`, so it is (a) dyn-INCOMPATIBLE, which poisons
+    // every `*mut dyn Base` the whole run emits, and (b) uncompilable anyway,
+    // because a trait has no fields to initialize. It is also dead: a derived
+    // constructor's mem-initializer for its base is dropped, so nothing in the
+    // output ever calls it. Excluding it is what makes `*mut dyn Base` legal.
+    if (clang::isa<clang::CXXConstructorDecl>(method)) {
+      return false;
+    }
+    // An override of a method a SUPERtrait already declares is not a second
+    // trait item -- in C++ it reuses the base's vtable slot. Redeclaring it in
+    // the subtrait creates two candidates with one name and every call through
+    // the subtrait becomes E0034 "multiple applicable items in scope". The
+    // override still reaches the leaf, via GetDeclaringTrait routing it to the
+    // supertrait's impl block.
+    if (!method->overridden_methods().empty()) {
+      return false;
+    }
     return !method->isImplicit() &&
            !clang::isa<clang::CXXDestructorDecl>(method);
   };
@@ -5130,35 +5727,123 @@ void Converter::ConvertCXXMethodDecls(
   }
 }
 
-Converter::DeferredBlock &
-Converter::VirtualMethodsFor(const clang::CXXRecordDecl *decl) {
-  auto name = GetRecordName(decl);
-  auto [it, inserted] = virtual_methods_.try_emplace(name);
-  if (inserted) {
-    it->second.header = std::format(
-        "{} impl {} for {}", keyword_unsafe_,
-        GetUnsafeTypeAsString(decl->bases_begin()->getType()), name);
+const clang::CXXRecordDecl *
+Converter::GetTraitBase(const clang::CXXRecordDecl *decl) {
+  // Only an ABSTRACT class becomes a Rust trait (ConvertAbstractClass); a
+  // concrete class becomes a struct. So the `impl Base for Derived` this
+  // function's caller wants to emit is only well formed when some transitive
+  // base really was lowered to a trait. Walk up the chain to the nearest one.
+  //
+  // Without this walk the header named the DIRECT base unconditionally, which
+  // is the E0404 bucket: `unsafe impl baseStickOp for APEOpLX {}` where
+  // baseStickOp is a struct, because baseStickOp's virtuals all have bodies so
+  // clang does not call it abstract.
+  for (auto *cur = decl; cur != nullptr;) {
+    if (cur->bases_begin() == cur->bases_end()) {
+      return nullptr;
+    }
+    auto *base = cur->bases_begin()->getType()->getAsCXXRecordDecl();
+    if (base == nullptr) {
+      return nullptr;
+    }
+    base = base->getDefinition() != nullptr ? base->getDefinition() : base;
+    if (base->isAbstract()) {
+      return base;
+    }
+    cur = base;
   }
-  return it->second;
+  return nullptr;
+}
+
+const clang::CXXRecordDecl *
+Converter::GetDeclaringTrait(const clang::CXXRecordDecl *impl_for,
+                            const clang::CXXMethodDecl *method) {
+  // Which trait does this override belong to?  In C++ one `override` satisfies
+  // every base declaration at once; in Rust an override must be written in the
+  // impl block of the trait that DECLARES that method, or rustc says "method X
+  // is not a member of trait Y" (E0407).  So follow the overridden chain to the
+  // HIGHEST abstract ancestor that declares it -- that is the trait whose
+  // vtable slot a C++ base pointer would dispatch through.
+  const clang::CXXRecordDecl *found = nullptr;
+  auto visit = [&](auto &&self, const clang::CXXMethodDecl *m) -> void {
+    auto *parent = m->getParent();
+    parent = parent->getDefinition() != nullptr ? parent->getDefinition()
+                                                : parent;
+    if (parent != impl_for && parent->isAbstract() &&
+        abstract_structs_.contains(GetID(parent))) {
+      found = parent;
+    }
+    for (const auto *over : m->overridden_methods()) {
+      self(self, over);
+    }
+  };
+  visit(visit, method);
+  // Nothing overridden and not itself in a trait: fall back to the nearest
+  // trait base, which is what a first-declared virtual in a concrete leaf
+  // derived from an abstract class wants.
+  return found != nullptr ? found : GetTraitBase(impl_for);
+}
+
+Converter::DeferredBlock *
+Converter::VirtualMethodsFor(const clang::CXXRecordDecl *decl,
+                            const clang::CXXRecordDecl *trait) {
+  if (trait == nullptr) {
+    return nullptr;
+  }
+  auto name = GetRecordName(decl);
+  auto trait_name = GetRecordName(trait);
+  // Key on BOTH, so a leaf implementing a 3-level chain gets one impl block per
+  // trait rather than all its overrides crammed into the nearest one.
+  auto [it, inserted] = virtual_methods_.try_emplace(trait_name + '|' + name);
+  if (inserted) {
+    it->second.header = std::format("{} impl {} for {}", keyword_unsafe_,
+                                    trait_name, name);
+  }
+  return &it->second;
 }
 
 void Converter::ConvertVirtualMethods(clang::CXXRecordDecl *decl) {
   if (decl->bases_begin() == decl->bases_end()) {
     return;
   }
-  bool any = false;
-  Buffer buf(*this);
+  // Group the overrides by the trait each one belongs to first, so nothing is
+  // written to the real output while a Buffer is redirecting it.
+  std::vector<std::pair<const clang::CXXRecordDecl *, std::string>> grouped;
+  std::string inherent;
   for (auto *method : decl->methods()) {
-    if (!method->isImplicit() && method->isVirtual()) {
-      any = true;
-      VisitCXXMethodDecl(method);
+    if (method->isImplicit() || !method->isVirtual() ||
+        clang::isa<clang::CXXDestructorDecl>(method)) {
+      continue;
     }
+    const auto *trait = GetDeclaringTrait(decl, method);
+    std::string body;
+    {
+      Buffer buf(*this);
+      VisitCXXMethodDecl(method);
+      body = std::move(buf).str();
+    }
+    if (body.empty()) {
+      continue;
+    }
+    if (trait == nullptr) {
+      // No trait anywhere up the chain -- every base is a concrete struct. The
+      // override belongs in the record's own inherent impl, which is where a
+      // non-virtual method would have gone. Naming the base struct as if it
+      // were a trait is the E0404 bucket; dropping the body would be silent
+      // wrongness.
+      inherent += body;
+      continue;
+    }
+    grouped.emplace_back(trait, std::move(body));
   }
-  auto body = std::move(buf).str();
-  if (!any) {
-    return;
+  for (auto &[trait, body] : grouped) {
+    VirtualMethodsFor(decl, trait)->body += body;
   }
-  VirtualMethodsFor(decl).body += body;
+  if (!inherent.empty()) {
+    StrCat(keyword::kImpl, GetRecordName(decl));
+    PushBrace impl_brace(*this);
+    StrCat(inherent);
+  }
 }
 
 bool Converter::ConvertOutOfLineVirtualMethod(clang::CXXMethodDecl *decl) {
@@ -5166,9 +5851,15 @@ bool Converter::ConvertOutOfLineVirtualMethod(clang::CXXMethodDecl *decl) {
   if (record->bases_begin() == record->bases_end()) {
     return false;
   }
+  auto *block = VirtualMethodsFor(record, GetDeclaringTrait(record, decl));
+  if (block == nullptr) {
+    // No trait up the chain -- emit it as an ordinary out-of-line method on the
+    // record itself rather than into an `impl <struct> for <struct>`.
+    return ConvertOutOfLineMethod(decl);
+  }
   Buffer buf(*this);
   auto emitted = ConvertCXXMethodDecl(decl);
-  VirtualMethodsFor(record).body += std::move(buf).str();
+  block->body += std::move(buf).str();
   return emitted;
 }
 

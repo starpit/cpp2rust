@@ -7,6 +7,7 @@
 #include <clang/AST/RecursiveASTVisitor.h>
 #include <clang/Sema/Sema.h>
 
+#include <algorithm>
 #include <functional>
 #include <map>
 #include <optional>
@@ -60,6 +61,14 @@ public:
   // declaration. The two indexes have to agree: the second decides whether
   // anything is emitted, the first decides which shape.
   static void NoteOpaqueRecord(std::string name);
+  // Records one API-boundary enum CONSTANT and the integer value the C++
+  // enumerator has. Unlike a boundary type, whose value the port still owes, an
+  // enumerator's value is known here, so it is carried through rather than
+  // approximated.
+  static void NoteOpaqueEnumConstant(std::string name, int64_t value);
+  // Declares every boundary enum constant recorded so far. Without this they
+  // were emitted as bare undefined identifiers.
+  static void EmitOpaqueEnumConstants(std::string &out);
   static void EmitGlobalInits(Model model, std::string &out);
 
   static void EmitVirtualMethods(std::string &out);
@@ -130,6 +139,7 @@ public:
   virtual bool VisitCXXRecordDecl(clang::CXXRecordDecl *decl);
 
   virtual void EmitRustStructOrUnion(clang::RecordDecl *decl);
+  void EmitNestedEnums(clang::RecordDecl *decl);
 
   void EmitReprC(clang::RecordDecl *decl);
   virtual void EmitRustUnion(clang::RecordDecl *decl);
@@ -185,6 +195,8 @@ public:
   virtual bool VisitTypeAliasDecl(clang::TypeAliasDecl *decl);
   virtual bool VisitTypeAliasTemplateDecl(clang::TypeAliasTemplateDecl *decl);
 
+  virtual bool VisitStaticAssertDecl(clang::StaticAssertDecl *decl);
+
   virtual bool VisitCompoundStmt(clang::CompoundStmt *stmt);
 
   virtual bool VisitDeclStmt(clang::DeclStmt *stmt);
@@ -197,6 +209,11 @@ public:
 
   virtual bool VisitIfStmt(clang::IfStmt *stmt);
 
+  // The `if`/`else` tail of VisitIfStmt, with no enclosing block. Split out so
+  // that an init-statement or a condition variable can be emitted in front of
+  // it inside one block without re-entering VisitIfStmt.
+  void EmitIfStmtNoScope(clang::IfStmt *stmt);
+
   virtual bool VisitWhileStmt(clang::WhileStmt *stmt);
 
   virtual bool VisitDoStmt(clang::DoStmt *stmt);
@@ -207,6 +224,13 @@ public:
 
   virtual bool VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt);
 
+  // std::set/unordered_set iterate to their ELEMENT, not to a key/value pair,
+  // even though they share the map's MapIter runtime type.
+  static bool IsSetRangeFor(const clang::CXXForRangeStmt *stmt);
+  // Rebinds a set's loop variable from the iterator to the element it denotes.
+  void EmitSetElementShadow(clang::VarDecl *loop_var,
+                            const std::string &loop_var_name);
+
   virtual bool VisitCXXForRangeStmtVector(clang::CXXForRangeStmt *stmt);
 
   virtual bool VisitCXXForRangeStmtString(clang::CXXForRangeStmt *stmt);
@@ -216,6 +240,43 @@ public:
 
   void ConvertForRangeBody(clang::CXXForRangeStmt *stmt,
                            const clang::VarDecl *map_iter_decl = nullptr);
+
+  // --- structured bindings (`auto &[a, b] : m`) ------------------------------
+  //
+  // For a tuple-like type clang does NOT make the names variables: each
+  // BindingDecl carries an implicit *holding* VarDecl whose initializer
+  // projects one element out of the holder, and every reference to the name is
+  // a DeclRefExpr to that holding var.  Nothing ever declared them, so each use
+  // came out as an undefined identifier.  These emit the missing declarations.
+  //
+  // `holder` names a Rust tuple (both models map std::pair and std::tuple to
+  // one), either by value or through a pointer; each binding becomes a pointer
+  // to one field of it.
+  void EmitTupleBindings(const clang::DecompositionDecl *decomp,
+                         const std::string &holder, bool holder_is_pointer);
+  // The Rust loop variable of a map range-for is a MapIter, not a pair -- there
+  // is no `pair<const K, V>` in the map's Rust representation at all -- so the
+  // two names come off the iterator's first()/second() instead.  The two models
+  // disagree on what those return, so each spells its own.
+  virtual void EmitMapIterBindings(const clang::DecompositionDecl *decomp,
+                                   const std::string &holder);
+  // True when `decomp` is a tuple-like decomposition, i.e. one whose bindings
+  // read through a holding var.  An array or plain-struct decomposition instead
+  // gets an expression per binding that needs no declaration.
+  static bool IsTupleLikeDecomposition(const clang::DecompositionDecl *decomp);
+  // The two bindings of a map decomposition, or {nullptr, nullptr} if `decomp`
+  // is not one this converter can project.
+  std::array<clang::VarDecl *, 2>
+  MapBindingHoldingVars(const clang::DecompositionDecl *decomp);
+  // `let <name>: <pointer type> = <init>;` for one binding.
+  void EmitBindingLet(clang::VarDecl *holding_var, const std::string &init);
+  // One binding of a tuple decomposition, as a pointer to field `index` of the
+  // Rust tuple `holder`.  `aliases` is false for `auto [..]`, which decomposes a
+  // copy, so a write through the name must not reach the original.
+  virtual void EmitOneTupleBinding(clang::VarDecl *holding_var,
+                                   const std::string &holder,
+                                   bool holder_is_pointer, unsigned index,
+                                   bool aliases);
 
   virtual bool VisitBreakStmt(clang::BreakStmt *stmt);
 
@@ -480,6 +541,35 @@ public:
   // callee so the LambdaExpr that the callee expands to can be emitted at that
   // call's argument types.
   clang::CXXMethodDecl *pending_lambda_call_op_ = nullptr;
+  // Lambdas are INLINED at every use: ConvertLambdaVarDecl emits nothing for
+  // `auto f = [..]{..}` and VisitDeclRefExpr re-expands the LambdaExpr at each
+  // reference. A lambda that refers to ITSELF -- the `std::function<R(A)> f =
+  // [&f](A a){ .. f(..) .. }` idiom C++ uses for a recursive local function --
+  // therefore inlines into itself without bound, which is unbounded recursion
+  // in the converter and, with no stack guard, a bare SIGSEGV. These are the
+  // lambda bodies currently being inlined, so the self-reference can be
+  // recognised at the inner use and refused instead of expanded.
+  std::vector<const clang::CXXRecordDecl *> lambdas_being_inlined_;
+
+  struct PushLambdaBeingInlined {
+    Converter &c;
+    PushLambdaBeingInlined(Converter &c, const clang::CXXRecordDecl *lambda)
+        : c(c) {
+      c.lambdas_being_inlined_.push_back(lambda);
+    }
+    ~PushLambdaBeingInlined() { c.lambdas_being_inlined_.pop_back(); }
+    PushLambdaBeingInlined(const PushLambdaBeingInlined &) = delete;
+    PushLambdaBeingInlined &operator=(const PushLambdaBeingInlined &) = delete;
+  };
+
+  // True when `lambda`'s body is already on the inlining stack, i.e. expanding
+  // it here would be expanding it inside itself.
+  bool IsInliningLambda(const clang::CXXRecordDecl *lambda) const {
+    return std::find(lambdas_being_inlined_.begin(),
+                     lambdas_being_inlined_.end(),
+                     lambda) != lambdas_being_inlined_.end();
+  }
+
 
   struct PushPendingLambdaCallOp {
     Converter &c;
@@ -726,6 +816,14 @@ protected:
                                             const clang::CXXRecordDecl *decl,
                                             std::string_view lhs);
 
+  // True when the type's Rust spelling names a trait, not a struct.
+  static bool IsTraitTyped(clang::QualType qual_type);
+
+  // `impl From<(A, B, ..)> for T` per converting constructor of arity >= 2.
+  // rules/{unique_ptr,shared_ptr} spell make_unique/make_shared's
+  // multi-argument forms as `<T1>::from((a0, a1))`; this supplies the impl.
+  virtual void AddFromTraits(const clang::CXXRecordDecl *decl);
+
   virtual void AddCloneTrait(const clang::RecordDecl *decl);
 
   virtual void AddDefaultTrait(const clang::RecordDecl *decl);
@@ -762,6 +860,10 @@ protected:
   // boundary. Returns false -- writing nothing -- when it is not one, or with
   // --opaque-namespace absent.
   bool ConvertOpaqueOperatorCall(clang::CXXOperatorCallExpr *expr);
+
+  // An operator with no dedicated handler: opaque transliteration if it is on a
+  // boundary type, otherwise a reported gap. Never writes nothing.
+  bool ConvertUnhandledOperatorCall(clang::CXXOperatorCallExpr *expr);
 
   std::string GetMappedAsString(clang::Expr *expr, clang::Expr **args = nullptr,
                                 unsigned num_args = 0,
@@ -925,9 +1027,6 @@ protected:
   };
 
   std::unordered_set<const clang::VarDecl *> map_iter_decls_;
-  // Structured-binding names bound to a map iterator's first()/second()
-  // rather than read out of a holding object.
-  std::unordered_set<const clang::BindingDecl *> map_binding_decls_;
 
   // Local variables hoisted outside a goto_block so that all labels can see and
   // use the variables.
@@ -1014,15 +1113,84 @@ protected:
     std::unordered_map<std::string, bool> entries_;
   };
   static RecordIndex record_decls_;
+  // Boundary enum constant name -> the C++ enumerator's value. Ordered so the
+  // emitted declarations are in a stable order run to run.
+  static std::map<std::string, int64_t> opaque_enum_constants_;
   struct DeferredBlock {
     std::string header;
     std::string body;
   };
   static std::map<std::string, DeferredBlock> virtual_methods_;
+  // Turns unbounded converter recursion from a bare SIGSEGV into a diagnostic
+  // naming a source location, via clang/Basic/Stack.h. A safety net, not a fix
+  // for any particular cycle -- see the comment on the definition.
+  void CheckStackSpace(const clang::Expr *expr);
+
+  // Recursion tracing, off unless CPP2RUST_TRACE_DEPTH=<n> is set -- the same
+  // convention as the CPP2RUST_DEBUG_* hooks.
+  //
+  // Unbounded recursion in the converter is otherwise a bare SIGSEGV with no
+  // output at all: the stack grows monotonically past 64 MB and nothing says
+  // where. With this set, once the depth of nested Convert()/VisitLambdaExpr()
+  // frames passes <n> the innermost 40 frames are printed -- each naming the
+  // converter function, the AST node class and the source location -- which
+  // turns the crash into a printout that names the cycle. That is how the
+  // self-referential-lambda cycle in VisitLambdaExpr was found, and it is kept
+  // because the next such cycle would otherwise be just as invisible.
+  //
+  // The hot path is one load and a branch: trace_enabled_ is resolved once and
+  // every frame after that returns immediately when tracing is off.
+  struct TraceFrame {
+    const char *site;
+    const char *kind;
+    std::string loc;
+  };
+  static std::vector<TraceFrame> trace_stack_;
+  static long trace_limit_;
+  // -1 until the environment has been read; then 0 (off) or 1 (on).
+  static signed char trace_enabled_;
+  static void TraceInit();
+  static void TraceDump();
+  struct PushTrace {
+    bool active;
+    PushTrace(Converter &c, const char *site, const clang::Expr *node) {
+      if (trace_enabled_ < 0) {
+        TraceInit();
+      }
+      active = trace_enabled_ > 0;
+      if (active) {
+        Push(c, site, node);
+      }
+    }
+    ~PushTrace() {
+      if (active) {
+        trace_stack_.pop_back();
+      }
+    }
+    PushTrace(const PushTrace &) = delete;
+    PushTrace &operator=(const PushTrace &) = delete;
+
+  private:
+    static void Push(Converter &c, const char *site, const clang::Expr *node);
+  };
+
 
   static void EmitDeferredBlock(const DeferredBlock &block, std::string &out);
 
-  DeferredBlock &VirtualMethodsFor(const clang::CXXRecordDecl *decl);
+  // Nearest transitive base that ConvertAbstractClass lowered to a trait, or
+  // nullptr when every base up the chain is a concrete struct.
+  static const clang::CXXRecordDecl *
+  GetTraitBase(const clang::CXXRecordDecl *decl);
+
+  // Trait whose impl block this override belongs in: the highest abstract
+  // ancestor declaring it. nullptr when no base became a trait at all.
+  static const clang::CXXRecordDecl *
+  GetDeclaringTrait(const clang::CXXRecordDecl *impl_for,
+                    const clang::CXXMethodDecl *method);
+
+  // nullptr when `trait` is nullptr, i.e. no `impl Trait for T` to write.
+  DeferredBlock *VirtualMethodsFor(const clang::CXXRecordDecl *decl,
+                                   const clang::CXXRecordDecl *trait);
 
   std::string hoisted_records_;
 

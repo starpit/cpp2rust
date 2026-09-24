@@ -16,6 +16,7 @@
 #include <mach-o/dyld.h>
 #endif
 
+#include <clang/Basic/Stack.h>
 #include <llvm/Support/CommandLine.h>
 
 #include "cpp2rust_lib.h"
@@ -154,6 +155,11 @@ static bool ResolveRulesDir() {
 }
 
 int main(int argc, char *argv[]) {
+  // Records the approximate bottom of the stack, which is what makes
+  // clang::isStackNearlyExhausted() -- and so the converter's stack guard --
+  // able to answer at all. Must run here, as near the bottom as possible;
+  // clang's own drivers do the same thing in their main().
+  clang::noteBottomOfStack(/*ForceSet=*/true);
   llvm::cl::HideUnrelatedOptions(cpp2rust_cmdargs);
   llvm::cl::ParseCommandLineOptions(argc, argv);
 

@@ -962,18 +962,15 @@ bool ConverterRefCount::VisitDeclRefExpr(clang::DeclRefExpr *expr) {
 
   auto decl = expr->getDecl();
 
-  // A structured binding is not a variable: clang gives each name an
-  // expression reading it out of the holding object (a member access, or a
-  // get<I> call for tuple-likes). Convert that instead of the name.
+  // A structured binding is not a variable: clang gives each name an expression
+  // reading it out of the holder.  For an array or plain struct that expression
+  // is self-contained; for a tuple-like it is a DeclRefExpr to an implicit
+  // holding variable, which EmitTupleBindings/EmitMapIterBindings declare.
+  // Either way, converting it is what a use of the name means.
   if (auto *binding = llvm::dyn_cast<clang::BindingDecl>(decl)) {
-    // A map-loop binding was emitted as a real local off the iterator, so it
-    // falls through and is treated like any other Value<T>. Every other kind
-    // reads out of the holding object clang built for it.
-    if (!map_binding_decls_.contains(binding)) {
-      if (auto *bound = binding->getBinding()) {
-        Convert(bound);
-        return false;
-      }
+    if (auto *bound = binding->getBinding()) {
+      Convert(bound);
+      return false;
     }
   }
 
@@ -2070,6 +2067,57 @@ void ConverterRefCount::EmitByValueShadow(const std::string &loop_var_name,
   }
 }
 
+void ConverterRefCount::EmitOneTupleBinding(clang::VarDecl *holding_var,
+                                            const std::string &holder,
+                                            bool holder_is_pointer,
+                                            unsigned index, bool aliases) {
+  // Every element of a Rust tuple is its own `Value<T>` cell in this model, so
+  // the binding is that cell's pointer -- no `&raw`, and const-ness does not
+  // change the spelling because a Ptr carries no mutability.
+  auto tuple = holder_is_pointer
+                   ? std::format("(*{}.upgrade().deref())", holder)
+                   : std::format("(*{}.borrow())", holder);
+  EmitBindingLet(holding_var,
+                 std::format("{}.{}.as_pointer()", tuple, index));
+}
+
+void ConverterRefCount::EmitMapIterBindings(
+    const clang::DecompositionDecl *decomp, const std::string &holder) {
+  auto vars = MapBindingHoldingVars(decomp);
+  if (!vars[0]) {
+    return;
+  }
+  // RefcountMapIter::first()/second() hand back `Value<K>`/`Value<V>` -- owning
+  // cells, not pointers -- while a binding's declared type is `Ptr<..>`.  The
+  // cell must be held in a NAMED local before `.as_pointer()`: the pointer is a
+  // Weak, and `iter.first()` in particular builds a fresh Rc, so downgrading it
+  // inside one expression leaves the binding pointing at an allocation dropped
+  // at the end of that statement ("ub: dangling pointer" on first use).
+  //
+  // `second()` clones the map's own Rc HANDLE, so a write through the value
+  // binding reaches the container, which is what `auto &[k, v]` means.
+  // `first()` clones the key, which is correct in both forms: a std::map key is
+  // const, so no conforming program writes through it.
+  bool by_value = !decomp->getType()->isReferenceType();
+  for (unsigned index = 0; index < 2; ++index) {
+    auto *holding_var = vars[index];
+    auto cell = std::format("{}.{}()", holder, index == 0 ? "first" : "second");
+    if (by_value) {
+      // `for (auto [k, v] : m)` decomposes a COPY of the pair, so a write
+      // through v must NOT reach the container: clone the pointee into a cell
+      // of its own rather than sharing the map's handle.
+      cell = std::format("Rc::new(RefCell::new((*{}.borrow()).clone()))", cell);
+    }
+    PushConversionKind push(*this, ConversionKind::FullRefCount);
+    auto pointee = holding_var->getType().getNonReferenceType();
+    auto tmp = std::format("__bindcell_{}", GetNamedDeclAsString(holding_var));
+    StrCat(keyword::kLet, tmp, token::kColon,
+           std::format("Value<{}>", Mapper::Map(pointee.getUnqualifiedType())),
+           token::kAssign, cell, token::kSemiColon);
+    EmitBindingLet(holding_var, std::format("{}.as_pointer()", tmp));
+  }
+}
+
 bool ConverterRefCount::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
   auto *loop_var = stmt->getLoopVariable();
   auto loop_var_name = GetNamedDeclAsString(loop_var);
@@ -2081,16 +2129,19 @@ bool ConverterRefCount::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
 
   // A set yields its ELEMENT, not a key/value pair, so the loop variable is
   // the element cell rather than the iterator.
-  auto range_class = GetClassName(stmt->getRangeInit()->getType());
-  const bool is_set =
-      range_class == "std::set" || range_class == "std::unordered_set";
+  const bool is_set = IsSetRangeFor(stmt);
   if (is_set) {
     // `for (auto &e : s)` aliases the element, so the loop variable is the
     // element cell.  `for (auto e : s)` COPIES it, and binding a Ptr there
     // would both fail to compile (a Ptr has no `.borrow()`) and, once it did,
     // alias an element the C++ says is a private copy -- so spell the copy.
     if (loop_var->getType()->isReferenceType()) {
-      StrCat(keyword::kLet, loop_var_name, token::kAssign,
+      // Annotated, not inferred: `as_pointer()` is a trait method whose Self is
+      // only pinned down by a later use, so an un-annotated `let` is E0282 for
+      // any element type whose uses do not name it (a std::set<std::string>
+      // reaching only `.size()` is the case in the tree).
+      StrCat(keyword::kLet, loop_var_name, token::kColon,
+             ToString(loop_var->getType()), token::kAssign,
              loop_var_name + ".second().as_pointer()", token::kSemiColon);
     } else {
       PushConversionKind push(*this, ConversionKind::FullRefCount);
@@ -2100,25 +2151,25 @@ bool ConverterRefCount::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
                                   loop_var_name)),
              token::kSemiColon);
     }
-  } else {
+  } else if (!llvm::isa<clang::DecompositionDecl>(loop_var)) {
     EmitByValueShadow(
         loop_var_name, loop_var->getType(), std::string(loop_var_name),
         "Value<" + Mapper::Map(GetForRangeIteratorType(stmt)) + '>');
   }
 
-  // `for (auto &[k, v] : map)`. The loop variable is the iterator, not a
-  // pair, so the two names come off the iterator rather than out of a
-  // holding object the way an ordinary structured binding does.
+  // The bindings, emitted after any shadowing above so they see the final
+  // meaning of the loop variable.  For a map the loop variable is a
+  // RefcountMapIter and NOT a pair -- the map's Rust representation has no
+  // `pair<const K, V>` in it at all -- so k/v come off the iterator.  For a set
+  // the shadow above has already made it the element, so an
+  // `auto &[a, b] : set_of_pairs` decomposes that element like any other tuple.
   if (auto *decomp = llvm::dyn_cast<clang::DecompositionDecl>(loop_var)) {
-    auto bindings = decomp->bindings();
-    if (bindings.size() == 2) {
-      static constexpr const char *kAccessor[] = {".first()", ".second()"};
-      for (unsigned i = 0; i < 2; ++i) {
-        StrCat(keyword::kLet, GetNamedDeclAsString(bindings[i]),
-               token::kAssign, loop_var_name + kAccessor[i],
-               token::kSemiColon);
-        map_binding_decls_.insert(bindings[i]);
-      }
+    if (is_set) {
+      EmitTupleBindings(decomp, loop_var_name,
+                        /*holder_is_pointer=*/decomp->getType()
+                            ->isReferenceType());
+    } else {
+      EmitMapIterBindings(decomp, loop_var_name);
     }
   }
 
@@ -2166,6 +2217,15 @@ bool ConverterRefCount::VisitCXXForRangeStmtVector(
     EmitByValueShadow(loop_var_name, type,
                       loop_var_name + GetPointerDerefSuffix(type) +
                           (copy ? "" : ".clone()"));
+  }
+
+  // `for (auto &[a, b] : vec_of_pairs)`.  EmitByValueShadow leaves a reference
+  // loop variable as the raw `Ptr<..>` it iterates and rebinds a by-value one to
+  // a `Value<..>` clone, so the holder is a pointer in exactly the first case.
+  if (auto *decomp = llvm::dyn_cast<clang::DecompositionDecl>(loop_var)) {
+    EmitTupleBindings(decomp, loop_var_name,
+                      /*holder_is_pointer=*/loop_var->getType()
+                          ->isReferenceType());
   }
 
   ConvertForRangeBody(stmt);

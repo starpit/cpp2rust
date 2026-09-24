@@ -1003,6 +1003,18 @@ private:
 void Extract(const std::filesystem::path &src_path, llvm::json::Object &out,
              llvm::ArrayRef<llvm::StringRef> cxx_flags) {
   auto flags = getPlatformClangBeginFlags();
+  // A rule module's own directory is on the include path, so a module that
+  // VENDORS its third-party headers beside src.cpp resolves them with no flag
+  // and no absolute path. rules/brotli and rules/rustls already vendor headers
+  // and get away without this because their internal includes are relative to
+  // the including file ("port.h"); a vendored header set whose internal
+  // includes are relative to its own ROOT instead -- gtest says
+  // #include "gtest/gtest-assertion-result.h" from inside gtest/gtest.h --
+  // needs the root itself to be searched. Deriving it here rather than asking
+  // each module for a `-I` keeps every cxxflags file portable: an absolute path
+  // baked into a committed rule cannot resolve on another machine or on CI.
+  const auto include_dir = "-I" + src_path.parent_path().string();
+  flags.push_back(include_dir);
   flags.insert(flags.end(), cxx_flags.begin(), cxx_flags.end());
   auto end_flags = getPlatformClangEndFlags();
   flags.insert(flags.end(), end_flags.begin(), end_flags.end());
