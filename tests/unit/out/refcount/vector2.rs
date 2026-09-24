@@ -48,7 +48,7 @@ fn main_0() -> i32 {
     (*v.borrow_mut()).push(6);
     (*v2.borrow_mut()).push(8);
     (*v2.borrow_mut()).push(9);
-    ({ fn_0(v.as_pointer(), (*v2.borrow()).clone()) });
+    ({ fn_0(v.as_pointer(), (*v2.borrow()).deep_clone()) });
     return 0;
 }
 pub fn __cpp2rust_init_globals() {}

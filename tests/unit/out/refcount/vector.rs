@@ -51,7 +51,7 @@ fn main_0() -> i32 {
         (*v2.borrow_mut()).insert(__off, 100);
         (v2.as_pointer() as Ptr<i32>)
     };
-    ({ copy_0((*v2.borrow()).clone()) });
+    ({ copy_0((*v2.borrow()).deep_clone()) });
     assert!(((*v2.borrow()).len() == 3_usize));
     assert!((((v2.as_pointer() as Ptr<i32>).offset(0_usize).read()) == 100));
     assert!((((v2.as_pointer() as Ptr<i32>).offset(1_usize).read()) == 2));

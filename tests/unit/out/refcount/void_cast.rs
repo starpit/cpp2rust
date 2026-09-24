@@ -17,7 +17,7 @@ pub struct NonTrivial {
 impl Clone for NonTrivial {
     fn clone(&self) -> Self {
         let __this: Value<NonTrivial> = Rc::new(RefCell::new(Self {
-            data: Rc::new(RefCell::new((*self.data.borrow()).clone())),
+            data: Rc::new(RefCell::new((*self.data.borrow()).deep_clone())),
         }));
         let this: Ptr<NonTrivial> = __this.as_pointer();
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
@@ -122,10 +122,8 @@ fn main_0() -> i32 {
     assert!(((*z.borrow()) == 7));
     let counter: Value<i32> = Rc::new(RefCell::new(0));
     let w: Value<i32> = Rc::new(RefCell::new({
-        {
-            &(*counter.borrow_mut());
-            (*counter.borrow_mut()) = 3
-        };
+        &(*counter.borrow_mut());
+        (*counter.borrow_mut()) = 3;
         (*counter.borrow())
     }));
     assert!(((*w.borrow()) == 3));

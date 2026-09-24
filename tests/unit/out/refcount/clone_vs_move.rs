@@ -162,13 +162,10 @@ fn main_0() -> i32 {
     let v1: Value<Vec<i32>> = Rc::new(RefCell::new(Vec::new()));
     let i: Value<i32> = Rc::new(RefCell::new(0));
     'loop_: while ((*i.borrow()) < (*N.borrow())) {
-        {
-            let a0_clone = (*i.borrow()).clone();
-            (*v1.borrow_mut()).push(a0_clone)
-        };
+        (*v1.borrow_mut()).push((*i.borrow()).deep_clone());
         (*i.borrow_mut()).prefix_inc();
     }
-    let v2: Value<Vec<i32>> = Rc::new(RefCell::new((*v1.borrow()).clone()));
+    let v2: Value<Vec<i32>> = Rc::new(RefCell::new((*v1.borrow()).deep_clone()));
     let i: Value<i32> = Rc::new(RefCell::new(0));
     'loop_: while ((*i.borrow()) < (*N.borrow())) {
         assert!(
@@ -216,12 +213,7 @@ fn main_0() -> i32 {
         );
         (*i.borrow_mut()).prefix_inc();
     }
-    let m2: Value<Vec<Value<Vec<i32>>>> = Rc::new(RefCell::new(
-        (*m1.borrow())
-            .iter()
-            .map(|inner_vec| Rc::new(RefCell::new(inner_vec.borrow().clone())))
-            .collect(),
-    ));
+    let m2: Value<Vec<Value<Vec<i32>>>> = Rc::new(RefCell::new((*m1.borrow()).deep_clone()));
     let i: Value<i32> = Rc::new(RefCell::new(0));
     'loop_: while ((*i.borrow()) < (*N.borrow())) {
         assert!(
@@ -350,12 +342,8 @@ fn main_0() -> i32 {
             .write(__rhs);
         (*i.borrow_mut()).prefix_inc();
     }
-    let map2: Value<BTreeMap<i32, Value<i32>>> = Rc::new(RefCell::new(
-        (*map1.borrow())
-            .iter()
-            .map(|(k, v)| (k.clone(), Rc::new(RefCell::new(v.borrow().clone()))))
-            .collect(),
-    ));
+    let map2: Value<BTreeMap<i32, Value<i32>>> =
+        Rc::new(RefCell::new((*map1.borrow()).deep_clone()));
     let i: Value<i32> = Rc::new(RefCell::new(0));
     'loop_: while ((*i.borrow()) < (*N.borrow())) {
         assert!(
@@ -405,10 +393,8 @@ fn main_0() -> i32 {
         Rc::new(RefCell::new(1.try_into().expect("failed conversion"))),
         Rc::new(RefCell::new(2.try_into().expect("failed conversion"))),
     )));
-    let pair2: Value<(Value<i32>, Value<i32>)> = Rc::new(RefCell::new((
-        Rc::new(RefCell::new((*pair1.borrow()).0.borrow().clone())),
-        Rc::new(RefCell::new((*pair1.borrow()).1.borrow().clone())),
-    )));
+    let pair2: Value<(Value<i32>, Value<i32>)> =
+        Rc::new(RefCell::new((*pair1.borrow()).deep_clone()));
     let __rhs = ((*(*pair2.borrow()).0.borrow()) * 10);
     (*(*pair2.borrow()).0.borrow_mut()) = __rhs;
     let __rhs = ((*(*pair2.borrow()).1.borrow()) * 10);
@@ -427,10 +413,8 @@ fn main_0() -> i32 {
         )),
         Rc::new(RefCell::new(0.try_into().expect("failed conversion"))),
     )));
-    let pair4: Value<(Value<Vec<i32>>, Value<i32>)> = Rc::new(RefCell::new((
-        Rc::new(RefCell::new((*pair3.borrow()).0.borrow().clone())),
-        Rc::new(RefCell::new((*pair3.borrow()).1.borrow().clone())),
-    )));
+    let pair4: Value<(Value<Vec<i32>>, Value<i32>)> =
+        Rc::new(RefCell::new((*pair3.borrow()).deep_clone()));
     (*(*pair4.borrow()).0.borrow_mut()).push(1);
     (*(*pair4.borrow()).1.borrow_mut()) = 1;
     assert!(((*(*pair4.borrow()).0.borrow()).len() == 1_usize));

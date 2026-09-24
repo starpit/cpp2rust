@@ -14,7 +14,7 @@ pub struct S {
 impl Clone for S {
     fn clone(&self) -> Self {
         let __this: Value<S> = Rc::new(RefCell::new(Self {
-            v: Rc::new(RefCell::new((*self.v.borrow()).clone())),
+            v: Rc::new(RefCell::new((*self.v.borrow()).deep_clone())),
             a: Rc::new(RefCell::new((*self.a.borrow()))),
         }));
         let this: Ptr<S> = __this.as_pointer();

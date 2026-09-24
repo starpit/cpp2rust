@@ -81,7 +81,7 @@ fn main_0() -> i32 {
         (*v2.borrow_mut()).insert(__off, 100);
         (v2.as_pointer() as Ptr<i32>)
     };
-    ({ copy_0((*v2.borrow()).clone()) });
+    ({ copy_0((*v2.borrow()).deep_clone()) });
     assert!(((*v2.borrow()).len() == 3_usize));
     assert!((((v2.as_pointer() as Ptr<i32>).offset(0_usize).read()) == 100));
     assert!((((v2.as_pointer() as Ptr<i32>).offset(1_usize).read()) == 2));
@@ -208,7 +208,7 @@ fn main_0() -> i32 {
     (*v7.borrow_mut()).push(6);
     (*v8.borrow_mut()).push(8);
     (*v8.borrow_mut()).push(9);
-    ({ fn_1(v7.as_pointer(), (*v8.borrow()).clone()) });
+    ({ fn_1(v7.as_pointer(), (*v8.borrow()).deep_clone()) });
     let src: Value<Box<[u32]>> = Rc::new(RefCell::new(Box::new([1_u32, 2_u32, 3_u32])));
     let v9: Value<Vec<u32>> = Rc::new(RefCell::new({
         let __count = (src.as_pointer() as Ptr<u32>)

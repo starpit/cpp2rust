@@ -13,7 +13,7 @@ pub struct MyContainer_int_ {
 impl Clone for MyContainer_int_ {
     fn clone(&self) -> Self {
         let __this: Value<MyContainer_int_> = Rc::new(RefCell::new(Self {
-            vec_: Rc::new(RefCell::new((*self.vec_.borrow()).clone())),
+            vec_: Rc::new(RefCell::new((*self.vec_.borrow()).deep_clone())),
         }));
         let this: Ptr<MyContainer_int_> = __this.as_pointer();
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
@@ -39,7 +39,7 @@ pub struct MyContainer_char_ {
 impl Clone for MyContainer_char_ {
     fn clone(&self) -> Self {
         let __this: Value<MyContainer_char_> = Rc::new(RefCell::new(Self {
-            vec_: Rc::new(RefCell::new((*self.vec_.borrow()).clone())),
+            vec_: Rc::new(RefCell::new((*self.vec_.borrow()).deep_clone())),
         }));
         let this: Ptr<MyContainer_char_> = __this.as_pointer();
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
@@ -65,7 +65,7 @@ pub struct MyContainer_float_ {
 impl Clone for MyContainer_float_ {
     fn clone(&self) -> Self {
         let __this: Value<MyContainer_float_> = Rc::new(RefCell::new(Self {
-            vec_: Rc::new(RefCell::new((*self.vec_.borrow()).clone())),
+            vec_: Rc::new(RefCell::new((*self.vec_.borrow()).deep_clone())),
         }));
         let this: Ptr<MyContainer_float_> = __this.as_pointer();
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
@@ -420,10 +420,7 @@ impl MyContainer_char_Impl for Ptr<MyContainer_char_> {
         return;
     }
     fn push_back(&self, item: Ptr<u8>) {
-        {
-            let a0_clone = (item.read()).clone();
-            (*(*(*self).upgrade().deref()).vec_.borrow_mut()).push(a0_clone)
-        };
+        (*(*(*self).upgrade().deref()).vec_.borrow_mut()).push((item.read()).deep_clone());
     }
 }
 pub trait MyContainer_float_Impl {
@@ -451,10 +448,7 @@ impl MyContainer_float_Impl for Ptr<MyContainer_float_> {
         return;
     }
     fn push_back(&self, item: Ptr<f32>) {
-        {
-            let a0_clone = (item.read()).clone();
-            (*(*(*self).upgrade().deref()).vec_.borrow_mut()).push(a0_clone)
-        };
+        (*(*(*self).upgrade().deref()).vec_.borrow_mut()).push((item.read()).deep_clone());
     }
 }
 pub trait MyContainer_int_Impl {
@@ -482,10 +476,7 @@ impl MyContainer_int_Impl for Ptr<MyContainer_int_> {
         return;
     }
     fn push_back(&self, item: Ptr<i32>) {
-        {
-            let a0_clone = (item.read()).clone();
-            (*(*(*self).upgrade().deref()).vec_.borrow_mut()).push(a0_clone)
-        };
+        (*(*(*self).upgrade().deref()).vec_.borrow_mut()).push((item.read()).deep_clone());
     }
 }
 pub trait Outer_int_Impl {
