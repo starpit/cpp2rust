@@ -210,3 +210,16 @@ fn f27<T1, T2>(a0: T1, a1: T2) -> (Value<T1>, Value<T2>) {
         Rc::new(RefCell::new(a1.try_into().expect("failed conversion"))),
     )
 }
+
+fn f17<T1: TryFrom<T3>, T2: TryFrom<T4>, T3: Clone, T4: Clone>(
+    a0: (Value<T3>, Value<T4>),
+) -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(
+            T1::try_from(a0.0.borrow().clone()).ok().expect("failed conversion"),
+        )),
+        Rc::new(RefCell::new(
+            T2::try_from(a0.1.borrow().clone()).ok().expect("failed conversion"),
+        )),
+    )
+}

@@ -94,17 +94,32 @@ bool f16(const std::pair<T1, T2> &a, const std::pair<T1, T2> &b) {
 // with an empty result immediately before a mangled-fallback emission).
 // ---------------------------------------------------------------------------
 
-// NOT ADDED: `pair<A, B>` from a `pair<C, D>` with DIFFERENT element types
-// (e.g. `std::pair<long long, long long>(std::pair<int, int>)`).  Written as
-//     template <typename T1, typename T2, typename T3, typename T4>
-//     std::pair<T1, T2> f17(const std::pair<T3, T4> &a0);
-// it resolves to `pair(const std::pair<T3, T4> &)`, which the matcher rates
-// EXACTLY as specific as f2's `pair(const std::pair<T1, T2> &)`.  The
-// converter then reports "ambiguous translation rule ... Refusing to guess"
-// and silently falls back to a whole-tuple `.clone()` -- which in the refcount
-// model clones the Rc handles, so the copy ALIASES the original.  That broke
-// tests/unit/clone_vs_move.cpp.  Reverted; the converting copy constructor
-// stays unmapped until the matcher can rank one pattern above the other.
+// `pair<A, B>` from a `pair<C, D>` with DIFFERENT element types
+// (e.g. `std::pair<long long, long long>(std::pair<int, int>)`).
+//
+// This was previously NOT ADDED, because it resolves to
+// `pair(const std::pair<T3, T4> &)`, which the matcher rated EXACTLY as
+// specific as f2's `pair(const std::pair<T1, T2> &)` -- equal length -- so the
+// converter reported "ambiguous translation rule ... Refusing to guess" and
+// fell back to a whole-tuple `.clone()`, which in the refcount model clones Rc
+// handles so the copy ALIASES the original.  The note said it would stay
+// unmapped "until the matcher can rank one pattern above the other"; that is
+// now true.  `search()` in mapper.cpp breaks an equal-length tie on the number
+// of DISTINCT template parameters, and f2's two beat this rule's four, so the
+// same-type case still selects f2 and only a genuinely differing-type pair
+// reaches here.
+//
+// The body must convert ELEMENTWISE, not clone: the whole point of this
+// overload is that the element types differ, and C++ applies each element's
+// converting constructor (a 32->64 bit widening in every site in dt_src).  A
+// whole-value `.clone()` here is an E0308 at best and a silently truncated
+// value at worst.  `TryFrom` is the same idiom f18/f19 already use for a
+// converted element, and `.expect` makes a narrowing that does not fit loud
+// rather than wrapping.
+template <typename T1, typename T2, typename T3, typename T4>
+std::pair<T1, T2> f17(const std::pair<T3, T4> &a0) {
+  return std::pair<T1, T2>(a0);
+}
 
 // `std::pair<const Enum, std::string>(e, "literal")`.  The second argument is
 // a string LITERAL, so libc++ deduces the parameter as `const char (&)[N]`

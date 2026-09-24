@@ -587,6 +587,50 @@ std::string instantiateTgt(const std::vector<std::optional<std::string>> &types,
   return instantiated_template;
 }
 
+// How many DISTINCT template parameters a rule's `src` mentions.
+//
+// This is the specificity signal that string length cannot express. Two rules
+// can spell the same shape at the same length while one CONSTRAINS more of it:
+//   f2  `pair(const std::pair<T1, T2> &)`   -- 2 params: argument and receiver
+//                                              element types must be EQUAL
+//   f17 `pair(const std::pair<T3, T4> &)`   -- 4 params: they may differ
+// Both match `pair<int,int>(pair<int,int>)`, at identical length, so the
+// length tie-breaker below is a coin flip and the old code called it
+// ambiguous and refused. But they are not equally specific: f2 matches a
+// strict SUBSET of what f17 matches, which is exactly what "more specific"
+// means. Fewer distinct parameters = more constrained = wins.
+//
+// This is what kept `pair<A,B>` from a `pair<C,D>` unmappable (rules/pair
+// src.cpp's "NOT ADDED" note): adding f17 made the same-type case ambiguous
+// and its fallback was a whole-value `.clone()`, which in the refcount model
+// clones Rc handles so the copy aliases the original.
+int countDistinctTemplateParams(std::string_view src) {
+  bool seen[64] = {};
+  int n = 0;
+  for (size_t i = 0; i + 1 < src.size(); ++i) {
+    if (src[i] != 'T' || !std::isdigit(static_cast<unsigned char>(src[i + 1]))) {
+      continue;
+    }
+    // Only a standalone `Tn`, never the tail of an identifier like `myT1`.
+    if (i > 0 && (std::isalnum(static_cast<unsigned char>(src[i - 1])) ||
+                  src[i - 1] == '_')) {
+      continue;
+    }
+    size_t j = i + 1;
+    unsigned idx = 0;
+    while (j < src.size() && std::isdigit(static_cast<unsigned char>(src[j]))) {
+      idx = idx * 10 + unsigned(src[j] - '0');
+      ++j;
+    }
+    if (idx && idx < 64 && !seen[idx]) {
+      seen[idx] = true;
+      ++n;
+    }
+    i = j - 1;
+  }
+  return n;
+}
+
 template <typename T>
 std::pair<T *, std::vector<std::optional<std::string>>>
 search(std::unordered_multimap<std::string, T> &map, const std::string &txt,
@@ -619,12 +663,27 @@ search(std::unordered_multimap<std::string, T> &map, const std::string &txt,
       ambiguous_with = nullptr;
     } else if (this_rule.src.size() == rule->src.size() &&
                this_rule.src != rule->src) {
-      // Two DIFFERENT rules of equal specificity both match, so "longest
-      // wins" is a coin flip and the multimap order decides. std::get<0> and
-      // std::get<1> on a std::tuple<int, int> do exactly this: the rules are
-      // `T1 &get(tuple<T1,T2>&)` and `T2 &get(tuple<T1,T2>&)`, equal length,
-      // both matching. Picking one silently returns the wrong element.
-      ambiguous_with = &this_rule.src;
+      // Equal length, different rules. Length has run out as a signal, so ask
+      // which one CONSTRAINS more of the shape: see
+      // countDistinctTemplateParams. Fewer distinct parameters wins, because
+      // that rule matches a strict subset of what the other one matches.
+      auto mine = countDistinctTemplateParams(this_rule.src);
+      auto theirs = countDistinctTemplateParams(rule->src);
+      if (mine < theirs) {
+        rule = &this_rule;
+        subs = *std::move(this_subs);
+        ambiguous_with = nullptr;
+      } else if (mine > theirs) {
+        // The incumbent is already the more specific one; keep it.
+      } else {
+        // Genuinely equally specific, and picking one is a coin flip the
+        // multimap order would decide. std::get<0> and std::get<1> on a
+        // std::tuple<int, int> do exactly this: the rules are
+        // `T1 &get(tuple<T1,T2>&)` and `T2 &get(tuple<T1,T2>&)`, equal length
+        // AND equal parameter count, both matching. Picking one silently
+        // returns the wrong element, so this must stay loud.
+        ambiguous_with = &this_rule.src;
+      }
     }
   }
   if (ambiguous_with) {

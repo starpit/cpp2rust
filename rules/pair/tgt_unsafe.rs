@@ -123,3 +123,12 @@ unsafe fn f26<T1, T2>(a0: T1, a1: T2) -> (T1, T2) {
 unsafe fn f27<T1, T2>(a0: T1, a1: T2) -> (T1, T2) {
     (a0.into(), a1.into())
 }
+
+unsafe fn f17<T1: TryFrom<T3>, T2: TryFrom<T4>, T3: Clone, T4: Clone>(
+    a0: (T3, T4),
+) -> (T1, T2) {
+    (
+        T1::try_from(a0.0).ok().expect("failed conversion"),
+        T2::try_from(a0.1).ok().expect("failed conversion"),
+    )
+}
