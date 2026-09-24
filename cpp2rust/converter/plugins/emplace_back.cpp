@@ -20,7 +20,36 @@ bool Converter::emplace_back_plugin_match(clang::CallExpr *call) {
 
 namespace {
 
+// The element type of a container class, read off its first template argument.
+// Null when `decl` is not a class template specialization.
+clang::QualType elemTypeOfContainerDecl(const clang::RecordDecl *decl) {
+  if (auto template_specialization =
+          clang::dyn_cast_or_null<clang::ClassTemplateSpecializationDecl>(
+              decl)) {
+    auto &args = template_specialization->getTemplateArgs();
+    if (args.size() && args[0].getKind() == clang::TemplateArgument::Type) {
+      return args[0].getAsType().getUnqualifiedType();
+    }
+  }
+  return clang::QualType();
+}
+
 clang::QualType getElemTypeFromEmplaceObj(clang::CXXMemberCallExpr *call) {
+  // Ask the class that DECLARES emplace_back, not the receiver's static type.
+  // For `v.emplace_back(..)` where v is a std::vector those are the same decl,
+  // but when the receiver merely INHERITS the container -- dsc/dsc2.h:529
+  // `struct VectorOfChildren : public std::vector<std::unique_ptr<
+  // ScheduleNode>>` -- the receiver is a plain CXXRecordDecl with no template
+  // arguments at all, while the method's parent is still the vector
+  // specialization. Reading the callee handles that, and every depth of
+  // inheritance and any using-declaration, with no base walk.
+  if (auto *method = call->getMethodDecl()) {
+    if (auto elem = elemTypeOfContainerDecl(method->getParent());
+        !elem.isNull()) {
+      return elem;
+    }
+  }
+
   auto *obj = GetCallObject(call);
   if (!obj) {
     return clang::QualType();
@@ -35,14 +64,7 @@ clang::QualType getElemTypeFromEmplaceObj(clang::CXXMemberCallExpr *call) {
   }
 
   if (auto record_ty = base->getAs<clang::RecordType>()) {
-    if (auto template_specialization =
-            clang::dyn_cast<clang::ClassTemplateSpecializationDecl>(
-                record_ty->getDecl())) {
-      auto &args = template_specialization->getTemplateArgs();
-      if (args.size() && args[0].getKind() == clang::TemplateArgument::Type) {
-        return args[0].getAsType().getUnqualifiedType();
-      }
-    }
+    return elemTypeOfContainerDecl(record_ty->getDecl());
   }
 
   return clang::QualType();
