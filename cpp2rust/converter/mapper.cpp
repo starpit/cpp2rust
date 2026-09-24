@@ -1091,6 +1091,64 @@ std::string mapTypeStringRecursive(const std::string &cpp_type) {
       }
     }
 
+    // Reference-to-a-library-type, reached as a CONTAINER'S ELEMENT
+    // (std::map<std::string, const std::unordered_map<K, V> &> at
+    // dsc/dsc2.cpp:175 and :251). Same shape as the pointer fallback just
+    // above, and handled the same way and in the same place: only the
+    // recursive type SPELLING is affected, no reference type rule is
+    // registered, so nothing that keys on a reference not having a rule
+    // changes behaviour.
+    //
+    // A reference element is mapped to a raw pointer, which is what the
+    // converter already does for a reference EVERYWHERE else -- VisitReferenceType
+    // (converter.cpp:817) emits exactly `*const`/`*mut` over the pointee, and
+    // C++ reference semantics are an alias, not a value: the referent is owned
+    // elsewhere and must be observed, not copied. Copying is the one outcome
+    // that would be silently wrong -- the real sites store an alias to a map
+    // living inside another container and then READ it, so a clone would answer
+    // from a snapshot. The pointer keeps the aliasing exact.
+    //
+    // Constness is read off the spelling, not dropped: clang prints the
+    // pointee's const WEST of the `&` (`const std::unordered_map<K, V> &`), and
+    // a `const T &` element must not become a `*mut T` -- these sites are
+    // read-only by construction and the mutable spelling would licence a write
+    // the C++ cannot express.
+    //
+    // ONLY the unsafe model. The refcount model is left LOUD on purpose: Ptr<T>
+    // is the semantically right shape there, but reading through one needs a
+    // deref node that a reference type does not have, so emitting it would swap
+    // this loud abort for a different loud error while implying the case is
+    // handled. See the same decision recorded in c31e82a.
+    if (model_ == Model::kUnsafe && cpp_type.ends_with('&') &&
+        cpp_type.find('(') == std::string::npos) {
+      std::string_view view = cpp_type;
+      // An rvalue reference binds a temporary, so there is no referent that
+      // outlives the container to point AT. Only `T &` is an alias to
+      // something someone else owns.
+      if (!view.ends_with("&&")) {
+        view.remove_suffix(1);
+        while (view.ends_with(' ')) {
+          view.remove_suffix(1);
+        }
+        std::string referent(view);
+        // `const` sits west of the `&`, so it is still on the referent here.
+        // Look the type up as spelled: `const T` has its own registered rule
+        // (addDerivedTypeForms), which is what makes the lookup succeed at all.
+        bool is_const = referent.starts_with("const ");
+        if (auto [rrule, rsubs] =
+                search(types_, referent, GetTypeMapKey(referent));
+            rrule) {
+          for (auto &ty : rsubs) {
+            if (ty) {
+              ty = mapTypeStringRecursive(*ty);
+            }
+          }
+          return (is_const ? "*const " : "*mut ") +
+                 instantiateTgt(rsubs, rrule->type_info.type);
+        }
+      }
+    }
+
     // A type on an opaque API boundary is not a gap in the translator: the
     // port is expected to replace it, not carry it over. Give it a nameable
     // Rust type and continue, so the run reports what the port still owes
