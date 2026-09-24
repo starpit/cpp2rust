@@ -59,4 +59,10 @@ pub use format::*;
 mod stream_fmt;
 pub use stream_fmt::*;
 
+mod variant;
+pub use variant::*;
+
+mod deep_clone;
+pub use deep_clone::*;
+
 pub use libcc2rs_macros::{ByteRepr, goto, goto_block, switch};
