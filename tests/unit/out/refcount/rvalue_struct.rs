@@ -23,6 +23,11 @@ impl S {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl From<(i32, i32)> for S {
+    fn from(__a: (i32, i32)) -> Self {
+        unsafe { S::S(__a.0, __a.1) }
+    }
+}
 impl Clone for S {
     fn clone(&self) -> Self {
         let __this: Value<S> = Rc::new(RefCell::new(Self {

@@ -25,6 +25,11 @@ impl StructWithCtor {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl From<(i32, i32)> for StructWithCtor {
+    fn from(__a: (i32, i32)) -> Self {
+        unsafe { StructWithCtor::StructWithCtor(__a.0, __a.1) }
+    }
+}
 impl Clone for StructWithCtor {
     fn clone(&self) -> Self {
         let __this: Value<StructWithCtor> = Rc::new(RefCell::new(Self {

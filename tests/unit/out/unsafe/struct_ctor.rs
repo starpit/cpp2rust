@@ -26,6 +26,11 @@ impl StructWithCtor {
         return &self.x2_;
     }
 }
+impl From<(i32, i32)> for StructWithCtor {
+    fn from(__a: (i32, i32)) -> Self {
+        unsafe { StructWithCtor::StructWithCtor(__a.0, __a.1) }
+    }
+}
 pub unsafe fn foo_0(x: *mut i32) -> *mut i32 {
     return x;
 }

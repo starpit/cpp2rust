@@ -54,6 +54,11 @@ impl Point {
         this
     }
 }
+impl From<(i32, i32)> for Point {
+    fn from(__a: (i32, i32)) -> Self {
+        unsafe { Point::Point1(__a.0, __a.1) }
+    }
+}
 impl Default for Point {
     fn default() -> Self {
         unsafe { Point::Point3() }

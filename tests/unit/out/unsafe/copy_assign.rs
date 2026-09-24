@@ -34,6 +34,11 @@ impl Partial {
         return &mut (*(self as *mut Partial));
     }
 }
+impl From<(i32, i32)> for Partial {
+    fn from(__a: (i32, i32)) -> Self {
+        unsafe { Partial::Partial(__a.0, __a.1) }
+    }
+}
 impl Clone for Partial {
     fn clone(&self) -> Self {
         unsafe { Partial::Partial_pconstPartial(self as *const Partial) }

@@ -79,6 +79,11 @@ impl Point {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl From<(i32, i32)> for Point {
+    fn from(__a: (i32, i32)) -> Self {
+        unsafe { Point::Point1(__a.0, __a.1) }
+    }
+}
 impl Clone for Point {
     fn clone(&self) -> Self {
         let __this: Value<Point> = Rc::new(RefCell::new(Self {

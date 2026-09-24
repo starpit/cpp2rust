@@ -18,6 +18,11 @@ impl S {
         this
     }
 }
+impl From<(i32, i32)> for S {
+    fn from(__a: (i32, i32)) -> Self {
+        unsafe { S::S(__a.0, __a.1) }
+    }
+}
 pub fn main() {
     unsafe {
         __cpp2rust_init_globals();

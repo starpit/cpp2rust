@@ -34,6 +34,11 @@ impl Partial {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl From<(i32, i32)> for Partial {
+    fn from(__a: (i32, i32)) -> Self {
+        unsafe { Partial::Partial(__a.0, __a.1) }
+    }
+}
 impl Clone for Partial {
     fn clone(&self) -> Self {
         let __src: Value<Partial> = Rc::new(RefCell::new(Partial {
