@@ -627,6 +627,32 @@ bool HasUsableDefaultArg(const clang::ParmVarDecl *param) {
   return param->hasDefaultArg() && !param->hasUninstantiatedDefaultArg();
 }
 
+bool DefaultArgIsMaterializedTemporary(const clang::ParmVarDecl *param) {
+  if (!HasUsableDefaultArg(param) || !param->getType()->isReferenceType()) {
+    return false;
+  }
+  // `void f(const std::vector<long> &v = {})`. The default expression is a
+  // prvalue that clang has already wrapped in a MaterializeTemporaryExpr,
+  // because binding it to the reference is what materialized it. [class.temp]
+  // extends that temporary's lifetime to the end of the full-expression
+  // CONTAINING the call, so the callee sees a live reference to a
+  // default-constructed object.
+  //
+  // The contrast is `void f(const std::vector<long> &v = gv)`, whose default
+  // expression is a DeclRefExpr naming an object that already exists: no
+  // temporary, and the callee's reference must denote that very object, so a
+  // mutation through it must be visible to every other reader of `gv`.
+  // `getDefaultArg()` returns the expression with its ExprWithCleanups and
+  // implicit-cast wrappers intact, so ask the AST rather than guessing from the
+  // expression's value category -- both shapes are lvalues by the time the
+  // reference is bound. `IgnoreImpCasts` skips exactly those wrappers
+  // (ImplicitCastExpr and FullExpr, of which ExprWithCleanups is one) and
+  // deliberately NOT MaterializeTemporaryExpr, which is the node being tested
+  // for; `IgnoreParenImpCasts` would skip it too and always answer false.
+  return clang::isa<clang::MaterializeTemporaryExpr>(
+      param->getDefaultArg()->IgnoreParens()->IgnoreImpCasts());
+}
+
 std::string GetMainFileName(const clang::ASTContext &ctx) {
   const auto &src_mgr = ctx.getSourceManager();
   auto file_id = src_mgr.getMainFileID();

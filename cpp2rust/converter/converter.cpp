@@ -30,6 +30,9 @@
 
 namespace cpp2rust {
 
+// The generic parameter name used for a user-written inserter's stream
+// parameter. One name is enough: an inserter has exactly one stream parameter.
+static constexpr const char *kStreamTypeParam = "__S";
 
 std::unordered_map<std::string, std::string> Converter::inner_structs_;
 std::unordered_set<std::string> Converter::decl_ids_;
@@ -943,6 +946,12 @@ bool Converter::VisitFunctionDecl(clang::FunctionDecl *decl) {
   if (!decl->isMain())
     ConvertFunctionQualifiers(decl);
   StrCat(keyword_unsafe_, keyword::kFn, std::move(function_name));
+  // A user-written inserter is generic over the stream -- see
+  // IsUserStreamInserter for why it has to be.
+  if (IsUserStreamInserter(decl)) {
+    StrCat(std::format("<'__s, {}: libcc2rs::Cc2Insert + ?Sized>",
+                       kStreamTypeParam));
+  }
   {
     PushParen paren(*this);
     ConvertFunctionParameters(decl);
@@ -1474,10 +1483,24 @@ Converter::FieldsIncludingTraitBases(const clang::RecordDecl *decl) {
       base_decl = base_decl->getDefinition() != nullptr
                       ? base_decl->getDefinition()
                       : base_decl;
-      if (!IsUserDefinedDecl(base_decl) || !base_decl->isAbstract()) {
+      // EVERY user-defined base, not only an abstract one. Rust has no
+      // inheritance, so a base's data reaches the derived struct only by being
+      // copied into it -- and that is as true of a concrete base as of an
+      // abstract one. Restricting this to abstract bases is what left
+      // `struct D1 : B1` with no `a` field at all: `d1.a` was E0609 "no field
+      // `a` on type `D1`", measured on a four-case concrete-base matrix that
+      // gave 7 errors in both models against C++'s `10 20 4 6 9`.
+      //
+      // Nothing above needs re-reasoning for the concrete case: (a) mutation
+      // through a copied field still writes the receiver's own storage, (b) a
+      // shadowed field name is still refused loudly by E0124, and (c) layout was
+      // already not preserved for a polymorphic record. A CONCRETE base has no
+      // vptr, so for that case the flattened order is in fact closer to C++'s
+      // than the abstract one it already covered.
+      if (!IsUserDefinedDecl(base_decl)) {
         continue;
       }
-      // Recurse: a 3-level chain of abstract bases contributes every level.
+      // Recurse: a 3-level chain of bases contributes every level.
       for (auto *f : FieldsIncludingTraitBases(base_decl)) {
         out.push_back(f);
       }
@@ -1604,6 +1627,20 @@ bool Converter::IsTraitTyped(clang::QualType qual_type) {
     return false;
   }
   record = record->getDefinition() != nullptr ? record->getDefinition() : record;
+  // An INCOMPLETE class -- forward-declared and never defined in this TU. C++
+  // permits it as a pointer or reference parameter, so this is reachable, and
+  // `isAbstract()` dereferences DefinitionData and asserts "queried property of
+  // class with no definition" (DeclCXX.h:463) rather than answering.
+  //
+  // Not trait-typed, and this is a statement about the OUTPUT, not about C++:
+  // a trait spelling exists only where ConvertAbstractClass emitted a trait, and
+  // that needs the definition this TU does not have. `abstract_structs_` is
+  // likewise populated only by visiting a definition. So no name this function
+  // could report as a trait can exist here, whatever the class turns out to be
+  // in the TU that defines it.
+  if (!record->hasDefinition()) {
+    return false;
+  }
   return record->isAbstract() || abstract_structs_.contains(GetID(record));
 }
 
@@ -1648,6 +1685,26 @@ void Converter::AddFromTraits(const clang::CXXRecordDecl *decl) {
       }
       auto param_type =
           param->getType().getNonReferenceType().getUnqualifiedType();
+      // A parameter that is a REFERENCE TO AN INCOMPLETE class -- declared and
+      // never defined in this TU. C++ allows it (the callee may hold and pass
+      // the reference; it just may not read through it), so it is reachable, and
+      // `getNonReferenceType()` above has just turned it into a BY-VALUE tuple
+      // element. That element cannot be spelled: an undefined record is emitted
+      // as a zero-sized `pub struct Fwd;` (EmitOpaqueRecords), so the tuple
+      // would promise to carry a class whose size this TU does not know, by
+      // value, as nothing. Refuse the impl, exactly as the three cases around
+      // this one do; the make_unique/make_shared site then fails loudly on a
+      // missing From instead of silently moving a zero-sized stand-in.
+      //
+      // Only the BY-VALUE position. A POINTER to an incomplete class is fine and
+      // stays allowed: a pointer has a known size whatever it points at, so
+      // `*const Fwd` is the honest translation and it is what the constructor's
+      // own signature already takes.
+      if (const auto *param_record = param_type->getAsCXXRecordDecl();
+          param_record != nullptr && !param_record->hasDefinition()) {
+        ok = false;
+        break;
+      }
       auto mapped = GetUnsafeTypeAsString(param_type);
       // A parameter that is a pointer to an ABSTRACT class maps to a trait
       // name, and a trait is not a type: naming it bare in the tuple is E0782.
@@ -1715,6 +1772,16 @@ void Converter::AddFromTraits(const clang::CXXRecordDecl *decl) {
 // and writes the same storage C++ gives it. Base-first and skipping any name the
 // derived class itself defines, so a C++ override wins over the inherited copy,
 // which is what virtual dispatch on a concrete receiver does.
+// Re-emit an inherited method that this model delivers through a Ptr trait.
+//
+// The base model has no such split -- every method is an inherent method -- so
+// this does nothing and the caller copies the body as-is. ConverterRefCount
+// overrides it.
+bool Converter::EmitInheritedMethodOnPtr(clang::CXXRecordDecl *,
+                                        clang::CXXMethodDecl *) {
+  return false;
+}
+
 void Converter::EmitInheritedStructMethods(clang::CXXRecordDecl *decl) {
   if (decl->bases_begin() == decl->bases_end()) {
     return;
@@ -1747,17 +1814,14 @@ void Converter::EmitInheritedStructMethods(clang::CXXRecordDecl *decl) {
           if (!IsUserDefinedDecl(base_decl) || IsTraitLowerable(base_decl)) {
             continue;
           }
-          // And only when the base's DATA was flattened in alongside, which
-          // FieldsIncludingTraitBases does for an abstract base and not for a
-          // concrete one. Copying a method whose body reads `self.tag` into a
-          // struct that has no `tag` just moves the error from E0599 to E0609 --
-          // no better, and it would mask the real gap. So a concrete base is left
-          // alone: its fields not reaching the derived struct is a separate,
-          // pre-existing defect (probe p2_basedata), and until that is fixed the
-          // honest outcome is the untouched one.
-          if (!base_decl->isAbstract()) {
-            continue;
-          }
+          // The precondition this used to guard -- "only when the base's DATA
+          // was flattened in alongside" -- now holds for a concrete base too:
+          // FieldsIncludingTraitBases copies every user-defined base's fields,
+          // not just an abstract one's. That was the "separate, pre-existing
+          // defect" this comment deferred to, and it is fixed above, so copying a
+          // concrete base's method no longer lands a body that reads a field the
+          // struct lacks. Keeping the guard would now be the thing that leaves
+          // `d2.get()` as an error.
           walk(base_decl);
           for (auto *method : base_decl->methods()) {
             if (method->isImplicit() || !method->hasBody() ||
@@ -1767,6 +1831,16 @@ void Converter::EmitInheritedStructMethods(clang::CXXRecordDecl *decl) {
             }
             auto name = GetMethodName(method);
             if (!taken.insert(name).second) {
+              continue;
+            }
+            // A method this model delivers through a Ptr TRAIT rather than an
+            // inherent impl cannot be copied as a plain body: the body is written
+            // against a `Ptr<T>` receiver (`(*self).upgrade()`), so pasting it
+            // into `impl Derived` gives "no method named `upgrade` found for
+            // struct D2". EmitInheritedMethodOnPtr re-emits it in the shape the
+            // model does use -- a no-op in the unsafe model, which has no such
+            // split.
+            if (EmitInheritedMethodOnPtr(decl, method)) {
               continue;
             }
             // ConvertCXXMethodDecl, not VisitCXXMethodDecl: the latter's
@@ -2332,7 +2406,15 @@ Converter::CollectTraitBaseFieldInits(clang::CXXConstructorDecl *decl) {
           base_decl = base_decl->getDefinition() != nullptr
                           ? base_decl->getDefinition()
                           : base_decl;
-          if (!IsUserDefinedDecl(base_decl) || !base_decl->isAbstract()) {
+          // Every user-defined base, matching FieldsIncludingTraitBases exactly.
+          // These two must agree: that function decides which fields the struct
+          // HAS, this one decides which of them a constructor INITIALIZES. If
+          // this stayed abstract-only, a concrete base's flattened fields would
+          // exist but never receive their base mem-initializer -- reading zero
+          // where C++ reads the initialized value, which is silent wrongness
+          // rather than a compile error. (`RecordHasFieldInitializer` was already
+          // fixed to walk the flattened list for the same reason.)
+          if (!IsUserDefinedDecl(base_decl)) {
             continue;
           }
           // Which base constructor did this level call?
@@ -2438,15 +2520,77 @@ void Converter::EmitFunctionPreamble(clang::FunctionDecl *decl) {
   auto params = decl->getDefinition() ? decl->getDefinition()->parameters()
                                       : decl->parameters();
   for (auto *param : params) {
-    if (HasUsableDefaultArg(param)) {
-      auto name = GetNamedDeclAsString(param);
-      auto type = ToString(param->getType());
-      auto init = std::format("{}.unwrap_or({})", name,
-                              ToString(param->getDefaultArg()));
-      StrCat(std::format("let mut {} : {} = {}", name, type, init),
-             token::kSemiColon);
+    if (!HasUsableDefaultArg(param)) {
+      continue;
     }
+    // A defaulted REFERENCE parameter is lowered to `Option<pointer>`, so its
+    // default cannot be the default VALUE: it has to be a pointer to storage.
+    if (param->getType()->isReferenceType()) {
+      EmitDefaultedRefParam(param);
+      continue;
+    }
+    auto name = GetNamedDeclAsString(param);
+    auto type = ToString(param->getType());
+    auto init =
+        std::format("{}.unwrap_or({})", name, ToString(param->getDefaultArg()));
+    StrCat(std::format("let mut {} : {} = {}", name, type, init),
+           token::kSemiColon);
   }
+}
+
+void Converter::EmitDefaultedRefParam(clang::ParmVarDecl *param) {
+  auto name = GetNamedDeclAsString(param);
+  // An unnamed parameter cannot be read by the body, so there is nothing for a
+  // preamble to bind; `let mut _ : *const T = _.unwrap_or(..)` is not even a
+  // Rust expression.
+  if (name == "_") {
+    return;
+  }
+  auto ptr_type = ToString(param->getType());
+  auto *default_arg = param->getDefaultArg();
+
+  // The default is evaluated LAZILY, in the `None` arm only. C++ evaluates a
+  // default argument at the call sites that omit it and nowhere else, so an
+  // eager `unwrap_or(..)` would run it -- and any side effect or allocation in
+  // it -- on every call, including the ones that passed an argument.
+  if (!DefaultArgIsMaterializedTemporary(param)) {
+    // `const T &x = some_object`: the callee's reference must denote that very
+    // object, so take its address rather than copying it into fresh storage --
+    // otherwise a mutation through a non-const reference would be lost, and a
+    // const one would read a stale copy.
+    std::string addr;
+    {
+      Buffer buf(*this);
+      PushExprKind push(*this, ExprKind::AddrOf);
+      ConvertVarInit(param->getType(), default_arg);
+      addr = std::move(buf).str();
+    }
+    StrCat(std::format("let mut {} : {} = match {} {{ Some(__p) => __p, None "
+                       "=> {} }}",
+                       name, ptr_type, name, addr),
+           token::kSemiColon);
+    return;
+  }
+
+  // `const T &x = {}`: the default is a temporary that the binding materialises,
+  // whose lifetime C++ extends to the end of the full-expression containing the
+  // call ([class.temp]). The callee therefore sees a live reference to a
+  // default-constructed object, and every read of it inside the callee is
+  // valid. Model that with storage in the CALLEE's frame: it outlives every use
+  // of the parameter, which is all the C++ lifetime guarantees the body can
+  // observe. Declaring it uninitialised and assigning inside the arm is what
+  // keeps the default lazy while still giving the pointer a referent that
+  // outlives the arm -- storage declared inside the block would be dropped at
+  // the arm's end, leaving the pointer dangling.
+  auto pointee = param->getType().getNonReferenceType();
+  auto storage = std::format("__dflt_{}", name);
+  auto value = ConvertRValue(default_arg, pointee);
+  StrCat(std::format("let mut {} : {}", storage, ToStringBase(pointee)),
+         token::kSemiColon);
+  StrCat(std::format("let mut {} : {} = match {} {{ Some(__p) => __p, None => "
+                     "{{ {} = {}; & mut {} }} }}",
+                     name, ptr_type, name, storage, value, storage),
+         token::kSemiColon);
 }
 
 bool Converter::VisitNamespaceDecl(clang::NamespaceDecl *decl) {
@@ -2563,6 +2707,17 @@ bool Converter::VisitReturnStmt(clang::ReturnStmt *stmt) {
   // convert it against the DECLARED type (`std::ostream &`, i.e. a concrete
   // pointer representation) and, in the refcount model, add a `.clone()` -- which
   // is a Ptr operation and does not exist on a `&mut __S`.
+  if (IsUserStreamInserter(curr_function_)) {
+    // `return o;` on a `&'__s mut __S`. The value is the PARAMETER NAME, taken
+    // verbatim: converting the expression would deref it (`(*o)`, which is
+    // `__S`, not the borrow) in the unsafe model, and in the refcount model would
+    // leave a pending deref the ostream path never consumes -- an assert. An
+    // inserter's `return`/`return os;` can only ever name its own stream
+    // parameter, so the reborrow is spelled directly.
+    StrCat(keyword::kReturn, "&mut *",
+           GetNamedDeclAsString(curr_function_->getParamDecl(0)));
+    return false;
+  }
   if (!return_type->isVoidType()) {
     HoistMaterializedTempBindings hoist_temps(*this);
     StrCat(keyword::kReturn);
@@ -3426,18 +3581,51 @@ bool Converter::ConvertOstreamItem(clang::Expr *arg,
     return true;
   }
 
-  // A USER-DEFINED operator<< is NOT modelled here, and stays loud.
+  // A USER-DEFINED operator<< inside a `<<` chain: call it.
   //
-  // A LONE `os << x` never reaches this function: VisitCXXOperatorCallExpr routes
-  // it to the ordinary call path. This arm is the CHAINED spelling,
-  // `ss << "a" << x << ";"`, and it cannot be a call yet for the reason recorded
-  // in GetUserDefinedInserter: the inserter's parameter is the translation of
-  // `std::ostream &`, one concrete representation, so the call does not typecheck
-  // against a string stream. Making the parameter generic over Cc2Insert fixes
-  // it; that change is written up separately because it alters how translated
-  // signatures are emitted.
-  if (GetUserDefinedInserter(call) != nullptr) {
-    return false;
+  // A LONE `os << x` never reaches here -- VisitCXXOperatorCallExpr routes it to
+  // the ordinary call path. This arm is for the chained spelling,
+  // `ss << "a" << x << ";"`, where the chain as a whole is an ostream insertion
+  // and only some operands are user inserters. The formatter emits one statement
+  // per operand, so the user's function is called with the stream and its result
+  // discarded, which is what C++ does with the returned reference here.
+  //
+  // This works because the inserter's stream parameter is GENERIC over
+  // Cc2Insert (see IsUserStreamInserter): the receiver is passed with the same
+  // spelling the libcc2rs helpers get, and inference supplies the stream type.
+  // Before that, the parameter was the translation of `std::ostream &`, i.e. one
+  // concrete representation, and every call on a stringstream was
+  // `expected *mut File, found &mut Box<StringStream>`.
+  if (auto *user_fn = GetUserDefinedInserter(call)) {
+    StrCat(std::format("{}(", GetFunctionRefName(user_fn)));
+    // StreamInserterReceiver, NOT StreamReceiver. The two are deliberately
+    // different and the comment on StreamInserterReceiver says why: the libcc2rs
+    // helpers take their receiver generically and the refcount model hands them a
+    // SHARED borrow of a Ptr (`&ss.as_pointer()`), which works because libcc2rs
+    // impls Cc2Insert for `&Ptr<T>`. A translated inserter's parameter is
+    // `&'__s mut __S`, so a shared borrow is
+    // `expected &mut _, found &Ptr<Box<StringStream>>` -- E0308, measured on this
+    // probe in the refcount model while the unsafe model passed. The inserter
+    // receiver spells the `&mut` both models need here.
+    StrCat(StreamInserterReceiver(stream_str), token::kComma);
+    // The operand goes through ConvertParamTy, the SAME conversion the ordinary
+    // call path uses, rather than a bare Convert as an rvalue.
+    //
+    // The operand's parameter is not constrained to any one shape -- the real
+    // inserters are split between `const T &` (sendefs.cpp:69, dims.cpp:152,
+    // shuffle.h:115) and BY VALUE (isa.hpp:346 and :351, which is 11 of the 32
+    // measured sites). A by-value operand is an rvalue and converting it as one
+    // is right; a reference operand is lowered to a POINTER in both models, so
+    // it has to be passed as an address. Converting it as an rvalue emits the
+    // record itself -- `operator_shl_1(&mut ss, d)` against a `d: *const Dims`
+    // parameter, E0308 -- and that was the last thing standing between this
+    // probe and matching C++. ConvertParamTy already makes exactly that
+    // distinction (it pushes ExprKind::AddrOf for a reference parameter), which
+    // is why the LONE path has always got this right; the chained arm simply was
+    // not using it.
+    ConvertParamTy(user_fn->getParamDecl(1)->getType(), arg);
+    StrCat(");");
+    return true;
   }
 
   // Any OTHER pointer prints its address in hex -- `<<` on a pointer resolves to
@@ -3837,6 +4025,13 @@ Converter::CallInfo Converter::CollectCallInfo(clang::CallExpr *expr) {
             function && HasUsableDefaultArg(function->getParamDecl(i)),
         .kind = (IsLiteral(arg) || info.is_libc_passthrough) ? Kind::Inline
                                                              : Kind::Hoisted,
+        // The stream argument of a user-written inserter must NOT be annotated
+        // with the declared parameter type: that type is `std::ostream &`, which
+        // maps to one concrete representation (`*mut std::fs::File`), and
+        // annotating it there defeats the generic parameter -- the binding
+        // becomes `let _o: *mut File = &mut o;` on a `Box<StringStream>`, E0308.
+        // Leaving it un-annotated lets inference supply __S from the caller.
+        .infer_type = i == 0 && IsUserStreamInserter(function),
     };
     bool is_materialize = clang::isa<clang::MaterializeTemporaryExpr>(arg);
     if (is_materialize && ca.param_type->isReferenceType()) {
@@ -3917,9 +4112,18 @@ void Converter::EmitHoistedArgs(CallInfo &info) {
   for (auto &ca : info.args) {
     switch (ca.kind) {
     case Kind::Hoisted:
-      StrCat(
-          std::format("let {}: {} =", ca.param_name, ToString(ca.param_type)));
-      ConvertParamTy(ca.param_type, ca.expr);
+      if (ca.infer_type) {
+        StrCat(std::format("let {} =", ca.param_name));
+        {
+          PushExprKind push(*this, ExprKind::LValue);
+          StrCat("&mut");
+          Convert(ca.expr);
+        }
+      } else {
+        StrCat(std::format("let {}: {} =", ca.param_name,
+                           ToString(ca.param_type)));
+        ConvertParamTy(ca.param_type, ca.expr);
+      }
       StrCat(";");
       break;
     case Kind::Materialized: {
@@ -4038,8 +4242,88 @@ void Converter::ConvertGenericCallExpr(clang::CallExpr *expr) {
   EmitCall(CollectCallInfo(expr));
 }
 
+// The record a UFCS call should NAME, which is not always the one that DECLARES
+// the method.
+//
+// Rust has no inheritance, so EmitInheritedStructMethods copies an inherited
+// non-virtual method into the derived struct's own inherent impl. The call must
+// then name the struct the copy lives on -- the receiver's static type -- not
+// `method->getParent()`, which is the C++ declaring class. `struct D2 : B2` with
+// `d2.get()` emitted `B2::get(&d2)` while the callable copy was `D2::get`, so the
+// argument was `&D2` against a `&B2` parameter: E0308 (and in the refcount model
+// `Ptr<D2>: B2Impl is not satisfied`). Fixing the flattening without this just
+// moves the error rather than clearing it.
+//
+// Only redirected when the derived record really did receive a copy -- same
+// question EmitInheritedStructMethods answers, asked the same way -- so a method
+// genuinely reached on its declaring class, or delivered through a trait impl,
+// keeps naming that class.
+const clang::CXXRecordDecl *
+Converter::GetUFCSOwner(const clang::CXXMethodDecl *method,
+                        const clang::CXXRecordDecl *receiver) const {
+  const auto *declaring = method->getParent();
+  if (receiver == nullptr || declaring == nullptr) {
+    return declaring;
+  }
+  receiver = receiver->getDefinition() != nullptr ? receiver->getDefinition()
+                                                  : receiver;
+  declaring = declaring->getDefinition() != nullptr ? declaring->getDefinition()
+                                                    : declaring;
+  if (receiver == declaring || !receiver->hasDefinition()) {
+    return declaring;
+  }
+  // A trait-lowered base delivers its methods through the trait impl, so the
+  // name to use is still the base's. Only a base emitted as a STRUCT has its
+  // methods copied.
+  if (IsTraitLowerable(declaring) || !IsUserDefinedDecl(declaring)) {
+    return declaring;
+  }
+  // Did the copy actually land? EmitInheritedStructMethods skips a name the
+  // derived class defines itself (a C++ override wins), and skips a method with
+  // no body. Mirror both, or this would rename a call whose target was never
+  // copied.
+  if (!method->hasBody() || clang::isa<clang::CXXConstructorDecl>(method) ||
+      clang::isa<clang::CXXDestructorDecl>(method)) {
+    return declaring;
+  }
+  // Compared on the C++ DECLARATION NAME, not GetMethodName: this function is
+  // const and GetMethodName is not (it reaches the virtual overload-renaming
+  // path). The two agree for the purpose here -- GetMethodName is injective on
+  // the declaration, so two methods share a Rust name only if they share a C++
+  // name -- and using the declaration name keeps the query side-effect free.
+  auto name = method->getDeclName();
+  for (const auto *own : receiver->methods()) {
+    if (!own->isImplicit() && own->getDeclName() == name) {
+      return declaring;
+    }
+  }
+  // Is `declaring` actually a base of `receiver`, reached only through bases the
+  // converter emits as structs?
+  std::function<bool(const clang::CXXRecordDecl *)> reaches =
+      [&](const clang::CXXRecordDecl *rec) {
+        if (rec == nullptr || !rec->hasDefinition()) {
+          return false;
+        }
+        for (const auto &base : rec->bases()) {
+          auto *bd = base.getType()->getAsCXXRecordDecl();
+          if (bd == nullptr) {
+            continue;
+          }
+          bd = bd->getDefinition() != nullptr ? bd->getDefinition() : bd;
+          if (!IsUserDefinedDecl(bd) || IsTraitLowerable(bd)) {
+            continue;
+          }
+          if (bd == declaring || reaches(bd)) {
+            return true;
+          }
+        }
+        return false;
+      };
+  return reaches(receiver) ? receiver : declaring;
+}
+
 std::string Converter::GetUFCSName(const clang::CXXMethodDecl *method) const {
-  return GetRecordName(method->getParent());
+  return GetRecordName(GetUFCSOwner(method, ufcs_receiver_record_));
 }
 
 void Converter::ConvertUserOperatorCall(clang::CXXOperatorCallExpr *expr) {
@@ -5287,8 +5571,11 @@ bool Converter::VisitMemberExpr(clang::MemberExpr *expr) {
   if (auto *method = clang::dyn_cast<clang::CXXMethodDecl>(member);
       method && IsMethodOnPtr(method) && !Mapper::Contains(expr)) {
     SetUFCSReceiver(expr->getBase(), expr->isArrow(), method);
-    StrCat(GetRecordName(method->getParent()), token::kDoubleColon,
-           GetMethodName(method));
+    // GetUFCSName, not GetRecordName(method->getParent()) -- same reason as every
+    // other UFCS emission site: an inherited method copied onto the derived
+    // struct must be named on that struct. SetUFCSReceiver just recorded the
+    // receiver's static type, so this has to come after it.
+    StrCat(GetUFCSName(method), token::kDoubleColon, GetMethodName(method));
     SetFreshType(expr->getType());
     return false;
   }
@@ -5336,18 +5623,50 @@ bool Converter::VisitMemberExpr(clang::MemberExpr *expr) {
   return false;
 }
 
+// Records the receiver's STATIC type BEFORE any derived-to-base conversion, for
+// GetUFCSName.
+//
+// An inherited non-virtual method is copied onto the derived type, so the call
+// must name that type rather than the C++ declaring class -- and
+// `base->getType()` is the wrong type to read for it. Calling an inherited method
+// makes clang insert an implicit derived-to-base cast on the object argument, so
+// `d3.bump()` has a base expression already typed `B3` where the source says
+// `d3`. IgnoreImpCasts steps back through that conversion to the expression as
+// written, which is the only place the derived type survives.
+//
+// Both models must call this, and each has receiver paths the other does not, so
+// it lives here rather than being duplicated: getting it only into the base model
+// left the redirect dead in the refcount model while a correct `D2Impl` sat right
+// beside the call that failed to name it.
+void Converter::SetUFCSReceiverRecord(clang::Expr *base, bool is_arrow) {
+  const auto *written =
+      is_arrow ? base->IgnoreImpCasts() : base->IgnoreParenImpCasts();
+  auto written_type = is_arrow ? written->getType()->getPointeeType()
+                               : written->getType().getNonReferenceType();
+  ufcs_receiver_record_ = written_type->getAsCXXRecordDecl();
+}
+
 void Converter::SetUFCSReceiver(clang::Expr *base, bool is_arrow,
                                 const clang::CXXMethodDecl *method) {
   if (clang::isa<clang::CXXThisExpr>(base->IgnoreParenImpCasts())) {
     bool in_ctor =
         curr_function_ && clang::isa<clang::CXXConstructorDecl>(curr_function_);
     ufcs_receiver_ = in_ctor ? "&mut this" : keyword::kSelfValue;
+    // `this` inside a copied body is the struct the copy was emitted INTO, which
+    // is what curr_record_for_ufcs names; falling back to the declaring class
+    // here would defeat the redirect for a base method that calls a sibling.
+    ufcs_receiver_record_ =
+        curr_function_ != nullptr
+            ? clang::dyn_cast_or_null<clang::CXXRecordDecl>(
+                  curr_function_->getParent())
+            : nullptr;
     return;
   }
   Buffer buf(*this);
   PushExprKind push(*this, ExprKind::LValue);
   auto object_type = is_arrow ? base->getType()->getPointeeType()
                               : base->getType().getNonReferenceType();
+  SetUFCSReceiverRecord(base, is_arrow);
   bool cast_mut =
       MethodNeedsMutableReceiver(method) && object_type.isConstQualified();
   StrCat(MethodNeedsMutableReceiver(method) ? "&mut" : "&");
@@ -6710,13 +7029,54 @@ void Converter::ConvertAssignment(clang::Expr *lhs, clang::Expr *rhs,
 }
 
 
+// Whether `decl` is a user-written stream inserter, i.e.
+// `std::ostream &operator<<(std::ostream &, T)`.
+//
+// Such a function must be generic over the STREAM, because C++'s contract is
+// "any ostream" and this port has two unrelated stream representations:
+// `Box<libcc2rs::StringStream>` for a string stream (rules/sstream) and
+// `std::fs::File` for a file stream or cout (rules/fstream, rules/iostream).
+// Taking the declared type literally gives `*mut std::fs::File`, and then every
+// call on a stringstream is `expected *mut File, found &mut Box<StringStream>` --
+// which is what blocked dsc/dsc2.cpp and dsc/pcfg.cpp (both on DataFormats).
+//
+// Keyed on the SHAPE, not on a name: first parameter an lvalue reference to
+// basic_ostream, and a matching return type. `operator<<` spelled as a member
+// is excluded (its stream is the receiver, a different shape).
+static bool IsOstreamRef(clang::QualType t) {
+  if (!t->isLValueReferenceType()) {
+    return false;
+  }
+  const auto *rd = t.getNonReferenceType()->getAsCXXRecordDecl();
+  return rd != nullptr && rd->getNameAsString() == "basic_ostream";
+}
+
+bool Converter::IsUserStreamInserter(const clang::FunctionDecl *decl) {
+  if (decl == nullptr || clang::isa<clang::CXXMethodDecl>(decl) ||
+      decl->getNumParams() != 2) {
+    return false;
+  }
+  if (decl->getOverloadedOperator() != clang::OO_LessLess) {
+    return false;
+  }
+  return IsOstreamRef(decl->getParamDecl(0)->getType()) &&
+         IsOstreamRef(decl->getReturnType());
+}
 
 
 void Converter::ConvertFunctionParameters(clang::FunctionDecl *decl) {
   in_function_formals_ = true;
   auto *definition =
       decl->getDefinition() != nullptr ? decl->getDefinition() : decl;
+  bool inserter = IsUserStreamInserter(decl);
   for (auto *parameter : definition->parameters()) {
+    // An inserter's stream parameter is generic; see IsUserStreamInserter.
+    if (inserter && parameter == definition->parameters().front()) {
+      StrCat(std::format("{}: &'__s mut {}", GetNamedDeclAsString(parameter),
+                         kStreamTypeParam),
+             token::kComma);
+      continue;
+    }
     ConvertVarDeclSkipInit(parameter);
     StrCat(token::kComma);
   }
@@ -6731,6 +7091,15 @@ void Converter::ConvertFunctionQualifiers(clang::FunctionDecl *decl) {
 }
 
 void Converter::ConvertFunctionReturnType(clang::FunctionDecl *decl) {
+  // An inserter returns the SAME stream it was handed, so its return type is the
+  // generic borrow rather than a concrete representation. Without this the
+  // signature mixes the two -- `(o: &mut __S) -> *mut std::fs::File` -- and every
+  // `return o;` is a type error.
+  if (IsUserStreamInserter(decl)) {
+    StrCat(token::kArrow,
+           std::format("&'__s mut {}", kStreamTypeParam));
+    return;
+  }
   auto return_type = decl->getReturnType();
   // C++ allows an override to narrow a pointer return to a derived class
   // (covariant return). Rust does not: the impl must repeat the trait's

@@ -84,6 +84,10 @@ public:
 
   void ConvertMethodOnPtrTraitDecl(clang::CXXMethodDecl *method);
   void ConvertMethodOnPtr(clang::CXXMethodDecl *method);
+  // An inherited method that lives in a Ptr trait rather than an inherent impl:
+  // re-emit it onto the DERIVED record's trait and impl. See converter_refcount.cpp.
+  bool EmitInheritedMethodOnPtr(clang::CXXRecordDecl *decl,
+                                clang::CXXMethodDecl *method) override;
 
   bool VisitCXXThisExpr(clang::CXXThisExpr *expr) override;
 
@@ -94,6 +98,8 @@ public:
   bool VisitFieldDecl(clang::FieldDecl *decl) override;
 
   void EmitFunctionPreamble(clang::FunctionDecl *decl) override;
+
+  void EmitDefaultedRefParam(clang::ParmVarDecl *param) override;
 
   bool VisitVarDecl(clang::VarDecl *decl) override;
   bool LazyStaticInit() const override { return false; }

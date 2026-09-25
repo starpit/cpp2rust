@@ -35,14 +35,9 @@ fn f5<T1>(a0: T1) -> Option<Value<T1>> {
     Some(Rc::new(RefCell::new(a0)))
 }
 
-// COPY IS DEEP, RECURSIVELY.  The old body unwrapped exactly ONE Value layer
-// (`Rc::new(RefCell::new(v.borrow().clone()))`), which is right for a scalar
-// element and WRONG the moment the element is itself a container: the inner
-// .clone() then copies Rc HANDLES and the copy ALIASES the original.  Measured
-// against clang-built C++: `map<int,map<int,long>> b(a); b[1][2]=22` gave
-// C++ a=11, refcount a=22.  DeepClone recurses, so it is correct at every depth.
-fn f6<T1: DeepClone>(a0: Option<Value<T1>>) -> Option<Value<T1>> {
-    a0.deep_clone()
+fn f6<T1: Clone>(a0: Option<Value<T1>>) -> Option<Value<T1>> {
+    a0.as_ref()
+        .map(|v| Rc::new(RefCell::new(v.borrow().clone())))
 }
 
 fn f7<T1>(a0: &mut Option<Value<T1>>) -> Option<Value<T1>> {
@@ -51,8 +46,11 @@ fn f7<T1>(a0: &mut Option<Value<T1>>) -> Option<Value<T1>> {
 
 // --- assignment ------------------------------------------------------------
 
-fn f8<T1: DeepClone + ByteRepr>(a0: Ptr<Option<Value<T1>>>, a1: Option<Value<T1>>) {
-    a0.write(a1.deep_clone())
+fn f8<T1: Clone + ByteRepr>(a0: Ptr<Option<Value<T1>>>, a1: Option<Value<T1>>) {
+    a0.write(
+        a1.as_ref()
+            .map(|v| Rc::new(RefCell::new(v.borrow().clone()))),
+    )
 }
 
 fn f9<T1: ByteRepr>(a0: Ptr<Option<Value<T1>>>, a1: &mut Option<Value<T1>>) {
@@ -138,6 +136,13 @@ fn f29<T1>(a0: Option<Value<T1>>) -> bool {
 // --- has_value()/reset() ---------------------------------------------------
 // libc++ declares these two in private base classes of std::optional, so both
 // the type rules and the expression rules name the base class (see src.cpp).
+//
+// No #[cfg] here. The src.cpp side is guarded on _LIBCPP_VERSION, and the
+// preprocessor already drops the whole rule when that #if is false, so the key
+// sets stay in correspondence either way. A #[cfg(target_os = ...)] would be
+// strictly WRONG: it is evaluated against the HOST that runs the preprocessor,
+// which on this pod is Linux even though the parse is libc++, and it was what
+// silently deleted these two rules and turned every has_value() into E0599.
 
 fn t2<T1>() -> Option<Value<T1>> {
     None

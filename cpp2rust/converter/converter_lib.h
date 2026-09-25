@@ -152,6 +152,11 @@ GetUserDefinedDefaultConstructor(const clang::CXXRecordDecl *decl);
 
 bool HasUsableDefaultArg(const clang::ParmVarDecl *param);
 
+/// True for a defaulted REFERENCE parameter whose default expression is a
+/// temporary materialised by the binding (`const T &x = {}`), as opposed to one
+/// naming an object that already exists (`const T &x = some_global`).
+bool DefaultArgIsMaterializedTemporary(const clang::ParmVarDecl *param);
+
 std::string GetMainFileName(const clang::ASTContext &ctx);
 
 std::string GetFileName(const clang::Decl *decl);

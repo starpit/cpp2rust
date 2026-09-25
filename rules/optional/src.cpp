@@ -149,22 +149,17 @@ bool f29(const std::optional<T1> &a0, std::nullopt_t a1) {
 // Naming the base class directly does work, and the converter looks the call
 // up under the base class name too, so that is what these rules do.
 //
-// The guard is on _LIBCPP_VERSION, not __APPLE__, and the distinction is not
-// pedantic: __APPLE__ is the HOST OS, while the question these rules ask is
-// WHICH STANDARD LIBRARY THE RULE PREPROCESSOR PARSES WITH.  Those differ here by
-// design -- BOOTSTRAP.md records it -- because the preprocessor parses with libc++
-// (the rules key on std::__1:: spellings) while the generated Rust is compiled
-// against a libstdc++-built toolchain.  On this Linux pod __APPLE__ was false, so
-// f14 and f25 were dropped from all three ir_*.json and every opt.has_value()
-// fell through to a verbatim .has_value() on a Rust Option: 10 E0599 on one TU.
-//
-// The target files had the mirror of the same confusion, 4x
-// #[cfg(target_os = "macos")] each, evaluated by rule-preprocessor against the
-// host that RUNS it -- so they deleted the target entries too.  The two wrongs
-// kept the key sets corresponding, which is exactly why check_rules.py, the
-// invariant that exists to catch this class, never fired.  Whether a rule EXISTS
-// is decided at parse time; the generated Rust is then compiled for whatever
-// target, so no cfg belongs on the target side at all.
+// The guard is on _LIBCPP_VERSION -- the STANDARD LIBRARY -- and not on
+// __APPLE__, the host OS. Those are not the same condition and conflating them
+// cost 10 rustc errors on dsc/test/operandattr_unit_test.cpp: this pod is
+// Linux, but the rule preprocessor parses with libc++ (CPLUS_INCLUDE_PATH
+// points at it, because the rules key on its std::__1:: spellings), so
+// __APPLE__ was false, f14/f25 were dropped from ir_src.json entirely, and
+// every `opt.has_value()` fell through to a verbatim `.has_value()` on a Rust
+// Option -- E0599, since Option spells it `is_some`. Keying on the library
+// makes the rule track what is actually being parsed. Verified directly:
+// naming std::optional rather than the base class still fails rule resolution
+// ("No viable function"), so the base-class spelling remains necessary.
 // ---------------------------------------------------------------------------
 #if defined(_LIBCPP_VERSION)
 template <typename T1> using t2 = std::__optional_storage_base<T1>;

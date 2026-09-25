@@ -55,11 +55,25 @@
 //! Records are leaves, and legitimately so: the converter already emits a
 //! per-field `Rc::new(RefCell::new((*self.f.borrow()).clone()))`, so a record
 //! whose field is a container recurses through THAT field's container
-//! `deep_clone` as soon as the impls below exist.  `EmitDeepCloneLeaf` in the
-//! refcount converter emits the one-line `impl DeepClone for R` beside the
-//! record's `Clone`.  Verified before this change: a
+//! `deep_clone` as soon as the impls below exist.  Verified before this change: a
 //! `struct R { std::map<int,long> m; int tag; }` copy was already correct, and
 //! so was `std::map<int, R>` where `R` holds a map.
+//!
+//! KNOWN HOLE, and this paragraph replaces a false claim.  An earlier version of
+//! this comment said "`EmitDeepCloneLeaf` in the refcount converter emits the
+//! one-line `impl DeepClone for R` beside the record's `Clone`".  THERE IS NO SUCH
+//! FUNCTION and there never was -- the comment described code that was never
+//! written.  The consequence is real and reachable: `rules/vector`'s `push_back`
+//! overlay requires `T1: DeepClone`, and a USER RECORD never gets an impl, so
+//!     struct R { long a; long b; };  std::vector<R> v;  v.push_back(r);
+//! is `error[E0599]: no method named deep_clone found for struct R` in the
+//! refcount model, against C++'s `3 4 1`.  It is LOUD rather than silently
+//! shallow, which is the acceptable direction, but it is a hole.
+//!
+//! The fix is for the refcount converter to emit `impl_deep_clone_leaf!(R)` per
+//! translated record, beside the `Clone` impl it already emits -- that is what the
+//! macro below exists for.  Until then a record element in a container is a rustc
+//! error, not a wrong value.
 
 use crate::rc::{Ptr, Value};
 use std::cell::RefCell;

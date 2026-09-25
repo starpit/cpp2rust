@@ -47,14 +47,55 @@
 // CXXConstructExpr conversions at the call sites in the target codebase, not
 // assumed.
 //
+// THE StringRef OPERANDS -- ADDED once rules/stringref landed (31a1cdc)
+// ---------------------------------------------------------------------
+// This comment block previously listed `Twine(StringRef)` and the
+// `operator+(StringRef, const char *)` fast path among the NOT COVERED cases,
+// on the stated grounds that each "would need a type rule for its own argument
+// type first".  That was exactly right, and rules/stringref now supplies it:
+// llvm::StringRef is modelled as the bytes it denotes, which is the SAME
+// representation this module gives a Twine.  So the two rules are f5 and f6
+// below and their bodies are the identity and a concatenation respectively --
+// no conversion at the boundary, because there is no boundary.
+//
+// WHY BOTH, when the gap is only the operator.  The survey records one site,
+// dbo/src/Transforms/Autopilot.cpp:167 --
+//
+//     (kAutopilotName + "_" + std::to_string(index)).str()
+//
+// where `kAutopilotName` is a `const llvm::StringRef` (Autopilot.cpp:42).
+// That is TWO operator+ calls, and they resolve to DIFFERENT overloads: the
+// inner `StringRef + "_"` picks LLVM's fast path
+// `Twine operator+(StringRef, const char *)` (Twine.h:540) because a StringRef
+// operand makes it a better match than converting to Twine, while the outer
+// `Twine + std::string` picks the general `operator+(const Twine &, const
+// Twine &)` that f4 already covers, with f2 converting the std::string.  So
+// f5 is what the gap needs.
+//
+// f6 (`Twine(StringRef)`, Twine.h:288) is NOT reachable from that site -- the
+// fast path takes its StringRef directly and constructs no intermediate Twine.
+// It is included because it is the conversion that makes a StringRef usable in
+// EVERY other Twine position (`Twine + StringRef`, an API taking `const Twine &`
+// handed a StringRef), it is one line in each model, and leaving it out would
+// make a StringRef work on the left of `+ "literal"` and abort anywhere else --
+// a boundary with no principle behind it.  It is verified by the probe on its
+// own, not assumed to be exercised by the operator.
+//
+// Note f5 takes its left operand BY VALUE (`llvm::StringRef`, not `const
+// llvm::StringRef &`), matching LLVM, and that is what the resolved signature
+// says: `llvm::Twine llvm::operator+(llvm::StringRef, const char *)`.
+//
 // NOT COVERED, deliberately -- nothing in the target scope reaches them, and
 // each would need a type rule for its own argument type first:
-//   Twine(StringRef), Twine(const StringLiteral &),
+//   Twine(const StringLiteral &),
 //   Twine(const SmallVectorImpl<char> &), Twine(const formatv_object_base &),
 //   Twine(const std::string_view &), the numeric utostr/itostr helpers,
 //   toStringRef/toVector/toNullTerminatedStringRef, isTriviallyEmpty,
-//   print/dump, and the two-operand `operator+(const char *, StringRef)` /
-//   `operator+(StringRef, const char *)` fast paths.
+//   print/dump, the `Twine(StringRef, const char *)` two-operand CONSTRUCTOR
+//   (LLVM's operator+ fast path is implemented in terms of it, but a rule for
+//   the operator answers the call site directly, so the constructor is never
+//   reached through a translated program), and the mirror-image
+//   `operator+(const char *, StringRef)` fast path, which has zero sites.
 //   Twine(std::nullptr_t) is `= delete` in LLVM and so can never be called.
 //
 // The default constructor is NOT covered either.  LLVM's is
@@ -67,6 +108,28 @@
 #include <string>
 
 namespace llvm {
+
+// Restated from llvm/ADT/StringRef.h, for the same reason and in the same words
+// as rules/stringref: the only flags that would reach LLVM's real headers are
+// absolute -I paths into whatever LLVM tree the target project happens to have
+// built.  This restatement must agree with rules/stringref's, because a rule
+// matches on a signature STRING and the two modules name the same type -- the
+// members below are the subset the two signatures here mention.  Only `Data`
+// and `Length` are declared for the same reason rules/stringref gives: the
+// layout is irrelevant to matching, but the class must be complete because f5
+// takes one by value.
+class StringRef {
+  const char *Data = nullptr;
+  unsigned long Length = 0;
+
+public:
+  // llvm/ADT/StringRef.h:83 -- /*implicit*/ StringRef() = default
+  StringRef() = default;
+  // llvm/ADT/StringRef.h:90 -- /*implicit*/ constexpr StringRef(const char *)
+  StringRef(const char *Str);
+  // llvm/ADT/StringRef.h:101 -- /*implicit*/ StringRef(const std::string &)
+  StringRef(const std::string &Str);
+};
 
 // Restated from llvm/ADT/Twine.h.  The member layout is irrelevant to
 // signature matching but the class has to be complete, because f4 returns one
@@ -83,12 +146,16 @@ public:
   Twine(const char *Str);
   // llvm/ADT/Twine.h:272 -- /*implicit*/ Twine(const std::string &Str)
   Twine(const std::string &Str);
+  // llvm/ADT/Twine.h:288 -- /*implicit*/ Twine(StringRef Str)
+  Twine(StringRef Str);
   // llvm/ADT/Twine.h:434 -- LLVM_ABI std::string str() const
   std::string str() const;
 };
 
 // llvm/ADT/Twine.h:526 -- inline Twine operator+(const Twine &, const Twine &)
 Twine operator+(const Twine &LHS, const Twine &RHS);
+// llvm/ADT/Twine.h:540 -- inline Twine operator+(StringRef, const char *)
+Twine operator+(StringRef LHS, const char *RHS);
 
 } // namespace llvm
 
@@ -103,3 +170,9 @@ std::string f3(const llvm::Twine &t) { return t.str(); }
 llvm::Twine f4(const llvm::Twine &a, const llvm::Twine &b) {
   return llvm::operator+(a, b);
 }
+
+llvm::Twine f5(llvm::StringRef a, const char *b) {
+  return llvm::operator+(a, b);
+}
+
+llvm::Twine f6(llvm::StringRef s) { return llvm::Twine(s); }

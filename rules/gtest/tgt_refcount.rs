@@ -123,9 +123,21 @@ unsafe fn f3(a0: *const libc::c_char, a1: *const libc::c_char, a2: u64, a3: u64)
 unsafe fn f4(a0: *const libc::c_char, a1: *const libc::c_char, a2: f32, a3: f32) -> bool {
     ({
         let _ = (a0, a1);
-        if a2.is_nan() || a3.is_nan() {
+        // Bind both operands to a TYPED pair first. A rule body is INLINED with
+        // the argument expressions substituted for a2/a3, so the `f32` in this
+        // function's own signature never constrains them: EXPECT_FLOAT_EQ's
+        // second operand is usually a literal, and `3.14f` arrives as a bare
+        // `3.140000105E+0`, whose `.is_nan()` is E0689 "ambiguous numeric type
+        // {float}" -- 8 of those on operandattr_unit_test.cpp. The annotation
+        // also pins the literal to f32 rather than letting it default to f64,
+        // which matters for VALUES and not just for compiling: C++ evaluates
+        // `attr.asFloat() == 3.14f` entirely in float, and `3.14f == 3.14`
+        // widened to double is FALSE (measured with clang), so an f64 literal
+        // here would make the 4-ULP comparison disagree with C++.
+        let (__lhs, __rhs): (f32, f32) = (a2, a3);
+        if __lhs.is_nan() || __rhs.is_nan() {
             false
-        } else if a2 == a3 {
+        } else if __lhs == __rhs {
             true
         } else {
             // Bit patterns as sign-magnitude, biased into a monotone ordering,
@@ -139,7 +151,7 @@ unsafe fn f4(a0: *const libc::c_char, a1: *const libc::c_char, a2: f32, a3: f32)
                     __b | 0x8000_0000
                 }
             };
-            let (__l, __r) = (__bias(a2), __bias(a3));
+            let (__l, __r) = (__bias(__lhs), __bias(__rhs));
             (if __l > __r { __l - __r } else { __r - __l }) <= 4
         }
     })
@@ -217,7 +229,17 @@ unsafe fn f15(
 unsafe fn f16(a0: *const libc::c_char, a1: *const libc::c_char, a2: u64, a3: u32) -> bool {
     ({
         let _ = (a0, a1);
-        a2 == a3 as u64
+        // Compare through u64 explicitly on BOTH sides rather than relying on
+        // a2 already being u64. The signature says `u64` because src.cpp says
+        // `unsigned long` (see above), but the body is INLINED and the actual
+        // receiver expression is whatever C++ handed the macro -- and for
+        // `EXPECT_EQ(attr.asString().length(), 1000u)` that is Rust's
+        // `String::len()`, i.e. `usize`, giving "expected usize, found u64".
+        // size_t is 8 bytes on this target (measured), so u64 and usize agree
+        // in VALUE and this cast is a spelling fix, not a semantic one; going
+        // through u64 keeps the widening identical to C++'s usual arithmetic
+        // conversions on the unsigned literal.
+        (a2 as u64) == (a3 as u64)
     })
 }
 
