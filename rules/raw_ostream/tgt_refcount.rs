@@ -147,3 +147,13 @@ fn f17(a0: Ptr<std::fs::File>, a1: f64) -> Ptr<std::fs::File> {
     let _ = __o.write_all(__b.as_bytes());
     __o
 }
+
+// See tgt_unsafe.rs f18.  AnyPtr is the refcount model's `const void *`; its
+// cc2_addr_of is the identity `to_int` already uses for casts, so the digits
+// agree with any comparison the translated program makes on the same pointer.
+fn f18(a0: Ptr<std::fs::File>, a1: AnyPtr) -> Ptr<std::fs::File> {
+    let __o = a0;
+    let __b = format!("0x{:x}", libcc2rs::cc2_addr_of(&a1));
+    let _ = __o.write_all(__b.as_bytes());
+    __o
+}

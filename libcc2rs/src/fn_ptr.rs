@@ -224,6 +224,13 @@ impl<T: FnSig> ErasedPtr for FnPtr<T> {
     fn is_null(&self) -> bool {
         FnPtr::is_null(self)
     }
+    // `addr` is the real machine address of the function, and 0 exactly for
+    // null, so this is a better identity than anything the data path could
+    // offer -- note `as_bytes` above panics, which is why `AnyPtr::to_int` must
+    // not be routed through it.
+    fn identity(&self) -> usize {
+        self.addr
+    }
 }
 
 impl<T: FnSig> FnPtr<T> {

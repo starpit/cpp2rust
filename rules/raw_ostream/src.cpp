@@ -61,9 +61,20 @@
 //
 // NOT COVERED: the formatting helpers (format(), formatv(), write_hex(),
 // indent, Colors), the SmallVectorImpl<char> and std::string_view overloads.
-// They need rules for their argument types first.  operator<<(const void *)
-// is left out deliberately: LLVM prints the address, and the refcount model's
-// AnyPtr has no address to print, so a rule could only invent one.
+// They need rules for their argument types first.
+//
+// operator<<(const void *) IS covered (f18).  It was once left out on the
+// grounds that the refcount model's AnyPtr has no machine address to print,
+// but that is not a reason to refuse the insertion: AnyPtr already has an
+// IDENTITY (`to_int`, the same number its pointer-to-integer casts use), so
+// the digits are stable within a run and differ between distinct pointers,
+// which is everything a correct program can depend on -- two C++ runs of the
+// same program do not agree on the digits either (ASLR).  The rule reuses
+// libcc2rs::cc2_addr_of, added for std::ostream's pointer insertion, so both
+// models get the same notion of address.  NOTE the FORMAT differs from
+// std::ostream: raw_ostream is write_hex(PrefixLower), an unconditional "0x"
+// followed by unpadded lowercase hex, so a null pointer is `0x0`, whereas
+// std::ostream's num_put uses hex|showbase and prints a bare `0`.
 // `bool` needs no rule of its own: bool -> int is an integral promotion and
 // bool -> char only a conversion, so C++ always picks operator<<(int) for it.
 // llvm::StringRef has no type rule anywhere in rules/, so the ARGUMENT of f7
@@ -101,6 +112,7 @@ public:
   raw_ostream &operator<<(unsigned int N);
   raw_ostream &operator<<(int N);
   raw_ostream &operator<<(double N);
+  raw_ostream &operator<<(const void *P);
 };
 
 // raw_fd_ostream derives from raw_ostream through raw_pwrite_stream; the
@@ -181,5 +193,11 @@ llvm::raw_ostream &f16(llvm::raw_ostream &o, unsigned long long v) {
 }
 
 llvm::raw_ostream &f17(llvm::raw_ostream &o, double v) {
+  return o.operator<<(v);
+}
+
+// raw_ostream.h: `operator<<(const void *P)` is write_hex(PrefixLower), NOT
+// the stream's own format state -- raw_ostream has none.
+llvm::raw_ostream &f18(llvm::raw_ostream &o, const void *v) {
   return o.operator<<(v);
 }

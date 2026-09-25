@@ -154,3 +154,15 @@ unsafe fn f17(a0: *mut std::fs::File, a1: f64) -> *mut std::fs::File {
     let _ = ::std::io::Write::write_all(&mut *__o, __b.as_bytes());
     __o
 }
+
+// LLVM prints a pointer as write_hex(HexPrintStyle::PrefixLower): the literal
+// "0x", then lowercase hex with no zero padding and no width, so a null
+// pointer is "0x0" and not the bare "0" std::ostream's showbase produces.
+// cc2_addr_of is shared with the std::ostream inserter so that the two models
+// agree on what "the address" is.
+unsafe fn f18(a0: *mut std::fs::File, a1: *const ::libc::c_void) -> *mut std::fs::File {
+    let __o = a0;
+    let __b = format!("0x{:x}", libcc2rs::cc2_addr_of(&a1));
+    let _ = ::std::io::Write::write_all(&mut *__o, __b.as_bytes());
+    __o
+}
