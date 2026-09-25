@@ -113,24 +113,39 @@
 // whose MapTy is SmallDenseMap and whose canonical string is therefore a
 // different one entirely (dcc/.../GraphStats.cpp uses it; it stays a gap).
 //
-// KNOWN REMAINING GAP -- the StringRef element type.  The census shows two
-// spellings of the key info argument:
+// TWO SPELLINGS OF THE KEY-INFO ARGUMENT, TWO RULE FAMILIES.  The census shows
 //     llvm::DenseMapInfo<long>                  (and <mlir::Value>, <unsigned long>)
 //     llvm::DenseMapInfo<llvm::StringRef, void>
-// i.e. for StringRef the defaulted `Enable` parameter of DenseMapInfo is spelled
-// out and for the others it is elided.  This module's key carries the
-// ONE-argument form, so llvm::DenseSet<llvm::StringRef> is NOT covered and stays
-// a loud abort.  That is left deliberately rather than guessed at: covering it
-// needs a second family of rules keyed on the two-argument spelling, and nothing
-// here measures which of the two a given TU produces.
+// i.e. for StringRef the `Enable` parameter of DenseMapInfo is spelled out and
+// for the others it is elided.  Both are part of the canonical string, so one
+// family cannot serve both.  f1..f22 carry the ONE-argument spelling and
+// f23..f44 the TWO-argument one; the FAMILY TWO banner at the bottom of this
+// file records the mechanism and why a sentinel default on DenseMapInfo is what
+// lets one translation unit produce both keys.
+//
+// STILL A GAP -- POINTER element types.  `const_arg_type_t<T *>` is `const T *`
+// BY VALUE, not `const T * &`, so llvm::DenseSet<mlir::Operation *> keys find /
+// contains / count / insert on a different string than the by-reference forms
+// declared below.  Left unmapped in both families, so it stays a loud abort
+// rather than a guess.
 
 #include <utility>
 
 namespace llvm {
 
-// DenseMapInfo, restated with ONE parameter -- see the KNOWN REMAINING GAP note
-// in the header comment for why that choice excludes the StringRef element type.
-template <typename KeyT> struct DenseMapInfo;
+// DenseMapInfo, restated with TWO parameters and a SENTINEL default.  LLVM
+// declares `template <typename T, typename Enable = void> struct DenseMapInfo;`
+// (DenseMapInfo.h:51), and the census shows both a one- and a two-argument
+// spelling reaching the converter.  The default here is deliberately NOT `void`
+// so that BOTH keys are expressible from one translation unit: a defaulted
+// argument is elided from the key, an explicitly-different one is kept.  See the
+// FAMILY TWO banner below for the full argument.  `DenseMapInfoEnableDefault` is
+// never spelled by any rule, so it can appear in no key; it is incomplete
+// because nothing needs it defined.
+struct DenseMapInfoEnableDefault;
+
+template <typename KeyT, typename Enable = DenseMapInfoEnableDefault>
+struct DenseMapInfo;
 
 namespace detail {
 
@@ -407,5 +422,183 @@ f21(typename llvm::DenseSet<T1>::iterator &it) {
 template <typename T1>
 typename llvm::DenseSet<T1>::const_iterator &
 f22(typename llvm::DenseSet<T1>::const_iterator &it) {
+  return it.operator++();
+}
+
+
+// ---------------------------------------------------------------------------
+// FAMILY TWO -- the same surface keyed on the TWO-ARGUMENT DenseMapInfo.
+//
+// The gap the header comment above left open, now closed and MEASURED rather
+// than argued.  The census shows the key-info argument arriving in two
+// spellings, and dbo/src/Transforms/Autopilot.cpp asks for the second one:
+//   llvm::detail::DenseSetImpl<llvm::StringRef, llvm::DenseMap<llvm::StringRef,
+//     llvm::detail::DenseSetEmpty, llvm::DenseMapInfo<llvm::StringRef, void>,
+//     llvm::detail::DenseSetPair<llvm::StringRef>>,
+//     llvm::DenseMapInfo<llvm::StringRef, void>>::DenseSetIterator<false>
+// -- `<llvm::StringRef, void>`, two arguments, where <long>/<mlir::Value>/
+// <unsigned long> arrive with ONE.  A single rule family cannot serve both:
+// the argument is part of the canonical string and the strings differ.
+//
+// WHY the two spellings differ, and why the sentinel default below is what makes
+// both families expressible in ONE translation unit.  `Mapper::ToString` prints
+// through clang's default PrintingPolicy, where SuppressDefaultTemplateArgs is
+// TRUE, and cpp-rule-preprocessor elides defaulted arguments the same way.  So
+// an argument that EQUALS its template's default vanishes from the key and an
+// explicitly-different one stays -- rules/smallset records the identical
+// mechanism from the other side (a written `std::less<T1>` kept a third argument
+// the use site had dropped).  DenseMapInfo therefore gets TWO parameters here
+// with a default that is deliberately NOT `void`:
+//   * family one writes `llvm::DenseSet<T1>`, whose defaulted ValueInfoT is
+//     `DenseMapInfo<T1>`; the second argument equals the default, is elided, and
+//     the key keeps the ONE-argument spelling the two already-closed TUs match.
+//   * family two writes the argument out through the `dsv` alias as
+//     `DenseMapInfo<T1, void>`; `void` differs from the sentinel default, is
+//     never suppressed, and the key comes out two-argument.
+// The sentinel itself is an incomplete type that no rule ever spells, so it
+// cannot appear in any key.  Verified by grepping the produced IR for both
+// spellings, not by trusting the argument.
+//
+// REPRESENTATION IS UNCHANGED.  ValueInfoT is hashing policy: it is not
+// observable through any member mapped here, and tgt_*.rs already drops it.  So
+// f23..f44 are f1..f22's bodies verbatim -- the two families differ only in the
+// C++ string they are keyed on.
+// ---------------------------------------------------------------------------
+
+template <typename T1> using dsv = llvm::DenseSet<T1, llvm::DenseMapInfo<T1, void>>;
+template <typename T1> using t4 = dsv<T1>;
+template <typename T1> using t5 = typename dsv<T1>::iterator;
+template <typename T1> using t6 = typename dsv<T1>::const_iterator;
+
+// Construction.  See the note on the class: both the nullary form and the
+// reserve-taking form are mapped so the mapping does not depend on which entity
+// `llvm::DenseSet<T> s;` resolves to.
+template <typename T1> dsv<T1> f23() { return dsv<T1>(); }
+
+template <typename T1> dsv<T1> f24(unsigned n) {
+  return dsv<T1>(n);
+}
+
+// insert -- the load-bearing member.  Keeps the incumbent, reports whether it
+// inserted; `insert(x).second` at the three abort sites is exactly this bool.
+template <typename T1>
+std::pair<typename dsv<T1>::iterator, bool>
+f25(dsv<T1> &o, const T1 &v) {
+  return o.insert(v);
+}
+
+template <typename T1>
+std::pair<typename dsv<T1>::iterator, bool>
+f26(dsv<T1> &o, T1 &&v) {
+  return o.insert(static_cast<T1 &&>(v));
+}
+
+// contains / count -- Autopilot.cpp:647 and :668 call contains; count is what a
+// probe can use to tell a deduplicating body from a non-deduplicating one.
+template <typename T1>
+bool f27(const dsv<T1> &o, const T1 &v) {
+  return o.contains(v);
+}
+
+template <typename T1>
+unsigned int f28(const dsv<T1> &o, const T1 &v) {
+  return o.count(v);
+}
+
+template <typename T1> unsigned int f29(const dsv<T1> &o) {
+  return o.size();
+}
+
+template <typename T1> bool f30(const dsv<T1> &o) {
+  return o.empty();
+}
+
+// begin/end/find, in both const-nesses.  The const receiver hands back
+// const_iterator, a different type AND a different signature -- rules/densemap
+// f44..f46.
+template <typename T1>
+typename dsv<T1>::iterator f31(dsv<T1> &o) {
+  return o.begin();
+}
+
+template <typename T1>
+typename dsv<T1>::iterator f32(dsv<T1> &o) {
+  return o.end();
+}
+
+template <typename T1>
+typename dsv<T1>::const_iterator f33(const dsv<T1> &o) {
+  return o.begin();
+}
+
+template <typename T1>
+typename dsv<T1>::const_iterator f34(const dsv<T1> &o) {
+  return o.end();
+}
+
+template <typename T1>
+typename dsv<T1>::iterator f35(dsv<T1> &o, const T1 &v) {
+  return o.find(v);
+}
+
+template <typename T1>
+typename dsv<T1>::const_iterator f36(const dsv<T1> &o,
+                                                const T1 &v) {
+  return o.find(v);
+}
+
+// The iterator comparisons.  SPELLED AS FREE-FUNCTION CALLS, never `a == b`:
+// these are hidden friends (found by ADL on the operand), and rules/smallset
+// records that a plain `a == b` spelling produces NO src entry, after which the
+// converter aborts EVERY translation that loads the module with
+// `LLVM ERROR: Expr rule loaded from IR but has no src`.
+template <typename T1>
+bool f37(typename dsv<T1>::iterator a,
+         typename dsv<T1>::iterator b) {
+  return operator==(a, b);
+}
+
+template <typename T1>
+bool f38(typename dsv<T1>::iterator a,
+         typename dsv<T1>::iterator b) {
+  return operator!=(a, b);
+}
+
+template <typename T1>
+bool f39(typename dsv<T1>::const_iterator a,
+         typename dsv<T1>::const_iterator b) {
+  return operator==(a, b);
+}
+
+template <typename T1>
+bool f40(typename dsv<T1>::const_iterator a,
+         typename dsv<T1>::const_iterator b) {
+  return operator!=(a, b);
+}
+
+// operator* and PREFIX operator++.  A begin()/end() walk is unusable without
+// both, and the probe's sorted signature is how the order-refinement discussed
+// in the header comment is kept out of the evidence.  DenseSet.h:131 returns
+// `reference`, i.e. ValueT & for the mutable iterator and const ValueT & for the
+// const one -- two different strings.  POSTFIX ++ is NOT mapped and stays loud
+// (rules/densemap f39 records that it is a separate entity).
+template <typename T1> T1 &f41(typename dsv<T1>::iterator it) {
+  return it.operator*();
+}
+
+template <typename T1>
+const T1 &f42(typename dsv<T1>::const_iterator it) {
+  return it.operator*();
+}
+
+template <typename T1>
+typename dsv<T1>::iterator &
+f43(typename dsv<T1>::iterator &it) {
+  return it.operator++();
+}
+
+template <typename T1>
+typename dsv<T1>::const_iterator &
+f44(typename dsv<T1>::const_iterator &it) {
   return it.operator++();
 }

@@ -163,3 +163,155 @@ fn f22<T1: Ord + Clone + 'static>(
     a0.inc();
     a0.clone()
 }
+
+// FAMILY TWO -- see src.cpp.  Keyed on the two-argument
+// `llvm::DenseMapInfo<T1, void>` spelling that Autopilot.cpp asks for.  The
+// key-info argument is hashing policy and is not represented on this side at
+// all, so these bodies are f1..f22 verbatim.
+
+fn t4<T1>() -> BTreeMap<T1, Value<T1>> {
+    BTreeMap::new()
+}
+
+fn t5<T1: Clone + Ord + 'static>() -> RefcountMapIter<T1, T1> {
+    RefcountMapIter::null()
+}
+
+fn t6<T1: Clone + Ord + 'static>() -> RefcountMapIter<T1, T1> {
+    RefcountMapIter::null()
+}
+
+fn f23<T1>() -> BTreeMap<T1, Value<T1>> {
+    BTreeMap::new()
+}
+
+// The bucket-count hint is dropped -- see tgt_unsafe.rs.
+fn f24<T1>(a0: u32) -> BTreeMap<T1, Value<T1>> {
+    let _ = a0;
+    BTreeMap::new()
+}
+
+// insert -- PROBE-AND-INSERT, keeping the incumbent.  rules/set's / rules/
+// smallset's refcount body; tgt_unsafe.rs says why BTreeMap::insert is wrong.
+fn f25<T1: Ord + Clone + 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T1>>>,
+    a1: T1,
+) -> (Value<RefcountMapIter<T1, T1>>, Value<bool>) {
+    let __inserted = a0.with_mut(|__v: &mut BTreeMap<T1, Value<T1>>| {
+        let __new = !__v.contains_key(&a1);
+        if __new {
+            __v.insert(a1.clone(), Rc::new(RefCell::new(a1.clone())));
+        }
+        __new
+    });
+    (
+        Rc::new(RefCell::new(RefcountMapIter::find_key(a0, &a1))),
+        Rc::new(RefCell::new(__inserted)),
+    )
+}
+
+fn f26<T1: Ord + Clone + 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T1>>>,
+    a1: T1,
+) -> (Value<RefcountMapIter<T1, T1>>, Value<bool>) {
+    let __inserted = a0.with_mut(|__v: &mut BTreeMap<T1, Value<T1>>| {
+        let __new = !__v.contains_key(&a1);
+        if __new {
+            __v.insert(a1.clone(), Rc::new(RefCell::new(a1.clone())));
+        }
+        __new
+    });
+    (
+        Rc::new(RefCell::new(RefcountMapIter::find_key(a0, &a1))),
+        Rc::new(RefCell::new(__inserted)),
+    )
+}
+
+fn f27<T1: Ord>(a0: BTreeMap<T1, Value<T1>>, a1: T1) -> bool {
+    a0.contains_key(&a1)
+}
+
+fn f28<T1: Ord>(a0: BTreeMap<T1, Value<T1>>, a1: T1) -> u32 {
+    if a0.contains_key(&a1) {
+        1_u32
+    } else {
+        0_u32
+    }
+}
+
+fn f29<T1>(a0: BTreeMap<T1, Value<T1>>) -> u32 {
+    a0.len() as u32
+}
+
+fn f30<T1>(a0: BTreeMap<T1, Value<T1>>) -> bool {
+    a0.is_empty()
+}
+
+fn f31<T1: Ord + Clone + 'static>(a0: Ptr<BTreeMap<T1, Value<T1>>>) -> RefcountMapIter<T1, T1> {
+    RefcountMapIter::begin(a0)
+}
+
+fn f32<T1: Ord + Clone + 'static>(a0: Ptr<BTreeMap<T1, Value<T1>>>) -> RefcountMapIter<T1, T1> {
+    RefcountMapIter::end(a0)
+}
+
+fn f33<T1: Ord + Clone + 'static>(a0: Ptr<BTreeMap<T1, Value<T1>>>) -> RefcountMapIter<T1, T1> {
+    RefcountMapIter::begin(a0)
+}
+
+fn f34<T1: Ord + Clone + 'static>(a0: Ptr<BTreeMap<T1, Value<T1>>>) -> RefcountMapIter<T1, T1> {
+    RefcountMapIter::end(a0)
+}
+
+fn f35<T1: Ord + Clone + 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T1>>>,
+    a1: T1,
+) -> RefcountMapIter<T1, T1> {
+    RefcountMapIter::find_key(a0, &a1)
+}
+
+fn f36<T1: Ord + Clone + 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T1>>>,
+    a1: T1,
+) -> RefcountMapIter<T1, T1> {
+    RefcountMapIter::find_key(a0, &a1)
+}
+
+fn f37<T1: PartialEq>(a0: RefcountMapIter<T1, T1>, a1: RefcountMapIter<T1, T1>) -> bool {
+    a0 == a1
+}
+
+fn f38<T1: PartialEq>(a0: RefcountMapIter<T1, T1>, a1: RefcountMapIter<T1, T1>) -> bool {
+    a0 != a1
+}
+
+fn f39<T1: PartialEq>(a0: RefcountMapIter<T1, T1>, a1: RefcountMapIter<T1, T1>) -> bool {
+    a0 == a1
+}
+
+fn f40<T1: PartialEq>(a0: RefcountMapIter<T1, T1>, a1: RefcountMapIter<T1, T1>) -> bool {
+    a0 != a1
+}
+
+// operator* -- the element, rules/set's f40 in this model.
+fn f41<T1: Ord + Clone + 'static>(a0: RefcountMapIter<T1, T1>) -> Ptr<T1> {
+    a0.second().as_pointer()
+}
+
+fn f42<T1: Ord + Clone + 'static>(a0: RefcountMapIter<T1, T1>) -> Ptr<T1> {
+    a0.second().as_pointer()
+}
+
+fn f43<T1: Ord + Clone + 'static>(
+    a0: &mut RefcountMapIter<T1, T1>,
+) -> RefcountMapIter<T1, T1> {
+    a0.inc();
+    a0.clone()
+}
+
+fn f44<T1: Ord + Clone + 'static>(
+    a0: &mut RefcountMapIter<T1, T1>,
+) -> RefcountMapIter<T1, T1> {
+    a0.inc();
+    a0.clone()
+}

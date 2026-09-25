@@ -186,3 +186,175 @@ unsafe fn f22<T1: Ord + Clone>(
     a0.inc();
     a0.clone()
 }
+
+// FAMILY TWO -- see src.cpp.  Keyed on the two-argument
+// `llvm::DenseMapInfo<T1, void>` spelling that Autopilot.cpp asks for.  The
+// key-info argument is hashing policy and is not represented on this side at
+// all, so these bodies are f1..f22 verbatim.
+
+fn t4<T1>() -> BTreeMap<T1, Box<T1>> {
+    BTreeMap::new()
+}
+
+fn t5<T1: Clone + Ord>() -> UnsafeMapIterator<T1, T1> {
+    UnsafeMapIterator::null()
+}
+
+fn t6<T1: Clone + Ord>() -> UnsafeMapIterator<T1, T1> {
+    UnsafeMapIterator::null()
+}
+
+unsafe fn f23<T1>() -> BTreeMap<T1, Box<T1>> {
+    BTreeMap::new()
+}
+
+// The reserve-taking constructor.  The argument is a bucket-count HINT and is
+// dropped: BTreeMap has no capacity to reserve, and a hint is not observable.
+// rules/densemap's f36 drops DenseMap's InitialReserve the same way.
+unsafe fn f24<T1>(a0: u32) -> BTreeMap<T1, Box<T1>> {
+    let _ = a0;
+    BTreeMap::new()
+}
+
+// insert(const T1 &) -- PROBE-AND-INSERT, not BTreeMap::insert, and that is the
+// whole contract at the three abort sites.  C++ insert KEEPS the incumbent and
+// reports false when the element is already present (DenseSet.h:198 forwards to
+// DenseMap::try_emplace); BTreeMap::insert would OVERWRITE the stored value and
+// report the old one.  rules/set's f33 and rules/smallset's f27 are this body.
+unsafe fn f25<T1: Ord + Clone>(
+    a0: &mut BTreeMap<T1, Box<T1>>,
+    a1: T1,
+) -> (UnsafeMapIterator<T1, T1>, bool) {
+    let __inserted = !a0.contains_key(&a1);
+    if __inserted {
+        a0.insert(a1.clone(), Box::new(a1.clone()));
+    }
+    (
+        UnsafeMapIterator::find_key(&*a0 as *const BTreeMap<T1, Box<T1>>, &a1),
+        __inserted,
+    )
+}
+
+// insert(T1 &&) -- same contract, separate signature (src.cpp says why).
+unsafe fn f26<T1: Ord + Clone>(
+    a0: &mut BTreeMap<T1, Box<T1>>,
+    a1: T1,
+) -> (UnsafeMapIterator<T1, T1>, bool) {
+    let __inserted = !a0.contains_key(&a1);
+    if __inserted {
+        a0.insert(a1.clone(), Box::new(a1.clone()));
+    }
+    (
+        UnsafeMapIterator::find_key(&*a0 as *const BTreeMap<T1, Box<T1>>, &a1),
+        __inserted,
+    )
+}
+
+unsafe fn f27<T1: Ord>(a0: BTreeMap<T1, Box<T1>>, a1: T1) -> bool {
+    a0.contains_key(&a1)
+}
+
+// count returns DenseSet's size_type, `unsigned` -> u32, and is 1 or 0 only
+// (DenseSet.h:176 is documented "Return 1 if the specified key is in the set, 0
+// otherwise").  rules/densemap's f30 is the same body for DenseMap.
+unsafe fn f28<T1: Ord>(a0: BTreeMap<T1, Box<T1>>, a1: T1) -> u32 {
+    if a0.contains_key(&a1) {
+        1_u32
+    } else {
+        0_u32
+    }
+}
+
+unsafe fn f29<T1>(a0: BTreeMap<T1, Box<T1>>) -> u32 {
+    a0.len() as u32
+}
+
+unsafe fn f30<T1>(a0: BTreeMap<T1, Box<T1>>) -> bool {
+    a0.is_empty()
+}
+
+unsafe fn f31<T1: Ord + Clone>(a0: &mut BTreeMap<T1, Box<T1>>) -> UnsafeMapIterator<T1, T1> {
+    UnsafeMapIterator::begin(&*a0 as *const BTreeMap<T1, Box<T1>>)
+}
+
+unsafe fn f32<T1: Ord + Clone>(a0: &mut BTreeMap<T1, Box<T1>>) -> UnsafeMapIterator<T1, T1> {
+    UnsafeMapIterator::end(&*a0 as *const BTreeMap<T1, Box<T1>>)
+}
+
+unsafe fn f33<T1: Ord + Clone>(a0: BTreeMap<T1, Box<T1>>) -> UnsafeMapIterator<T1, T1> {
+    UnsafeMapIterator::begin(&a0 as *const BTreeMap<T1, Box<T1>>)
+}
+
+unsafe fn f34<T1: Ord + Clone>(a0: BTreeMap<T1, Box<T1>>) -> UnsafeMapIterator<T1, T1> {
+    UnsafeMapIterator::end(&a0 as *const BTreeMap<T1, Box<T1>>)
+}
+
+// find -- an iterator to the element, or end() when absent.  find_key already
+// has exactly that contract (iterators.rs:86), which is why rules/set's f27 and
+// rules/densemap's f25 are the same one-liner.
+unsafe fn f35<T1: Ord + Clone>(
+    a0: &mut BTreeMap<T1, Box<T1>>,
+    a1: T1,
+) -> UnsafeMapIterator<T1, T1> {
+    UnsafeMapIterator::find_key(&*a0 as *const BTreeMap<T1, Box<T1>>, &a1)
+}
+
+unsafe fn f36<T1: Ord + Clone>(a0: BTreeMap<T1, Box<T1>>, a1: T1) -> UnsafeMapIterator<T1, T1> {
+    UnsafeMapIterator::find_key(&a0 as *const BTreeMap<T1, Box<T1>>, &a1)
+}
+
+// The four comparisons.  POSITION IDENTITY, which for a deduplicating set is the
+// same relation as key identity -- see src.cpp.
+unsafe fn f37<T1: PartialEq>(
+    a0: UnsafeMapIterator<T1, T1>,
+    a1: UnsafeMapIterator<T1, T1>,
+) -> bool {
+    a0 == a1
+}
+
+unsafe fn f38<T1: PartialEq>(
+    a0: UnsafeMapIterator<T1, T1>,
+    a1: UnsafeMapIterator<T1, T1>,
+) -> bool {
+    a0 != a1
+}
+
+unsafe fn f39<T1: PartialEq>(
+    a0: UnsafeMapIterator<T1, T1>,
+    a1: UnsafeMapIterator<T1, T1>,
+) -> bool {
+    a0 == a1
+}
+
+unsafe fn f40<T1: PartialEq>(
+    a0: UnsafeMapIterator<T1, T1>,
+    a1: UnsafeMapIterator<T1, T1>,
+) -> bool {
+    a0 != a1
+}
+
+// operator* -- the ELEMENT.  In this representation the element is stored as
+// both the key and the value, and `second()` is the pointer into the stored
+// value, which is what rules/set's f40 yields for `*it` on a std::set iterator.
+unsafe fn f41<T1: Ord + Clone>(a0: UnsafeMapIterator<T1, T1>) -> *mut T1 {
+    a0.second()
+}
+
+unsafe fn f42<T1: Ord + Clone>(a0: UnsafeMapIterator<T1, T1>) -> *const T1 {
+    a0.second()
+}
+
+// PREFIX ++ -- advance and yield the advanced iterator, rules/set's f42.
+unsafe fn f43<T1: Ord + Clone>(
+    a0: &mut UnsafeMapIterator<T1, T1>,
+) -> UnsafeMapIterator<T1, T1> {
+    a0.inc();
+    a0.clone()
+}
+
+unsafe fn f44<T1: Ord + Clone>(
+    a0: &mut UnsafeMapIterator<T1, T1>,
+) -> UnsafeMapIterator<T1, T1> {
+    a0.inc();
+    a0.clone()
+}
