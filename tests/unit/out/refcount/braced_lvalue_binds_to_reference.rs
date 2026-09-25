@@ -8,7 +8,7 @@ use std::os::fd::AsFd;
 use std::rc::{Rc, Weak};
 pub fn sum_vec_0(v: Ptr<Vec<i32>>) -> i32 {
     let n: Value<i32> = Rc::new(RefCell::new(0));
-    'loop_: for mut x in v.to_strong().as_pointer() as Ptr<i32> {
+    'loop_: for mut x in v.decay() as Ptr<i32> {
         let x: Value<i32> = Rc::new(RefCell::new(x.read()));
         (*n.borrow_mut()) += (*x.borrow());
     }
@@ -16,22 +16,16 @@ pub fn sum_vec_0(v: Ptr<Vec<i32>>) -> i32 {
 }
 pub fn sum_vec_rvref_1(v: Ptr<Vec<i32>>) -> i32 {
     let n: Value<i32> = Rc::new(RefCell::new(0));
-    'loop_: for mut x in v.to_strong().as_pointer() as Ptr<i32> {
+    'loop_: for mut x in v.decay() as Ptr<i32> {
         let x: Value<i32> = Rc::new(RefCell::new(x.read()));
         (*n.borrow_mut()) += (*x.borrow());
     }
     return (*n.borrow());
 }
 pub fn sum_arr_2(a: Ptr<Vec<i32>>) -> i32 {
-    return ((((a.to_strong().as_pointer() as Ptr<i32>)
-        .offset(0_usize)
-        .read())
-        + ((a.to_strong().as_pointer() as Ptr<i32>)
-            .offset(1_usize)
-            .read()))
-        + ((a.to_strong().as_pointer() as Ptr<i32>)
-            .offset(2_usize)
-            .read()));
+    return ((((a.decay() as Ptr<i32>).offset(0_usize).read())
+        + ((a.decay() as Ptr<i32>).offset(1_usize).read()))
+        + ((a.decay() as Ptr<i32>).offset(2_usize).read()));
 }
 #[derive(Default)]
 pub struct Two {

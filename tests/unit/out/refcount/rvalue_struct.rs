@@ -12,7 +12,7 @@ pub struct S {
     pub b: Value<i32>,
 }
 impl S {
-    pub fn S(a: i32, b: i32) -> Self {
+    pub fn new(a: i32, b: i32) -> Self {
         let a: Value<i32> = Rc::new(RefCell::new(a));
         let b: Value<i32> = Rc::new(RefCell::new(b));
         let __this: Value<S> = Rc::new(RefCell::new(Self {
@@ -25,7 +25,7 @@ impl S {
 }
 impl From<(i32, i32)> for S {
     fn from(__a: (i32, i32)) -> Self {
-        unsafe { S::S(__a.0, __a.1) }
+        unsafe { S::new(__a.0, __a.1) }
     }
 }
 impl Clone for S {
@@ -58,7 +58,7 @@ pub fn main() {
     std::process::exit(main_0());
 }
 fn main_0() -> i32 {
-    let s1: Value<S> = Rc::new(RefCell::new(S::S({ 1 }, { 2 })));
+    let s1: Value<S> = Rc::new(RefCell::new(S::new({ 1 }, { 2 })));
     let s2: Ptr<S> = s1.as_pointer();
     assert!(((*(*s2.upgrade().deref()).a.borrow()) == 1));
     assert!(((*(*s2.upgrade().deref()).b.borrow()) == 2));

@@ -12,11 +12,6 @@ pub unsafe trait Base {
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
 pub struct Derived {}
-unsafe impl Base for Derived {
-    unsafe fn id(&self) -> i32 {
-        return 7;
-    }
-}
 pub fn main() {
     unsafe {
         __cpp2rust_init_globals();
@@ -33,5 +28,10 @@ unsafe fn main_0() -> i32 {
     assert!(((d.len()) == (2_usize)));
     assert!(!(d.is_empty()));
     return 0;
+}
+unsafe impl Base for Derived {
+    unsafe fn id(&self) -> i32 {
+        return 7;
+    }
 }
 pub unsafe fn __cpp2rust_init_globals() {}

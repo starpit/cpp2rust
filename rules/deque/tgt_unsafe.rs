@@ -277,3 +277,17 @@ unsafe fn f58<T1>(a0: &mut *mut T1) -> *mut T1 {
 unsafe fn f59<T1>(a0: &mut *mut T1) -> *mut T1 {
     a0.postfix_inc()
 }
+
+// emplace_back through an argument pack. Upstream's f12/f13, renumbered to
+// f60/f61 -- see the note in src.cpp. Upstream's f14 (the deque default
+// constructor) is dropped there as a duplicate of our f45, so it has no target
+// body here either.
+unsafe fn f60<T1>(a0: &mut Vec<T1>, init: T1) {
+    let __init = init;
+    a0.push(__init)
+}
+
+unsafe fn f61<T1>(a0: &mut Vec<Vec<T1>>, init: Vec<T1>) {
+    let __init = init;
+    a0.push(__init)
+}

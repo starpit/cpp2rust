@@ -8,14 +8,11 @@ use std::os::fd::AsFd;
 use std::rc::{Rc, Weak};
 pub fn tag_0(v: i32, suffix: Option<Vec<u8>>) -> i32 {
     let v: Value<i32> = Rc::new(RefCell::new(v));
-    let suffix: Value<Vec<u8>> = Rc::new(RefCell::new(
-        suffix.unwrap_or(
-            Ptr::<u8>::from_string_literal(b"")
-                .to_c_string_iterator()
-                .chain(std::iter::once(0))
-                .collect::<Vec<u8>>(),
-        ),
-    ));
+    let suffix: Value<Vec<u8>> = Rc::new(RefCell::new(suffix.unwrap_or({
+        let mut __bytes = Ptr::<u8>::from_string_literal(b"").to_c_bytes();
+        __bytes.push(0);
+        __bytes
+    })));
     return ((*v.borrow()) + (((*suffix.borrow()).len() - 1) as i32));
 }
 #[derive(Default)]
@@ -23,16 +20,13 @@ pub struct Holder {
     pub n: Value<i32>,
 }
 impl Holder {
-    pub fn Holder(n: i32, name: Option<Vec<u8>>) -> Self {
+    pub fn new(n: i32, name: Option<Vec<u8>>) -> Self {
         let n: Value<i32> = Rc::new(RefCell::new(n));
-        let name: Value<Vec<u8>> = Rc::new(RefCell::new(
-            name.unwrap_or(
-                Ptr::<u8>::from_string_literal(b"anon")
-                    .to_c_string_iterator()
-                    .chain(std::iter::once(0))
-                    .collect::<Vec<u8>>(),
-            ),
-        ));
+        let name: Value<Vec<u8>> = Rc::new(RefCell::new(name.unwrap_or({
+            let mut __bytes = Ptr::<u8>::from_string_literal(b"anon").to_c_bytes();
+            __bytes.push(0);
+            __bytes
+        })));
         let __this: Value<Holder> = Rc::new(RefCell::new(Self {
             n: Rc::new(RefCell::new(
                 ((*n.borrow()) + (((*name.borrow()).len() - 1) as i32)),
@@ -74,24 +68,22 @@ fn main_0() -> i32 {
         (({
             tag_0(
                 1,
-                Some(
-                    Ptr::<u8>::from_string_literal(b"abc")
-                        .to_c_string_iterator()
-                        .chain(std::iter::once(0))
-                        .collect::<Vec<u8>>(),
-                ),
+                Some({
+                    let mut __bytes = Ptr::<u8>::from_string_literal(b"abc").to_c_bytes();
+                    __bytes.push(0);
+                    __bytes
+                }),
             )
         }) == 4)
     );
-    let a: Value<Holder> = Rc::new(RefCell::new(Holder::Holder({ 0 }, None)));
+    let a: Value<Holder> = Rc::new(RefCell::new(Holder::new({ 0 }, None)));
     assert!(((*(*a.borrow()).n.borrow()) == 4));
-    let b: Value<Holder> = Rc::new(RefCell::new(Holder::Holder({ 0 }, {
-        Some(
-            Ptr::<u8>::from_string_literal(b"xy")
-                .to_c_string_iterator()
-                .chain(std::iter::once(0))
-                .collect::<Vec<u8>>(),
-        )
+    let b: Value<Holder> = Rc::new(RefCell::new(Holder::new({ 0 }, {
+        Some({
+            let mut __bytes = Ptr::<u8>::from_string_literal(b"xy").to_c_bytes();
+            __bytes.push(0);
+            __bytes
+        })
     })));
     assert!(((*(*b.borrow()).n.borrow()) == 2));
     return 0;

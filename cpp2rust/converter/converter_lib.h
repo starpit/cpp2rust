@@ -19,6 +19,10 @@
 
 #include "logging.h"
 
+namespace clang {
+class Sema;
+} // namespace clang
+
 namespace cpp2rust {
 
 // Order matters: each category is a superset of the previous one.
@@ -69,6 +73,11 @@ void ForEachTemplateInstantiatedMethod(
     llvm::function_ref<void(clang::CXXMethodDecl *)> fn);
 
 bool IsOverloadedMethod(const clang::CXXMethodDecl *decl);
+
+const char *GetCopyOrMoveName(const clang::CXXMethodDecl *method);
+
+bool CanUseCopyOrMoveName(const clang::CXXMethodDecl *decl,
+                          const std::string &name);
 
 bool IsUserDefinedCopyConstructor(const clang::CXXConstructorDecl *ctor);
 
@@ -174,6 +183,11 @@ const char *GetOverloadedOperator(const clang::FunctionDecl *decl);
 
 std::string GetFunctionBaseName(const clang::FunctionDecl *decl);
 
+void ToIdentifier(std::string &name);
+
+std::string GetConversionName(const clang::CXXConversionDecl *decl,
+                              const std::string &rust_type);
+
 bool IsImplicitAssignmentCall(const clang::CallExpr *expr);
 bool IsUserOperatorCall(const clang::CXXOperatorCallExpr *expr);
 
@@ -243,6 +257,10 @@ std::optional<clang::QualType> GetParamImplicitConvertTarget(clang::Expr *expr,
 // args are used as-is.
 std::vector<clang::Expr *>
 BuildUnifiedArgs(clang::Expr *expr, clang::Expr **args, unsigned num_args);
+
+clang::Expr *BuildInitExpr(clang::Sema &sema, clang::QualType type,
+                           llvm::ArrayRef<clang::Expr *> args,
+                           clang::SourceLocation loc);
 
 const clang::CXXForRangeStmt *
 GetParentForRange(clang::ASTContext &ctx, const clang::MemberExpr *member);

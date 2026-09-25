@@ -588,3 +588,20 @@ unsafe fn f127(a0: &mut Vec<bool>, a1: usize) -> bool {
 unsafe fn f128<T1>(a0: *mut T1, a1: usize) -> *mut T1 {
     a0.sub(a1 as usize)
 }
+
+// emplace_back through an argument pack. Upstream's f112/f113/f114, renumbered
+// to f129/f130/f131 -- see the note in src.cpp.
+unsafe fn f129<T1>(a0: &mut Vec<T1>, init: T1) {
+    let __init = init;
+    a0.push(__init)
+}
+
+unsafe fn f130<T1>(a0: &mut Vec<Vec<T1>>, init: Vec<T1>) {
+    let __init = init;
+    a0.push(__init)
+}
+
+unsafe fn f131<T1>(a0: &mut Vec<T1>, init: T1) {
+    let __init = init;
+    a0.push(__init)
+}

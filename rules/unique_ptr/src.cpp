@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <memory>
 
+template <typename T, typename A> using Init = A;
+
 template <typename T1> using t1 = std::unique_ptr<T1>;
 template <typename T1> using t2 = std::unique_ptr<T1[]>;
 
@@ -31,31 +33,9 @@ template <typename T1> void f6(std::unique_ptr<T1[]> &o, T1 *p) {
 
 template <typename T1> T1 *f7(std::unique_ptr<T1[]> &o) { return o.get(); }
 
-// template <typename T, typename... Args>
-// std::unique_ptr<T> f8(Args&&... args) {
-//     return std::make_unique<T>(std::forward<Args>(args)...);
-// }
-
-// Rust does not have variadic generics. We should consider writing specialized
-// versions for make_unique with 1, 2, 3, etc arguments and translate the
-// specialized versions.
-
-template <typename T1, typename T2> std::unique_ptr<T1> f8(T2 &&a0) {
-  return std::make_unique<T1>(std::move(a0));
-}
-
-// The lvalue overloads.  f8 only covers the rvalue spelling, so
-// `std::make_unique<std::string>(s)` for an lvalue `s` -- which is what
-// dsc/pcfg.cpp and dsc/superdsc.cpp do -- resolved to
-// `std::make_unique(const std::string &)` / `std::make_unique(std::string &)`
-// and matched nothing.  Both COPY the argument, exactly as C++ does: T's copy
-// constructor is what make_unique forwards to.
-template <typename T1, typename T2> std::unique_ptr<T1> f18(const T2 &a0) {
-  return std::make_unique<T1>(a0);
-}
-
-template <typename T1, typename T2> std::unique_ptr<T1> f19(T2 &a0) {
-  return std::make_unique<T1>(a0);
+template <typename T1, typename... Args>
+std::unique_ptr<T1> f8(Init<T1, Args> &&...args) {
+  return std::make_unique<T1>(std::forward<Args>(args)...);
 }
 
 template <typename T1> void f9(std::unique_ptr<T1[]> &o) {
@@ -112,37 +92,27 @@ template <typename T1> std::unique_ptr<T1> f17(std::nullptr_t a0) {
   return std::unique_ptr<T1>(a0);
 }
 
-// Two-argument std::make_unique. Mirrors rules/shared_ptr's f5/f6/f7 exactly,
-// including the reason there are three: `Args&&...` deduces a different
-// signature for rvalues, lvalues and const lvalues, so each value category
-// needs its own rule or the call matches nothing and falls back to an
-// undefined `libcc2rs::make_unique_<model>`.
+// ---------------------------------------------------------------------------
+// SIX make_unique RULES OF OURS WERE DELETED HERE, as duplicates that upstream's
+// argument-pack f8 (7896632) subsumes. They were f18/f19 (one lvalue and one
+// const-lvalue argument) and f20/f21/f22/f23 (two arguments in each value
+// category, and the zero-argument form).
 //
-// Rust has no variadic generics, so the target cannot call an arbitrary
-// constructor; it builds T1 with `From<(T2, T3)>`, which the converter now
-// emits for every translated constructor of arity >= 2 (Converter::
-// AddFromTraits). Before that impl existed this rule could only have produced
-// a type error, which is why shared_ptr's src.cpp documented the gap instead.
-template <typename T1, typename T2, typename T3>
-std::unique_ptr<T1> f20(T2 &&a0, T3 &&a1) {
-  return std::make_unique<T1>(std::move(a0), std::move(a1));
-}
-
-template <typename T1, typename T2, typename T3>
-std::unique_ptr<T1> f21(T2 &a0, T3 &a1) {
-  return std::make_unique<T1>(a0, a1);
-}
-
-template <typename T1, typename T2, typename T3>
-std::unique_ptr<T1> f22(const T2 &a0, const T3 &a1) {
-  return std::make_unique<T1>(a0, a1);
-}
-
-// Zero-argument std::make_unique. rules/shared_ptr has had the corresponding
-// f1 all along; unique_ptr's f10/f11 are the `unique_ptr<T>()` CONSTRUCTOR,
-// whose resolved signature is different, so `std::make_unique<T>()` matched
-// nothing and fell back to an undefined `libcc2rs::make_unique_<model>`.
-// Unlike the constructor it is NOT None -- it default-constructs a T.
-template <typename T1> std::unique_ptr<T1> f23() {
-  return std::make_unique<T1>();
-}
+// They existed because, before packs, `Args&&...` deduced a DIFFERENT signature
+// per value category and arity, so each shape needed its own rule -- the reason
+// rules/shared_ptr still carries f5/f6/f7. With f8 the preprocessor prints one
+// key, `std::unique_ptr<T1> std::make_unique(&&...)`, for every arity and every
+// value category; keeping ours put SEVEN rules on that one key and the converter
+// aborted at load with "generic T2 declared but missing from src: f22".
+//
+// Upstream's one rule is not merely equivalent, it is better: it covers any
+// arity, where ours stopped at two. Proven by running all seven shapes -- 0, 1
+// and 2 arguments, rvalue, lvalue and const lvalue -- against clang-built C++ in
+// both models: C++, unsafe and refcount all give
+//   z=(-1,-1) o=(3,0) t=(4,10) l=(6,14) c=(8,18) q=111 cq=112
+// so the constructor actually selected, and the doubling in P(int,int), are the
+// ones C++ picks.
+//
+// f16 and f17 above are ours and are NOT in upstream, so this module is our file
+// with the six rules removed rather than upstream's file taken wholesale.
+// ---------------------------------------------------------------------------

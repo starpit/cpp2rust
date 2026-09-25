@@ -95,7 +95,7 @@ fn main_0() -> i32 {
     let s3: Value<Vec<u8>> = Rc::new(RefCell::new({
         let mut __tmp1 = (*s2.borrow())[(2_usize) as usize
             ..::std::cmp::min(
-                (2_usize + 5_usize) as usize,
+                2_usize.saturating_add(5_usize),
                 (*s2.borrow()).len().saturating_sub(1),
             )]
             .to_vec();
@@ -118,14 +118,15 @@ fn main_0() -> i32 {
     let s4: Value<Vec<u8>> = Rc::new(RefCell::new({
         let mut __tmp1 = (*s1.borrow())[(1_usize) as usize
             ..::std::cmp::min(
-                (1_usize
-                    + Ptr::<u8>::from_string_literal(b"l").with_c_str(|__lookup| {
+                1_usize.saturating_add(Ptr::<u8>::from_string_literal(b"l").with_c_str(
+                    |__lookup| {
                         (*s1.borrow())
                             .iter()
                             .take((*s1.borrow()).len().saturating_sub(1))
                             .rposition(|&x| __lookup.contains(&x))
                             .unwrap_or(usize::MAX)
-                    })) as usize,
+                    },
+                )),
                 (*s1.borrow()).len().saturating_sub(1),
             )]
             .to_vec();
@@ -321,7 +322,7 @@ fn main_0() -> i32 {
     let substr_0: Value<Vec<u8>> = Rc::new(RefCell::new({
         let mut __tmp1 = (*result.borrow())[(5_usize) as usize
             ..::std::cmp::min(
-                (5_usize + 3_usize) as usize,
+                5_usize.saturating_add(3_usize),
                 (*result.borrow()).len().saturating_sub(1),
             )]
             .to_vec();
@@ -344,7 +345,7 @@ fn main_0() -> i32 {
     let substr_1: Value<Vec<u8>> = Rc::new(RefCell::new({
         let mut __tmp1 = (*result.borrow())[(0_usize) as usize
             ..::std::cmp::min(
-                (0_usize + 5_usize) as usize,
+                0_usize.saturating_add(5_usize),
                 (*result.borrow()).len().saturating_sub(1),
             )]
             .to_vec();
@@ -372,7 +373,7 @@ fn main_0() -> i32 {
     let substr_2: Value<Vec<u8>> = Rc::new(RefCell::new({
         let mut __tmp1 = (*result.borrow())[(0_usize) as usize
             ..::std::cmp::min(
-                (0_usize + 15_usize) as usize,
+                0_usize.saturating_add(15_usize),
                 (*result.borrow()).len().saturating_sub(1),
             )]
             .to_vec();

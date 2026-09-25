@@ -12,7 +12,7 @@ pub struct StructWithCtor {
     x2_: Value<i32>,
 }
 impl StructWithCtor {
-    pub fn StructWithCtor(x1: i32, x2: i32) -> Self {
+    pub fn new(x1: i32, x2: i32) -> Self {
         let x1: Value<i32> = Rc::new(RefCell::new(x1));
         let x2: Value<i32> = Rc::new(RefCell::new(x2));
         let __this: Value<StructWithCtor> = Rc::new(RefCell::new(Self {
@@ -27,7 +27,7 @@ impl StructWithCtor {
 }
 impl From<(i32, i32)> for StructWithCtor {
     fn from(__a: (i32, i32)) -> Self {
-        unsafe { StructWithCtor::StructWithCtor(__a.0, __a.1) }
+        unsafe { StructWithCtor::new(__a.0, __a.1) }
     }
 }
 impl Clone for StructWithCtor {
@@ -64,7 +64,7 @@ pub fn main() {
 }
 fn main_0() -> i32 {
     let struct_with_ctor: Value<StructWithCtor> =
-        Rc::new(RefCell::new(StructWithCtor::StructWithCtor({ 1 }, { 2 })));
+        Rc::new(RefCell::new(StructWithCtor::new({ 1 }, { 2 })));
     let x: Value<i32> = Rc::new(RefCell::new(3));
     assert!(
         (((({ foo_0(x.as_pointer(),) }).read()) == 3)

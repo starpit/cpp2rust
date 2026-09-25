@@ -1305,10 +1305,7 @@ bool ConverterRefCount::VisitCallExpr(clang::CallExpr *expr) {
 
   std::optional<TempMaterializationCtx> ctx;
   std::string str;
-  if (auto plugin_str = TryPluginConvert(expr)) {
-    StrCat(*plugin_str);
-    return false;
-  } else {
+  {
     PushConversionKind push(*this, ConversionKind::Unboxed);
     Buffer buf(*this);
     ctx = Converter::ConvertCallExpr(expr);
@@ -1790,6 +1787,7 @@ void ConverterRefCount::ConvertBinaryOperator(clang::BinaryOperator *expr) {
 }
 
 bool ConverterRefCount::VisitInitListExpr(clang::InitListExpr *expr) {
+  auto *syntactic = expr->isSyntacticForm() ? expr : expr->getSyntacticForm();
   if (auto form = expr->getSemanticForm())
     expr = form;
 
@@ -1839,6 +1837,19 @@ bool ConverterRefCount::VisitInitListExpr(clang::InitListExpr *expr) {
         ConverterRefCount::VisitInitListExpr(init);
       } else {
         StrCat(GetArrayDefaultAsString(qual_type));
+      }
+      computed_expr_type_ = ComputedExprType::FreshValue;
+      return false;
+    }
+
+    // The refcount mirror of the same pair in Converter::VisitInitListExpr; see
+    // the reasoning there. Upstream's syntactically-empty check goes FIRST
+    // because a value-initialized record is the type default, and `expr` is the
+    // padded semantic form by now so ours cannot distinguish `U{}` from `U{5}`.
+    if (syntactic->getNumInits() == 0) {
+      {
+        PushConversionKind push(*this, ConversionKind::Unboxed);
+        StrCat(GetDefaultAsString(qual_type));
       }
       computed_expr_type_ = ComputedExprType::FreshValue;
       return false;
@@ -2498,6 +2509,18 @@ std::string ConverterRefCount::GetDefaultAsString(clang::QualType qual_type) {
 
 std::string
 ConverterRefCount::GetDefaultAsStringFallback(clang::QualType qual_type) {
+  auto canonical = qual_type.getUnqualifiedType().getCanonicalType();
+  if (canonical->isBooleanType() ||
+      (canonical->isIntegerType() && !canonical->isEnumeralType()) ||
+      canonical->isFloatingType()) {
+    std::string unboxed;
+    {
+      PushConversionKind push(*this, ConversionKind::Unboxed);
+      unboxed = Converter::GetDefaultAsStringFallback(qual_type);
+    }
+    return BoxValue(std::move(unboxed));
+  }
+
   return std::format("<{}>::default()", ToString(qual_type));
 }
 
@@ -3047,24 +3070,10 @@ std::string ConverterRefCount::AccessLValueObject(clang::MemberExpr *member) {
   return is_mut ? ConvertLValue(object) : ConvertRValue(object);
 }
 
-void ConverterRefCount::emplace_back_plugin_construct_arg(
-    clang::QualType elem_type, clang::CXXConstructExpr *ctor) {
-  PushUnboxedIfSimple push(*this, "Vec<%>", elem_type);
-  ConvertVarInit(elem_type, ctor);
-}
-
-void ConverterRefCount::emplace_back_emit_push(clang::CXXMemberCallExpr *call,
-                                               std::string_view arg) {
-  auto *obj = GetCallObject(call);
-  auto obj_type = obj->getType().getNonReferenceType();
-  if (obj_type->isPointerType()) {
-    obj_type = obj_type->getPointeeType();
-  }
-  StrCat(ConvertObject(obj), ".with_mut");
-  PushParen outer(*this);
-  StrCat("|__v: &mut ", ToString(obj_type.getNonReferenceType()), "| __v.push");
-  PushParen inner(*this);
-  StrCat(arg);
+void ConverterRefCount::ConvertConstructedValue(clang::QualType type,
+                                                clang::CXXConstructExpr *ctor) {
+  PushConversionKind push(*this, ConversionKind::Unboxed);
+  ConvertVarInit(type, ctor);
 }
 
 const char *

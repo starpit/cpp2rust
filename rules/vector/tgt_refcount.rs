@@ -504,3 +504,17 @@ fn f80<T1: DeepClone>(a0: &mut Vec<T1>, a1: T1) {
 fn f100<T1: DeepClone>(a0: &mut Vec<Vec<T1>>, a1: Vec<T1>) {
     a0.push(a1.deep_clone())
 }
+
+// emplace_back through an argument pack, refcount overlay. Upstream's f113,
+// renumbered to f130 -- see the note in src.cpp.
+//
+// No deep_clone here, unlike the push_back overlays above, and the difference is
+// real rather than an oversight: emplace_back CONSTRUCTS the element from its
+// arguments, so `init` is an object built fresh at the call site (upstream emits
+// `T::new(args..)`) and there is no original for the new cell to alias. The
+// copying push_back rules take an element that already exists elsewhere, which
+// is what makes a shallow copy observable there.
+fn f130<T1: ByteRepr + Clone>(a0: Ptr<Vec<Value<Vec<T1>>>>, init: Vec<T1>) {
+    let __init = init;
+    a0.with_mut(|__v: &mut Vec<Value<Vec<T1>>>| __v.push(Rc::new(RefCell::new(__init))))
+}

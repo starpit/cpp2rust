@@ -19,7 +19,7 @@ pub struct Holder {
     pub n: i32,
 }
 impl Holder {
-    pub unsafe fn Holder(mut n: i32, mut name: Option<Vec<libc::c_char>>) -> Self {
+    pub unsafe fn new(mut n: i32, mut name: Option<Vec<libc::c_char>>) -> Self {
         let mut name: Vec<libc::c_char> = name.unwrap_or({
             let s = c"anon".as_ptr();
             std::slice::from_raw_parts(s, (0..).take_while(|&i| *s.add(i) != 0).count() + 1)
@@ -51,9 +51,9 @@ unsafe fn main_0() -> i32 {
             )
         }) == (4))
     );
-    let mut a: Holder = Holder::Holder({ 0 }, None);
+    let mut a: Holder = Holder::new({ 0 }, None);
     assert!(((a.n) == (4)));
-    let mut b: Holder = Holder::Holder({ 0 }, {
+    let mut b: Holder = Holder::new({ 0 }, {
         Some({
             let s = c"xy".as_ptr();
             std::slice::from_raw_parts(s, (0..).take_while(|&i| *s.add(i) != 0).count() + 1)

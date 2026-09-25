@@ -13,14 +13,14 @@ pub struct S {
     pub b: i32,
 }
 impl S {
-    pub unsafe fn S(mut a: i32, mut b: i32) -> Self {
+    pub unsafe fn new(mut a: i32, mut b: i32) -> Self {
         let mut this = Self { a: a, b: b };
         this
     }
 }
 impl From<(i32, i32)> for S {
     fn from(__a: (i32, i32)) -> Self {
-        unsafe { S::S(__a.0, __a.1) }
+        unsafe { S::new(__a.0, __a.1) }
     }
 }
 pub fn main() {
@@ -30,7 +30,7 @@ pub fn main() {
     }
 }
 unsafe fn main_0() -> i32 {
-    let mut s1: S = S::S({ 1 }, { 2 });
+    let mut s1: S = S::new({ 1 }, { 2 });
     let s2: *mut S = &mut s1;
     assert!((((*s2).a) == (1)));
     assert!((((*s2).b) == (2)));

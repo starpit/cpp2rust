@@ -5,6 +5,8 @@
 #include <initializer_list>
 #include <vector>
 
+template <typename T, typename A> using Init = A;
+
 template <typename T1> using t1 = std::vector<T1>;
 template <typename T1> using t2 = typename std::vector<T1>::iterator;
 template <typename T1> using t3 = std::vector<std::vector<T1>>;
@@ -729,4 +731,34 @@ template <typename T1>
 typename std::vector<T1>::iterator f128(typename std::vector<T1>::iterator it,
                                         std::size_t n) {
   return it.operator-(n);
+}
+
+// ---------------------------------------------------------------------------
+// emplace_back through an argument pack (upstream 7896632, which also DELETED
+// the emplace_back converter plugin these replace).
+//
+// RENUMBERED f112/f113/f114 -> f129/f130/f131. Both sides independently grew
+// this module past the merge-base's f111, so upstream's three new rules and our
+// seventeen (vector==/!=, reverse iterators, vector<bool>::at, iterator
+// operator-) claimed the same numbers. The names are module-local -- nothing
+// outside rules/vector refers to them, and rules/errno has its own unrelated
+// f112 -- so renumbering the smaller set is a rename with no behavioural
+// content. Ours keep their numbers because tgt_unsafe/tgt_refcount and the
+// frozen IR already agree on them.
+// ---------------------------------------------------------------------------
+
+template <typename T1, typename... Args>
+T1 &f129(std::vector<T1> &o, Init<T1, Args> &&...args) {
+  return o.emplace_back(std::forward<Args>(args)...);
+}
+
+template <typename T1, typename... Args>
+std::vector<T1> &f130(std::vector<std::vector<T1>> &o,
+                      Init<std::vector<T1>, Args> &&...args) {
+  return o.emplace_back(std::forward<Args>(args)...);
+}
+
+template <typename T1, typename T2 = std::allocator<T1>, typename... Args>
+T1 &f131(std::vector<T1, T2> &o, Init<T1, Args> &&...args) {
+  return o.emplace_back(std::forward<Args>(args)...);
 }

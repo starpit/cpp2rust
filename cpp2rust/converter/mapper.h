@@ -51,6 +51,8 @@ enum class ScalarSugar {
   kPreserve,
 };
 
+bool HasFunctionParameterPack(const clang::FunctionDecl *decl);
+
 // Whether a printed function signature carries the template arguments that
 // its own text cannot otherwise show.
 //

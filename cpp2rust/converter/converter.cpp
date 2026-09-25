@@ -9,6 +9,7 @@
 #include <clang/Basic/LangOptions.h>
 #include <clang/Basic/SourceManager.h>
 #include <clang/Basic/Version.h>
+#include <clang/Sema/Template.h>
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/Support/ConvertUTF.h>
 #include <llvm/Support/ErrorHandling.h>
@@ -1294,6 +1295,10 @@ bool Converter::RecordDerivesDefault(const clang::RecordDecl *decl) {
   }
 
   for (auto f : decl->fields()) {
+    if (f->hasInClassInitializer()) {
+      return false;
+    }
+
     // Records that contain function pointer do not derive Default
     if (auto ptr_ty = f->getType()->getAs<clang::PointerType>()) {
       if (ptr_ty->getPointeeType()->isFunctionType()) {
@@ -2014,8 +2019,16 @@ std::string Converter::GetMethodName(const clang::CXXMethodDecl *decl) {
   if (clang::isa<clang::CXXDestructorDecl>(decl)) {
     return kDestructorName;
   }
+  if (const char *name = GetCopyOrMoveName(decl);
+      name && CanUseCopyOrMoveName(decl, name)) {
+    return name;
+  }
   if (IsOverloadedMethod(decl)) {
     return GetOverloadedFunctionName(decl);
+  }
+  if (auto *conversion = clang::dyn_cast<clang::CXXConversionDecl>(decl)) {
+    return GetConversionName(
+        conversion, GetUnsafeTypeAsString(conversion->getConversionType()));
   }
   return GetNamedDeclAsString(decl);
 }
@@ -2059,12 +2072,15 @@ std::string Converter::GetSelfMaybeWithMut(const clang::CXXMethodDecl *decl) {
 
 std::string Converter::GetCtorName(clang::CXXConstructorDecl *decl) {
   if (decl->isCopyOrMoveConstructor()) {
+    if (const char *name = GetCopyOrMoveName(decl);
+        CanUseCopyOrMoveName(decl, name)) {
+      return name;
+    }
     return GetOverloadedFunctionName(decl);
   }
-  return GetRecordName(decl->getParent()) +
-         (GetNumberOfConvertingCtors(decl->getParent()) != 1
-              ? std::to_string(GetCtorIndex(decl))
-              : "");
+  return GetNumberOfConvertingCtors(decl->getParent()) != 1
+             ? std::format("new_{}", GetCtorIndex(decl))
+             : "new";
 }
 
 bool Converter::VisitCXXConstructorDecl(clang::CXXConstructorDecl *decl) {
@@ -2570,7 +2586,12 @@ void Converter::ConvertCondition(clang::Expr *cond) {
 
 void Converter::EmitIfStmtNoScope(clang::IfStmt *stmt) {
   StrCat(keyword::kIf);
-  ConvertCondition(stmt->getCond());
+  if (auto *cond = clang::dyn_cast<clang::ConstantExpr>(stmt->getCond());
+      cond && stmt->isConstexpr()) {
+    StrCat(cond->getResultAsAPSInt() != 0 ? keyword::kTrue : keyword::kFalse);
+  } else {
+    ConvertCondition(stmt->getCond());
+  }
   ConvertBody(stmt->getThen());
   if (stmt->hasElseStorage()) {
     StrCat(keyword::kElse);
@@ -3582,15 +3603,6 @@ void Converter::ConvertPrintf(clang::CallExpr *expr) {
   StrCat(')');
 }
 
-std::optional<std::string> Converter::TryPluginConvert(clang::CallExpr *call) {
-  if (emplace_back_plugin_match(call)) {
-    Buffer buf(*this);
-    emplace_back_plugin_convert(call);
-    return std::move(buf).str();
-  }
-  return std::nullopt;
-}
-
 void Converter::ConvertVariadicArg(clang::Expr *arg) {
   if (arg->getType()->isFunctionPointerType()) {
     Convert(arg);
@@ -3642,12 +3654,6 @@ bool Converter::VisitCallExpr(clang::CallExpr *expr) {
   if (IsImplicitAssignmentCall(expr) && !Mapper::Contains(expr->getCallee())) {
     auto *call = clang::cast<clang::CXXMemberCallExpr>(expr);
     ConvertAssignment(call->getImplicitObjectArgument(), call->getArg(0), "=");
-    return false;
-  }
-
-  if (auto plugin_str = TryPluginConvert(expr)) {
-    StrCat(*plugin_str);
-    SetFreshType(expr->getType());
     return false;
   }
 
@@ -3795,10 +3801,17 @@ Converter::CallInfo Converter::CollectCallInfo(clang::CallExpr *expr) {
                    << (curr_function_->getDescribedFunctionTemplate() != nullptr)
                    << " callee=" << callee->getType().getAsString() << '\n';
     }
+    // Both sides agree this is fatal outside survey mode; upstream (80bda18)
+    // additionally replaced the `assert(0)` with report_fatal_error, which is
+    // the strictly better failure because a Release build compiles the assert
+    // out and then reads parameter types off a null `function`/`proto`. Taken:
+    // survey still recovers, and the non-survey path is now loud under NDEBUG
+    // too.
     if (!ReportUnsupported("UnprototypedCallee",
                            callee->getType().getAsString(), expr->getExprLoc(),
                            ctx_)) {
-      assert(0 && "Either function decl or function prototype should be known");
+      llvm::report_fatal_error(
+          "Either function decl or function prototype should be known");
     }
   }
 
@@ -5425,7 +5438,7 @@ void Converter::ConvertMemberExpr(clang::MemberExpr *expr) {
   if (auto *method = clang::dyn_cast<clang::CXXMethodDecl>(member);
       method && IsOverloadedMethod(method)) {
     StrCat(token::kDot);
-    StrCat(GetOverloadedFunctionName(method));
+    StrCat(GetMethodName(method));
   } else if (!name_override.empty()) {
     StrCat(token::kDot, name_override);
   } else if (member->getDeclName().isIdentifier()) {
@@ -5491,6 +5504,7 @@ bool Converter::VisitArrayInitLoopExpr(clang::ArrayInitLoopExpr *expr) {
 }
 
 bool Converter::VisitInitListExpr(clang::InitListExpr *expr) {
+  auto *syntactic = expr->isSyntacticForm() ? expr : expr->getSyntacticForm();
   if (auto form = expr->getSemanticForm())
     expr = form;
 
@@ -5537,11 +5551,32 @@ bool Converter::VisitInitListExpr(clang::InitListExpr *expr) {
       return false;
     }
 
-    // Anything still short of one init per field is not an aggregate init of
-    // this record, and the walk below would read past the end of the list. In a
-    // Release build that assert is compiled out and the out-of-bounds read
-    // segfaults with no diagnostic -- and `--survey` segfaulted with it, so the
-    // whole class was invisible to every gap inventory. Report it instead.
+    // Upstream 1ce3815's branch, and it must run BEFORE ours below. A
+    // SYNTACTICALLY empty list is value-initialization of the whole record, so
+    // the answer is the type's default -- which, now that EmitDefaultStructLiteral
+    // honours NSDMIs, is the right one. Verified against clang: `Inner c = {}`
+    // with `int x = 3, y = 4` gives (3,4), and `U u = {}` on a union gives 0.
+    //
+    // The two branches are disjoint in this order and each catches cases the
+    // other does not. Note `expr` is the SEMANTIC form by this point, which is
+    // padded, so ours cannot see this case at all: clang rewrites `Inner{}` to
+    // two CXXDefaultInitExprs (2 inits, 2 fields -> not "too few"), and rewrites
+    // a union's `U{}` to one named field (1 init, 2 fields -> "too few", so ours
+    // REFUSED an expressible construct). Upstream's check is on the syntactic
+    // form and therefore sees the braces the user actually wrote.
+    if (syntactic->getNumInits() == 0) {
+      StrCat(GetDefaultAsString(qual_type));
+      SetFreshType(qual_type);
+      return false;
+    }
+
+    // Ours: a list that is non-empty but still short of one init per field is
+    // not an aggregate init of this record, and the walk below would read past
+    // the end of it. In a Release build the assert is compiled out and the
+    // out-of-bounds read segfaults with no diagnostic -- and `--survey`
+    // segfaulted with it, so the whole class was invisible to every gap
+    // inventory. Report it instead. Still reachable after upstream's branch: a
+    // union written `U u = {5}` has one init for two fields.
     if (HasTooFewInitsForFieldWalk(expr)) {
       auto detail = std::format("{} initializer(s) for {} field(s) of '{}'",
                                 expr->getNumInits(),
@@ -5755,6 +5790,7 @@ void Converter::ConvertArrayCXXConstructExpr(clang::CXXConstructExpr *expr) {
 }
 
 void Converter::ConvertCXXConstructExprArgs(clang::CXXConstructExpr *expr) {
+  HoistMaterializedTempBindings hoist_temps(*this, /*as_block=*/true);
   auto ctor = expr->getConstructor();
   StrCat(GetRecordName(ctor->getParent()), token::kDoubleColon,
          GetCtorName(ctor));
@@ -5777,7 +5813,6 @@ void Converter::ConvertCXXConstructExprArgs(clang::CXXConstructExpr *expr) {
     if (arg_idx < expr->getNumArgs()) {
       clang::Expr *arg = expr->getArg(arg_idx++);
       PushBrace brace(*this);
-      HoistMaterializedTempBindings hoist_temps(*this);
 
       if (has_default) {
         StrCat("Some(");
@@ -6339,18 +6374,6 @@ std::string Converter::GetDefaultAsStringFallback(clang::QualType qual_type) {
     return getTypedLiteral("0.0", ToString(qual_type));
   }
 
-  if (auto record = qual_type->getAsRecordDecl();
-      record && in_const_initializer_) {
-    if (auto cxx = clang::dyn_cast<clang::CXXRecordDecl>(record)) {
-      ENSURE(GetUserDefinedDefaultConstructor(cxx) == nullptr &&
-             "Default initializing globals using default constructor is not "
-             "supported");
-    }
-    Buffer buf(*this);
-    EmitDefaultStructLiteral(record);
-    return std::move(buf).str();
-  }
-
   if (auto record = qual_type->getAsRecordDecl()) {
     if (ctx_.getSourceManager().isInSystemHeader(record->getLocation()) &&
         qual_type.isPODType(ctx_)) {
@@ -6377,6 +6400,10 @@ std::string Converter::ConvertVarDefaultInit(clang::QualType qual_type) {
 std::string
 Converter::GetOverloadedFunctionName(const clang::FunctionDecl *decl) {
   auto name = GetFunctionBaseName(decl);
+  if (auto *conversion = clang::dyn_cast<clang::CXXConversionDecl>(decl)) {
+    name = GetConversionName(
+        conversion, GetUnsafeTypeAsString(conversion->getConversionType()));
+  }
   if (auto *ctor = clang::dyn_cast<clang::CXXConstructorDecl>(decl);
       ctor && !ctor->getParent()->getIdentifier()) {
     name = GetRecordName(ctor->getParent());
@@ -6446,22 +6473,14 @@ Converter::GetOverloadedFunctionName(const clang::FunctionDecl *decl) {
     }
   }
 
-  ReplaceAll(name, "[", "arr");
-  ReplaceAll(name, "]", "arr");
-  ReplaceAll(name, ";", "_");
-  ReplaceAll(name, ",", "_");
-  name.erase(std::remove_if(name.begin(), name.end(),
-                            [](char c) {
-                              // ',' matters for a multi-argument template:
-                              // BTreeMap<i32, Value<i32>> otherwise leaves a
-                              // comma in what becomes a Rust identifier.
-                              return c == '<' || c == '>' || c == ' ' ||
-                                     c == ':' || c == ',' || c == '(' ||
-                                     c == ')' || c == '-';
-                            }),
-             name.end());
-  std::replace(name.begin(), name.end(), '*', 'p');
-
+  // Upstream factored this sanitizer out to converter_lib's ToIdentifier, and
+  // the two are byte-equivalent: our side had additionally listed ',' in the
+  // remove_if predicate, but that was DEAD CODE -- the `ReplaceAll(",", "_")`
+  // one line above (which predates both sides) has already turned every comma
+  // into an underscore, so remove_if never sees one. Measured over
+  // BTreeMap<i32, Value<i32>>, f<A,B,C>, push_back(std::pair<int,long>) and
+  // four more: the two spellings agree on every input.
+  ToIdentifier(name);
   return name;
 }
 
@@ -7446,14 +7465,28 @@ void Converter::AddDefaultTrait(const clang::RecordDecl *decl) {
 void Converter::EmitDefaultStructLiteral(const clang::RecordDecl *decl) {
   StrCat(GetRecordName(decl));
   PushBrace brace(*this);
+  // Upstream 1ce3815 wrote the SAME core body here independently (a0bf472/
+  // a670bb8 on our side): `if (init) ConvertVarInit else GetDefaultAsString`,
+  // token for token. That part is a genuine duplicate of merged work. Two
+  // deltas of ours are kept because upstream's version does not cover them, and
+  // each is a measured failure, not a preference:
+  //
+  //  * FieldsIncludingTraitBases, not decl->fields(). A base lowered to a TRAIT
+  //    has nowhere to keep its data, so its fields are physically fields of
+  //    THIS struct. Scanning own-fields-only makes this walk disagree with
+  //    RecordDerivesDefault: a leaf whose own fields have no initializer
+  //    answered "no", `#[derive(Default)]` was chosen, and every initialized
+  //    base field read ZERO. Measured on an abstract base with `a_ = 7, b_ = 3`
+  //    and a leaf with `c_ = 11`: C++ gives 21, the derive gave 0.
+  //
+  //  * the ReadsThis guard. `struct { int x = 1; int y = x + 1; }` -- an
+  //    initializer that reads the object under construction cannot be spelled
+  //    in `fn default()`, because there is no `self` yet; emitting it verbatim
+  //    names an out-of-scope `x`. Those keep the type default here, which is
+  //    exactly what the user-constructor path gives them before
+  //    EmitDeferredFieldInits runs and assigns the real value.
   for (auto *field : FieldsIncludingTraitBases(decl)) {
     StrCat(GetNamedDeclAsString(field), token::kColon);
-    // A default member initializer IS the field's default value; without this
-    // the record read back zero where C++ reads the initializer.  An
-    // initializer that reads the object under construction cannot be spelled
-    // here -- there is no `this` yet in a `fn default()` -- so those keep the
-    // type default, which is what the constructor path also gives them before
-    // EmitDeferredFieldInits fixes them up.
     auto *init = field->hasInClassInitializer()
                      ? field->getInClassInitializer()
                      : nullptr;
@@ -7841,6 +7874,13 @@ std::string Converter::ConvertIRFragment(
       AppendCode(result, ConvertPlaceholder(expr, arg, ph_ctx));
     } else if (std::get_if<TranslationRule::VaArgsFragment>(&frag)) {
       AppendCode(result, ConvertVariadicTail(expr, all_args));
+    } else if (std::get_if<TranslationRule::InitFragment>(&frag)) {
+      // Upstream appended this with a bare `+=`. It goes through AppendCode
+      // like every other fragment for the reason documented above: the piece
+      // before it came back from StrCat with a trailing token separator, and a
+      // body that starts the init on a fresh line would leave that separator as
+      // trailing whitespace, which rustfmt refuses to format.
+      AppendCode(result, ConvertInitFragment(expr, all_args));
     } else if (auto *mc =
                    std::get_if<std::unique_ptr<MethodCallFragment>>(&frag)) {
       AppendCode(result,
@@ -7868,6 +7908,43 @@ Converter::ConvertVariadicTail(clang::Expr *expr,
   }
   StrCat("]");
   return std::move(buf).str();
+}
+
+std::string
+Converter::ConvertInitFragment(clang::Expr *expr,
+                               const std::vector<clang::Expr *> &all_args) {
+  const auto *tgt_ir = Mapper::GetExprRule(GetCalleeOrExpr(expr));
+  assert(tgt_ir && tgt_ir->init_type.valid());
+  auto *callee = clang::cast<clang::CallExpr>(expr)->getDirectCallee();
+  assert(callee);
+  auto type = GetSema()
+                  .getTemplateInstantiationArgs(callee)(tgt_ir->init_type.depth,
+                                                        tgt_ir->init_type.index)
+                  .getAsType();
+
+  Buffer buf(*this);
+  ConvertConstructFromArgs(
+      type, llvm::ArrayRef(all_args).drop_front(tgt_ir->params.size()),
+      expr->getExprLoc());
+  return std::move(buf).str();
+}
+
+void Converter::ConvertConstructFromArgs(clang::QualType type,
+                                         llvm::ArrayRef<clang::Expr *> args,
+                                         clang::SourceLocation loc) {
+  auto *init = BuildInitExpr(GetSema(), type, args, loc);
+  assert(init && "type cannot be initialized from the arguments");
+  if (auto *ctor =
+          clang::dyn_cast<clang::CXXConstructExpr>(init->IgnoreImplicit())) {
+    ConvertConstructedValue(type, ctor);
+    return;
+  }
+
+  if (args.empty()) {
+    StrCat(GetDefaultAsString(type));
+    return;
+  }
+  Convert(init);
 }
 
 std::string Converter::AccessLValueObject(clang::MemberExpr *member) {
@@ -7990,9 +8067,9 @@ void Converter::dump_expr_kinds() {
         << ", isVoid: " << isVoid() << '\n';
 }
 
-void Converter::emplace_back_plugin_construct_arg(
-    clang::QualType elem_type, clang::CXXConstructExpr *ctor) {
-  ConvertVarInit(elem_type, ctor);
+void Converter::ConvertConstructedValue(clang::QualType type,
+                                        clang::CXXConstructExpr *ctor) {
+  ConvertVarInit(type, ctor);
 }
 
 const char *Converter::GetPointerDerefPrefix(clang::QualType pointee_type) {

@@ -6,12 +6,12 @@ use std::io::prelude::*;
 use std::io::{Read, Seek, Write};
 use std::os::fd::AsFd;
 use std::rc::{Rc, Weak};
-pub fn get_0(t: Local_1) -> i32 {
-    let t: Value<Local_1> = Rc::new(RefCell::new(t));
+pub fn get_2(t: Local_0) -> i32 {
+    let t: Value<Local_0> = Rc::new(RefCell::new(t));
     return ((*(*t.borrow()).x.borrow()) as i32);
 }
-pub fn get_2(t: Local_3) -> i32 {
-    let t: Value<Local_3> = Rc::new(RefCell::new(t));
+pub fn get_3(t: Local_1) -> i32 {
+    let t: Value<Local_1> = Rc::new(RefCell::new(t));
     return (*(*t.borrow()).x.borrow());
 }
 pub fn get_4(t: Local_5) -> i32 {
@@ -22,8 +22,8 @@ pub fn get_6(t: Local_7) -> i32 {
     let t: Value<Local_7> = Rc::new(RefCell::new(t));
     return ((*(*t.borrow()).x.borrow()) as i32);
 }
-pub fn twice_8(t: Local_3) -> i32 {
-    let t: Value<Local_3> = Rc::new(RefCell::new(t));
+pub fn twice_8(t: Local_1) -> i32 {
+    let t: Value<Local_1> = Rc::new(RefCell::new(t));
     return ((*(*t.borrow()).x.borrow()) * 2);
 }
 pub fn wrap_9(v: i32) -> i32 {
@@ -93,28 +93,28 @@ impl ByteRepr for Local_7 {
     }
 }
 pub fn other_11() -> i32 {
-    let l: Value<Local_1> = Rc::new(RefCell::new(Local_1 {
+    let l: Value<Local_0> = Rc::new(RefCell::new(Local_0 {
         x: Rc::new(RefCell::new(3_i64)),
         y: Rc::new(RefCell::new(4_i64)),
     }));
-    return (({ get_0((*l.borrow()).clone()) }) + ((*(*l.borrow()).y.borrow()) as i32));
+    return (({ get_2((*l.borrow()).clone()) }) + ((*(*l.borrow()).y.borrow()) as i32));
 }
 #[derive(Default)]
-pub struct Local_1 {
+pub struct Local_0 {
     pub x: Value<i64>,
     pub y: Value<i64>,
 }
-impl Clone for Local_1 {
+impl Clone for Local_0 {
     fn clone(&self) -> Self {
-        let __this: Value<Local_1> = Rc::new(RefCell::new(Self {
+        let __this: Value<Local_0> = Rc::new(RefCell::new(Self {
             x: Rc::new(RefCell::new((*self.x.borrow()))),
             y: Rc::new(RefCell::new((*self.y.borrow()))),
         }));
-        let this: Ptr<Local_1> = __this.as_pointer();
+        let this: Ptr<Local_0> = __this.as_pointer();
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
-impl ByteRepr for Local_1 {
+impl ByteRepr for Local_0 {
     fn byte_size() -> usize {
         16
     }
@@ -134,10 +134,10 @@ pub fn main() {
     std::process::exit(main_0());
 }
 fn main_0() -> i32 {
-    let l: Value<Local_3> = Rc::new(RefCell::new(Local_3 {
+    let l: Value<Local_1> = Rc::new(RefCell::new(Local_1 {
         x: Rc::new(RefCell::new(7)),
     }));
-    assert!((({ get_2((*l.borrow()).clone(),) }) == 7));
+    assert!((({ get_3((*l.borrow()).clone(),) }) == 7));
     assert!((({ twice_8((*l.borrow()).clone(),) }) == 14));
     assert!((({ other_11() }) == 7));
     assert!((({ wrap_9(5,) }) == 5));
@@ -145,19 +145,19 @@ fn main_0() -> i32 {
     return 0;
 }
 #[derive(Default)]
-pub struct Local_3 {
+pub struct Local_1 {
     pub x: Value<i32>,
 }
-impl Clone for Local_3 {
+impl Clone for Local_1 {
     fn clone(&self) -> Self {
-        let __this: Value<Local_3> = Rc::new(RefCell::new(Self {
+        let __this: Value<Local_1> = Rc::new(RefCell::new(Self {
             x: Rc::new(RefCell::new((*self.x.borrow()))),
         }));
-        let this: Ptr<Local_3> = __this.as_pointer();
+        let this: Ptr<Local_1> = __this.as_pointer();
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
-impl ByteRepr for Local_3 {
+impl ByteRepr for Local_1 {
     fn byte_size() -> usize {
         4
     }

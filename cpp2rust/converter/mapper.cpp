@@ -104,6 +104,8 @@ std::string GetExprMapKey(const std::string &str) {
   return result;
 }
 
+constexpr const char kPackMarker[] = "&&...";
+
 std::string GetTypeMapKey(const std::string &str) {
   auto n = str.find_first_of("<[");
   if (n == std::string::npos || str[n] == '<') {
@@ -1847,6 +1849,13 @@ std::string ToString(clang::QualType qual_type, ScalarSugar sugar) {
   return normalizeTranslationRule(std::move(type));
 }
 
+bool HasFunctionParameterPack(const clang::FunctionDecl *decl) {
+  if (auto *primary = decl->getPrimaryTemplate()) {
+    decl = primary->getTemplatedDecl();
+  }
+  return decl->getNumParams() && decl->parameters().back()->isParameterPack();
+}
+
 std::string ToString(const clang::NamedDecl *decl, TemplateArgs targs) {
   if (auto *record = clang::dyn_cast<clang::RecordDecl>(decl);
       record && !record->getIdentifier()) {
@@ -1962,16 +1971,32 @@ std::string ToString(const clang::NamedDecl *decl, TemplateArgs targs) {
   }
 
   // Template arguments are spliced in here, between the name and the
-  // parameter list, exactly where C++ writes them.
+  // parameter list, exactly where C++ writes them. This must be taken BEFORE
+  // upstream's pack block below writes anything more to `os`: name_end is the
+  // offset of the end of the printed name, and the splice point is there.
   os.flush();
   const size_t name_end = out.size();
 
+  bool has_pack = HasFunctionParameterPack(func_decl);
+  unsigned num_params = func_decl->getNumParams();
+  if (has_pack) {
+    const auto *primary = func_decl->getPrimaryTemplate();
+    num_params =
+        (primary ? primary->getTemplatedDecl() : func_decl)->getNumParams() - 1;
+  }
+
   os << '(';
-  for (unsigned i = 0, n = func_decl->getNumParams(); i < n; ++i) {
+  for (unsigned i = 0; i < num_params; ++i) {
     if (i) {
       os << ", ";
     }
     os << ToString(func_decl->getParamDecl(i)->getType());
+  }
+  if (has_pack) {
+    if (num_params) {
+      os << ", ";
+    }
+    os << kPackMarker;
   }
   if (func_decl->isVariadic()) {
     if (func_decl->getNumParams()) {

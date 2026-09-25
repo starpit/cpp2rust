@@ -14,8 +14,8 @@ pub struct UserDefined {
 impl Clone for UserDefined {
     fn clone(&self) -> Self {
         let __this: Value<UserDefined> = Rc::new(RefCell::new(Self {
-            a: Rc::new(RefCell::new((*self.a.borrow()).clone())),
-            v: Rc::new(RefCell::new((*self.v.borrow()).clone())),
+            a: Rc::new(RefCell::new((*self.a.borrow()).deep_clone())),
+            v: Rc::new(RefCell::new((*self.v.borrow()).deep_clone())),
         }));
         let this: Ptr<UserDefined> = __this.as_pointer();
         Rc::try_unwrap(__this).ok().unwrap().into_inner()

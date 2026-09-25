@@ -8,6 +8,9 @@
 #include <clang/AST/Mangle.h>
 #include <clang/AST/ParentMapContext.h>
 #include <clang/Basic/SourceManager.h>
+#include <clang/Sema/Initialization.h>
+#include <clang/Sema/Sema.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/Path.h>
 #include <llvm/Support/raw_ostream.h>
 
@@ -293,6 +296,44 @@ bool IsOverloadedMethod(const clang::CXXMethodDecl *decl) {
                        [&method_name](const auto *method) {
                          return method->getNameAsString() == method_name;
                        }) > 1;
+}
+
+const char *GetCopyOrMoveName(const clang::CXXMethodDecl *method) {
+  if (auto *ctor = clang::dyn_cast<clang::CXXConstructorDecl>(method)) {
+    if (ctor->isCopyConstructor()) {
+      return "copy_from";
+    }
+    if (ctor->isMoveConstructor()) {
+      return "move_from";
+    }
+    return nullptr;
+  }
+  if (method->isCopyAssignmentOperator()) {
+    return "copy_assign";
+  }
+  if (method->isMoveAssignmentOperator()) {
+    return "move_assign";
+  }
+  return nullptr;
+}
+
+bool CanUseCopyOrMoveName(const clang::CXXMethodDecl *decl,
+                          const std::string &name) {
+  const auto *record = decl->getParent();
+  bool is_unique_member =
+      std::count_if(record->method_begin(), record->method_end(),
+                    [&name](const clang::CXXMethodDecl *method) {
+                      const char *method_name = GetCopyOrMoveName(method);
+                      return !method->isDeleted() && method_name &&
+                             method_name == name;
+                    }) == 1;
+  bool is_unique_name =
+      std::none_of(record->method_begin(), record->method_end(),
+                   [&name](const clang::CXXMethodDecl *method) {
+                     return method->getDeclName().isIdentifier() &&
+                            method->getName() == name;
+                   });
+  return is_unique_member && is_unique_name;
 }
 
 bool IsUserDefinedCopyConstructor(const clang::CXXConstructorDecl *ctor) {
@@ -796,8 +837,14 @@ std::string GetNamedDeclAsString(const clang::NamedDecl *decl) {
         return std::format("__unnamed_{}",
                            reinterpret_cast<uintptr_t>(decl) & 0xffffff);
       }
+      // Outside survey mode this stays fatal, and upstream 80bda18's spelling is
+      // the better one: an `assert` is compiled out under NDEBUG, after which
+      // `pdecl` is dereferenced null just below. The AST dump is upstream's too
+      // and is worth keeping -- "Unexpected unnamed construct" alone does not
+      // say WHICH construct.
+      decl->dump();
+      llvm::report_fatal_error("Unexpected unnamed construct");
     }
-    assert(pdecl && "Unexpected unnamed construct");
 
     const auto *fn =
         llvm::dyn_cast<clang::FunctionDecl>(pdecl->getDeclContext());
@@ -1016,6 +1063,35 @@ std::string GetFunctionBaseName(const clang::FunctionDecl *decl) {
     return GetOverloadedOperator(decl);
   }
   return decl->getNameAsString();
+}
+
+void ToIdentifier(std::string &name) {
+  ReplaceAll(name, "[", "arr");
+  ReplaceAll(name, "]", "arr");
+  ReplaceAll(name, ";", "_");
+  ReplaceAll(name, ",", "_");
+  name.erase(std::remove_if(name.begin(), name.end(),
+                            [](char c) {
+                              return c == '<' || c == '>' || c == ' ' ||
+                                     c == ':' || c == '(' || c == ')' ||
+                                     c == '-';
+                            }),
+             name.end());
+  std::replace(name.begin(), name.end(), '*', 'p');
+}
+
+std::string GetConversionName(const clang::CXXConversionDecl *decl,
+                              const std::string &rust_type) {
+  auto name = "to_" + rust_type;
+  ToIdentifier(name);
+  const auto *record = decl->getParent();
+  bool is_unique_name =
+      std::none_of(record->method_begin(), record->method_end(),
+                   [&name](const clang::CXXMethodDecl *method) {
+                     return method->getDeclName().isIdentifier() &&
+                            method->getName() == name;
+                   });
+  return is_unique_name ? name : GetFunctionBaseName(decl);
 }
 
 clang::CXXDestructorDecl *
@@ -1315,6 +1391,28 @@ BuildUnifiedArgs(clang::Expr *expr, clang::Expr **args, unsigned num_args) {
     all_args.push_back(args[i]);
   }
   return all_args;
+}
+
+clang::Expr *BuildInitExpr(clang::Sema &sema, clang::QualType type,
+                           llvm::ArrayRef<clang::Expr *> args,
+                           clang::SourceLocation loc) {
+  llvm::SmallVector<clang::Expr *, 4> init_args(args.begin(), args.end());
+  auto kind = args.size() == 1 && clang::isa<clang::InitListExpr>(
+                                      args[0]->IgnoreParenImpCasts())
+                  ? clang::InitializationKind::CreateDirectList(loc)
+                  : clang::InitializationKind::CreateDirect(loc, {}, {});
+  auto entity = clang::InitializedEntity::InitializeTemporary(type);
+  clang::InitializationSequence seq(sema, entity, kind, init_args);
+  if (!seq) {
+    return nullptr;
+  }
+
+  auto result = seq.Perform(sema, entity, kind, init_args);
+  if (result.isInvalid()) {
+    return nullptr;
+  }
+
+  return result.get();
 }
 
 clang::Expr *GetCallee(clang::CallExpr *expr) {

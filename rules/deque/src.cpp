@@ -4,6 +4,8 @@
 #include <deque>
 #include <vector>
 
+template <typename T, typename A> using Init = A;
+
 template <typename T1> using t1 = std::deque<T1>;
 
 // The allocator-explicit spelling. Unlike std::vector, whose default argument
@@ -345,4 +347,26 @@ template <typename T1>
 typename std::deque<T1>::iterator
 f59(typename std::deque<T1>::iterator a0, int a1) {
   return a0.operator++(a1);
+}
+
+// ---------------------------------------------------------------------------
+// emplace_back through an argument pack (upstream 7896632), renumbered
+// f12/f13 -> f60/f61 for the same reason as rules/vector: both sides grew this
+// module past the merge-base's f11 and claimed the same numbers.
+//
+// Upstream's THIRD new rule here, `f14() { return std::deque<T1>(); }`, is NOT
+// carried: it is the deque default constructor, which is our f45 above, added
+// independently and byte-identical. Keeping both would put two rules with the
+// same signature in one module.
+// ---------------------------------------------------------------------------
+
+template <typename T1, typename... Args>
+T1 &f60(std::deque<T1> &o, Init<T1, Args> &&...args) {
+  return o.emplace_back(std::forward<Args>(args)...);
+}
+
+template <typename T1, typename... Args>
+std::vector<T1> &f61(std::deque<std::vector<T1>> &o,
+                     Init<std::vector<T1>, Args> &&...args) {
+  return o.emplace_back(std::forward<Args>(args)...);
 }

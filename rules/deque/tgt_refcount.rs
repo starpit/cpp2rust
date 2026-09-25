@@ -208,3 +208,12 @@ fn f59<T1>(a0: &mut Ptr<T1>) -> Ptr<T1> {
 fn f8<T1: DeepClone>(a0: Vec<T1>) -> Vec<T1> {
     a0.deep_clone()
 }
+
+// emplace_back through an argument pack, refcount overlay. Upstream's f13,
+// renumbered to f61 -- see the note in src.cpp. No deep_clone: emplace_back
+// CONSTRUCTS its element at the call site, so there is no original to alias
+// (the same reasoning as rules/vector's f130).
+fn f61<T1: ByteRepr>(a0: Ptr<Vec<Value<Vec<T1>>>>, init: Vec<T1>) {
+    let __init = init;
+    a0.with_mut(|__v: &mut Vec<Value<Vec<T1>>>| __v.push(Rc::new(RefCell::new(__init))))
+}

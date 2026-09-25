@@ -52,11 +52,7 @@ fn main_0() -> i32 {
     libcc2rs::cc2_insert_int(&libcc2rs::cout(), ((*h.borrow()).read()) as i128, 4, true);
     libcc2rs::cc2_insert_bytes(&libcc2rs::cout(), &[('\n' as u8) as u8]);
     (*h.borrow()).delete();
-    let i: Value<Ptr<i32>> = Rc::new(RefCell::new(Ptr::alloc_array(Box::new([
-        7,
-        8,
-        <i32>::default(),
-    ]))));
+    let i: Value<Ptr<i32>> = Rc::new(RefCell::new(Ptr::alloc_array(Box::new([7, 8, 0_i32]))));
     libcc2rs::cc2_insert_int(
         &libcc2rs::cout(),
         ((*i.borrow()).offset((0) as isize).read()) as i128,
