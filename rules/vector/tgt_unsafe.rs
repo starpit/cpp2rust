@@ -632,3 +632,13 @@ unsafe fn f134<T1>(a0: &mut *mut T1) -> *mut T1 {
 unsafe fn f135<T1>(a0: *mut T1) -> *mut T1 {
     a0
 }
+
+// Comparison on the raw-pointer reverse iterator -- pointer comparison, the
+// mirror of f124/f125 for the unwrapped spelling. See src.cpp.
+unsafe fn f136<T1>(a0: *mut T1, a1: *mut T1) -> bool {
+    a0 == a1
+}
+
+unsafe fn f137<T1>(a0: *mut T1, a1: *mut T1) -> bool {
+    a0 != a1
+}

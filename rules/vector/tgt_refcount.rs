@@ -545,3 +545,14 @@ fn f134<T1>(a0: &mut Ptr<T1>) -> Ptr<T1> {
 fn f135<T1>(a0: Ptr<T1>) -> Ptr<T1> {
     a0
 }
+
+// Comparison on the raw-pointer reverse iterator -- the refcount mirror of
+// f124/f125 for the unwrapped spelling. Ptr's PartialEq compares (kind, offset),
+// which is what makes a decremented iterator and a freshly built rend() equal.
+fn f136<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
+    a0 == a1
+}
+
+fn f137<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
+    a0 != a1
+}

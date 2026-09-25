@@ -854,3 +854,46 @@ std::reverse_iterator<T1 *> &f134(std::reverse_iterator<T1 *> &it) {
 template <typename T1> T1 &f135(std::reverse_iterator<T1 *> it) {
   return it.operator*();
 }
+
+// ---------------------------------------------------------------------------
+// COMPARISON on the raw-pointer reverse iterator: `it != v.rend()`.
+//
+// The other half of t10/f132-f135. I left these out when the ++ rules landed on
+// the grounds that ==/!= was another agent's class; it is not being worked, and
+// a measurement changed the priority: with converter.cpp's materialized-temp
+// abort fixed (9df5804), dcc/src/Transform/Sentient/LiveRangeReduction.cpp went
+// from a hard rc=134 to exactly TWO recorded gaps, and both are this comparison
+// -- :838 on reverse_iterator<mlir::BlockArgument *> and :862 on
+// reverse_iterator<mlir::Value *>. So these two rules take that TU to zero.
+// Five more sites across four further TUs use the same spelling
+// (reverse_iterator<mlir::sentient::IfOp *>, <const EvaluatedValue **>,
+// <std::pair<mlir::Operation *, unsigned> *>, <std::pair<mlir::sentient::ForOp,
+// ...> *>).
+//
+// f124/f125 already do this for the WRAPPED spelling
+// (std::reverse_iterator<std::__wrap_iter<T1 *>>) and cannot match this one, for
+// the same reason f121 could not match f132 -- the outer template name inside
+// differs. Verified the same way: an empty `result:` next to a matching f125 in
+// one --verbose run.
+//
+// SEMANTICS: pointer comparison, because the representation IS the pointer to
+// the element the iterator dereferences to. Two reverse iterators into the same
+// container are equal exactly when they address the same element, and rend() is
+// the one-before-first slot both models name reproducibly (see above f114). So
+// `it != rend()` terminates a reverse walk at the right place and not one step
+// early or late -- the failure mode that would matter here, and the reason the
+// probe walks a container to EXHAUSTION and prints the element count rather
+// than just comparing two iterators.
+// ---------------------------------------------------------------------------
+
+template <typename T1>
+bool f136(const std::reverse_iterator<T1 *> &a,
+          const std::reverse_iterator<T1 *> &b) {
+  return operator==(a, b);
+}
+
+template <typename T1>
+bool f137(const std::reverse_iterator<T1 *> &a,
+          const std::reverse_iterator<T1 *> &b) {
+  return operator!=(a, b);
+}
