@@ -592,7 +592,15 @@ void ConverterRefCount::EmitRustUnion(clang::RecordDecl *decl) {
 }
 
 void ConverterRefCount::AddByteReprTrait(const clang::RecordDecl *decl) {
-  if (RecordDerivesByteRepr(decl)) {
+  // Exactly the condition under which the DERIVE is chosen (see RecordAttrs):
+  // own-fields-empty is not enough, because the emitted struct also carries the
+  // fields flattened in from a base. `struct D3 : B3 {}` has no fields of its own,
+  // so this used to return early believing the derive would cover it, while the
+  // derive declined because the struct is not empty -- and the type ended up with
+  // NO ByteRepr at all, which surfaced as `the method deref exists for
+  // StrongPtr<D3> but its trait bounds were not satisfied`. The two decisions have
+  // to be the same decision.
+  if (RecordDerivesByteRepr(decl) && FieldsIncludingTraitBases(decl).empty()) {
     return;
   }
 
@@ -2014,7 +2022,11 @@ bool ConverterRefCount::VisitMemberExpr(clang::MemberExpr *expr) {
       method && !known) {
     if (IsMethodOnPtr(method)) {
       SetUFCSReceiver(expr->getBase(), expr->isArrow(), method);
-      StrCat(TraitName(method->getParent()), token::kDoubleColon,
+      // GetUFCSName, not TraitName(method->getParent()): an inherited method
+      // copied onto the derived struct gets that struct's trait, so the name has
+      // to follow the copy. GetUFCSName already applies TraitName for a
+      // method-on-Ptr, so this is the same spelling with the owner resolved.
+      StrCat(GetUFCSName(method), token::kDoubleColon,
              GetMethodName(method));
       SetFreshType(expr->getType());
       return false;
@@ -2577,7 +2589,23 @@ ConverterRefCount::GetStructAttributes(const clang::RecordDecl *decl) {
     attrs.emplace_back("Clone");
   }
 
-  if (RecordDerivesByteRepr(decl)) {
+  // `RecordDerivesByteRepr` asks `field_empty()`, i.e. the record's OWN fields --
+  // but the struct being EMITTED also carries whatever FieldsIncludingTraitBases
+  // flattened in from a base. A record with no fields of its own and two
+  // inherited ones is not an empty struct, and `derive(ByteRepr)` -- whose whole
+  // contract is the empty-struct shortcut -- then panics at macro expansion:
+  // "derive(ByteRepr) is only supported on empty structs, `D3` is not empty".
+  // Every other error in that build was downstream of the panic, since a failed
+  // derive means the type implements ByteRepr nowhere.
+  //
+  // AddByteReprTrait already decides this case correctly ~1,900 lines up: a
+  // record with flattened fields gets an EMPTY hand-written impl, because every
+  // offset it would need comes from `layout.getFieldOffset(idx)` over the C++
+  // record's own fields and a flattened field has no index there. Ask the same
+  // question in both places so the derive and the impl cannot disagree -- and
+  // nothing that had a byte-level layout loses one, because a record whose fields
+  // are all its own still takes the derive.
+  if (RecordDerivesByteRepr(decl) && FieldsIncludingTraitBases(decl).empty()) {
     attrs.emplace_back("ByteRepr");
   }
 
@@ -3269,6 +3297,15 @@ void ConverterRefCount::SetUFCSReceiver(clang::Expr *base, bool is_arrow,
     Converter::SetUFCSReceiver(base, is_arrow, method);
     return;
   }
+  // Record the receiver's static type for GetUFCSName on THIS path too. The base
+  // model does it for the paths it owns, but every method-on-Ptr receiver is
+  // spelled below and returns before reaching it -- so without this the redirect
+  // that renames an inherited method's trait was dead in this model, and
+  // `Ptr<D2>: B2Impl is not satisfied` survived a correct D2Impl sitting right
+  // beside it. Read through IgnoreImpCasts for the same reason as the base model:
+  // calling an inherited method inserts a derived-to-base conversion, so the
+  // unwritten type would be the BASE.
+  SetUFCSReceiverRecord(base, is_arrow);
   bool base_is_pointer = is_arrow && !clang::isa<clang::CXXOperatorCallExpr>(
                                          base->IgnoreParenImpCasts());
   if (clang::isa<clang::CXXThisExpr>(base->IgnoreParenImpCasts())) {
@@ -3345,6 +3382,56 @@ void ConverterRefCount::ConvertMethodOnPtrTraitDecl(
     ConvertCXXMethodDecl(method);
   }
   MethodsOnPtrFor(method->getParent()).trait.body += std::move(buf).str();
+}
+
+// An inherited method this model delivers through a Ptr trait.
+//
+// EmitInheritedStructMethods copies an inherited method into the derived type so
+// that Rust, which has no inheritance, can still resolve the call. In THIS model
+// most methods do not live in an inherent impl at all -- IsMethodOnPtr routes
+// them to a `trait XImpl` with `impl XImpl for Ptr<X>` -- and their bodies are
+// written against a `Ptr` receiver. Copying such a body into `impl Derived`
+// produced `no method named 'upgrade' found for struct D2`: the right shape, in
+// the wrong kind of item.
+//
+// So emit the copy the same way the model emits the original, keyed on the
+// DERIVED record: a declaration in the derived type's trait and a definition in
+// its `impl ... for Ptr<Derived>`. Both reuse the model's own emitters, so the
+// copy cannot drift from the original in receiver spelling or body conversion --
+// and MethodsOnPtrFor(decl) is what makes GetUFCSOwner's redirect resolve, since
+// the call site names `DerivedImpl`.
+bool ConverterRefCount::EmitInheritedMethodOnPtr(clang::CXXRecordDecl *decl,
+                                                 clang::CXXMethodDecl *method) {
+  if (!IsMethodOnPtr(method)) {
+    return false;
+  }
+  auto &target = MethodsOnPtrFor(decl);
+  {
+    Buffer buf(*this);
+    {
+      PushCurrFunction push_fn(*this, method);
+      PushMethodTarget push(*this, method->getDefinition()
+                                       ? MethodTarget::TraitDecl
+                                       : MethodTarget::TraitDefault);
+      ConvertCXXMethodDecl(method);
+    }
+    target.trait.body += std::move(buf).str();
+  }
+  if (method->isThisDeclarationADefinition() ||
+      method->getDefinition() != nullptr) {
+    auto *definition = method->isThisDeclarationADefinition()
+                           ? method
+                           : clang::cast<clang::CXXMethodDecl>(
+                                 method->getDefinition());
+    Buffer buf(*this);
+    {
+      PushCurrFunction push_fn(*this, definition);
+      PushMethodTarget push(*this, MethodTarget::PtrImpl);
+      ConvertCXXMethodDecl(definition);
+    }
+    target.impl.body += std::move(buf).str();
+  }
+  return true;
 }
 
 void ConverterRefCount::ConvertMethodOnPtr(clang::CXXMethodDecl *method) {

@@ -1022,6 +1022,10 @@ protected:
   // GetUFCSName so an inherited method copied onto a derived struct is called by
   // that struct's name rather than its declaring class's.
   const clang::CXXRecordDecl *ufcs_receiver_record_ = nullptr;
+  // Sets the above from a receiver expression, looking through the implicit
+  // derived-to-base conversion. Every model's receiver path must call it; see
+  // converter.cpp.
+  void SetUFCSReceiverRecord(clang::Expr *base, bool is_arrow);
   bool in_const_initializer_ = false;
   std::optional<bool> autoref_mut_;
   bool suppress_iterator_clone_ = false;
@@ -1314,6 +1318,11 @@ protected:
   // delivers nothing through a trait impl, so without this every inherited call
   // is E0599. Sound because the base's fields were flattened in alongside.
   void EmitInheritedStructMethods(clang::CXXRecordDecl *decl);
+  // Re-emit an inherited method in the shape a model that splits methods between
+  // inherent impls and Ptr traits needs. Returns true if it handled the method,
+  // in which case the caller must not also copy the body. See converter.cpp.
+  virtual bool EmitInheritedMethodOnPtr(clang::CXXRecordDecl *decl,
+                                        clang::CXXMethodDecl *method);
 
   // Nearest transitive base that ConvertAbstractClass lowered to a trait, or
   // nullptr when every base up the chain is a concrete struct.

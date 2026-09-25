@@ -1767,6 +1767,16 @@ void Converter::AddFromTraits(const clang::CXXRecordDecl *decl) {
 // and writes the same storage C++ gives it. Base-first and skipping any name the
 // derived class itself defines, so a C++ override wins over the inherited copy,
 // which is what virtual dispatch on a concrete receiver does.
+// Re-emit an inherited method that this model delivers through a Ptr trait.
+//
+// The base model has no such split -- every method is an inherent method -- so
+// this does nothing and the caller copies the body as-is. ConverterRefCount
+// overrides it.
+bool Converter::EmitInheritedMethodOnPtr(clang::CXXRecordDecl *,
+                                        clang::CXXMethodDecl *) {
+  return false;
+}
+
 void Converter::EmitInheritedStructMethods(clang::CXXRecordDecl *decl) {
   if (decl->bases_begin() == decl->bases_end()) {
     return;
@@ -1816,6 +1826,16 @@ void Converter::EmitInheritedStructMethods(clang::CXXRecordDecl *decl) {
             }
             auto name = GetMethodName(method);
             if (!taken.insert(name).second) {
+              continue;
+            }
+            // A method this model delivers through a Ptr TRAIT rather than an
+            // inherent impl cannot be copied as a plain body: the body is written
+            // against a `Ptr<T>` receiver (`(*self).upgrade()`), so pasting it
+            // into `impl Derived` gives "no method named `upgrade` found for
+            // struct D2". EmitInheritedMethodOnPtr re-emits it in the shape the
+            // model does use -- a no-op in the unsafe model, which has no such
+            // split.
+            if (EmitInheritedMethodOnPtr(decl, method)) {
               continue;
             }
             // ConvertCXXMethodDecl, not VisitCXXMethodDecl: the latter's
@@ -5590,6 +5610,29 @@ bool Converter::VisitMemberExpr(clang::MemberExpr *expr) {
   return false;
 }
 
+// Records the receiver's STATIC type BEFORE any derived-to-base conversion, for
+// GetUFCSName.
+//
+// An inherited non-virtual method is copied onto the derived type, so the call
+// must name that type rather than the C++ declaring class -- and
+// `base->getType()` is the wrong type to read for it. Calling an inherited method
+// makes clang insert an implicit derived-to-base cast on the object argument, so
+// `d3.bump()` has a base expression already typed `B3` where the source says
+// `d3`. IgnoreImpCasts steps back through that conversion to the expression as
+// written, which is the only place the derived type survives.
+//
+// Both models must call this, and each has receiver paths the other does not, so
+// it lives here rather than being duplicated: getting it only into the base model
+// left the redirect dead in the refcount model while a correct `D2Impl` sat right
+// beside the call that failed to name it.
+void Converter::SetUFCSReceiverRecord(clang::Expr *base, bool is_arrow) {
+  const auto *written =
+      is_arrow ? base->IgnoreImpCasts() : base->IgnoreParenImpCasts();
+  auto written_type = is_arrow ? written->getType()->getPointeeType()
+                               : written->getType().getNonReferenceType();
+  ufcs_receiver_record_ = written_type->getAsCXXRecordDecl();
+}
+
 void Converter::SetUFCSReceiver(clang::Expr *base, bool is_arrow,
                                 const clang::CXXMethodDecl *method) {
   if (clang::isa<clang::CXXThisExpr>(base->IgnoreParenImpCasts())) {
@@ -5610,11 +5653,7 @@ void Converter::SetUFCSReceiver(clang::Expr *base, bool is_arrow,
   PushExprKind push(*this, ExprKind::LValue);
   auto object_type = is_arrow ? base->getType()->getPointeeType()
                               : base->getType().getNonReferenceType();
-  // The receiver's STATIC type, for GetUFCSName: an inherited non-virtual method
-  // is copied onto the derived struct, so the call must name that struct rather
-  // than the C++ declaring class. Recorded here because this is the one place
-  // that already has the receiver expression's type.
-  ufcs_receiver_record_ = object_type->getAsCXXRecordDecl();
+  SetUFCSReceiverRecord(base, is_arrow);
   bool cast_mut =
       MethodNeedsMutableReceiver(method) && object_type.isConstQualified();
   StrCat(MethodNeedsMutableReceiver(method) ? "&mut" : "&");
