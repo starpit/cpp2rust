@@ -96,9 +96,33 @@ impl<T: ByteRepr> ByteRepr for Box<[T]> {}
 impl<T: ByteRepr> ByteRepr for Box<T> {}
 impl<T: 'static> ByteRepr for *const T {}
 impl<T: 'static> ByteRepr for *mut T {}
-impl<A: ByteRepr, B: ByteRepr> ByteRepr for (A, B) {}
-impl<A: ByteRepr, B: ByteRepr, C: ByteRepr> ByteRepr for (A, B, C) {}
-impl<A: ByteRepr, B: ByteRepr, C: ByteRepr, D: ByteRepr> ByteRepr for (A, B, C, D) {}
+// Tuples, arity 1 through 12.  These are MARKER impls: every method is the
+// trait's default, which panics, so the arity list costs nothing semantically and
+// the only thing a short list buys is a confusing error a long way away.
+//
+// It used to stop at 4, and that was the reason `rules/tuple`'s BY-VALUE tuple
+// family also stopped at 4 while its by-reference family reached 32: the refcount
+// model's assignment rule is `a0.write(a1.deep_clone())`, `Ptr::<T>::write`
+// requires `T: ByteRepr` for the WHOLE tuple (rc.rs:392), and per-element bounds
+// do not satisfy it.  So a 5-element `std::tuple` was unmappable, which aborted
+// the converter at mapper.cpp:1185 with `Type is not present in types_` on
+// `std::tuple<mlir::Operation *, long, long, long, long>`.  Two limits in two
+// files that looked independent were the same limit.
+macro_rules! tuple_byte_repr {
+    ($($name:ident),+) => { impl<$($name: ByteRepr),+> ByteRepr for ($($name,)+) {} };
+}
+tuple_byte_repr!(A);
+tuple_byte_repr!(A, B);
+tuple_byte_repr!(A, B, C);
+tuple_byte_repr!(A, B, C, D);
+tuple_byte_repr!(A, B, C, D, E);
+tuple_byte_repr!(A, B, C, D, E, F);
+tuple_byte_repr!(A, B, C, D, E, F, G);
+tuple_byte_repr!(A, B, C, D, E, F, G, H);
+tuple_byte_repr!(A, B, C, D, E, F, G, H, I);
+tuple_byte_repr!(A, B, C, D, E, F, G, H, I, J);
+tuple_byte_repr!(A, B, C, D, E, F, G, H, I, J, K);
+tuple_byte_repr!(A, B, C, D, E, F, G, H, I, J, K, L);
 impl<K: 'static, V: 'static> ByteRepr for std::collections::BTreeMap<K, V> {}
 
 // Runs `f` with a zeroed scratch buffer of `len` bytes. Small buffers live on
