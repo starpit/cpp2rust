@@ -1956,3 +1956,100 @@ template <typename T1, typename T2, typename T3, typename T4, typename T5, typen
 bool f378(const std::tuple<T1 &, T2 &, T3 &, T4 &, T5 &, T6 &, T7 &, T8 &, T9 &, T10 &, T11 &, T12 &, T13 &, T14 &, T15 &, T16 &, T17 &, T18 &, T19 &, T20 &, T21 &, T22 &, T23 &, T24 &, T25 &, T26 &, T27 &, T28 &, T29 &, T30 &, T31 &, T32 &> &a, const std::tuple<T1 &, T2 &, T3 &, T4 &, T5 &, T6 &, T7 &, T8 &, T9 &, T10 &, T11 &, T12 &, T13 &, T14 &, T15 &, T16 &, T17 &, T18 &, T19 &, T20 &, T21 &, T22 &, T23 &, T24 &, T25 &, T26 &, T27 &, T28 &, T29 &, T30 &, T31 &, T32 &> &b) {
   return operator!=(a, b);
 }
+
+// --- 5-element tuples -------------------------------------------------------
+//
+// Added for the census TU that needs a homogeneous arity-5 tuple.  The
+// construction form is copied VERBATIM from f98 (arity 4): the extra defaulted
+// parameters T6..T10 make the call select libc++'s VARIADIC constructor, so the
+// recorded key is `void std::tuple<T1..T5>::tuple(&&...)` -- which is the key
+// the converter looks up.  Spelling it `(const T1 &, ...)` instead selects the
+// by-const-ref constructor and records a key nothing ever asks for.
+//
+// The full 3^5 by-value/by-ref/by-rvalue-ref cross product is NOT written out:
+// 243 functions for a form that collapses to one `(&&...)` key anyway.
+template <typename T1, typename T2, typename T3, typename T4, typename T5> using t35 = std::tuple<T1, T2, T3, T4, T5>;
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5> std::tuple<T1, T2, T3, T4, T5> f379() {
+  return std::tuple<T1, T2, T3, T4, T5>();
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5, typename T6 = T1, typename T7 = T2, typename T8 = T3, typename T9 = T4, typename T10 = T5>
+std::tuple<T1, T2, T3, T4, T5> f380(const T6 &a0, const T7 &a1, const T8 &a2, const T9 &a3, const T10 &a4) {
+  return std::tuple<T1, T2, T3, T4, T5>(a0, a1, a2, a3, a4);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5>
+std::tuple<T1, T2, T3, T4, T5> f381(const std::tuple<T1, T2, T3, T4, T5> &a0) {
+  return std::tuple<T1, T2, T3, T4, T5>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5>
+std::tuple<T1, T2, T3, T4, T5> f382(std::tuple<T1, T2, T3, T4, T5> &&a0) {
+  return std::tuple<T1, T2, T3, T4, T5>(std::move(a0));
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5>
+std::tuple<T1, T2, T3, T4, T5> &f383(std::tuple<T1, T2, T3, T4, T5> &dst, const std::tuple<T1, T2, T3, T4, T5> &src) {
+  return dst.operator=(src);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5>
+std::tuple<T1, T2, T3, T4, T5> &f384(std::tuple<T1, T2, T3, T4, T5> &dst, std::tuple<T1, T2, T3, T4, T5> &&src) {
+  return dst.operator=(std::move(src));
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5> T1 &f385(std::tuple<T1, T2, T3, T4, T5> &a0) {
+  return std::get<0>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5> T2 &f386(std::tuple<T1, T2, T3, T4, T5> &a0) {
+  return std::get<1>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5> T3 &f387(std::tuple<T1, T2, T3, T4, T5> &a0) {
+  return std::get<2>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5> T4 &f388(std::tuple<T1, T2, T3, T4, T5> &a0) {
+  return std::get<3>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5> T5 &f389(std::tuple<T1, T2, T3, T4, T5> &a0) {
+  return std::get<4>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5>
+const T1 &f390(const std::tuple<T1, T2, T3, T4, T5> &a0) {
+  return std::get<0>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5>
+const T2 &f391(const std::tuple<T1, T2, T3, T4, T5> &a0) {
+  return std::get<1>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5>
+const T3 &f392(const std::tuple<T1, T2, T3, T4, T5> &a0) {
+  return std::get<2>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5>
+const T4 &f393(const std::tuple<T1, T2, T3, T4, T5> &a0) {
+  return std::get<3>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5>
+const T5 &f394(const std::tuple<T1, T2, T3, T4, T5> &a0) {
+  return std::get<4>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5>
+bool f395(const std::tuple<T1, T2, T3, T4, T5> &a, const std::tuple<T1, T2, T3, T4, T5> &b) {
+  return operator==(a, b);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5>
+bool f396(const std::tuple<T1, T2, T3, T4, T5> &a, const std::tuple<T1, T2, T3, T4, T5> &b) {
+  return operator!=(a, b);
+}

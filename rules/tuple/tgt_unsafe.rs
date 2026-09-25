@@ -3454,3 +3454,84 @@ unsafe fn f378<T1: PartialEq, T2: PartialEq, T3: PartialEq, T4: PartialEq, T5: P
         (*a0.30 != *a1.30) ||
         (*a0.31 != *a1.31)
 }
+
+// --- 5-element tuples -------------------------------------------------------
+
+unsafe fn f379<T1: Default, T2: Default, T3: Default, T4: Default, T5: Default>() -> (T1, T2, T3, T4, T5) {
+    <(T1, T2, T3, T4, T5)>::default()
+}
+
+unsafe fn f380<T1, T2, T3, T4, T5>(a0: T1, a1: T2, a2: T3, a3: T4, a4: T5) -> (T1, T2, T3, T4, T5) {
+    (a0.into(), a1.into(), a2.into(), a3.into(), a4.into())
+}
+
+unsafe fn f381<T1: Clone, T2: Clone, T3: Clone, T4: Clone, T5: Clone>(a0: (T1, T2, T3, T4, T5)) -> (T1, T2, T3, T4, T5) {
+    a0.clone()
+}
+
+unsafe fn f382<T1: Default, T2: Default, T3: Default, T4: Default, T5: Default>(a0: &mut (T1, T2, T3, T4, T5)) -> (T1, T2, T3, T4, T5) {
+    std::mem::take(&mut *a0)
+}
+
+unsafe fn f383<T1: Clone, T2: Clone, T3: Clone, T4: Clone, T5: Clone>(a0: &mut (T1, T2, T3, T4, T5), a1: (T1, T2, T3, T4, T5)) {
+    *a0 = a1.clone()
+}
+
+unsafe fn f384<T1: Default, T2: Default, T3: Default, T4: Default, T5: Default>(a0: &mut (T1, T2, T3, T4, T5), a1: &mut (T1, T2, T3, T4, T5)) {
+    *a0 = std::mem::take(&mut *a1)
+}
+
+unsafe fn f385<T1, T2, T3, T4, T5>(a0: *mut (T1, T2, T3, T4, T5)) -> *mut T1 {
+    &raw mut (*a0).0
+}
+
+unsafe fn f386<T1, T2, T3, T4, T5>(a0: *mut (T1, T2, T3, T4, T5)) -> *mut T2 {
+    &raw mut (*a0).1
+}
+
+unsafe fn f387<T1, T2, T3, T4, T5>(a0: *mut (T1, T2, T3, T4, T5)) -> *mut T3 {
+    &raw mut (*a0).2
+}
+
+unsafe fn f388<T1, T2, T3, T4, T5>(a0: *mut (T1, T2, T3, T4, T5)) -> *mut T4 {
+    &raw mut (*a0).3
+}
+
+unsafe fn f389<T1, T2, T3, T4, T5>(a0: *mut (T1, T2, T3, T4, T5)) -> *mut T5 {
+    &raw mut (*a0).4
+}
+
+unsafe fn f390<T1, T2, T3, T4, T5>(a0: *const (T1, T2, T3, T4, T5)) -> *const T1 {
+    &raw const (*a0).0
+}
+
+unsafe fn f391<T1, T2, T3, T4, T5>(a0: *const (T1, T2, T3, T4, T5)) -> *const T2 {
+    &raw const (*a0).1
+}
+
+unsafe fn f392<T1, T2, T3, T4, T5>(a0: *const (T1, T2, T3, T4, T5)) -> *const T3 {
+    &raw const (*a0).2
+}
+
+unsafe fn f393<T1, T2, T3, T4, T5>(a0: *const (T1, T2, T3, T4, T5)) -> *const T4 {
+    &raw const (*a0).3
+}
+
+unsafe fn f394<T1, T2, T3, T4, T5>(a0: *const (T1, T2, T3, T4, T5)) -> *const T5 {
+    &raw const (*a0).4
+}
+
+unsafe fn f395<T1: PartialEq, T2: PartialEq, T3: PartialEq, T4: PartialEq, T5: PartialEq>(a0: (T1, T2, T3, T4, T5), a1: (T1, T2, T3, T4, T5)) -> bool {
+    a0 == a1
+}
+
+unsafe fn f396<T1: PartialEq, T2: PartialEq, T3: PartialEq, T4: PartialEq, T5: PartialEq>(a0: (T1, T2, T3, T4, T5), a1: (T1, T2, T3, T4, T5)) -> bool {
+    a0 != a1
+}
+
+// The arity-5 by-value tuple type. src.cpp declares `t35`; both target files must
+// carry it or the converter aborts with
+// `ir_src.json type entry has no matching IR target rule`.
+fn t35<T1: Default, T2: Default, T3: Default, T4: Default, T5: Default>() -> (T1, T2, T3, T4, T5) {
+    <(T1, T2, T3, T4, T5)>::default()
+}

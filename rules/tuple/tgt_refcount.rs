@@ -4639,3 +4639,100 @@ fn f378<T1: PartialEq + ByteRepr, T2: PartialEq + ByteRepr, T3: PartialEq + Byte
         (*a0.30.upgrade().deref() != *a1.30.upgrade().deref()) ||
         (*a0.31.upgrade().deref() != *a1.31.upgrade().deref())
 }
+
+// --- 5-element tuples -------------------------------------------------------
+
+fn f379<T1: Default, T2: Default, T3: Default, T4: Default, T5: Default>() -> (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>) {
+    (
+        Rc::new(RefCell::new(T1::default())),
+        Rc::new(RefCell::new(T2::default())),
+        Rc::new(RefCell::new(T3::default())),
+        Rc::new(RefCell::new(T4::default())),
+        Rc::new(RefCell::new(T5::default())),
+    )
+}
+
+fn f380<T1, T2, T3, T4, T5>(a0: T1, a1: T2, a2: T3, a3: T4, a4: T5) -> (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>) {
+    (
+        Rc::new(RefCell::new(a0.try_into().expect("failed conversion"))),
+        Rc::new(RefCell::new(a1.try_into().expect("failed conversion"))),
+        Rc::new(RefCell::new(a2.try_into().expect("failed conversion"))),
+        Rc::new(RefCell::new(a3.try_into().expect("failed conversion"))),
+        Rc::new(RefCell::new(a4.try_into().expect("failed conversion"))),
+    )
+}
+
+fn f381<T1: DeepClone, T2: DeepClone, T3: DeepClone, T4: DeepClone, T5: DeepClone>(a0: (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>)) -> (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>) {
+    a0.deep_clone()
+}
+
+fn f382<T1: Default, T2: Default, T3: Default, T4: Default, T5: Default>(a0: &mut (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>)) -> (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>) {
+    std::mem::take(&mut *a0)
+}
+
+fn f383<T1: DeepClone + ByteRepr, T2: DeepClone + ByteRepr, T3: DeepClone + ByteRepr, T4: DeepClone + ByteRepr, T5: DeepClone + ByteRepr>(a0: Ptr<(Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>)>, a1: (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>)) {
+    a0.write(a1.deep_clone())
+}
+
+fn f384<T1: Default + ByteRepr, T2: Default + ByteRepr, T3: Default + ByteRepr, T4: Default + ByteRepr, T5: Default + ByteRepr>(a0: Ptr<(Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>)>, a1: &mut (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>)) {
+    a0.write(std::mem::take(&mut *a1))
+}
+
+fn f385<T1, T2, T3, T4, T5>(a0: (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>)) -> Ptr<T1> {
+    (a0.0.as_pointer() as Ptr<T1>)
+}
+
+fn f386<T1, T2, T3, T4, T5>(a0: (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>)) -> Ptr<T2> {
+    (a0.1.as_pointer() as Ptr<T2>)
+}
+
+fn f387<T1, T2, T3, T4, T5>(a0: (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>)) -> Ptr<T3> {
+    (a0.2.as_pointer() as Ptr<T3>)
+}
+
+fn f388<T1, T2, T3, T4, T5>(a0: (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>)) -> Ptr<T4> {
+    (a0.3.as_pointer() as Ptr<T4>)
+}
+
+fn f389<T1, T2, T3, T4, T5>(a0: (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>)) -> Ptr<T5> {
+    (a0.4.as_pointer() as Ptr<T5>)
+}
+
+fn f390<T1, T2, T3, T4, T5>(a0: (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>)) -> Ptr<T1> {
+    (a0.0.as_pointer() as Ptr<T1>)
+}
+
+fn f391<T1, T2, T3, T4, T5>(a0: (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>)) -> Ptr<T2> {
+    (a0.1.as_pointer() as Ptr<T2>)
+}
+
+fn f392<T1, T2, T3, T4, T5>(a0: (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>)) -> Ptr<T3> {
+    (a0.2.as_pointer() as Ptr<T3>)
+}
+
+fn f393<T1, T2, T3, T4, T5>(a0: (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>)) -> Ptr<T4> {
+    (a0.3.as_pointer() as Ptr<T4>)
+}
+
+fn f394<T1, T2, T3, T4, T5>(a0: (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>)) -> Ptr<T5> {
+    (a0.4.as_pointer() as Ptr<T5>)
+}
+
+fn f395<T1: PartialEq, T2: PartialEq, T3: PartialEq, T4: PartialEq, T5: PartialEq>(
+    a0: (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>),
+    a1: (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>),
+) -> bool {
+    a0 == a1
+}
+
+fn f396<T1: PartialEq, T2: PartialEq, T3: PartialEq, T4: PartialEq, T5: PartialEq>(
+    a0: (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>),
+    a1: (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>),
+) -> bool {
+    a0 != a1
+}
+
+// See tgt_unsafe.rs: src.cpp's `t35` needs a target entry in BOTH files.
+fn t35<T1: Default, T2: Default, T3: Default, T4: Default, T5: Default>() -> (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>) {
+    <(Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>)>::default()
+}
