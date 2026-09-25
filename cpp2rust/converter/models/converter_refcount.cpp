@@ -542,6 +542,29 @@ bool ConverterRefCount::EmitCloneImpl(const clang::RecordDecl *decl) {
     return false;
   }
 
+  // A copy constructor with NEITHER a body NOR mem-initializers copies nothing:
+  // ConvertCXXConstructorBody below would fall back to each field's in-class
+  // initializer (GetFieldInitExpr) and emit a `clone()` that rebuilds a fresh
+  // object, ignoring `self` -- values that compile and are wrong. Since
+  // DefineImplicitMembers defines every DEFAULTED copy constructor this is a
+  // backstop; reaching it emits NO Clone, which leaves a copy of this type a
+  // LOUD rustc error exactly like the deleted-copy-constructor path above. It
+  // is decided BEFORE the impl header is emitted, so bailing out cannot leave a
+  // half-written impl behind.
+  if (GetUserDefinedCopyConstructor(cxx) == nullptr && !decl->field_empty()) {
+    for (const auto *ctor : cxx->ctors()) {
+      if (ctor->isCopyConstructor() && !ctor->doesThisDeclarationHaveABody() &&
+          ctor->getNumCtorInitializers() == 0) {
+        llvm::errs() << "no Clone for " << record_name
+                     << ": its copy constructor has no definition to convert, "
+                        "so a clone() emitted from it would ignore the source\n";
+        ReportUnsupported("UndefinedCopyConstructor", record_name,
+                          ctor->getLocation(), ctx_);
+        return false;
+      }
+    }
+  }
+
   StrCat(keyword::kImpl, "Clone for", record_name, '{');
   StrCat("fn clone(&self) -> Self {");
 
@@ -3568,6 +3591,11 @@ ConverterRefCount::DestroyMembers(const clang::CXXRecordDecl *decl) {
 
 void ConverterRefCount::ConvertCXXConstructorBody(
     clang::CXXConstructorDecl *decl) {
+  // Same invariant as the base model's override: this body binds a local `this`,
+  // so curr_function_ must name this constructor for every caller, including
+  // EmitCloneImpl, which converts a copy constructor from record scope. See the
+  // comment on Converter::ConvertCXXConstructorBody.
+  PushCurrFunction push_fn(*this, decl);
   EmitFunctionPreamble(decl);
   auto record_name = GetRecordName(decl->getParent());
   auto deferred = CollectThisDependentFieldInits(decl);

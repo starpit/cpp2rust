@@ -2047,7 +2047,26 @@ void Converter::DefineImplicitMembers(clang::CXXRecordDecl *decl) {
   auto *saved_tu_scope = std::exchange(sema_->TUScope, &tu_scope);
   sema_->ForceDeclarationOfImplicitMembers(decl);
   for (auto ctor : decl->ctors()) {
-    if (ctor->isCopyConstructor() && ctor->isImplicit() &&
+    // `!isUserProvided()`, not `isImplicit()`: `S(const S &) = default;` is
+    // DEFAULTED but not IMPLICIT, so it was skipped here and clang never gave it
+    // a definition -- no body and an EMPTY mem-initializer list. Everything that
+    // reads a constructor's field initializers then falls back to each field's
+    // IN-CLASS initializer (GetFieldInitExpr), which is not what a copy
+    // constructor does: the refcount model's `impl Clone` is emitted by
+    // converting this constructor, so it re-ran the in-class initializers
+    // instead of copying the source -- `clone()` of an object whose field had
+    // been assigned returned the in-class value. And when such an in-class
+    // initializer READS `this` (`int b = a + 5;`) the field became a deferred
+    // init, whose synthesized `this->b = a + 5` aborted the converter outright
+    // (`isa<> used on a null pointer`, llvm/Support/Casting.h:109) in 9 of
+    // dt_src's 295 TUs.  MEASURED after this change, same invocations: the abort
+    // is gone from 9 of 9, and 7 of them now translate (7.4k-16.7k lines each).
+    // The other two go on to abort in ConvertUnhandledOperatorCall, which is a
+    // DIFFERENT gap -- worth stating because an aborting run stops at its first
+    // assert, so a log can only ever show ONE blocker and "this TU has no other
+    // blocker" is not a claim any abort census can support.
+    // The move-constructor line below already spells the predicate this way.
+    if (ctor->isCopyConstructor() && !ctor->isUserProvided() &&
         !ctor->doesThisDeclarationHaveABody() && !ctor->isDeleted()) {
       sema_->DefineImplicitCopyConstructor(decl->getLocation(), ctor);
     }
@@ -2229,6 +2248,17 @@ bool Converter::VisitCXXConstructorDecl(clang::CXXConstructorDecl *decl) {
 }
 
 void Converter::ConvertCXXConstructorBody(clang::CXXConstructorDecl *decl) {
+  // The body is emitted around a LOCAL `this`, so every "am I inside a
+  // constructor?" query made while converting it has to answer yes. The answer
+  // is read off curr_function_, and VisitCXXConstructorDecl is not the only
+  // caller -- the refcount model's EmitCloneImpl converts a copy constructor's
+  // body from record scope, where curr_function_ was null. Null is not merely a
+  // crash at the one unguarded isa<> (in ConvertMemberExpr): the sites that DO
+  // guard it (SetUFCSReceiver, ThisIsRustPtr, VisitCXXThisExpr) then answered
+  // "not in a constructor" and reached for `self` -- the object being COPIED
+  // FROM -- where the constructor means the object being built. Establishing it
+  // here makes the invariant hold for every caller rather than for one.
+  PushCurrFunction push_fn(*this, decl);
   EmitFunctionPreamble(decl);
   auto deferred = CollectThisDependentFieldInits(decl);
   StrCat(keyword::kLet, "mut", "this", token::kAssign);
