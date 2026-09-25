@@ -4034,7 +4034,28 @@ Converter::CallInfo Converter::CollectCallInfo(clang::CallExpr *expr) {
         .infer_type = i == 0 && IsUserStreamInserter(function),
     };
     bool is_materialize = clang::isa<clang::MaterializeTemporaryExpr>(arg);
-    if (is_materialize && ca.param_type->isReferenceType()) {
+    // A temporary bound to a reference parameter does not always reach us as a
+    // BARE MaterializeTemporaryExpr. Binding a derived temporary to a base
+    // reference wraps it in an UncheckedDerivedToBase ImplicitCastExpr:
+    // `take(D(7))` against `take(const B &)`, and in dt_src every
+    // `units.append((SmallVector<Value>)x)` against
+    // `append(const SmallVectorImpl<Value> &)`.
+    //
+    // Both branches below end up in ConvertVarInit, which asks this same
+    // question THROUGH `IgnoreImpCasts` -- so asking it here without that let
+    // the two disagree: the argument was classified Inline/Hoisted, converted
+    // in place, and ConvertVarInit then materialised a temp in a position with
+    // no HoistMaterializedTempBindings scope around it, which is the
+    // `materialized_temp_bindings_` abort in EmitMaterializedTempBinding. That
+    // abort is invisible to --survey (it is not a recorded gap, it kills the
+    // process and leaves the TSV empty) and it fires before any recorded gap
+    // can be reached, so those TUs could not reach rc=0 whatever else was
+    // fixed. Ask it the same way in both places, and the case lands on the
+    // Kind::Materialized path that a temporary with no cast has always taken.
+    bool is_materialize_ref =
+        ca.param_type->isReferenceType() &&
+        clang::isa<clang::MaterializeTemporaryExpr>(arg->IgnoreImpCasts());
+    if (is_materialize_ref) {
       ca.kind = Kind::Materialized;
     } else if (is_materialize) {
       ca.kind = Kind::Inline;
