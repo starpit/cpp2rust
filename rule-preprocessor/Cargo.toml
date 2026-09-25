@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 libcc2rs = { path = "../libcc2rs" }
+# Needed so find_artifact() can locate the .rlib that the --extern above points at.
+dataflowir-gen = { path = "../../dt_src/cpp2rust-port/dataflowir-gen" }
 rules = { path = "../rules" }
 cfg-expr = "0.20"
 ra_ap_syntax = "0.0.266"

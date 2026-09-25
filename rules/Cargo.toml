@@ -9,6 +9,11 @@ name = "rules"
 path = "src/lib.rs"
 
 [dependencies]
+# The .td-generated MLIR model, so a rule body may name `dataflowir_gen`.
+# Three places need this and missing any one gives E0433: this crate (which
+# compiles every tgt_*.rs), rule-preprocessor (its own rustc type-check pass),
+# and the emitted probe crate.
+dataflowir-gen = { path = "../../dt_src/cpp2rust-port/dataflowir-gen" }
 libc = "0.2.148"
 libcc2rs = { version = "0.1.0", path = "../libcc2rs" }
 brotli-sys = "0.3"

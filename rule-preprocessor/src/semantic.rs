@@ -77,6 +77,13 @@ fn build_rustc_args(crate_root: &Path) -> Vec<String> {
     for dep in &[
         "libcc2rs",
         "libcc2rs_macros",
+        // The .td-generated MLIR model (OpInst/Block/Region/Value/Ty/Attr).  Without
+        // it on this allowlist a rule body naming `dataflowir_gen` fails semantic
+        // analysis with E0433 "cannot find module or crate", which reads as a broken
+        // rule rather than a missing --extern.  Adding it to the emitted probe crate's
+        // Cargo.toml is NOT sufficient: that governs the emitted crate, whereas this is
+        // the preprocessor's own separate rustc invocation for type-checking tgt_*.rs.
+        "dataflowir_gen",
         "libc",
         "brotli_sys",
         "rustls_ffi",
