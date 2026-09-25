@@ -62,6 +62,12 @@ fn t3<T1>() -> BTreeMap<Vec<u8>, Value<T1>> {
     BTreeMap::new()
 }
 
+// llvm::EmptyStringSetTag is an empty struct: the unit type carries exactly the
+// same (zero) information.
+fn t4() -> () {
+    ()
+}
+
 fn f5<T1>() -> BTreeMap<Vec<u8>, Value<T1>> {
     BTreeMap::new()
 }

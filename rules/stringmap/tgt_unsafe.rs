@@ -60,6 +60,12 @@ fn t3<T1>() -> BTreeMap<Vec<libc::c_char>, Box<T1>> {
     BTreeMap::new()
 }
 
+// llvm::EmptyStringSetTag is an empty struct: the unit type carries exactly the
+// same (zero) information.
+fn t4() -> () {
+    ()
+}
+
 unsafe fn f5<T1>() -> BTreeMap<Vec<libc::c_char>, Box<T1>> {
     BTreeMap::new()
 }

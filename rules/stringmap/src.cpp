@@ -189,12 +189,28 @@ public:
   ValueTy &operator[](StringRef Key);
 };
 
+// Restated from llvm/ADT/StringSet.h:26.  `llvm::StringSet<>` is
+// `StringMap<EmptyStringSetTag>`, and the tag is an EMPTY struct -- it declares
+// no members at all, it exists only to give the map a zero-information value
+// type.  The honest Rust counterpart is therefore the unit type.
+//
+// This rule closes a RECURSION gap, not an outer-match gap: the iterator rule
+// `StringMapIterBase<T1, false>` above already matched with
+// T1 = llvm::EmptyStringSetTag; what aborted was mapper.cpp's recursive
+// descent into the substituted template argument (mapper.cpp:1189-1194), which
+// requires the argument to have a rule of its own.
+struct EmptyStringSetTag {};
+
 } // namespace llvm
 
 // The container type.  Written with ONE parameter and instantiating TWO: the
 // default supplies llvm::MallocAllocator, so this canonicalises to the string
 // the converter actually reports, `llvm::StringMap<T1, llvm::MallocAllocator>`.
 template <typename T1> using t3 = llvm::StringMap<T1>;
+
+// The value type of llvm::StringSet<>.  Not a template: it is a concrete empty
+// tag struct, so the alias takes no parameters.
+using t4 = llvm::EmptyStringSetTag;
 
 template <typename T1> using t1 = typename llvm::StringMap<T1>::iterator;
 
