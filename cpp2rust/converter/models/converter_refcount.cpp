@@ -809,26 +809,78 @@ void ConverterRefCount::EmitFunctionPreamble(clang::FunctionDecl *decl) {
   auto params = decl->getDefinition() ? decl->getDefinition()->parameters()
                                       : decl->parameters();
   for (auto *param : params) {
-    if (!param->getType()->isReferenceType()) {
-      auto name = GetNamedDeclAsString(param);
-      // Skip emitting the preamble for unnamed parameters
-      if (name == "_") {
-        continue;
-      }
-
-      auto type = ToString(param->getType());
-      auto init = name;
-
+    if (param->getType()->isReferenceType()) {
+      // A reference parameter is already a `Ptr<T>` and needs no boxing -- but
+      // a DEFAULTED one arrives as `Option<Ptr<T>>` and the body reads it as a
+      // `Ptr<T>`, so the `None` case still has to be resolved to a pointer.
       if (HasUsableDefaultArg(param)) {
-        init = std::format("{}.unwrap_or({})", name,
-                           ToString(param->getDefaultArg()));
+        EmitDefaultedRefParam(param);
       }
-
-      StrCat(std::format("let {} : {} = Rc::new(RefCell::new({}))", name, type,
-                         init),
-             token::kSemiColon);
+      continue;
     }
+    auto name = GetNamedDeclAsString(param);
+    // Skip emitting the preamble for unnamed parameters
+    if (name == "_") {
+      continue;
+    }
+
+    auto type = ToString(param->getType());
+    auto init = name;
+
+    if (HasUsableDefaultArg(param)) {
+      init = std::format("{}.unwrap_or({})", name,
+                         ToString(param->getDefaultArg()));
+    }
+
+    StrCat(
+        std::format("let {} : {} = Rc::new(RefCell::new({}))", name, type, init),
+        token::kSemiColon);
   }
+}
+
+// Same reasoning as Converter::EmitDefaultedRefParam, in this model's
+// representation: a reference is a `Ptr<T>`, which borrows a `Value<T>` rather
+// than pointing at a stack slot, so the default's storage is an `Rc<RefCell<T>>`
+// in the callee's frame and the pointer comes from `as_pointer()`. The `Ptr`
+// keeps only a Weak, so the `Value` must be the thing that outlives the arm.
+void ConverterRefCount::EmitDefaultedRefParam(clang::ParmVarDecl *param) {
+  auto name = GetNamedDeclAsString(param);
+  if (name == "_") {
+    return;
+  }
+  auto ptr_type = ToString(param->getType());
+  auto *default_arg = param->getDefaultArg();
+
+  if (!DefaultArgIsMaterializedTemporary(param)) {
+    std::string addr;
+    {
+      Buffer buf(*this);
+      PushExprKind push(*this, ExprKind::AddrOf);
+      ConvertVarInit(param->getType(), default_arg);
+      addr = std::move(buf).str();
+    }
+    StrCat(std::format(
+               "let {} : {} = match {} {{ Some(__p) => __p, None => {} }}", name,
+               ptr_type, name, addr),
+           token::kSemiColon);
+    return;
+  }
+
+  auto pointee = param->getType().getNonReferenceType();
+  auto storage = std::format("__dflt_{}", name);
+  std::string value;
+  std::string storage_type;
+  {
+    PushConversionKind push(*this, ConversionKind::Unboxed);
+    value = ConvertRValue(default_arg, pointee);
+    storage_type = ToString(pointee);
+  }
+  StrCat(std::format("let {} : Value<{}>", storage, storage_type),
+         token::kSemiColon);
+  StrCat(std::format("let {} : {} = match {} {{ Some(__p) => __p, None => {{ {} "
+                     "= Rc::new(RefCell::new({})); {}.as_pointer() }} }}",
+                     name, ptr_type, name, storage, value, storage),
+         token::kSemiColon);
 }
 
 void ConverterRefCount::ConvertVaListVarDecl(clang::VarDecl *decl) {
@@ -2314,6 +2366,12 @@ const char *ConverterRefCount::StreamManipFn() const {
 // only after an extra reborrow that a Ptr temporary cannot always provide.
 std::string
 ConverterRefCount::StreamReceiver(const std::string &stream_str) const {
+  // Inside a user-written inserter the stream is already a `&mut __S` generic
+  // borrow, not a Ptr: reborrow it rather than taking a shared reference OF it,
+  // which would be `&&mut __S` and satisfies no Cc2Insert impl.
+  if (curr_function_ != nullptr && IsUserStreamInserter(curr_function_)) {
+    return "&mut *" + stream_str;
+  }
   // Borrowed, not moved. The receiver expression is sometimes a place that
   // cannot be moved out of -- `*os1 << ..` on a `std::ostream *` becomes
   // `(*os1.borrow())`, a `Ptr<File>` behind a `Ref`, which is E0507 if taken by
@@ -3238,8 +3296,12 @@ void ConverterRefCount::SetUFCSReceiver(clang::Expr *base, bool is_arrow,
 
 std::string
 ConverterRefCount::GetUFCSName(const clang::CXXMethodDecl *method) const {
-  return IsMethodOnPtr(method) ? TraitName(method->getParent())
-                               : GetRecordName(method->getParent());
+  // GetUFCSOwner, not method->getParent(): an inherited non-virtual method is
+  // copied onto the derived struct, so both the trait name and the record name
+  // have to follow the copy. `Ptr<D2>: B2Impl is not satisfied` was this --
+  // `B2Impl` is implemented for `Ptr<B2>`, while the callable copy is on D2.
+  const auto *owner = GetUFCSOwner(method, ufcs_receiver_record_);
+  return IsMethodOnPtr(method) ? TraitName(owner) : GetRecordName(owner);
 }
 
 std::string
