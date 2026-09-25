@@ -579,6 +579,17 @@ public:
     return std::nullopt;
   }
 
+  // Same problem on the UFCS receiver path: converting the receiver of a
+  // method call in an LValue context can stash it instead of emitting it,
+  // leaving `base_text` with no receiver in it. Gives the model the chance to
+  // rebuild the receiver text from what it stashed. `object_type` is the
+  // non-reference receiver type. The unsafe model never stashes and returns
+  // `base_text` unchanged.
+  virtual std::string FinishUFCSReceiverText(std::string base_text,
+                                             clang::QualType object_type) {
+    return base_text;
+  }
+
   virtual bool VisitParenExpr(clang::ParenExpr *expr);
 
   void ConvertMemberExpr(clang::MemberExpr *expr);

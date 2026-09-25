@@ -5769,10 +5769,24 @@ void Converter::SetUFCSReceiver(clang::Expr *base, bool is_arrow,
   if (cast_mut) {
     StrCat("*(&raw const");
   }
-  if (is_arrow) {
-    ConvertArrow(base);
-  } else {
-    Convert(base);
+  {
+    // The base is converted into its own buffer so a model that STASHES the
+    // receiver instead of emitting it (the refcount model does this for any
+    // lvalue reached through a Ptr -- `(*p).m()`, `v[i].m()`) gets a chance to
+    // turn the stash back into receiver text. Emitted inline, a stashed
+    // receiver came out as `& ( )`: an empty argument, and then the stash
+    // outlived the statement and tripped its not-consumed assert.
+    std::string base_text;
+    {
+      Buffer base_buf(*this);
+      if (is_arrow) {
+        ConvertArrow(base);
+      } else {
+        Convert(base);
+      }
+      base_text = std::move(base_buf).str();
+    }
+    StrCat(FinishUFCSReceiverText(std::move(base_text), object_type));
   }
   if (cast_mut) {
     StrCat(").cast_mut()");
@@ -8331,9 +8345,21 @@ std::string Converter::ConvertPlaceholder(clang::Expr *expr, clang::Expr *arg,
     // ConvertLValue can stash the argument instead of emitting it, leaving
     // `lvalue` empty. There is no place expression to borrow then, so ask the
     // model for the take form of what it stashed.
-    if (auto taken = TakePendingDerefAsMemTake()) {
-      computed_expr_type_ = ComputedExprType::FreshValue;
-      return std::move(*taken);
+    //
+    // The two must be kept in step: when `lvalue` is NON-empty the text has
+    // already been produced and it -- not the stash -- is the argument, so
+    // taking the stash here would silently DISCARD that text. Only reach for
+    // the stash on the empty-lvalue path it was written for.
+    if (lvalue.empty()) {
+      if (auto taken = TakePendingDerefAsMemTake()) {
+        computed_expr_type_ = ComputedExprType::FreshValue;
+        return std::move(*taken);
+      }
+      // Nothing emitted and nothing stashed: `std::mem::take(&mut )` would be
+      // emitted, which is not valid Rust and reads as a dropped argument.
+      // Loud rather than silently wrong.
+      assert(false && "kTake placeholder produced neither an lvalue nor a "
+                      "pending deref");
     }
     SetFresh();
     return std::format("std::mem::take(&mut {})", std::move(lvalue));

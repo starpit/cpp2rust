@@ -250,6 +250,14 @@ public:
 
   void ConvertVarInit(clang::QualType qual_type, clang::Expr *expr) override;
 
+  // Consumes pending_deref_ on the return-of-a-reference path; see the
+  // definition.
+  bool VisitReturnStmt(clang::ReturnStmt *stmt) override;
+
+  // Consumes pending_deref_ on the UFCS receiver path; see the definition.
+  std::string FinishUFCSReceiverText(std::string base_text,
+                                     clang::QualType object_type) override;
+
   std::string ConvertVarInitValue(clang::QualType qual_type, clang::Expr *expr);
 
   void ConvertAssignment(clang::Expr *lhs, clang::Expr *rhs,

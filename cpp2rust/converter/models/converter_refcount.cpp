@@ -2764,6 +2764,103 @@ void ConverterRefCount::ConvertVarInit(clang::QualType qual_type,
   StrCat(BoxValue(ConvertVarInitValue(qual_type, expr)));
 }
 
+// True when `str` is what a conversion that only STASHED a pending deref
+// leaves behind: nothing of substance -- the parens of a ParenExpr whose inner
+// expression emitted nothing, and/or the `(..).clone()` freshness wrapper
+// ConvertFreshPointer wrapped around that nothing.
+[[maybe_unused]] static bool IsStashOnlyRemainder(std::string_view str) {
+  std::string squeezed;
+  for (char ch : str) {
+    if (!std::isspace(static_cast<unsigned char>(ch)) && ch != '(' &&
+        ch != ')') {
+      squeezed.push_back(ch);
+    }
+  }
+  return squeezed.empty() || squeezed == ".clone";
+}
+
+std::string
+ConverterRefCount::FinishUFCSReceiverText(std::string base_text,
+                                          clang::QualType object_type) {
+  if (pending_deref_.empty()) {
+    return base_text;
+  }
+  // The receiver of a method call is converted in an LValue context, and every
+  // pointer-ish arm of this model emits NOTHING there: it stashes the ptr
+  // expression in pending_deref_ for a consumer to shape. The UFCS receiver
+  // path had no consumer, so `(*m_ptr)[i]` came out as
+  // `JsonValue::operator_index(&( ), i)` -- an EMPTY receiver argument -- and
+  // the stash then outlived the statement and tripped assert_consumed. That is
+  // the abort 14 TUs hit.
+  //
+  // A receiver is a place to borrow, so the shape it needs is the plain deref
+  // of the ptr -- exactly what the same arms emit in an RValue context.
+  assert(IsStashOnlyRemainder(base_text) &&
+         "UFCS receiver both emitted a value and stashed a deref");
+  auto ptr = pending_deref_.take();
+  SetFreshType(object_type);
+  return DerefPtrExpr(ptr, object_type);
+}
+
+bool ConverterRefCount::VisitReturnStmt(clang::ReturnStmt *stmt) {
+  auto *value = stmt->getRetValue();
+  auto return_type = curr_function_->getReturnType();
+  if (value == nullptr || !return_type->isReferenceType() ||
+      IsUserStreamInserter(curr_function_)) {
+    return Converter::VisitReturnStmt(stmt);
+  }
+
+  // `return <lvalue>;` from a reference-returning function needs to CONSUME
+  // pending_deref_.
+  //
+  // The pointer-ish arms of this model -- `operator*`, `operator[]`, a call
+  // whose return type is a reference -- emit NOTHING in an LValue context.
+  // They stash the ptr expression in pending_deref_ and hand ownership to a
+  // consumer that knows what shape to give it: assignment consumes it as
+  // `ptr.write(rhs)` (EmitSetOrAssign), a mapped method call as
+  // `ptr.with_mut(..)` (ConvertMappedMethodCall), a kTake placeholder as
+  // `std::mem::take` (TakePendingDerefAsMemTake).
+  //
+  // Returning a reference had NO consumer -- the base VisitReturnStmt knows
+  // nothing about pending_deref_ -- so the stash outlived the statement and
+  // tripped assert_consumed. 14 TUs aborted there, `const Json &
+  // Json::operator[](size_t) const { return (*m_ptr)[i]; }` among them.
+  //
+  // A reference-returning function returns a `Ptr` in this model, so the
+  // stashed ptr expression IS the return value. Dropping the stash instead
+  // (or dropping the assert) returns an EMPTY expression: silently wrong,
+  // which is worse than the abort.
+  HoistMaterializedTempBindings hoist_temps(*this);
+  std::string emitted;
+  {
+    Buffer buf(*this);
+    ConvertVarInit(return_type, value);
+    emitted = std::move(buf).str();
+  }
+
+  if (!pending_deref_.empty()) {
+    bool fresh = pending_deref_.is_fresh();
+    if (getenv("CPP2RUST_DEBUG_DEREF")) {
+      llvm::errs() << "RETURN-DEREF at "
+                   << stmt->getBeginLoc().printToString(ctx_.getSourceManager())
+                   << " emitted='" << emitted << "' held='"
+                   << pending_deref_.peek() << "'\n";
+    }
+    auto ptr = pending_deref_.take();
+    // A stash-only conversion leaves behind either nothing at all or the
+    // freshness wrapper ConvertFreshPointer put around the empty text. Any
+    // other leftover means the value was BOTH emitted and stashed, and
+    // picking one would silently discard the other -- do not guess.
+    assert(IsStashOnlyRemainder(emitted) &&
+           "return of a reference both emitted a value and stashed a deref");
+    emitted = fresh ? std::move(ptr) : std::format("({}).clone()", ptr);
+    SetFresh();
+  }
+
+  StrCat(keyword::kReturn, emitted);
+  return false;
+}
+
 bool ConverterRefCount::EmitGlobalValueAssign(clang::Expr *lhs,
                                               std::string_view assign_operator,
                                               std::string_view rhs) {
