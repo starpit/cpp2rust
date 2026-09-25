@@ -94,3 +94,15 @@ fn f27<T1: ByteRepr>(a0: Ptr<Vec<T1>>, a1: Vec<T1>) {
 fn f28<T1: ByteRepr>(a0: Ptr<Vec<T1>>, a1: Vec<T1>) {
     a0.write(a1)
 }
+
+// Equality. The OVERRIDE exists only to spell the element as `Value<T1>`: Rc and
+// RefCell both delegate PartialEq to the inner value, so this compares element
+// VALUES rather than handles, which is what the C++ compares. rules/vector's
+// f112/f113 are the same two bodies for the same reason.
+fn f29<T1: PartialEq>(a0: Vec<Value<T1>>, a1: Vec<Value<T1>>) -> bool {
+    a0 == a1
+}
+
+fn f30<T1: PartialEq>(a0: Vec<Value<T1>>, a1: Vec<Value<T1>>) -> bool {
+    a0 != a1
+}

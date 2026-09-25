@@ -153,6 +153,16 @@ public:
   void append(const SmallVectorImpl<T> &RHS);
   template <typename... ArgTypes> T &emplace_back(ArgTypes &&...Args);
   T *erase(const T *CS, const T *CE);
+  // SmallVector.h:959-965.  These are MEMBERS of SmallVectorImpl, not the
+  // namespace-scope templates std::vector has, and not hidden friends either --
+  // so the resolved signature carries the DECLARING CLASS
+  // (`llvm::SmallVectorImpl<T>::operator==`) and is arity-independent: a
+  // `SmallVector<T>` and a `SmallVector<T, N>` compared against each other
+  // resolve to this ONE key, because both convert to the same base.  A rule
+  // keyed on `SmallVector<T1>` would match nothing, the same trap f1/f2 record
+  // for size()/empty() on SmallVectorBase.
+  bool operator==(const SmallVectorImpl<T> &RHS) const;
+  bool operator!=(const SmallVectorImpl<T> &RHS) const;
 };
 
 template <typename T, unsigned N = 0> class SmallVector : public SmallVectorImpl<T> {
@@ -372,4 +382,40 @@ template <typename T1, unsigned T2>
 llvm::SmallVector<T1, T2> &f28(llvm::SmallVector<T1, T2> &dst,
                                const std::initializer_list<T1> &il) {
   return dst.operator=(il);
+}
+
+// ---------------------------------------------------------------------------
+// equality.  ONE rule pair for every instantiation and every arity, because the
+// operators are declared on SmallVectorImpl<T> (see the declaration above).
+//
+// SEMANTICS, read out of SmallVector.h:959 rather than assumed:
+//     if (this->size() != RHS.size()) return false;
+//     return std::equal(this->begin(), this->end(), RHS.begin());
+// -- the LENGTH is compared FIRST and a prefix is therefore never equal to its
+// extension, then the elements are compared PAIRWISE with the element type's
+// own ==.  Rust's `Vec<T>: PartialEq` is specified the same way (length, then
+// elementwise), so the body is the direct `a0 == a1` -- rules/vector's f112/f113
+// for std::vector's identical semantics.  The probe measures the four cases a
+// wrong body would pass a naive test on: equal, same-length-one-differing,
+// PREFIX (the case a zip-based or length-blind body gets wrong while passing
+// every equal-length test), and both-empty.
+//
+// In the refcount model the elements are `Value<T1>` = `Rc<RefCell<T1>>`, whose
+// PartialEq delegates to the inner value, so `a0 == a1` compares element VALUES
+// and not Rc identity -- which is what the C++ means.  rules/tuple's f272/f273
+// and rules/vector's f112/f113 rest on the same delegation.
+//
+// The receiver is spelled `a.operator==(b)` and NOT `a == b`: the bare spelling
+// records no src entry for the rule and then aborts every translation with
+// "Expr rule loaded from IR but has no src".
+// ---------------------------------------------------------------------------
+
+template <typename T1>
+bool f29(const llvm::SmallVectorImpl<T1> &a, const llvm::SmallVectorImpl<T1> &b) {
+  return a.operator==(b);
+}
+
+template <typename T1>
+bool f30(const llvm::SmallVectorImpl<T1> &a, const llvm::SmallVectorImpl<T1> &b) {
+  return a.operator!=(b);
 }

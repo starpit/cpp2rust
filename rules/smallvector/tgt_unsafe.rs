@@ -179,3 +179,14 @@ unsafe fn f27<T1>(a0: &mut Vec<T1>, a1: Vec<T1>) {
 unsafe fn f28<T1>(a0: &mut Vec<T1>, a1: Vec<T1>) {
     *a0 = a1
 }
+
+// Equality: length first, then elementwise -- which is exactly Vec's PartialEq,
+// so the body is direct. src.cpp quotes SmallVector.h:959 for why. Same bodies
+// as rules/vector's f112/f113 so the two containers cannot drift.
+unsafe fn f29<T1: PartialEq>(a0: Vec<T1>, a1: Vec<T1>) -> bool {
+    a0 == a1
+}
+
+unsafe fn f30<T1: PartialEq>(a0: Vec<T1>, a1: Vec<T1>) -> bool {
+    a0 != a1
+}
