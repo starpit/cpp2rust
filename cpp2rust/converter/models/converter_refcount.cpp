@@ -2461,6 +2461,27 @@ const char *ConverterRefCount::StreamManipFn() const {
 // E0716 the extraction rules were rewritten to avoid). So the receiver needs no
 // borrow: taking `&mut` of it would make the helper's S = Ptr<..> anyway, but
 // only after an extra reborrow that a Ptr temporary cannot always provide.
+// How a user-defined `operator<<` receives the stream, in this model.
+//
+// Same reborrow as StreamReceiver above, for the same reason and one level out.
+// Inside a user-written inserter the stream parameter is `&mut __S`, a generic
+// borrow rather than a Ptr, because Converter::ConvertFunctionParameters declares
+// it that way.  The base model spells the argument `&mut os`, which on an
+// already-`&mut` binding is E0596 ("cannot borrow `os` as mutable"); it has to be
+// `&mut *os`.
+//
+// Measured: without this, a translated inserter that calls ANOTHER inserter --
+// `os << *node;` inside `operator<<(std::ostream &, Graph &)` -- emitted
+// `let _os = &mut os;` and did not compile.  The abort it used to hide behind was
+// the `pending_deref_ not consumed` assert at the DeclRefExpr arm above.
+std::string ConverterRefCount::StreamInserterReceiver(
+    const std::string &stream_str) const {
+  if (curr_function_ != nullptr && IsUserStreamInserter(curr_function_)) {
+    return "&mut *" + stream_str;
+  }
+  return Converter::StreamInserterReceiver(stream_str);
+}
+
 std::string
 ConverterRefCount::StreamReceiver(const std::string &stream_str) const {
   // Inside a user-written inserter the stream is already a `&mut __S` generic
