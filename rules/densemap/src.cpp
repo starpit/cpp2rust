@@ -118,6 +118,20 @@ public:
   bool empty() const;
   unsigned int size() const;
   void clear();
+
+  // The lookup/insert/erase family. Every return type here is LLVM's, not
+  // std::map's, and three of them DIFFER -- see the block above f28.
+  ValueT lookup(const KeyT &Val) const;
+  ValueT &at(const KeyT &Val);
+  const ValueT &at(const KeyT &Val) const;
+  std::pair<iterator, bool> insert(const std::pair<KeyT, ValueT> &KV);
+  std::pair<iterator, bool> insert(std::pair<KeyT, ValueT> &&KV);
+  template <typename... Ts>
+  std::pair<iterator, bool> try_emplace(KeyT &&Key, Ts &&...Args);
+  template <typename... Ts>
+  std::pair<iterator, bool> try_emplace(const KeyT &Key, Ts &&...Args);
+  bool erase(const KeyT &Val);
+  void erase(iterator I);
 };
 
 template <typename KeyT, typename ValueT,
@@ -312,4 +326,132 @@ const T2 &f26(typename llvm::DenseMap<T1, T2>::const_iterator it) {
 template <typename T1, typename T2>
 const T1 &f27(typename llvm::DenseMap<T1, T2>::const_iterator it) {
   return it->first;
+}
+
+// ---------------------------------------------------------------------------
+// lookup / at / insert / try_emplace / erase.  Added ON EVIDENCE: a census of
+// llvm::DenseMap receivers across dt_src counted insert 86 calls, at 71,
+// lookup 31, erase 10 and try_emplace 7, and before this every one of them
+// emitted a nonexistent BTreeMap method -- measured, in both models:
+//   no method named `insert_pmuti32_i64_rv` / `lookup` / `at_pconsti32`
+//   / `erase_pconsti32` / `erase_UnsafeMapIteratori32_i64` / `try_emplace`
+//
+// THREE OF THESE DISAGREE WITH std::map, so a body copied from rules/map
+// would be silently wrong rather than absent.  LLVM's own bodies are the
+// specification and each was read out of llvm/ADT/DenseMap.h:
+//
+//   * erase(key) returns BOOL (DenseMap.h:330 `return false; // not in map.`).
+//     std::map::erase(key) returns the NUMBER erased, and rules/map's f43
+//     accordingly answers 0/1 as a size_t.  Returning a count here would be
+//     wrong at every `if (m.erase(k))` and every arithmetic use.
+//   * erase(iterator) returns VOID (DenseMap.h:341).  std::map's returns the
+//     FOLLOWING iterator, which is rules/map's f3.  A body that returned one
+//     would typecheck in Rust and mean something C++ never said.
+//   * lookup(key) returns ValueT BY VALUE, default-constructed when the key is
+//     absent, and DOES NOT INSERT (DenseMap.h:205).  This is the whole point of
+//     lookup existing beside operator[], which DOES insert -- so reusing f7's
+//     entry().or_insert_with() body would silently grow the map.  The probe
+//     reads size() back after looking up an absent key for exactly this.
+//
+// The other three agree with std::map and reuse its shape:
+//   * insert(pair&&) and try_emplace KEEP THE INCUMBENT on a duplicate key and
+//     report false (DenseMap.h:241, :256), whereas BTreeMap::insert OVERWRITES.
+//     Same trap rules/map's f45/f50 record; the probe inserts 99 over an
+//     existing 10 and asserts it is still 10.
+//   * at(key) returns ValueT& and ABORTS on a missing key (DenseMap.h:224 is an
+//     assert).  `.expect(...)` keeps that loud instead of inventing a value.
+//
+// Measured against $TC/shim4/clang++ before any rule was written:
+//   1 1 10 1 / 2 0 10 / 3 0 10 / 4 1 20 2 / 5 0 2 / 6 21 / 7 1 0 1 / 8 1 1
+// A BTreeMap::insert body gives `2 0 99`; an operator[] body for lookup gives
+// `5 0 3`; a count-returning erase gives a different line 7.
+//
+// Signatures were read back out of a real translation with --verbose, as this
+// file's header requires, NOT copied from the header and hoped over:
+//   bool ...DenseMapBase<...>::erase(const int &)
+//   void ...DenseMapBase<...>::erase(llvm::DenseMapIterator<int, long>)
+//   long ...DenseMapBase<...>::lookup(const int &) const
+//   long & ...DenseMapBase<...>::at(const int &)
+//   std::pair<llvm::DenseMapIterator<int, long>, bool> ...::insert(std::pair<int, long> &&)
+//   std::pair<llvm::DenseMapIterator<int, long>, bool> ...::try_emplace(int &&, &&...)
+// Note try_emplace's parameter pack prints as `&&...`, so it has to be RESTATED
+// as a pack: a non-variadic `try_emplace(KeyT &&, ValueT &&)` resolves to a
+// different string and would never match.
+//
+// NOTE the LLVM include form matters for whether this module is reached at all.
+// The dt_src database passes `-isystem <llvm>/include`, which makes DenseMap a
+// system type and lets these rules apply.  Under a plain `-I` the same headers
+// are USER code, Mapper::AddRuleForUserDefinedType claims the instantiation and
+// every rule here is silently bypassed in favour of translating LLVM's own
+// bodies.  Measured both ways; `-isystem` is what the real build uses.
+// ---------------------------------------------------------------------------
+
+template <typename T1, typename T2>
+std::pair<typename llvm::DenseMap<T1, T2>::iterator, bool>
+f28(llvm::DenseMap<T1, T2> &o, std::pair<T1, T2> &&v) {
+  return o.insert(static_cast<std::pair<T1, T2> &&>(v));
+}
+
+template <typename T1, typename T2>
+std::pair<typename llvm::DenseMap<T1, T2>::iterator, bool>
+f29(llvm::DenseMap<T1, T2> &o, T1 &&key, T2 &&value) {
+  return o.try_emplace(static_cast<T1 &&>(key), static_cast<T2 &&>(value));
+}
+
+template <typename T1, typename T2>
+T2 f30(const llvm::DenseMap<T1, T2> &o, const T1 &key) {
+  return o.lookup(key);
+}
+
+template <typename T1, typename T2>
+T2 &f31(llvm::DenseMap<T1, T2> &o, const T1 &key) {
+  return o.at(key);
+}
+
+template <typename T1, typename T2>
+bool f32(llvm::DenseMap<T1, T2> &o, const T1 &key) {
+  return o.erase(key);
+}
+
+template <typename T1, typename T2>
+void f33(llvm::DenseMap<T1, T2> &o,
+         typename llvm::DenseMap<T1, T2>::iterator it) {
+  return o.erase(it);
+}
+
+// THE CONST-RECEIVER AND LVALUE-ARGUMENT OVERLOADS ARE DIFFERENT SIGNATURES.
+// Same lesson this file already records for find/begin/end (f22..f24) and for
+// operator[] on an rvalue key (f15): a rule is keyed on the WHOLE resolved
+// string, so an overload the port actually reaches and this module does not
+// restate is a rule that validates cleanly and then silently does nothing.
+//
+// Each of the three below was produced by a PLAIN C++ shape, read off with
+// --verbose, not guessed:
+//   static long readback(const llvm::DenseMap<int,long> &m) { return m.at(1); }
+//     -> const long & ...::at(const int &) const        (f34, distinct from f31)
+//   std::pair<int,long> kv(1, 10L); m.insert(kv);
+//     -> ...::insert(const std::pair<int, long> &)      (f35, distinct from f28)
+//   int k = 3; m.try_emplace(k, 30L);
+//     -> ...::try_emplace(const int &, &&...)           (f36, distinct from f29)
+//
+// The const `at` is the one most likely to be load-bearing: reading a map
+// through a `const DenseMap &` parameter is the ordinary way to pass one, and
+// src.cpp already records dcc/.../AgenToSentient/Helper.cpp:772 needing the
+// const form of `find` for exactly that reason.
+
+template <typename T1, typename T2>
+const T2 &f34(const llvm::DenseMap<T1, T2> &o, const T1 &key) {
+  return o.at(key);
+}
+
+template <typename T1, typename T2>
+std::pair<typename llvm::DenseMap<T1, T2>::iterator, bool>
+f35(llvm::DenseMap<T1, T2> &o, const std::pair<T1, T2> &v) {
+  return o.insert(v);
+}
+
+template <typename T1, typename T2>
+std::pair<typename llvm::DenseMap<T1, T2>::iterator, bool>
+f36(llvm::DenseMap<T1, T2> &o, const T1 &key, T2 &&value) {
+  return o.try_emplace(key, static_cast<T2 &&>(value));
 }
