@@ -87,3 +87,37 @@ fn f17<T1>() -> Option<Value<T1>> {
     None
 }
 
+// Comparison against nullptr. Ownership IS the Option's discriminant, so all
+// four forms are `.is_some()` / `.is_none()`. See src.cpp for why this is the
+// top ==/!= row by TUs blocked, and for the f3 null-check defect these bodies
+// deliberately do not paper over.
+//
+// The std::nullptr_t operand takes NO Rust parameter: the rule preprocessor
+// elided ONLY WHEN TRAILING -- which is what f9 (`reset(std::nullptr_t)`) and
+// f17 (`unique_ptr(std::nullptr_t)`) in this module already rely on. A LEADING
+// one cannot be dropped: positions are matched in C++ order, so for the
+// reversed forms f20/f21 the nullptr is a0 and the unique_ptr is a1. The
+// converter emits a bare `Default::default()` for it with no type, which is an
+// E0282 unless the parameter names a type that can satisfy it -- measured, not
+// guessed: declaring f20 with one parameter produced
+// `(Default::default().is_some() as i32)` and `cannot infer type`. `()` is the
+// smallest type that both implements Default and cannot be confused with a
+// real value, and the `let () = a0;` binding consumes it so the body does not
+// carry an unused parameter.
+fn f18<T1>(a0: &Option<Value<T1>>) -> bool {
+    a0.is_some()
+}
+
+fn f19<T1>(a0: &Option<Value<T1>>) -> bool {
+    a0.is_none()
+}
+
+fn f20<T1>(a0: (), a1: &Option<Value<T1>>) -> bool {
+    let () = a0;
+    a1.is_some()
+}
+
+fn f21<T1>(a0: (), a1: &Option<Value<T1>>) -> bool {
+    let () = a0;
+    a1.is_none()
+}
