@@ -152,6 +152,16 @@ GetUserDefinedDefaultConstructor(const clang::CXXRecordDecl *decl);
 
 bool HasUsableDefaultArg(const clang::ParmVarDecl *param);
 
+/// The parameter whose default argument governs `param` -- itself, except for an
+/// INHERITED constructor's parameter, whose default lives on the base
+/// constructor it was inherited from. See converter_lib.cpp.
+const clang::ParmVarDecl *
+EffectiveDefaultArgParam(const clang::ParmVarDecl *param);
+
+/// The default-argument expression to use for `param`, following the inherited
+/// constructor hop. Null when there is none; ask HasUsableDefaultArg first.
+clang::Expr *GetUsableDefaultArg(const clang::ParmVarDecl *param);
+
 /// True for a defaulted REFERENCE parameter whose default expression is a
 /// temporary materialised by the binding (`const T &x = {}`), as opposed to one
 /// naming an object that already exists (`const T &x = some_global`).

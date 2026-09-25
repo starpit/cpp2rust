@@ -623,8 +623,64 @@ GetUserDefinedDefaultConstructor(const clang::CXXRecordDecl *decl) {
   return nullptr;
 }
 
+// The parameter whose default argument governs `param`.
+//
+// Normally that is `param` itself. The exception is an INHERITED CONSTRUCTOR:
+// `struct D : B { using B::B; };` gives D a constructor of its own, and clang
+// builds fresh ParmVarDecls for it that carry NO default argument -- the
+// defaults stay on B's constructor, which is where the standard puts them
+// ([class.inhctor.init]: the inherited constructor is used as if it were the
+// base's, default arguments included, and overload resolution at the call site
+// therefore builds a CXXDefaultArgExpr against B's parameter). Asking D's own
+// parameter answers "no default" for a call that omitted the argument, which is
+// exactly the disagreement that made `assert(has_default)` in
+// ConvertCXXConstructExprArgs a hard abort on 5 of the 295 dxp TUs
+// (mlir::affine::FlatAffineValueConstraints, which inherits
+// FlatLinearValueConstraints(IntegerSet, ValueRange = {}), and dt_src's own
+// DuplicateReusedTogglePattern, which inherits mlir's
+// OpRewritePattern(MLIRContext *, PatternBenefit = 1, ArrayRef<StringRef> = {})).
+//
+// Every reader of a default argument has to follow the same hop, or the two
+// sides disagree again in the other direction: EmitFunctionPreamble would emit
+// `Option<T>` for the parameter and then call `getDefaultArg()` on a decl that
+// has none (a null dereference), and DefaultArgIsMaterializedTemporary would
+// answer from the wrong decl. So the hop lives here, in one place, and
+// GetUsableDefaultArg below is what every reader uses.
+const clang::ParmVarDecl *
+EffectiveDefaultArgParam(const clang::ParmVarDecl *param) {
+  if (param->hasDefaultArg() || param->hasUnparsedDefaultArg()) {
+    return param;
+  }
+  const auto *ctor = clang::dyn_cast_or_null<clang::CXXConstructorDecl>(
+      clang::dyn_cast<clang::FunctionDecl>(param->getDeclContext()));
+  if (ctor == nullptr || !ctor->isInheritingConstructor()) {
+    return param;
+  }
+  const clang::CXXConstructorDecl *inherited =
+      ctor->getInheritedConstructor().getConstructor();
+  if (inherited == nullptr) {
+    return param;
+  }
+  unsigned index = param->getFunctionScopeIndex();
+  if (index >= inherited->getNumParams()) {
+    return param;
+  }
+  // One hop only: the inherited constructor's own parameter is a real
+  // declaration with its own default, and an inherited constructor inheriting
+  // another inherited constructor resolves to the original in clang already.
+  return inherited->getParamDecl(index);
+}
+
+clang::Expr *GetUsableDefaultArg(const clang::ParmVarDecl *param) {
+  // The callers convert the expression, which the converter's Convert(Expr *)
+  // takes mutably throughout; only the lookup above needs no write access.
+  return const_cast<clang::ParmVarDecl *>(EffectiveDefaultArgParam(param))
+      ->getDefaultArg();
+}
+
 bool HasUsableDefaultArg(const clang::ParmVarDecl *param) {
-  return param->hasDefaultArg() && !param->hasUninstantiatedDefaultArg();
+  const clang::ParmVarDecl *effective = EffectiveDefaultArgParam(param);
+  return effective->hasDefaultArg() && !effective->hasUninstantiatedDefaultArg();
 }
 
 bool DefaultArgIsMaterializedTemporary(const clang::ParmVarDecl *param) {
@@ -650,7 +706,7 @@ bool DefaultArgIsMaterializedTemporary(const clang::ParmVarDecl *param) {
   // deliberately NOT MaterializeTemporaryExpr, which is the node being tested
   // for; `IgnoreParenImpCasts` would skip it too and always answer false.
   return clang::isa<clang::MaterializeTemporaryExpr>(
-      param->getDefaultArg()->IgnoreParens()->IgnoreImpCasts());
+      GetUsableDefaultArg(param)->IgnoreParens()->IgnoreImpCasts());
 }
 
 std::string GetMainFileName(const clang::ASTContext &ctx) {

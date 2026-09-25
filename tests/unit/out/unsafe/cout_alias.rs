@@ -20,7 +20,7 @@ unsafe fn main_0() -> i32 {
         libcc2rs::cerr_unsafe()
     };
     libcc2rs::cc2_insert_bytes(&mut (*os1), b"hello\n");
-    let os2: *mut std::fs::File = if cond {
+    let os2: *mut std::fs::File = (if cond {
         &mut std::fs::File::from_raw_fd(
             std::io::stdout()
                 .as_fd()
@@ -36,7 +36,7 @@ unsafe fn main_0() -> i32 {
                 .unwrap()
                 .into_raw_fd(),
         )
-    } as *mut std::fs::File;
+    }) as *mut std::fs::File;
     libcc2rs::cc2_insert_bytes(&mut (*os2), b"hello\n");
     return 0;
 }

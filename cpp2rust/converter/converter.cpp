@@ -785,6 +785,42 @@ Converter::MaterializeTemp(const std::string &binding_name,
   auto pointee = param_type.getNonReferenceType();
   auto value = ConvertRValue(expr, pointee);
   auto type_str = ToStringBase(pointee);
+  // An EMPTY Rust spelling means the mapper had no rule for this type and
+  // Convert's type walk rendered NOTHING AT ALL -- the hole Convert(QualType)
+  // documents on its own boundary-enum branch. It is reachable for a type that
+  // is neither user-defined (so no rule is generated for it) nor covered by
+  // `--opaque-namespace` (so Opaque never declares it): an enum from a system
+  // header, measured on `llvm::cl::NumOccurrencesFlag` in
+  // dcc/tools/LitAutoTestGen/LitAutoTestGenMain.cpp. The format below then emits
+  //
+  //     static mut __tmp_8 :  = llvm_cl_NumOccurrencesFlag_Required ;
+  //
+  // which is not Rust -- rustc: "missing type for `static mut` item" -- so the
+  // WHOLE FILE stops parsing while the converter reports success and survey
+  // records no gap. That is the worst shape in this project: invisible to both
+  // instruments. Refuse here instead, exactly as an unmapped type is refused at
+  // mapper.cpp:1185, so it becomes one RANKED `UnmappedType` row.
+  //
+  // This does NOT close the TU it was found on, and must not be read as though
+  // it does. The enumerator is never declared either -- it is spelled once, at
+  // its use -- so LitAutoTestGenMain moves from "does not parse" to E0425
+  // "cannot find value", i.e. from invisible to an ordinary compile blocker that
+  // the census can see and rank. Declaring boundary enums is the separate
+  // decision, deliberately not taken here.
+  if (type_str.empty()) {
+    auto cpp_type = Mapper::ToString(pointee);
+    if (!ReportUnsupported("UnmappedType", cpp_type, expr->getExprLoc(),
+                           ctx_)) {
+      llvm::errs() << "materialized temporary of a type with no Rust spelling: "
+                   << cpp_type << '\n';
+      assert(0 && "materialized temp type has no Rust spelling");
+    }
+    // Both halves are the placeholder: the binding has no type to declare, and
+    // the reference has no binding to point at. Returning a typed binding with
+    // an unspelled type is the bug being removed.
+    auto placeholder = UnsupportedPlaceholder("UnmappedType", cpp_type);
+    return {placeholder + ";", placeholder};
+  }
   const auto *decl = in_const_initializer_ ? keyword::kStatic : keyword::kLet;
 
   auto binding =
@@ -2073,7 +2109,15 @@ bool Converter::VisitCXXMethodDecl(clang::CXXMethodDecl *decl) {
   if (decl->isOutOfLine() && !decl->overridden_methods().empty()) {
     return ConvertOutOfLineVirtualMethod(decl);
   }
-  if (decl->isOutOfLine() && !decl->isTemplateInstantiation()) {
+  // `!IsOwnImplOpen`: both out-of-line emitters below open their OWN
+  // `impl <Record> {`, which is right at item level and is a parse error when an
+  // impl for the same record is already open -- Rust has no nested items, and
+  // rustc says "implementation is not supported in `trait`s or `impl`s". The
+  // method is emitted as a bare item of the enclosing impl instead, which is the
+  // same Rust either way: an inherent method of the same record. See
+  // open_impl_for_ for how the nesting was reached.
+  if (decl->isOutOfLine() && !decl->isTemplateInstantiation() &&
+      !IsOwnImplOpen(decl)) {
     return ConvertOutOfLineMethod(decl);
   }
   return ConvertCXXMethodDecl(decl);
@@ -2532,7 +2576,8 @@ void Converter::EmitFunctionPreamble(clang::FunctionDecl *decl) {
     auto name = GetNamedDeclAsString(param);
     auto type = ToString(param->getType());
     auto init =
-        std::format("{}.unwrap_or({})", name, ToString(param->getDefaultArg()));
+        std::format("{}.unwrap_or({})", name,
+                    ToString(GetUsableDefaultArg(param)));
     StrCat(std::format("let mut {} : {} = {}", name, type, init),
            token::kSemiColon);
   }
@@ -2547,7 +2592,7 @@ void Converter::EmitDefaultedRefParam(clang::ParmVarDecl *param) {
     return;
   }
   auto ptr_type = ToString(param->getType());
-  auto *default_arg = param->getDefaultArg();
+  auto *default_arg = GetUsableDefaultArg(param);
 
   // The default is evaluated LAZILY, in the `None` arm only. C++ evaluates a
   // default argument at the call sites that omit it and nowhere else, so an
@@ -6144,7 +6189,17 @@ void Converter::ConvertCXXConstructExprArgs(clang::CXXConstructExpr *expr) {
 
     if (arg_idx < expr->getNumArgs() &&
         clang::isa<clang::CXXDefaultArgExpr>(expr->getArg(arg_idx))) {
-      assert(has_default);
+      // A bare `assert(has_default)` here was a HARD ABORT with no diagnostic at
+      // all -- invisible to --survey, which records gaps and cannot record a
+      // crash, and in a plain run it kills the process on whatever TU reaches
+      // it. Whatever else is true, both sides have to be NAMED before they are
+      // refused: the constructor, the parameter and the call site. Emitting
+      // `None` against a signature that has no `Option` in that position would
+      // be a type error at best and a wrong argument at worst, so this refuses.
+      if (!has_default && !ReportDefaultArgMismatch(ctor, param, param_idx,
+                                                    expr)) {
+        assert(false && "has_default");
+      }
       ++arg_idx;
       StrCat("None", token::kComma);
       continue;
@@ -6162,11 +6217,43 @@ void Converter::ConvertCXXConstructExprArgs(clang::CXXConstructExpr *expr) {
         ConvertVarInit(param_type, arg);
       }
     } else {
-      assert(has_default);
+      if (!has_default && !ReportDefaultArgMismatch(ctor, param, param_idx,
+                                                    expr)) {
+        assert(false && "has_default");
+      }
       StrCat("None");
     }
     StrCat(token::kComma);
   }
+}
+
+// Names both sides of a "the call site omitted this argument, but the parameter
+// has no default the converter can see" disagreement, which is otherwise a bare
+// `Assertion `has_default' failed` naming only a line number. Returns true when
+// a survey run recorded it as a gap, in which case the caller carries on;
+// otherwise it has printed the diagnostic and the caller refuses loudly.
+bool Converter::ReportDefaultArgMismatch(const clang::CXXConstructorDecl *ctor,
+                                         const clang::ParmVarDecl *param,
+                                         unsigned param_idx,
+                                         const clang::CXXConstructExpr *expr) {
+  const auto *inherited = ctor->getInheritedConstructor().getConstructor();
+  auto detail = std::format(
+      "{}: parameter #{} ({}) is omitted at the call site but carries no "
+      "default argument this converter can see (hasDefaultArg={}, "
+      "uninstantiated={}, unparsed={}, inheriting constructor of {})",
+      ctor->getQualifiedNameAsString(), param_idx,
+      param->getType().getAsString(), param->hasDefaultArg(),
+      param->hasUninstantiatedDefaultArg(), param->hasUnparsedDefaultArg(),
+      inherited != nullptr ? inherited->getQualifiedNameAsString()
+                           : std::string("<not inheriting>"));
+  if (ReportUnsupported("DefaultArgMismatch", detail, expr->getExprLoc(),
+                        ctx_)) {
+    return true;
+  }
+  llvm::errs() << "unsupported DefaultArgMismatch " << detail << " at "
+               << expr->getExprLoc().printToString(ctx_.getSourceManager())
+               << '\n';
+  return false;
 }
 
 bool Converter::VisitCXXConstructExpr(clang::CXXConstructExpr *expr) {
@@ -6450,6 +6537,32 @@ bool Converter::VisitLambdaExpr(clang::LambdaExpr *expr) {
   PushCurrFunction push_fn(*this, call_op);
   ConvertFunctionBody(curr_function_);
   StrCat('}');
+  // A Rust closure literal is a FRESH value: a temporary this expression just
+  // created, which nothing else refers to, so no caller owes it a `.clone()`.
+  // Both refusals above already say FreshValue; the path that actually emits a
+  // closure said nothing, and that was a real defect in two directions.
+  //
+  // Convert(Expr *) requires every expression to classify itself and asserts
+  // otherwise. Whether this omission reached that assert depended on what the
+  // lambda's BODY left in computed_expr_type_, because the field is one
+  // converter-wide slot and ConvertFunctionBody above runs arbitrary
+  // conversions through it: a body whose last Convert(Expr *) ended on a value
+  // left a stale non-Unknown answer and the assert stayed quiet, while a body
+  // that ended on `Convert(nullptr)` -- a bare `return;`, an `if` with no else,
+  // a `for` with no condition -- or an EMPTY body left Unknown and the process
+  // died with `Assertion `false && "computed_expr_type_ not set"' failed`. That
+  // is 11 of the 295 dxp TUs at 9df5804 (7 with the lambda bound to a
+  // forwarding-reference parameter, 4 as a bare LambdaExpr), each of them an
+  // abort with no other blocker: invisible to --survey, which cannot record a
+  // crash, and fatal in a plain run.
+  //
+  // The quiet case was the worse half: when the stale answer happened to be
+  // Pointer or Value, callers that ask isFresh() -- ConvertFreshRValue adds a
+  // `.clone()`, the reference-binding paths decide whether to materialise --
+  // were deciding about a closure from whatever the body's last subexpression
+  // happened to be. Same closure, different code depending on its body's last
+  // statement.
+  computed_expr_type_ = ComputedExprType::FreshValue;
   return false;
 }
 
@@ -6872,6 +6985,20 @@ void Converter::ConvertVarInit(clang::QualType qual_type, clang::Expr *expr) {
             expr->IgnoreParenImpCasts());
         cond && cond->isLValue()) {
       {
+        // PARENTHESIZED, and that is a parse requirement, not a style choice. An
+        // lvalue ternary lowers to `if c { &mut a } else { &mut b }`, which is a
+        // Rust ExpressionWithBlock: in STATEMENT position -- including as the
+        // final expression of a block, which is exactly where
+        // ConvertCXXConstructExprArgs puts a by-reference argument (`X::new({ ..
+        // })`) -- Rust parses it as a statement and the `as` below is then
+        // "expected expression, found `as`". rustfmt rejects the file, so the TU
+        // reports as translated (conversion itself succeeds, no gap recorded,
+        // rc=1 only from rustfmt) while the output is not Rust at all.
+        //
+        // Parenthesizing the operand is valid in every position an unparenthesized
+        // one was, so this cannot change any output that already parsed except by
+        // adding the two characters.
+        PushParen paren(*this);
         PushExprKind push(*this, ExprKind::LValue);
         PushInitType init_type(*this, qual_type);
         Convert(cond);
@@ -7338,6 +7465,11 @@ bool Converter::ConvertCXXMethodDecls(
         }
         first = false;
       }
+      // The `impl <Record> {` is open from here to the closing brace below, and
+      // whichever emitter this method reaches must not open a second one. The
+      // scope covers the bare case too: there the CALLER writes the braces
+      // around this buffered body, so an item emitted here is just as nested.
+      PushOpenImpl open(*this, decl);
       VisitCXXMethodDecl(method);
     }
   };

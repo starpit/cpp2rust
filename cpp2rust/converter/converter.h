@@ -607,6 +607,12 @@ public:
   virtual bool VisitCXXConstructExpr(clang::CXXConstructExpr *expr);
 
   void ConvertCXXConstructExprArgs(clang::CXXConstructExpr *expr);
+  // See converter.cpp: names both sides of an omitted-argument/no-default
+  // disagreement. True when a survey run recorded it as a gap.
+  bool ReportDefaultArgMismatch(const clang::CXXConstructorDecl *ctor,
+                                const clang::ParmVarDecl *param,
+                                unsigned param_idx,
+                                const clang::CXXConstructExpr *expr);
 
   virtual void ConvertArrayCXXConstructExpr(clang::CXXConstructExpr *expr);
 
@@ -1041,6 +1047,37 @@ protected:
     }
     ~PushMethodTarget() { c.method_target_ = prev; }
   };
+
+  // The record whose `impl <Record> {` item is CURRENTLY OPEN, or null at item
+  // level. Rust has no nested items inside an `impl`, so a method emitter that
+  // opens its own `impl` (ConvertOutOfLineMethod) must not run while one is
+  // already open -- that emits `impl X { .. impl X { .. } .. }` and the whole
+  // file stops parsing with "implementation is not supported in `trait`s or
+  // `impl`s". Reachable because ConvertCXXMethodDecls feeds
+  // ForEachTemplateInstantiatedMethod's results into VisitCXXMethodDecl from
+  // INSIDE the impl it just opened, and an explicit specialization of a member
+  // function template (`template <> void N::walk<0>(..) {..}` in the .cpp) is
+  // out-of-line while `isTemplateInstantiation()` is false, so it took the
+  // out-of-line branch.
+  const clang::CXXRecordDecl *open_impl_for_ = nullptr;
+
+  struct PushOpenImpl {
+    Converter &c;
+    const clang::CXXRecordDecl *prev;
+    PushOpenImpl(Converter &c, const clang::CXXRecordDecl *decl)
+        : c(c), prev(c.open_impl_for_) {
+      c.open_impl_for_ = decl;
+    }
+    ~PushOpenImpl() { c.open_impl_for_ = prev; }
+  };
+
+  // Whether an `impl` for this method's own record is already open, i.e. whether
+  // emitting one here would nest.
+  bool IsOwnImplOpen(const clang::CXXMethodDecl *decl) const {
+    return open_impl_for_ != nullptr && decl->getParent() != nullptr &&
+           open_impl_for_->getCanonicalDecl() ==
+               decl->getParent()->getCanonicalDecl();
+  }
 
   std::string ufcs_receiver_;
   // The receiver's static record type, set beside ufcs_receiver_ and read by

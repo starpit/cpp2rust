@@ -866,7 +866,7 @@ void ConverterRefCount::EmitFunctionPreamble(clang::FunctionDecl *decl) {
 
     if (HasUsableDefaultArg(param)) {
       init = std::format("{}.unwrap_or({})", name,
-                         ToString(param->getDefaultArg()));
+                         ToString(GetUsableDefaultArg(param)));
     }
 
     StrCat(
@@ -886,7 +886,7 @@ void ConverterRefCount::EmitDefaultedRefParam(clang::ParmVarDecl *param) {
     return;
   }
   auto ptr_type = ToString(param->getType());
-  auto *default_arg = param->getDefaultArg();
+  auto *default_arg = GetUsableDefaultArg(param);
 
   if (!DefaultArgIsMaterializedTemporary(param)) {
     std::string addr;
