@@ -31,3 +31,27 @@ fn f2(a0: Ptr<u64>) -> u64 {
         __old
     })
 }
+
+fn f3(a0: Ptr<i32>) -> i32 {
+    ({
+        let __old: i32 = a0.read();
+        a0.write(__old.wrapping_add(1));
+        __old
+    })
+}
+
+fn f4(a0: Ptr<i32>) -> i32 {
+    ({
+        let __new: i32 = a0.read().wrapping_add(1);
+        a0.write(__new);
+        __new
+    })
+}
+
+fn f5(a0: Ptr<u64>) -> u64 {
+    ({
+        let __new: u64 = a0.read().wrapping_add(1);
+        a0.write(__new);
+        __new
+    })
+}

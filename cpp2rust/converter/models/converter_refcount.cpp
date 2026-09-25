@@ -479,6 +479,32 @@ std::string ConverterRefCount::GetShallowCopy(const clang::RecordDecl *decl,
 }
 
 void ConverterRefCount::AddCloneTrait(const clang::RecordDecl *decl) {
+  // The record's `Clone` -- whether emitted below or supplied by the
+  // `derive(Clone)` GetStructAttributes chose -- IS already the deep copy: every
+  // field is rebuilt as a fresh `Rc::new(RefCell::new(...))`, and a container
+  // field's initializer is itself a `deep_clone`. So a record is a legitimate
+  // `DeepClone` LEAF, and it has to SAY so: `rules/vector`'s `push_back` overlay
+  // is `fn f21<T1: DeepClone>`, so without an impl `std::vector<R>::push_back` is
+  // `error[E0599]: no method named deep_clone found for struct R`. That is the
+  // hole libcc2rs/src/deep_clone.rs documents -- and which an earlier version of
+  // that comment claimed a function here already closed, describing code that was
+  // never written.
+  //
+  // Emitted from the same function that emits the `Clone` it delegates to, and
+  // skipped on the one path that emits NO `Clone`, so the leaf impl and the
+  // `Clone` it needs cannot drift apart.
+  if (!EmitCloneImpl(decl)) {
+    return;
+  }
+  StrCat(std::format("impl_deep_clone_leaf!({});", GetRecordName(decl)));
+}
+
+// True when the record ends up with a `Clone` in the output, which is the
+// precondition for the leaf impl above. False on exactly one path: a record whose
+// copy constructor is deleted or has no definition, which C++ cannot copy either.
+// A container element of such a type stays a LOUD rustc error rather than
+// becoming a silently shallow copy.
+bool ConverterRefCount::EmitCloneImpl(const clang::RecordDecl *decl) {
   auto record_name = GetRecordName(decl);
 
   if (decl->isUnion()) {
@@ -488,11 +514,13 @@ void ConverterRefCount::AddCloneTrait(const clang::RecordDecl *decl) {
     PushBrace fn_brace(*this);
     StrCat(record_name,
            "{ __bytes: Rc::new(RefCell::new(self.__bytes.borrow().clone())) }");
-    return;
+    return true;
   }
 
+  // `derive(Clone)` covers this one -- see GetStructAttributes, which asks the
+  // same question -- so there is a `Clone`, just not one written here.
   if (HasDefaultedCopyConstructor(decl) && RecordHasOnlyReferenceFields(decl)) {
-    return;
+    return true;
   }
   auto *cxx = clang::dyn_cast<clang::CXXRecordDecl>(decl);
   if (!cxx) {
@@ -507,11 +535,11 @@ void ConverterRefCount::AddCloneTrait(const clang::RecordDecl *decl) {
       StrCat(std::format(
           "{0}: Rc::new(RefCell::new((*self.{0}.borrow()).clone())),", name));
     }
-    return;
+    return true;
   }
 
   if (!HasCallableCopyConstructor(cxx)) {
-    return;
+    return false;
   }
 
   StrCat(keyword::kImpl, "Clone for", record_name, '{');
@@ -535,6 +563,7 @@ void ConverterRefCount::AddCloneTrait(const clang::RecordDecl *decl) {
 
   StrCat('}');
   StrCat('}');
+  return true;
 }
 
 void ConverterRefCount::AddDefaultTrait(const clang::RecordDecl *decl) {

@@ -518,3 +518,30 @@ fn f130<T1: ByteRepr + Clone>(a0: Ptr<Vec<Value<Vec<T1>>>>, init: Vec<T1>) {
     let __init = init;
     a0.with_mut(|__v: &mut Vec<Value<Vec<T1>>>| __v.push(Rc::new(RefCell::new(__init))))
 }
+
+// std::reverse_iterator<T1 *> -- the raw-pointer spelling, as opposed to
+// f121-f123's std::reverse_iterator<std::__wrap_iter<T1 *>>.  Same
+// representation, same bodies: the iterator IS the Ptr to the element it
+// dereferences to, so ++ steps BACKWARDS.  f133 is the postfix form and must
+// hand back the OLD position -- PostfixDec, not PrefixDec; see src.cpp above
+// f132 for why that distinction is load-bearing and what it was verified
+// against.
+fn t10<T1>() -> Ptr<T1> {
+    Ptr::null()
+}
+
+fn f132<T1>(a0: &mut Ptr<T1>) -> Ptr<T1> {
+    a0.prefix_dec()
+}
+
+fn f133<T1>(a0: &mut Ptr<T1>) -> Ptr<T1> {
+    a0.postfix_dec()
+}
+
+fn f134<T1>(a0: &mut Ptr<T1>) -> Ptr<T1> {
+    a0.prefix_inc()
+}
+
+fn f135<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0
+}

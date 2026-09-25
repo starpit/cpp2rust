@@ -57,3 +57,16 @@ fn f12<T1: Clone + ByteRepr>(a0: Ptr<Vec<T1>>, a1: T1) {
 fn f6<T1: DeepClone>(a0: Vec<T1>) -> Vec<T1> {
     a0.deep_clone()
 }
+
+// rbegin / rend on std::array -- the refcount mirror of tgt_unsafe's f13/f14,
+// and of rules/vector f114/f115.  Ptr keeps a usize offset, so "one before
+// index 0" is the wrapped offset usize::MAX, which a decremented iterator and
+// a freshly built rend() both name, making them compare equal.
+fn f13<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0.to_end().offset(-1_isize)
+}
+
+fn f14<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    let __len = a0.len() as isize;
+    a0.to_end().offset(-(__len + 1))
+}

@@ -141,3 +141,51 @@ template <typename T1> std::atomic<T1> f1(T1 a0) {
 unsigned long f2(std::__atomic_base<unsigned long> &o, int a1) {
   return o.operator++(a1);
 }
+
+// ---------------------------------------------------------------------------
+// The other three corners of the ++ table: PREFIX on both widths, and the
+// `int` width, which is what `static std::atomic tag_id(0)` deduces at
+// sys-arch-spec/progpatch/progpatch.cpp:67 (CTAD from the `0`).  That site is
+// `std::to_string(++tag_id)` at progpatch.cpp:113 -- prefix, in a
+// VALUE-CONSUMING position, so the returned value is again load-bearing and
+// not a discarded side effect.  It was the ONLY translation gap in that whole
+// TU, measured on its survey TSV.
+//
+// PREFIX vs POSTFIX here is not the ordinary iterator distinction, and the
+// difference is visible in libc++'s own source
+// (__atomic/atomic.h:185 and :189):
+//
+//     _Tp operator++(int) { return fetch_add(_Tp(1)); }        // OLD value
+//     _Tp operator++()    { return fetch_add(_Tp(1)) + _Tp(1); } // NEW value
+//
+// Note what prefix does NOT do: it does not return a reference to the atomic.
+// It cannot -- an atomic's value is only observable through a load -- so both
+// forms return a PRVALUE of _Tp and differ only by one.  That is why f4/f5 are
+// spelled with a `T` return and not a `T &`, and why the target bodies can use
+// libcc2rs's PrefixInc (inc.rs, `*self = self.wrapping_add(1); *self`)
+// directly: its "return the new value" contract is exactly the C++ one.  Using
+// PostfixInc for a prefix site would compile and answer one too LOW, the
+// mirror of the trap documented above f2.
+//
+// WRAPPING IS CORRECT FOR THE SIGNED WIDTH TOO, which is the one thing here
+// that is not obvious.  Signed overflow on a plain `int` is UB, so a reflex
+// reading says f3/f4 should not wrap.  But [atomics.types.int] specifies the
+// atomic arithmetic operations to use two's-complement representation with
+// "no undefined results", and libc++ implements them as fetch_add, so
+// std::atomic<int> overflow is DEFINED to wrap where `int` overflow is not.
+// wrapping_add therefore records the C++ semantics rather than relaxing them;
+// a checked `+= 1` would introduce a panic C++ does not have.
+//
+// Each width needs its own rule for the reason spelled out at length above f2
+// (the defaulted `bool` argument of std::__atomic_base only prints away for a
+// concrete integral type).  `int` and `unsigned long` are the two widths that
+// occur in dcg/ ddc/ dsc/ dbo/ sys-arch-spec/; a third is a two-line copy.
+// ---------------------------------------------------------------------------
+
+int f3(std::__atomic_base<int> &o, int a1) { return o.operator++(a1); }
+
+int f4(std::__atomic_base<int> &o) { return o.operator++(); }
+
+unsigned long f5(std::__atomic_base<unsigned long> &o) {
+  return o.operator++();
+}

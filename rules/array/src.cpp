@@ -73,3 +73,36 @@ template <typename T1, std::size_t T2>
 void f12(std::array<T1, T2> &o, const T1 &value) {
   return o.fill(value);
 }
+
+// ---------------------------------------------------------------------------
+// rbegin / rend.
+//
+// std::array's iterator IS a raw pointer, so these return
+// `std::reverse_iterator<T1 *>` -- the spelling rules/vector t10/f129-f132
+// owns, NOT vector's `std::reverse_iterator<std::__wrap_iter<T1 *>>`.  That is
+// why these two rules belong here and the operations on their RESULT do not:
+// once the type matches t10, ++/--/* are already covered.
+//
+// No type rule is declared for the result.  vector's t10 already maps that
+// exact spelling, and two modules mapping one C++ type to the identical Rust
+// type is accepted (addRulesFromDirectory treats it as the idempotent case);
+// but declaring it twice buys nothing and adds a spelling to keep in sync, so
+// the mapping is left in one place.
+//
+// The representation, and the reason rbegin() is `data() + len - 1` rather
+// than something one-past-the-end, is documented above rules/vector f114 --
+// the reverse iterator is the pointer to the element it dereferences to.
+// rend() is the slot one BEFORE the first element, which for an EMPTY array
+// coincides with rbegin(), so a reverse walk terminates immediately, as in
+// C++.
+// ---------------------------------------------------------------------------
+
+template <typename T1, std::size_t T2>
+typename std::array<T1, T2>::reverse_iterator f13(std::array<T1, T2> &o) {
+  return o.rbegin();
+}
+
+template <typename T1, std::size_t T2>
+typename std::array<T1, T2>::reverse_iterator f14(std::array<T1, T2> &o) {
+  return o.rend();
+}

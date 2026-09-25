@@ -762,3 +762,95 @@ template <typename T1, typename T2 = std::allocator<T1>, typename... Args>
 T1 &f131(std::vector<T1, T2> &o, Init<T1, Args> &&...args) {
   return o.emplace_back(std::forward<Args>(args)...);
 }
+
+// ---------------------------------------------------------------------------
+// RENUMBERED f129-f132 -> f132-f135.  These were written against 6f21c8d, where
+// f128 was the highest number in this module; the upstream merge landed an
+// emplace_back argument-pack set that independently took f129/f130/f131 (and was
+// itself renumbered from f112/f113/f114 for the same reason -- see the note above
+// it).  The names are module-local, so this is a rename with no behavioural
+// content, and t10 was free on both sides.
+//
+// std::reverse_iterator over a RAW POINTER -- `std::reverse_iterator<T1 *>`,
+// as distinct from f114-f126's `std::reverse_iterator<std::__wrap_iter<T1 *>>`.
+//
+// WHY THIS IS A SEPARATE SET OF RULES AND NOT A GENERALISATION OF THOSE.
+// A rule matches on the SIGNATURE STRING, and libc++ spells the two
+// differently because the underlying iterator is a different type: a
+// std::vector's iterator is the wrapper class `std::__wrap_iter<T1 *>`, while
+// a container whose iterator IS a raw pointer reverses to
+// `std::reverse_iterator<T1 *>` with no wrapper in between.  f121's spelling
+// therefore cannot match the latter, no matter how the template parameter is
+// captured -- `std::__wrap_iter<T1 *>` cannot unify with `mlir::sentient::IfOp
+// *` because the outer template name differs.  Confirmed by the converter's
+// own lookup: `cpp2rust --verbose` on
+// dcc/src/Transform/Sentient/CFGSimplificationSentientLevel.cpp prints
+//
+//   search expr std::reverse_iterator<mlir::sentient::IfOp *> &
+//               std::reverse_iterator<mlir::sentient::IfOp *>::operator++(),
+//               result:
+//
+// -- an empty result next to an f121 that was already present and matching
+// the vector spelling in the same run.
+//
+// WHERE THESE OCCUR.  Two shapes, both raw-pointer-iterator containers:
+//   * llvm::SmallVector<T> / SmallVectorTemplateCommon<T>::rbegin(), which is
+//     `std::reverse_iterator<T *>`.  Five sites over four TUs in dcc/,
+//     e.g. CFGSimplificationSentientLevel.cpp:875 `for (auto it =
+//     if_ops_to_clean_up.rbegin(); it != ...rend(); ++it)`, and
+//     LiveRangeReduction.cpp:862 `for (auto result = list.rbegin(); ...;
+//     result++)` -- note the POSTFIX form there, which is why f133 exists.
+//   * std::array<T, N>::rbegin(), the same spelling from a std container, which
+//     is what makes this reachable by a self-contained probe rather than only
+//     through LLVM headers.
+//
+// MODEL: identical to f114-f126's, and deliberately so -- a reverse iterator
+// is the POINTER TO THE ELEMENT IT DEREFERENCES TO, walked backwards.  So
+// operator++ DECREMENTS, operator-- increments, operator*() is the identity,
+// and rend() is the slot one before the first element.  The full justification,
+// including why that differs from the real std::reverse_iterator (whose stored
+// base() sits one past the element) and how each model names the
+// one-before-the-first slot reproducibly, is in the comment above f114; read it
+// there rather than trusting this paragraph.
+//
+// THE TRAP THAT MATTERS, stated for the postfix rule f133.  Post-increment
+// yields a COPY OF THE OLD VALUE, which for an iterator means the OLD
+// POSITION -- so after `auto old = it++`, `*old` must be the element `it`
+// addressed BEFORE the step.  A body returning the new position compiles
+// cleanly and answers the NEXT element, which on this reversed representation
+// means one element further TOWARDS THE FRONT.  Verified by running, not by
+// reading: on `std::array<int,4> a = {10,20,30,40}`, C++ gives `old=40 new=30`,
+// and so must the translation.  PostfixDec is therefore the correct trait here
+// -- "return the old value, then step" where the step is a decrement -- exactly
+// as f122 already uses it for the wrapped spelling.
+//
+// NO operator== / operator!= RULES ARE ADDED HERE.  The comparison on this
+// spelling is `bool std::__1::operator!=(const std::reverse_iterator<T1 *> &,
+// const std::reverse_iterator<T1 *> &)`, which is a DIFFERENT gap class
+// (`CXXOperatorCallExpr !=`, the top row of the blocker list) and is being
+// worked separately.  Adding a half of it here would collide with that work
+// for no gain, since every loop site needs both halves to translate.  The
+// honest position: these rules clear the `++` occurrences and leave the `!=`
+// on the same lines recorded, which is what the survey will show.
+// ---------------------------------------------------------------------------
+
+template <typename T1> using t10 = std::reverse_iterator<T1 *>;
+
+template <typename T1>
+std::reverse_iterator<T1 *> &f132(std::reverse_iterator<T1 *> &it) {
+  return it.operator++();
+}
+
+template <typename T1>
+std::reverse_iterator<T1 *> f133(std::reverse_iterator<T1 *> a0, int a1) {
+  return a0.operator++(a1);
+}
+
+template <typename T1>
+std::reverse_iterator<T1 *> &f134(std::reverse_iterator<T1 *> &it) {
+  return it.operator--();
+}
+
+template <typename T1> T1 &f135(std::reverse_iterator<T1 *> it) {
+  return it.operator*();
+}

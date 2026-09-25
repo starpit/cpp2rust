@@ -64,3 +64,18 @@ unsafe fn f12<T1: Clone>(a0: &mut Vec<T1>, a1: T1) {
         *__e = a1.clone();
     }
 }
+
+// rbegin / rend on std::array.  The result is rules/vector's t10 spelling --
+// the reverse iterator is the POINTER TO THE ELEMENT IT DEREFERENCES TO, so
+// rbegin() is the LAST element and rend() the slot one BEFORE the first.
+// wrapping_sub, not sub: on an empty array rend() steps off the front, and the
+// wrapping spelling is what makes it produce the same address the walk's
+// prefix_dec eventually reaches.  See rules/vector f114/f115, whose bodies
+// these mirror exactly.
+unsafe fn f13<T1>(a0: &mut Vec<T1>) -> *mut T1 {
+    a0.as_mut_ptr().add(a0.len()).wrapping_sub(1)
+}
+
+unsafe fn f14<T1>(a0: &mut Vec<T1>) -> *mut T1 {
+    a0.as_mut_ptr().wrapping_sub(1)
+}

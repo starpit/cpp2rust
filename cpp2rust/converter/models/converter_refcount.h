@@ -49,6 +49,11 @@ public:
                              std::string_view src);
   void AddCloneTrait(const clang::RecordDecl *decl) override;
 
+  // The `Clone` half of AddCloneTrait, split out so the `DeepClone` leaf impl
+  // is emitted if and only if a `Clone` exists to delegate to. Returns whether
+  // the record has one.
+  bool EmitCloneImpl(const clang::RecordDecl *decl);
+
   void AddByteReprTrait(const clang::RecordDecl *decl) override;
 
   bool
