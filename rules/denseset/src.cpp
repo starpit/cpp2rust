@@ -515,7 +515,7 @@ template <typename T1> bool f30(const dsv<T1> &o) {
 
 // begin/end/find, in both const-nesses.  The const receiver hands back
 // const_iterator, a different type AND a different signature -- rules/densemap
-// f44..f46.
+// f22..f24.
 template <typename T1>
 typename dsv<T1>::iterator f31(dsv<T1> &o) {
   return o.begin();
@@ -581,7 +581,7 @@ bool f40(typename dsv<T1>::const_iterator a,
 // in the header comment is kept out of the evidence.  DenseSet.h:131 returns
 // `reference`, i.e. ValueT & for the mutable iterator and const ValueT & for the
 // const one -- two different strings.  POSTFIX ++ is NOT mapped and stays loud
-// (rules/densemap f39 records that it is a separate entity).
+// (rules/densemap f17 records that it is a separate entity).
 template <typename T1> T1 &f41(typename dsv<T1>::iterator it) {
   return it.operator*();
 }

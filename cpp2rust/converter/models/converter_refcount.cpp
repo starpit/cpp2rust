@@ -1175,6 +1175,28 @@ bool ConverterRefCount::VisitDeclRefExpr(clang::DeclRefExpr *expr) {
             computed_expr_type_ = ComputedExprType::FreshPointer;
             return false;
           }
+          // The stream parameter of a user-written inserter is NOT a Ptr: it is
+          // declared `os: &'__s mut __S`, a generic borrow (see
+          // Converter::ConvertFunctionParameters / IsUserStreamInserter). There
+          // is nothing to deref and no downstream consumer for a stash of it,
+          // so `os << x;` inside the inserter emitted an EMPTY receiver --
+          // `Cc2Insert::insert(&mut * , ..)` -- and the stash outlived the
+          // statement and tripped assert_consumed. The receiver wrapping is
+          // ConverterRefCount::StreamReceiver's job (it already special-cases
+          // being inside an inserter and spells `&mut *os`), so the name is
+          // emitted verbatim here, the same way Converter::VisitReturnStmt
+          // spells `return &mut *os;` verbatim for the same reason.
+          //
+          // Marked FreshPointer, not Pointer: a non-fresh pointer gets a
+          // `.clone()` appended, which is a Ptr operation that does not exist
+          // on a `&mut __S`.
+          if (curr_function_ != nullptr &&
+              IsUserStreamInserter(curr_function_) &&
+              decl == curr_function_->getParamDecl(0)) {
+            StrCat(str);
+            computed_expr_type_ = ComputedExprType::FreshPointer;
+            return false;
+          }
           pending_deref_.set(str, /*fresh=*/false);
           return false;
         }

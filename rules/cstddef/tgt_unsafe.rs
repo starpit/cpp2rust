@@ -5,6 +5,11 @@ fn t1() -> u8 {
     Default::default()
 }
 
+// std::nullptr_t: one C++ value, one Rust inhabitant.  See src.cpp.
+fn t2() -> () {
+    ()
+}
+
 fn f1(a0: &mut u8, a1: u32) -> u8 {
     *a0 << a1
 }
