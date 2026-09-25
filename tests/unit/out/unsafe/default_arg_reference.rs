@@ -80,7 +80,7 @@ pub struct Holder {
     pub n: i64,
 }
 impl Holder {
-    pub unsafe fn Holder(values: Option<*const Vec<i64>>) -> Self {
+    pub unsafe fn new(values: Option<*const Vec<i64>>) -> Self {
         let mut __dflt_values: Vec<i64>;
         let mut values: *const Vec<i64> = match values {
             Some(__p) => __p,
@@ -96,7 +96,7 @@ impl Holder {
 }
 impl Default for Holder {
     fn default() -> Self {
-        unsafe { Holder::Holder(None) }
+        unsafe { Holder::new(None) }
     }
 }
 pub fn main() {
@@ -129,9 +129,9 @@ unsafe fn main_0() -> i32 {
     (unsafe { grow_7(Some(&mut own)) });
     assert!(((own.len()) == (1_usize)));
     assert!((((*std::cell::LazyCell::force_mut(&mut *&raw mut shared_6)).len()) == (2_usize)));
-    let mut a: Holder = Holder::Holder(None);
+    let mut a: Holder = Holder::new(None);
     assert!(((a.n) == (0_i64)));
-    let mut b: Holder = Holder::Holder({ Some(&x) });
+    let mut b: Holder = Holder::new({ Some(&x) });
     assert!(((b.n) == (3_i64)));
     return 0;
 }

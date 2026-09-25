@@ -89,7 +89,7 @@ pub struct Holder {
     pub n: Value<i64>,
 }
 impl Holder {
-    pub fn Holder(values: Option<Ptr<Vec<i64>>>) -> Self {
+    pub fn new(values: Option<Ptr<Vec<i64>>>) -> Self {
         let __dflt_values: Value<Vec<i64>>;
         let values: Ptr<Vec<i64>> = match values {
             Some(__p) => __p,
@@ -99,7 +99,7 @@ impl Holder {
             }
         };
         let __this: Value<Holder> = Rc::new(RefCell::new(Self {
-            n: <Value<i64>>::default(),
+            n: Rc::new(RefCell::new(0_i64)),
         }));
         let this: Ptr<Holder> = __this.as_pointer();
         (*(*this.upgrade().deref()).n.borrow_mut()) = ((*values.upgrade().deref()).len() as i64);
@@ -117,7 +117,7 @@ impl Clone for Holder {
 }
 impl Default for Holder {
     fn default() -> Self {
-        { Holder::Holder(None) }
+        { Holder::new(None) }
     }
 }
 impl ByteRepr for Holder {
@@ -162,9 +162,9 @@ fn main_0() -> i32 {
     ({ grow_7(Some(own.as_pointer())) });
     assert!(((*own.borrow()).len() == 1_usize));
     assert!((shared_6.with(|rc| rc.borrow().clone()).len() == 2_usize));
-    let a: Value<Holder> = Rc::new(RefCell::new(Holder::Holder(None)));
+    let a: Value<Holder> = Rc::new(RefCell::new(Holder::new(None)));
     assert!(((*(*a.borrow()).n.borrow()) == 0_i64));
-    let b: Value<Holder> = Rc::new(RefCell::new(Holder::Holder({ Some(x.as_pointer()) })));
+    let b: Value<Holder> = Rc::new(RefCell::new(Holder::new({ Some(x.as_pointer()) })));
     assert!(((*(*b.borrow()).n.borrow()) == 3_i64));
     return 0;
 }
