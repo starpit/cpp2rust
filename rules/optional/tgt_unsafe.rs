@@ -130,6 +130,13 @@ unsafe fn f29<T1>(a0: Option<T1>) -> bool {
 // --- has_value()/reset() ---------------------------------------------------
 // libc++ declares these two in private base classes of std::optional, so both
 // the type rules and the expression rules name the base class (see src.cpp).
+//
+// No #[cfg] here. The src.cpp side is guarded on _LIBCPP_VERSION, and the
+// preprocessor already drops the whole rule when that #if is false, so the key
+// sets stay in correspondence either way. A #[cfg(target_os = ...)] would be
+// strictly WRONG: it is evaluated against the HOST that runs the preprocessor,
+// which on this pod is Linux even though the parse is libc++, and it was what
+// silently deleted these two rules and turned every has_value() into E0599.
 
 fn t2<T1>() -> Option<T1> {
     None
