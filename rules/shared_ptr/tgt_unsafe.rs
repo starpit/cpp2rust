@@ -21,34 +21,12 @@ fn t2<T1>() -> Option<std::rc::Weak<std::cell::RefCell<T1>>> {
 
 // --- std::make_shared ------------------------------------------------------
 
-unsafe fn f1<T1: Default>() -> Option<Value<T1>> {
-    Some(Rc::new(std::cell::RefCell::new(<T1>::default())))
-}
-
-unsafe fn f2<T1>(a0: T1) -> Option<Value<T1>> {
-    Some(Rc::new(std::cell::RefCell::new(a0)))
-}
-
-unsafe fn f3<T1>(a0: T1) -> Option<Value<T1>> {
-    Some(Rc::new(std::cell::RefCell::new(a0)))
-}
-
-unsafe fn f4<T1>(a0: T1) -> Option<Value<T1>> {
-    Some(Rc::new(std::cell::RefCell::new(a0)))
-}
-
-// Rust has no variadic generics, so the two-argument form has to name a way to
-// build T1 out of its arguments; `From<(T2, T3)>` is the only generic one.
-unsafe fn f5<T1: From<(T2, T3)>, T2, T3>(a0: T2, a1: T3) -> Option<Value<T1>> {
-    Some(Rc::new(std::cell::RefCell::new(<T1>::from((a0, a1)))))
-}
-
-unsafe fn f6<T1: From<(T2, T3)>, T2, T3>(a0: T2, a1: T3) -> Option<Value<T1>> {
-    Some(Rc::new(std::cell::RefCell::new(<T1>::from((a0, a1)))))
-}
-
-unsafe fn f7<T1: From<(T2, T3)>, T2, T3>(a0: T2, a1: T3) -> Option<Value<T1>> {
-    Some(Rc::new(std::cell::RefCell::new(<T1>::from((a0, a1)))))
+// One rule for every arity and value category: the argument pack arrives
+// already lowered as the single initializer of T1. Replaces the old
+// f1..f7 (see src.cpp) which collapsed onto one key under upstream's
+// 7896632 and aborted the converter at load.
+unsafe fn f1<T1>(init: T1) -> Option<Value<T1>> {
+    Some(Rc::new(std::cell::RefCell::new(init)))
 }
 
 // --- construction ----------------------------------------------------------

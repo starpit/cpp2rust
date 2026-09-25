@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <memory>
 
+template <typename T, typename A> using Init = A;
+
 template <typename T1> using t1 = std::shared_ptr<T1>;
 template <typename T1> using t2 = std::weak_ptr<T1>;
 
@@ -104,47 +106,40 @@ using t4 = std::shared_ptr<void>;
 // ---------------------------------------------------------------------------
 // std::make_shared
 //
-// Rust has no variadic generics, so (like make_unique) we write specialized
-// versions for 0, 1 and 2 arguments. Each argument count needs one rule per
-// value category because `Args&&...` deduces a different signature for
-// rvalues, lvalues and const lvalues.
+// ONE argument-pack rule, for the same reason rules/unique_ptr has one: with
+// upstream's 7896632 the preprocessor prints a single key,
+// `std::shared_ptr<T1> std::make_shared(&&...)`, for EVERY arity and every
+// value category of a variadic std function.
 //
-// Caveat on the two-argument form (f5/f6/f7): a rule body cannot call an
-// arbitrary C++ constructor, so the target builds T1 with `From<(T2, T3)>`.
-// That is right for types that have such an impl and a plain Rust type error
-// for those that do not -- cpp2rust does not (yet) emit From impls for
-// translated constructors.
+// This module used to carry seven rules here -- f1 (zero arguments), f2/f3/f4
+// (one argument as rvalue, lvalue and const lvalue) and f5/f6/f7 (two
+// arguments in each of those categories) -- because before packs `Args&&...`
+// deduced a different signature per shape, so each needed its own rule. Under
+// the pack key all seven collapse onto ONE key, and the converter aborts at
+// load: "generic T2 declared but missing from src". Seven rules on one key is
+// not a near miss, it is a hard failure to start.
+//
+// unique_ptr was fixed the same way when upstream's own pack rule replaced
+// ours; shared_ptr is a module of OURS that upstream does not have, so no
+// replacement arrived with the merge and the collapse went unnoticed until the
+// IR was regenerated against the merged preprocessor.
+//
+// The pack rule is also strictly more capable than the seven it replaces: it
+// covers ANY arity, where the old set stopped at two arguments. The `Init`
+// alias is the same device unique_ptr, vector and deque use to name the pack
+// as the initializer of T1.
+//
+// This drops the old two-argument `From<(T2, T3)>` caveat with the rules that
+// needed it. That was never a real C++ semantics claim -- a rule body cannot
+// call an arbitrary constructor, so the old f5/f6/f7 built T1 via From and
+// were a plain Rust type error for any type without such an impl, which is
+// every translated record. The pack rule passes the initializer straight
+// through instead.
 // ---------------------------------------------------------------------------
 
-template <typename T1> std::shared_ptr<T1> f1() {
-  return std::make_shared<T1>();
-}
-
-template <typename T1, typename T2> std::shared_ptr<T1> f2(T2 &&a0) {
-  return std::make_shared<T1>(std::move(a0));
-}
-
-template <typename T1, typename T2> std::shared_ptr<T1> f3(T2 &a0) {
-  return std::make_shared<T1>(a0);
-}
-
-template <typename T1, typename T2> std::shared_ptr<T1> f4(const T2 &a0) {
-  return std::make_shared<T1>(a0);
-}
-
-template <typename T1, typename T2, typename T3>
-std::shared_ptr<T1> f5(T2 &&a0, T3 &&a1) {
-  return std::make_shared<T1>(std::move(a0), std::move(a1));
-}
-
-template <typename T1, typename T2, typename T3>
-std::shared_ptr<T1> f6(T2 &a0, T3 &a1) {
-  return std::make_shared<T1>(a0, a1);
-}
-
-template <typename T1, typename T2, typename T3>
-std::shared_ptr<T1> f7(const T2 &a0, const T3 &a1) {
-  return std::make_shared<T1>(a0, a1);
+template <typename T1, typename... Args>
+std::shared_ptr<T1> f1(Init<T1, Args> &&...args) {
+  return std::make_shared<T1>(std::forward<Args>(args)...);
 }
 
 // ---------------------------------------------------------------------------
