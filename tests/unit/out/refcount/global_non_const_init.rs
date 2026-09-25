@@ -63,6 +63,7 @@ impl Clone for Ctor {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Ctor);
 impl Default for Ctor {
     fn default() -> Self {
         { Ctor::new_1() }
@@ -99,6 +100,7 @@ thread_local!(
 );
 #[derive(Clone, ByteRepr, Default)]
 pub struct Holder {}
+impl_deep_clone_leaf!(Holder);
 thread_local!(
     pub static member_10: Value<i32> = Rc::new(RefCell::new(({ next_0() })));
 );
@@ -140,6 +142,7 @@ impl Clone for Singleton {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Singleton);
 impl Default for Singleton {
     fn default() -> Self {
         { Singleton::new() }

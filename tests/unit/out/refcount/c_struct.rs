@@ -19,6 +19,7 @@ impl Clone for Point {
         }
     }
 }
+impl_deep_clone_leaf!(Point);
 impl ByteRepr for Point {
     fn byte_size() -> usize {
         8
@@ -47,6 +48,7 @@ impl Clone for Line {
         }
     }
 }
+impl_deep_clone_leaf!(Line);
 impl ByteRepr for Line {
     fn byte_size() -> usize {
         16
@@ -75,6 +77,7 @@ impl Clone for Node {
         }
     }
 }
+impl_deep_clone_leaf!(Node);
 impl ByteRepr for Node {
     fn byte_size() -> usize {
         16
@@ -107,6 +110,7 @@ impl Clone for Inner {
         }
     }
 }
+impl_deep_clone_leaf!(Inner);
 impl ByteRepr for Inner {
     fn byte_size() -> usize {
         8
@@ -137,6 +141,7 @@ impl Clone for Container {
         }
     }
 }
+impl_deep_clone_leaf!(Container);
 impl ByteRepr for Container {
     fn byte_size() -> usize {
         16

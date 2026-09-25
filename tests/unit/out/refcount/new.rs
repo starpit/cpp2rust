@@ -21,6 +21,7 @@ impl Clone for Pair {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Pair);
 impl ByteRepr for Pair {
     fn byte_size() -> usize {
         8

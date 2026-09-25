@@ -11,8 +11,10 @@ pub trait Animal {
 }
 #[derive(Clone, ByteRepr, Default)]
 pub struct Dog {}
+impl_deep_clone_leaf!(Dog);
 #[derive(Clone, ByteRepr, Default)]
 pub struct Cat {}
+impl_deep_clone_leaf!(Cat);
 pub fn main() {
     __cpp2rust_init_globals();
     std::process::exit(main_0());

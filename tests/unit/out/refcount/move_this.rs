@@ -41,6 +41,7 @@ impl Clone for Chain {
         Chain::copy_from(__src.as_pointer())
     }
 }
+impl_deep_clone_leaf!(Chain);
 impl ByteRepr for Chain {
     fn byte_size() -> usize {
         4

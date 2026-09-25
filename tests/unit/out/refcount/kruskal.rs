@@ -23,6 +23,7 @@ impl Clone for Edge {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Edge);
 impl ByteRepr for Edge {
     fn byte_size() -> usize {
         16

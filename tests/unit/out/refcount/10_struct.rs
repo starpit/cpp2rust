@@ -21,6 +21,7 @@ impl Clone for GraphNode {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(GraphNode);
 impl ByteRepr for GraphNode {
     fn byte_size() -> usize {
         16
@@ -51,6 +52,7 @@ impl Clone for Graph {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Graph);
 impl ByteRepr for Graph {
     fn byte_size() -> usize {
         16
@@ -89,6 +91,7 @@ impl Clone for Partial {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Partial);
 impl Default for Partial {
     fn default() -> Self {
         {
@@ -114,6 +117,7 @@ impl ByteRepr for Partial {
 #[derive(Clone, ByteRepr, Default)]
 pub struct Declared {}
 impl Declared {}
+impl_deep_clone_leaf!(Declared);
 #[derive(Default)]
 pub struct S {
     pub i: Value<i32>,
@@ -129,6 +133,7 @@ impl Clone for S {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(S);
 impl ByteRepr for S {
     fn byte_size() -> usize {
         16

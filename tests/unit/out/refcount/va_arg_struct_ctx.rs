@@ -19,6 +19,7 @@ impl Clone for context {
         }
     }
 }
+impl_deep_clone_leaf!(context);
 impl ByteRepr for context {
     fn byte_size() -> usize {
         8

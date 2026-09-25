@@ -19,6 +19,7 @@ impl Clone for MyContainer_int_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(MyContainer_int_);
 impl ByteRepr for MyContainer_int_ {
     fn byte_size() -> usize {
         24
@@ -45,6 +46,7 @@ impl Clone for MyContainer_char_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(MyContainer_char_);
 impl ByteRepr for MyContainer_char_ {
     fn byte_size() -> usize {
         24
@@ -71,6 +73,7 @@ impl Clone for MyContainer_float_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(MyContainer_float_);
 impl ByteRepr for MyContainer_float_ {
     fn byte_size() -> usize {
         24
@@ -103,6 +106,7 @@ impl Clone for Boxed_int_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Boxed_int_);
 impl ByteRepr for Boxed_int_ {
     fn byte_size() -> usize {
         4
@@ -135,6 +139,7 @@ impl Clone for Boxed_long_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Boxed_long_);
 impl ByteRepr for Boxed_long_ {
     fn byte_size() -> usize {
         8
@@ -163,6 +168,7 @@ impl Clone for Outer_int__Inner_int_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Outer_int__Inner_int_);
 impl ByteRepr for Outer_int__Inner_int_ {
     fn byte_size() -> usize {
         8
@@ -191,6 +197,7 @@ impl Clone for Outer_int_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Outer_int_);
 impl ByteRepr for Outer_int_ {
     fn byte_size() -> usize {
         4
@@ -219,6 +226,7 @@ impl Clone for Outer_long__Inner_int_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Outer_long__Inner_int_);
 impl ByteRepr for Outer_long__Inner_int_ {
     fn byte_size() -> usize {
         16
@@ -249,6 +257,7 @@ impl Clone for Outer_long__Inner_char_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Outer_long__Inner_char_);
 impl ByteRepr for Outer_long__Inner_char_ {
     fn byte_size() -> usize {
         16
@@ -277,6 +286,7 @@ impl Clone for Outer_long_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Outer_long_);
 impl ByteRepr for Outer_long_ {
     fn byte_size() -> usize {
         8

@@ -19,6 +19,7 @@ impl Clone for Test {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Test);
 impl ByteRepr for Test {
     fn byte_size() -> usize {
         4

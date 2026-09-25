@@ -11,6 +11,7 @@ thread_local!(
 );
 #[derive(Clone, ByteRepr, Default)]
 pub struct S {}
+impl_deep_clone_leaf!(S);
 #[derive(Default)]
 pub struct Defaulted {
     pub s: Value<S>,
@@ -24,6 +25,7 @@ impl Clone for Defaulted {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Defaulted);
 impl ByteRepr for Defaulted {
     fn byte_size() -> usize {
         1
@@ -50,6 +52,7 @@ impl Clone for Middle {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Middle);
 impl ByteRepr for Middle {
     fn byte_size() -> usize {
         1
@@ -76,6 +79,7 @@ impl Clone for Outer {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Outer);
 impl ByteRepr for Outer {
     fn byte_size() -> usize {
         1
@@ -104,6 +108,7 @@ impl Clone for ArrayMember {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(ArrayMember);
 impl Default for ArrayMember {
     fn default() -> Self {
         ArrayMember {
@@ -139,6 +144,7 @@ impl Clone for EmptyBody {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(EmptyBody);
 impl ByteRepr for EmptyBody {
     fn byte_size() -> usize {
         1
@@ -165,6 +171,7 @@ impl Clone for Templated_char_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Templated_char_);
 impl ByteRepr for Templated_char_ {
     fn byte_size() -> usize {
         1
@@ -191,6 +198,7 @@ impl Clone for Templated_int_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Templated_int_);
 impl ByteRepr for Templated_int_ {
     fn byte_size() -> usize {
         4
@@ -217,6 +225,7 @@ impl Clone for Copied {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Copied);
 impl ByteRepr for Copied {
     fn byte_size() -> usize {
         4
@@ -250,6 +259,7 @@ impl Clone for Tagged {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Tagged);
 impl ByteRepr for Tagged {
     fn byte_size() -> usize {
         4
@@ -284,6 +294,7 @@ impl Clone for Ordered {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Ordered);
 impl ByteRepr for Ordered {
     fn byte_size() -> usize {
         20

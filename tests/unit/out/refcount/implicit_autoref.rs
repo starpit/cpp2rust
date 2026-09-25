@@ -19,6 +19,7 @@ impl Clone for Holder {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Holder);
 impl ByteRepr for Holder {
     fn byte_size() -> usize {
         24

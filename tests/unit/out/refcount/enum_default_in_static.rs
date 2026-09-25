@@ -23,6 +23,7 @@ impl Clone for Config {
         }
     }
 }
+impl_deep_clone_leaf!(Config);
 impl ByteRepr for Config {
     fn byte_size() -> usize {
         8

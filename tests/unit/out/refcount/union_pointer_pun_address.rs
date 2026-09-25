@@ -17,6 +17,7 @@ impl Clone for node_a {
         }
     }
 }
+impl_deep_clone_leaf!(node_a);
 impl ByteRepr for node_a {
     fn byte_size() -> usize {
         4
@@ -43,6 +44,7 @@ impl Clone for node_b {
         }
     }
 }
+impl_deep_clone_leaf!(node_b);
 impl ByteRepr for node_b {
     fn byte_size() -> usize {
         16
@@ -96,6 +98,7 @@ impl Clone for anon_0 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_0);
 impl Default for anon_0 {
     fn default() -> Self {
         anon_0 {

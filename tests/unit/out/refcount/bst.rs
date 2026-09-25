@@ -23,6 +23,7 @@ impl Clone for node_t {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(node_t);
 impl ByteRepr for node_t {
     fn byte_size() -> usize {
         24

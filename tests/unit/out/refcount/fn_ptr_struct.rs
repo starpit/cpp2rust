@@ -21,6 +21,7 @@ impl Clone for Handler {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Handler);
 impl Default for Handler {
     fn default() -> Self {
         Handler {
@@ -70,6 +71,7 @@ impl S {
         return ((*x.borrow()) + 3);
     }
 }
+impl_deep_clone_leaf!(S);
 pub fn main() {
     __cpp2rust_init_globals();
     std::process::exit(main_0());

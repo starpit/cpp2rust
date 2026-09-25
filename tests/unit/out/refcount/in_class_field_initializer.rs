@@ -21,6 +21,7 @@ impl Clone for Inner {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Inner);
 impl Default for Inner {
     fn default() -> Self {
         {
@@ -65,6 +66,7 @@ impl Clone for S {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(S);
 impl Default for S {
     fn default() -> Self {
         {
@@ -128,6 +130,7 @@ impl Clone for Boxed_int_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Boxed_int_);
 impl Default for Boxed_int_ {
     fn default() -> Self {
         {

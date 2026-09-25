@@ -19,6 +19,7 @@ impl Clone for shape_a {
         }
     }
 }
+impl_deep_clone_leaf!(shape_a);
 impl Default for shape_a {
     fn default() -> Self {
         shape_a {
@@ -59,6 +60,7 @@ impl Clone for shape_b {
         }
     }
 }
+impl_deep_clone_leaf!(shape_b);
 impl Default for shape_b {
     fn default() -> Self {
         shape_b {
@@ -109,6 +111,7 @@ impl Clone for anon_0 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_0);
 impl Default for anon_0 {
     fn default() -> Self {
         anon_0 {
@@ -140,6 +143,7 @@ impl Clone for Container {
         }
     }
 }
+impl_deep_clone_leaf!(Container);
 impl ByteRepr for Container {
     fn byte_size() -> usize {
         256

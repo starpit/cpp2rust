@@ -34,6 +34,7 @@ impl Clone for S {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(S);
 impl ByteRepr for S {
     fn byte_size() -> usize {
         4
@@ -94,6 +95,7 @@ impl Clone for Point {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Point);
 impl Default for Point {
     fn default() -> Self {
         { Point::new_3() }

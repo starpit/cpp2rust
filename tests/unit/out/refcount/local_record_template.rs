@@ -53,6 +53,7 @@ impl Clone for Local_5 {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Local_5);
 impl ByteRepr for Local_5 {
     fn byte_size() -> usize {
         4
@@ -79,6 +80,7 @@ impl Clone for Local_7 {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Local_7);
 impl ByteRepr for Local_7 {
     fn byte_size() -> usize {
         8
@@ -114,6 +116,7 @@ impl Clone for Local_0 {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Local_0);
 impl ByteRepr for Local_0 {
     fn byte_size() -> usize {
         16
@@ -157,6 +160,7 @@ impl Clone for Local_1 {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Local_1);
 impl ByteRepr for Local_1 {
     fn byte_size() -> usize {
         4

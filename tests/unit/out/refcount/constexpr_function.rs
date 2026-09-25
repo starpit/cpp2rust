@@ -38,6 +38,7 @@ impl Clone for Flag {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Flag);
 impl ByteRepr for Flag {
     fn byte_size() -> usize {
         4
@@ -74,6 +75,7 @@ impl Clone for P {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(P);
 impl ByteRepr for P {
     fn byte_size() -> usize {
         4

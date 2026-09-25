@@ -8,6 +8,7 @@ use std::os::fd::AsFd;
 use std::rc::{Rc, Weak};
 #[derive(Clone, ByteRepr, Default)]
 pub struct Probe {}
+impl_deep_clone_leaf!(Probe);
 #[derive(Default)]
 pub struct Wrapper_Probe_ {
     pub base_: Value<Probe>,
@@ -23,6 +24,7 @@ impl Clone for Wrapper_Probe_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Wrapper_Probe_);
 impl ByteRepr for Wrapper_Probe_ {
     fn byte_size() -> usize {
         8

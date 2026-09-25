@@ -64,6 +64,7 @@ impl Clone for Buffer {
         Buffer::copy_from(__src.as_pointer())
     }
 }
+impl_deep_clone_leaf!(Buffer);
 impl Default for Buffer {
     fn default() -> Self {
         Buffer {

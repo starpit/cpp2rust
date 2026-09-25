@@ -19,6 +19,7 @@ impl Clone for Level0_Level1_1_Level2_1_Level3_1 {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Level0_Level1_1_Level2_1_Level3_1);
 impl ByteRepr for Level0_Level1_1_Level2_1_Level3_1 {
     fn byte_size() -> usize {
         4
@@ -47,6 +48,7 @@ impl Clone for Level0_Level1_1_Level2_1_Level3_2 {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Level0_Level1_1_Level2_1_Level3_2);
 impl ByteRepr for Level0_Level1_1_Level2_1_Level3_2 {
     fn byte_size() -> usize {
         8
@@ -75,6 +77,7 @@ impl Clone for Level0_Level1_1_Level2_1 {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Level0_Level1_1_Level2_1);
 impl ByteRepr for Level0_Level1_1_Level2_1 {
     fn byte_size() -> usize {
         4
@@ -101,6 +104,7 @@ impl Clone for Level0_Level1_1 {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Level0_Level1_1);
 impl ByteRepr for Level0_Level1_1 {
     fn byte_size() -> usize {
         4
@@ -129,6 +133,7 @@ impl Clone for Level0_Level1_2 {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Level0_Level1_2);
 impl ByteRepr for Level0_Level1_2 {
     fn byte_size() -> usize {
         8
@@ -146,6 +151,7 @@ impl ByteRepr for Level0_Level1_2 {
 }
 #[derive(Clone, ByteRepr, Default)]
 pub struct Level0 {}
+impl_deep_clone_leaf!(Level0);
 pub fn main() {
     __cpp2rust_init_globals();
     std::process::exit(main_0());

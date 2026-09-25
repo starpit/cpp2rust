@@ -30,6 +30,7 @@ impl Clone for X1 {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(X1);
 impl ByteRepr for X1 {
     fn byte_size() -> usize {
         4
@@ -47,6 +48,7 @@ impl ByteRepr for X1 {
 pub struct X2 {
     pub v: Ptr<X1>,
 }
+impl_deep_clone_leaf!(X2);
 impl ByteRepr for X2 {}
 #[derive(Default)]
 pub struct X3 {
@@ -61,6 +63,7 @@ impl Clone for X3 {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(X3);
 impl ByteRepr for X3 {
     fn byte_size() -> usize {
         8
@@ -87,6 +90,7 @@ impl Clone for X4 {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(X4);
 impl ByteRepr for X4 {
     fn byte_size() -> usize {
         8

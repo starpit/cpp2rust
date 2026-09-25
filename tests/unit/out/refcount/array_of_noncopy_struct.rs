@@ -21,6 +21,7 @@ impl Clone for NonCopy {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(NonCopy);
 impl Default for NonCopy {
     fn default() -> Self {
         {

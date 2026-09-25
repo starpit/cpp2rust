@@ -25,6 +25,7 @@ impl Clone for anon_1 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_1);
 impl ByteRepr for anon_1 {
     fn byte_size() -> usize {
         24
@@ -59,6 +60,7 @@ impl Clone for anon_2 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_2);
 impl ByteRepr for anon_2 {
     fn byte_size() -> usize {
         16
@@ -97,6 +99,7 @@ impl Clone for anon_3 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_3);
 impl ByteRepr for anon_3 {
     fn byte_size() -> usize {
         40
@@ -139,6 +142,7 @@ impl Clone for anon_0 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_0);
 impl Default for anon_0 {
     fn default() -> Self {
         anon_0 {
@@ -174,6 +178,7 @@ impl Clone for Branch {
         }
     }
 }
+impl_deep_clone_leaf!(Branch);
 impl ByteRepr for Branch {
     fn byte_size() -> usize {
         48

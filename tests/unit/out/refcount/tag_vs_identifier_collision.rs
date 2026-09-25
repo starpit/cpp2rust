@@ -23,6 +23,7 @@ impl Clone for widget {
         }
     }
 }
+impl_deep_clone_leaf!(widget);
 impl ByteRepr for widget {
     fn byte_size() -> usize {
         8
@@ -51,6 +52,7 @@ impl Clone for point_struct {
         }
     }
 }
+impl_deep_clone_leaf!(point_struct);
 impl ByteRepr for point_struct {
     fn byte_size() -> usize {
         8
@@ -84,6 +86,7 @@ impl Clone for point {
         }
     }
 }
+impl_deep_clone_leaf!(point);
 impl Default for point {
     fn default() -> Self {
         point {
@@ -122,6 +125,7 @@ impl Clone for slot_union {
         }
     }
 }
+impl_deep_clone_leaf!(slot_union);
 impl Default for slot_union {
     fn default() -> Self {
         slot_union {
@@ -156,6 +160,7 @@ impl Clone for Inner {
         }
     }
 }
+impl_deep_clone_leaf!(Inner);
 impl ByteRepr for Inner {
     fn byte_size() -> usize {
         4
@@ -180,6 +185,7 @@ impl Clone for Outer {
         }
     }
 }
+impl_deep_clone_leaf!(Outer);
 impl ByteRepr for Outer {
     fn byte_size() -> usize {
         4
@@ -204,6 +210,7 @@ impl Clone for Inner_struct {
         }
     }
 }
+impl_deep_clone_leaf!(Inner_struct);
 impl ByteRepr for Inner_struct {
     fn byte_size() -> usize {
         4

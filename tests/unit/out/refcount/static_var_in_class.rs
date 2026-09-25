@@ -11,11 +11,13 @@ thread_local!(
 );
 #[derive(Clone, ByteRepr, Default)]
 pub struct C {}
+impl_deep_clone_leaf!(C);
 thread_local!(
     pub static inner_const_1: Value<i32> = Rc::new(RefCell::new(2));
 );
 #[derive(Clone, ByteRepr, Default)]
 pub struct S {}
+impl_deep_clone_leaf!(S);
 pub fn main() {
     __cpp2rust_init_globals();
     std::process::exit(main_0());

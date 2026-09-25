@@ -23,6 +23,7 @@ impl Clone for S {
         }
     }
 }
+impl_deep_clone_leaf!(S);
 impl ByteRepr for S {
     fn byte_size() -> usize {
         4
@@ -55,6 +56,7 @@ impl Clone for WithAnonField {
         }
     }
 }
+impl_deep_clone_leaf!(WithAnonField);
 impl ByteRepr for WithAnonField {
     fn byte_size() -> usize {
         8

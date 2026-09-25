@@ -19,6 +19,7 @@ impl Clone for Bar {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Bar);
 impl ByteRepr for Bar {
     fn byte_size() -> usize {
         4
@@ -55,6 +56,7 @@ impl Clone for Foo {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Foo);
 impl Default for Foo {
     fn default() -> Self {
         Foo {
@@ -72,6 +74,7 @@ pub struct Refs {
     pub a: Ptr<i32>,
     pub b: Ptr<i32>,
 }
+impl_deep_clone_leaf!(Refs);
 impl ByteRepr for Refs {}
 pub fn main() {
     __cpp2rust_init_globals();

@@ -24,6 +24,7 @@ impl Clone for basic {
         }
     }
 }
+impl_deep_clone_leaf!(basic);
 impl Default for basic {
     fn default() -> Self {
         basic {
@@ -55,6 +56,7 @@ impl Clone for empty {
         }
     }
 }
+impl_deep_clone_leaf!(empty);
 impl Default for empty {
     fn default() -> Self {
         empty {

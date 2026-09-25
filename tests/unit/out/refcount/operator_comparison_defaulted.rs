@@ -40,6 +40,7 @@ impl Clone for Eq {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Eq);
 impl ByteRepr for Eq {
     fn byte_size() -> usize {
         8
@@ -112,6 +113,7 @@ impl Clone for Cmp {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Cmp);
 impl ByteRepr for Cmp {
     fn byte_size() -> usize {
         8
@@ -166,6 +168,7 @@ impl Clone for Both {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Both);
 impl ByteRepr for Both {
     fn byte_size() -> usize {
         4
@@ -218,6 +221,7 @@ impl Clone for OrdOnly {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(OrdOnly);
 impl ByteRepr for OrdOnly {
     fn byte_size() -> usize {
         4
@@ -270,6 +274,7 @@ impl Clone for Inner {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Inner);
 impl ByteRepr for Inner {
     fn byte_size() -> usize {
         4
@@ -340,6 +345,7 @@ impl Clone for Outer {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Outer);
 impl ByteRepr for Outer {
     fn byte_size() -> usize {
         8
@@ -394,6 +400,7 @@ impl Clone for Secondary {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Secondary);
 impl ByteRepr for Secondary {
     fn byte_size() -> usize {
         4
@@ -446,6 +453,7 @@ impl Clone for PtrMember {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(PtrMember);
 impl ByteRepr for PtrMember {
     fn byte_size() -> usize {
         8

@@ -53,6 +53,7 @@ impl Clone for V {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(V);
 impl ByteRepr for V {
     fn byte_size() -> usize {
         4
@@ -82,6 +83,7 @@ impl Clone for W_int_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(W_int_);
 impl ByteRepr for W_int_ {
     fn byte_size() -> usize {
         4
@@ -111,6 +113,7 @@ impl Clone for W_long_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(W_long_);
 impl ByteRepr for W_long_ {
     fn byte_size() -> usize {
         8
@@ -137,6 +140,7 @@ impl Clone for D {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(D);
 impl ByteRepr for D {
     fn byte_size() -> usize {
         4

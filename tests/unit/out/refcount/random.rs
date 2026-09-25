@@ -35,6 +35,7 @@ impl Clone for Pair {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Pair);
 impl Default for Pair {
     fn default() -> Self {
         Pair {
@@ -58,6 +59,7 @@ pub fn zero_0() -> i32 {
 }
 #[derive(Clone, ByteRepr, Default)]
 pub struct X1 {}
+impl_deep_clone_leaf!(X1);
 pub fn foo_1(x1: i32, x2: Ptr<i32>, x3: Ptr<i32>, p2: Ptr<Pair>, p3: Ptr<Pair>) {
     let x1: Value<i32> = Rc::new(RefCell::new(x1));
     let x3: Value<Ptr<i32>> = Rc::new(RefCell::new(x3));

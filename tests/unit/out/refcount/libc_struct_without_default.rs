@@ -21,6 +21,7 @@ impl Clone for UserDefined {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(UserDefined);
 impl Default for UserDefined {
     fn default() -> Self {
         UserDefined {
@@ -59,6 +60,7 @@ impl Clone for FieldIsLibcType {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(FieldIsLibcType);
 impl Default for FieldIsLibcType {
     fn default() -> Self {
         FieldIsLibcType {

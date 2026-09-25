@@ -19,6 +19,7 @@ impl Clone for Point {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Point);
 impl ByteRepr for Point {
     fn byte_size() -> usize {
         4
@@ -45,6 +46,7 @@ impl Clone for Box_int_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Box_int_);
 impl ByteRepr for Box_int_ {
     fn byte_size() -> usize {
         4
@@ -71,6 +73,7 @@ impl Clone for Box_Point_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Box_Point_);
 impl ByteRepr for Box_Point_ {
     fn byte_size() -> usize {
         4

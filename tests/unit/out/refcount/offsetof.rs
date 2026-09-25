@@ -23,6 +23,7 @@ impl Clone for Layout {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Layout);
 impl ByteRepr for Layout {
     fn byte_size() -> usize {
         12
@@ -57,6 +58,7 @@ impl Clone for Frame {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Frame);
 impl Default for Frame {
     fn default() -> Self {
         Frame {

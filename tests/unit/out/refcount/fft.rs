@@ -21,6 +21,7 @@ impl Clone for Complex {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Complex);
 impl ByteRepr for Complex {
     fn byte_size() -> usize {
         16

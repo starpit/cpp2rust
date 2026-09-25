@@ -19,6 +19,7 @@ impl Clone for Inner {
         }
     }
 }
+impl_deep_clone_leaf!(Inner);
 impl ByteRepr for Inner {
     fn byte_size() -> usize {
         8
@@ -59,6 +60,7 @@ impl Clone for anon_1 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_1);
 impl Default for anon_1 {
     fn default() -> Self {
         anon_1 {
@@ -90,6 +92,7 @@ impl Clone for Outer {
         }
     }
 }
+impl_deep_clone_leaf!(Outer);
 impl ByteRepr for Outer {
     fn byte_size() -> usize {
         16

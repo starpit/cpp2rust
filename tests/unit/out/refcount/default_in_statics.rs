@@ -21,6 +21,7 @@ impl Clone for Inner {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Inner);
 impl ByteRepr for Inner {
     fn byte_size() -> usize {
         16
@@ -65,6 +66,7 @@ impl Clone for Outer {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Outer);
 impl Default for Outer {
     fn default() -> Self {
         Outer {
@@ -133,6 +135,7 @@ impl Clone for Foo {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Foo);
 impl Default for Foo {
     fn default() -> Self {
         Foo {

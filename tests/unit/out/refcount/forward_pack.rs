@@ -60,6 +60,7 @@ impl Clone for Tracked {
         Tracked::copy_from(__src.as_pointer())
     }
 }
+impl_deep_clone_leaf!(Tracked);
 impl ByteRepr for Tracked {
     fn byte_size() -> usize {
         12
@@ -166,6 +167,7 @@ impl Clone for Pair {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Pair);
 impl ByteRepr for Pair {
     fn byte_size() -> usize {
         24

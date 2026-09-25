@@ -36,6 +36,7 @@ impl Clone for Entry {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Entry);
 impl ByteRepr for Entry {
     fn byte_size() -> usize {
         16

@@ -39,6 +39,7 @@ impl Clone for anon_0 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_0);
 impl Default for anon_0 {
     fn default() -> Self {
         anon_0 {
@@ -72,6 +73,7 @@ impl Clone for Slot {
         }
     }
 }
+impl_deep_clone_leaf!(Slot);
 impl ByteRepr for Slot {
     fn byte_size() -> usize {
         16

@@ -19,6 +19,7 @@ impl Clone for record {
         }
     }
 }
+impl_deep_clone_leaf!(record);
 impl Default for record {
     fn default() -> Self {
         record {
@@ -60,6 +61,7 @@ impl Clone for anon_0 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_0);
 impl Default for anon_0 {
     fn default() -> Self {
         anon_0 {
@@ -91,6 +93,7 @@ impl Clone for inner {
         }
     }
 }
+impl_deep_clone_leaf!(inner);
 impl ByteRepr for inner {
     fn byte_size() -> usize {
         128
@@ -122,6 +125,7 @@ impl Clone for anon_1 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_1);
 impl Default for anon_1 {
     fn default() -> Self {
         anon_1 {
@@ -161,6 +165,7 @@ impl Clone for Outer {
         }
     }
 }
+impl_deep_clone_leaf!(Outer);
 impl ByteRepr for Outer {
     fn byte_size() -> usize {
         144

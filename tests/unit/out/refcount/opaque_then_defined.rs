@@ -19,6 +19,7 @@ impl Clone for list {
         }
     }
 }
+impl_deep_clone_leaf!(list);
 impl ByteRepr for list {
     fn byte_size() -> usize {
         16
@@ -47,6 +48,7 @@ impl Clone for node {
         }
     }
 }
+impl_deep_clone_leaf!(node);
 impl ByteRepr for node {
     fn byte_size() -> usize {
         16

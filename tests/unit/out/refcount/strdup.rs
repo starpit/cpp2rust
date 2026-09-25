@@ -17,6 +17,7 @@ impl Clone for record {
         }
     }
 }
+impl_deep_clone_leaf!(record);
 impl ByteRepr for record {
     fn byte_size() -> usize {
         8

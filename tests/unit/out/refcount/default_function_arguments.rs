@@ -42,6 +42,7 @@ impl Clone for Bar {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Bar);
 impl Default for Bar {
     fn default() -> Self {
         { Bar::new(None) }

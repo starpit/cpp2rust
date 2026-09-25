@@ -19,6 +19,7 @@ impl Clone for header {
         }
     }
 }
+impl_deep_clone_leaf!(header);
 impl ByteRepr for header {
     fn byte_size() -> usize {
         8
@@ -45,6 +46,7 @@ impl Clone for view {
         }
     }
 }
+impl_deep_clone_leaf!(view);
 impl ByteRepr for view {
     fn byte_size() -> usize {
         4

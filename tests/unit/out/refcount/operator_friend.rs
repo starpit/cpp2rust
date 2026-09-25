@@ -49,6 +49,7 @@ impl Clone for Defaulted {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Defaulted);
 impl ByteRepr for Defaulted {
     fn byte_size() -> usize {
         8
@@ -121,6 +122,7 @@ impl Clone for DefaultedOrd {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(DefaultedOrd);
 impl ByteRepr for DefaultedOrd {
     fn byte_size() -> usize {
         4
@@ -202,6 +204,7 @@ impl Clone for Inline {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Inline);
 impl ByteRepr for Inline {
     fn byte_size() -> usize {
         4
@@ -239,6 +242,7 @@ impl Clone for OutOfLine {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(OutOfLine);
 impl ByteRepr for OutOfLine {
     fn byte_size() -> usize {
         4
@@ -331,6 +335,7 @@ impl Clone for Tmpl_int_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Tmpl_int_);
 impl ByteRepr for Tmpl_int_ {
     fn byte_size() -> usize {
         4
@@ -357,6 +362,7 @@ impl Clone for Tmpl_long_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Tmpl_long_);
 impl ByteRepr for Tmpl_long_ {
     fn byte_size() -> usize {
         8
@@ -400,6 +406,7 @@ impl Clone for TmplDefaulted_int_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(TmplDefaulted_int_);
 impl ByteRepr for TmplDefaulted_int_ {
     fn byte_size() -> usize {
         4

@@ -19,6 +19,7 @@ impl Clone for registry {
         }
     }
 }
+impl_deep_clone_leaf!(registry);
 impl ByteRepr for registry {
     fn byte_size() -> usize {
         16

@@ -11,6 +11,7 @@ pub trait Base {
 }
 #[derive(Clone, ByteRepr, Default)]
 pub struct Derived {}
+impl_deep_clone_leaf!(Derived);
 pub fn main() {
     __cpp2rust_init_globals();
     std::process::exit(main_0());

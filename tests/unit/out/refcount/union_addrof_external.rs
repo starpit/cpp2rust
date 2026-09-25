@@ -23,6 +23,7 @@ impl Clone for record {
         }
     }
 }
+impl_deep_clone_leaf!(record);
 impl Default for record {
     fn default() -> Self {
         record {
@@ -70,6 +71,7 @@ impl Clone for anon_0 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_0);
 impl Default for anon_0 {
     fn default() -> Self {
         anon_0 {
@@ -101,6 +103,7 @@ impl Clone for Container {
         }
     }
 }
+impl_deep_clone_leaf!(Container);
 impl ByteRepr for Container {
     fn byte_size() -> usize {
         128

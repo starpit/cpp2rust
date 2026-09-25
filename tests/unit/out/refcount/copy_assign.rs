@@ -48,6 +48,7 @@ impl Clone for Partial {
         Partial::copy_from(__src.as_pointer())
     }
 }
+impl_deep_clone_leaf!(Partial);
 impl ByteRepr for Partial {
     fn byte_size() -> usize {
         8
@@ -85,6 +86,7 @@ impl Clone for NonConstAssign {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(NonConstAssign);
 impl Default for NonConstAssign {
     fn default() -> Self {
         { NonConstAssign::new() }
@@ -125,6 +127,7 @@ impl Clone for RefQualified {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(RefQualified);
 impl Default for RefQualified {
     fn default() -> Self {
         { RefQualified::new() }
@@ -162,6 +165,7 @@ impl Clone for Holder {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Holder);
 impl Default for Holder {
     fn default() -> Self {
         Holder {

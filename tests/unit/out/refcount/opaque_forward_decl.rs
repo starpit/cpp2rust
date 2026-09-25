@@ -19,6 +19,7 @@ impl Clone for container {
         }
     }
 }
+impl_deep_clone_leaf!(container);
 impl ByteRepr for container {
     fn byte_size() -> usize {
         16

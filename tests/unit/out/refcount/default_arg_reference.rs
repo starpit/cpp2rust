@@ -115,6 +115,7 @@ impl Clone for Holder {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Holder);
 impl Default for Holder {
     fn default() -> Self {
         { Holder::new(None) }

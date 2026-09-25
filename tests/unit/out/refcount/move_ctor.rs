@@ -135,6 +135,7 @@ impl Clone for ThrowingMove {
         ThrowingMove::copy_from(__src.as_pointer())
     }
 }
+impl_deep_clone_leaf!(ThrowingMove);
 impl ByteRepr for ThrowingMove {
     fn byte_size() -> usize {
         12
@@ -201,6 +202,7 @@ impl Clone for NoexceptMove {
         NoexceptMove::copy_from(__src.as_pointer())
     }
 }
+impl_deep_clone_leaf!(NoexceptMove);
 impl ByteRepr for NoexceptMove {
     fn byte_size() -> usize {
         12

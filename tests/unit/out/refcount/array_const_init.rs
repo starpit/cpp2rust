@@ -21,6 +21,7 @@ impl Clone for S {
         }
     }
 }
+impl_deep_clone_leaf!(S);
 impl Default for S {
     fn default() -> Self {
         S {

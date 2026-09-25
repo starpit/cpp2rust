@@ -40,6 +40,7 @@ impl Clone for StructWithCtor {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(StructWithCtor);
 impl ByteRepr for StructWithCtor {
     fn byte_size() -> usize {
         8

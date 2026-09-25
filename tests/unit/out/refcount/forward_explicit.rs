@@ -60,6 +60,7 @@ impl Clone for Tracked {
         Tracked::copy_from(__src.as_pointer())
     }
 }
+impl_deep_clone_leaf!(Tracked);
 impl ByteRepr for Tracked {
     fn byte_size() -> usize {
         12

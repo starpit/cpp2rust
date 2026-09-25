@@ -23,6 +23,7 @@ impl Clone for POD {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(POD);
 impl ByteRepr for POD {
     fn byte_size() -> usize {
         12

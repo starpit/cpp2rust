@@ -24,6 +24,7 @@ impl Clone for anon_0 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_0);
 impl Default for anon_0 {
     fn default() -> Self {
         anon_0 {
@@ -59,6 +60,7 @@ impl Clone for node {
         }
     }
 }
+impl_deep_clone_leaf!(node);
 impl ByteRepr for node {
     fn byte_size() -> usize {
         24

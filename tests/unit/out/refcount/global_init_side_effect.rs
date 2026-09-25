@@ -20,6 +20,7 @@ impl S {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(S);
 thread_local!(
     pub static a_1: Value<S> = Rc::new(RefCell::new(S::new({ 1 })));
 );

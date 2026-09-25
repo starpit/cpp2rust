@@ -19,6 +19,7 @@ impl Clone for point {
         }
     }
 }
+impl_deep_clone_leaf!(point);
 impl ByteRepr for point {
     fn byte_size() -> usize {
         8

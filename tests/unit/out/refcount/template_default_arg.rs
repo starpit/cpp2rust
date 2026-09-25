@@ -36,6 +36,7 @@ impl Clone for A {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(A);
 impl Default for A {
     fn default() -> Self {
         { A::new_1() }
@@ -76,6 +77,7 @@ impl Clone for B {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(B);
 impl Default for B {
     fn default() -> Self {
         { B::new() }
@@ -117,6 +119,7 @@ impl Clone for NoDefault {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(NoDefault);
 impl ByteRepr for NoDefault {
     fn byte_size() -> usize {
         4
@@ -170,6 +173,7 @@ impl Clone for S_NoDefault_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(S_NoDefault_);
 impl ByteRepr for S_NoDefault_ {
     fn byte_size() -> usize {
         4

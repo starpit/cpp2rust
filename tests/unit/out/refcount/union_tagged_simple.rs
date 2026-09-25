@@ -27,6 +27,7 @@ impl Clone for anon_0 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_0);
 impl Default for anon_0 {
     fn default() -> Self {
         anon_0 {
@@ -62,6 +63,7 @@ impl Clone for Event {
         }
     }
 }
+impl_deep_clone_leaf!(Event);
 impl ByteRepr for Event {
     fn byte_size() -> usize {
         24

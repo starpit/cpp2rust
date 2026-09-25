@@ -21,6 +21,7 @@ impl Clone for label {
         }
     }
 }
+impl_deep_clone_leaf!(label);
 impl Default for label {
     fn default() -> Self {
         label {

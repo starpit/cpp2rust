@@ -49,6 +49,7 @@ impl Clone for Command {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Command);
 impl ByteRepr for Command {
     fn byte_size() -> usize {
         8

@@ -38,6 +38,7 @@ pub fn bar_4(x: Ptr<i32>) -> i32 {
 }
 #[derive(Clone, ByteRepr, Default)]
 pub struct Foo {}
+impl_deep_clone_leaf!(Foo);
 pub fn func_5(x: i32) -> i32 {
     let x: Value<i32> = Rc::new(RefCell::new(x));
     return 1;

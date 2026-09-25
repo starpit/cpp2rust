@@ -55,6 +55,7 @@ impl Clone for Val {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Val);
 impl ByteRepr for Val {
     fn byte_size() -> usize {
         4

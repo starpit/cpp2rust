@@ -19,6 +19,7 @@ impl Clone for Inner {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Inner);
 impl ByteRepr for Inner {
     fn byte_size() -> usize {
         4
@@ -40,6 +41,7 @@ impl Table {
         return (table_0.with(|v| v.as_pointer()) as Ptr<i32>).offset((*i.borrow()));
     }
 }
+impl_deep_clone_leaf!(Table);
 thread_local!(
     pub static table_0: Value<Box<[i32]>> = Rc::new(RefCell::new(Box::new([7, 8, 9])));
 );
@@ -60,6 +62,7 @@ impl Clone for S {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(S);
 impl Default for S {
     fn default() -> Self {
         S {

@@ -19,6 +19,7 @@ impl Clone for Named {
         }
     }
 }
+impl_deep_clone_leaf!(Named);
 impl ByteRepr for Named {
     fn byte_size() -> usize {
         8
@@ -47,6 +48,7 @@ impl Clone for anon_0 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_0);
 impl ByteRepr for anon_0 {
     fn byte_size() -> usize {
         8
@@ -75,6 +77,7 @@ impl Clone for anon_1 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_1);
 impl ByteRepr for anon_1 {
     fn byte_size() -> usize {
         8
@@ -103,6 +106,7 @@ impl Clone for anon_2 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_2);
 impl ByteRepr for anon_2 {
     fn byte_size() -> usize {
         8
@@ -129,6 +133,7 @@ impl Clone for anon_4 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_4);
 impl ByteRepr for anon_4 {
     fn byte_size() -> usize {
         4
@@ -153,6 +158,7 @@ impl Clone for anon_5 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_5);
 impl ByteRepr for anon_5 {
     fn byte_size() -> usize {
         4
@@ -181,6 +187,7 @@ impl Clone for anon_3 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_3);
 impl ByteRepr for anon_3 {
     fn byte_size() -> usize {
         12
@@ -217,6 +224,7 @@ impl Clone for Outer {
         }
     }
 }
+impl_deep_clone_leaf!(Outer);
 impl ByteRepr for Outer {
     fn byte_size() -> usize {
         44
@@ -321,6 +329,7 @@ impl Clone for anon_6 {
         }
     }
 }
+impl_deep_clone_leaf!(anon_6);
 impl ByteRepr for anon_6 {
     fn byte_size() -> usize {
         8

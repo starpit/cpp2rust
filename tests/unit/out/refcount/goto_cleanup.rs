@@ -88,6 +88,7 @@ impl Clone for wrapper {
         }
     }
 }
+impl_deep_clone_leaf!(wrapper);
 impl ByteRepr for wrapper {
     fn byte_size() -> usize {
         8

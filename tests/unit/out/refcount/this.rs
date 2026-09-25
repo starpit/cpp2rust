@@ -65,6 +65,7 @@ impl Clone for S {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(S);
 impl ByteRepr for S {
     fn byte_size() -> usize {
         16
@@ -108,6 +109,7 @@ impl Clone for D {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(D);
 impl ByteRepr for D {
     fn byte_size() -> usize {
         4

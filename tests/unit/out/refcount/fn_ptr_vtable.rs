@@ -23,6 +23,7 @@ impl Clone for Vtable {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Vtable);
 impl Default for Vtable {
     fn default() -> Self {
         Vtable {

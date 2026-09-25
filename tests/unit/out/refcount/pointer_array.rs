@@ -21,6 +21,7 @@ impl Clone for StackArray {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(StackArray);
 impl Default for StackArray {
     fn default() -> Self {
         StackArray {
