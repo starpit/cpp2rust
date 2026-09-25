@@ -30,3 +30,18 @@ unsafe fn f4(a0: Vec<libc::c_char>, a1: Vec<libc::c_char>) -> Vec<libc::c_char> 
     __lhs.extend_from_slice(&a1);
     __lhs
 }
+
+unsafe fn f5(a0: Vec<libc::c_char>, a1: *const libc::c_char) -> Vec<libc::c_char> {
+    let mut __lhs = a0.clone();
+    __lhs.pop();
+    let __r = a1;
+    __lhs.extend_from_slice(std::slice::from_raw_parts(
+        __r,
+        (0..).take_while(|&i| *__r.add(i) != 0).count() + 1,
+    ));
+    __lhs
+}
+
+unsafe fn f6(a0: Vec<libc::c_char>) -> Vec<libc::c_char> {
+    a0.clone()
+}

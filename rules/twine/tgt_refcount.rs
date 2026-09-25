@@ -32,3 +32,14 @@ fn f4(a0: Vec<u8>, a1: Vec<u8>) -> Vec<u8> {
     __lhs.extend_from_slice(&a1);
     __lhs
 }
+
+fn f5(a0: Vec<u8>, a1: Ptr<u8>) -> Vec<u8> {
+    let mut __lhs = a0;
+    __lhs.pop();
+    __lhs.extend(a1.to_c_string_iterator().chain(std::iter::once(0)));
+    __lhs
+}
+
+fn f6(a0: Vec<u8>) -> Vec<u8> {
+    a0
+}
