@@ -2803,6 +2803,15 @@ bool Converter::VisitDeclStmt(clang::DeclStmt *stmt) {
   return false;
 }
 
+// Whether `expr` is, once parens and implicit conversions are stripped, nothing
+// but a reference to `decl`. Used to tell `return o;` (the value alone) from
+// `return o << e.v;` (an insertion whose value is that same `o`).
+static bool IsDeclRefTo(const clang::Expr *expr, const clang::ValueDecl *decl) {
+  auto *ref =
+      clang::dyn_cast<clang::DeclRefExpr>(expr->IgnoreParenImpCasts());
+  return ref != nullptr && ref->getDecl() == decl;
+}
+
 bool Converter::VisitReturnStmt(clang::ReturnStmt *stmt) {
   auto return_type = curr_function_->getReturnType();
   // A user-written inserter returns the generic stream borrow it was handed, so
@@ -2811,14 +2820,30 @@ bool Converter::VisitReturnStmt(clang::ReturnStmt *stmt) {
   // pointer representation) and, in the refcount model, add a `.clone()` -- which
   // is a Ptr operation and does not exist on a `&mut __S`.
   if (IsUserStreamInserter(curr_function_)) {
-    // `return o;` on a `&'__s mut __S`. The value is the PARAMETER NAME, taken
-    // verbatim: converting the expression would deref it (`(*o)`, which is
-    // `__S`, not the borrow) in the unsafe model, and in the refcount model would
-    // leave a pending deref the ostream path never consumes -- an assert. An
-    // inserter's `return`/`return os;` can only ever name its own stream
-    // parameter, so the reborrow is spelled directly.
-    StrCat(keyword::kReturn, "&mut *",
-           GetNamedDeclAsString(curr_function_->getParamDecl(0)));
+    auto *stream_param = curr_function_->getParamDecl(0);
+    // The RETURNED VALUE is the reborrowed stream, spelled verbatim: converting
+    // the expression against the DECLARED type (`std::ostream &`, a concrete
+    // pointer representation) would deref it (`(*o)`, which is `__S`, not the
+    // borrow) in the unsafe model and, in the refcount model, add a `.clone()`
+    // or leave a pending deref the ostream path never consumes -- an assert.
+    //
+    // But the return EXPRESSION is not always just the parameter. The
+    // idiomatic inserter body is `return o << e.v;` -- an insertion whose value
+    // happens to be the stream -- and emitting only the reborrow DROPPED the
+    // insertion, so the translation compiled, ran, and silently printed
+    // nothing for the value. Splitting it in two recovers both halves in C++
+    // order: the insertion runs as a discarded-value expression statement (the
+    // same path a bare `o << e.v;` inside an inserter takes, hoisting included),
+    // then the reborrow is returned. This is sound for exactly the reason the
+    // short-circuit is sound in the first place -- the value of an insertion
+    // chain IS its left operand, the stream -- so the only expression this must
+    // NOT convert is the one that is already just the stream (`return o;`),
+    // where converting would hit the deref problem above for no gain.
+    if (auto *ret = stmt->getRetValue();
+        ret != nullptr && !IsDeclRefTo(ret, stream_param)) {
+      Convert(ret);
+    }
+    StrCat(keyword::kReturn, "&mut *", GetNamedDeclAsString(stream_param));
     return false;
   }
   if (!return_type->isVoidType()) {
