@@ -409,6 +409,11 @@ public:
   virtual bool VisitDeclRefExpr(clang::DeclRefExpr *expr);
   std::string ConvertDeclRefExpr(clang::DeclRefExpr *expr);
 
+  // An ADL name clang could not resolve. There is no lowering; this exists only
+  // so the failure is LOUD and names the construct instead of traversing to
+  // nothing and tripping the sentinel assert in Convert(Expr*, ...).
+  virtual bool VisitUnresolvedLookupExpr(clang::UnresolvedLookupExpr *expr);
+
   virtual bool VisitParenExpr(clang::ParenExpr *expr);
 
   void ConvertMemberExpr(clang::MemberExpr *expr);
@@ -686,6 +691,10 @@ protected:
   virtual void ConvertUniquePtrDeref(clang::CXXOperatorCallExpr *expr);
 
   virtual bool ConvertCXXOperatorCallExpr(clang::CXXOperatorCallExpr *expr);
+
+  // Loud, actionable report for an overloaded-operator call with no lowering.
+  // Callable (not a `default:` body) so the OO_LessLess arm can reach it.
+  void ReportUnsupportedOperatorCall(clang::CXXOperatorCallExpr *expr);
 
   std::string GetMappedAsString(clang::Expr *expr, clang::Expr **args = nullptr,
                                 unsigned num_args = 0,

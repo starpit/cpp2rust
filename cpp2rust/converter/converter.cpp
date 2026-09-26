@@ -3157,6 +3157,57 @@ bool Converter::VisitDeclRefExpr(clang::DeclRefExpr *expr) {
   return false;
 }
 
+// An UnresolvedLookupExpr is a name clang could not bind -- typically an ADL
+// call inside a class template whose template argument is still a
+// SubstTemplateTypeParmType (e.g. `isa<Key>`). There is no lowering here and we
+// deliberately do NOT try to resolve the lookup; without this hook the visitor
+// traverses to nothing, emits no text, and the failure surfaces as the sentinel
+// assert in Convert(Expr*, optional<QualType>) with no clue as to the construct.
+bool Converter::VisitUnresolvedLookupExpr(clang::UnresolvedLookupExpr *expr) {
+  std::string name = expr->getName().getAsString();
+
+  std::string targs;
+  if (expr->hasExplicitTemplateArgs()) {
+    for (const auto &loc : expr->template_arguments()) {
+      if (!targs.empty()) {
+        targs += ", ";
+      }
+      const clang::TemplateArgument &arg = loc.getArgument();
+      if (arg.getKind() == clang::TemplateArgument::Type) {
+        targs += Mapper::ToString(arg.getAsType(),
+                                  Mapper::ScalarSugar::kPreserve);
+      } else {
+        std::string buf;
+        llvm::raw_string_ostream os(buf);
+        arg.print(ctx_.getPrintingPolicy(), os, /*IncludeType=*/true);
+        targs += buf;
+      }
+    }
+  }
+
+  std::string spelled = name;
+  if (!targs.empty()) {
+    spelled += "<" + targs + ">";
+  }
+
+  const std::string loc =
+      expr->getExprLoc().printToString(ctx_.getSourceManager());
+
+  if (survey::Enabled()) {
+    survey::Record(survey::GapKind::kUnsupportedExpr,
+                   std::string("UnresolvedLookupExpr: ") + spelled, loc);
+    computed_expr_type_ = ComputedExprType::FreshValue;
+    return false;
+  }
+
+  // FIXME: improve error handling
+  llvm::errs() << "unsupported UnresolvedLookupExpr: " << spelled
+               << " (unresolved ADL call, " << expr->getNumDecls()
+               << " candidate decl(s)) at " << loc << '\n';
+  assert(0 && "unsupported UnresolvedLookupExpr\n");
+  return false;
+}
+
 bool Converter::VisitParenExpr(clang::ParenExpr *expr) {
   if (auto *bin = clang::dyn_cast<clang::BinaryOperator>(expr->getSubExpr());
       bin && (bin->isCommaOp() || (bin->isAssignmentOp() && isVoid()))) {
@@ -3170,6 +3221,74 @@ bool Converter::VisitParenExpr(clang::ParenExpr *expr) {
   }
 
   return false;
+}
+
+// Report an overloaded-operator call the converter has no lowering for.
+//
+// This is deliberately a FUNCTION and not an inlined `default:` body: the
+// OO_LessLess arm cannot fall through into `default:`, and before this existed
+// a non-ostream ADL `operator<<` left the switch through a bare `break`, emitted
+// no text at all, and then tripped the sentinel assert in
+// Convert(Expr*, optional<QualType>) with no clue as to the construct.
+//
+// The message must be actionable BY ITSELF: the old text was
+// `unsupported CXXOperatorCallExpr: ==`, which names neither the operand types
+// nor the location, so a rule author could not tell which key to add. It now
+// prints, on ONE line (census-head.sh takes a single grep match):
+//   * the operator spelling,
+//   * every operand's type in the MAPPER's own spelling -- that is the spelling
+//     a rule key must use, not clang's,
+//   * the resolved callee rendered by Mapper::ToString(NamedDecl*), which is
+//     exactly the rule-key signature form the preprocessor records, and
+//   * the source location.
+// LOUD FAILURE, never a placeholder: outside --survey this still asserts.
+void Converter::ReportUnsupportedOperatorCall(
+    clang::CXXOperatorCallExpr *expr) {
+  const char *spelling = clang::getOperatorSpelling(expr->getOperator());
+
+  std::string operands;
+  for (unsigned i = 0; i < expr->getNumArgs(); ++i) {
+    if (i) {
+      operands += ", ";
+    }
+    const auto *arg = expr->getArg(i);
+    operands += arg ? Mapper::ToString(arg->getType(),
+                                       Mapper::ScalarSugar::kPreserve)
+                    : "<null>";
+  }
+
+  std::string key;
+  if (auto *callee = expr->getDirectCallee()) {
+    key = Mapper::ToString(callee);
+  }
+
+  const std::string loc =
+      expr->getExprLoc().printToString(ctx_.getSourceManager());
+
+  if (survey::Enabled()) {
+    std::string detail =
+        std::string("CXXOperatorCallExpr: ") + spelling + " on (" + operands +
+        ")";
+    if (!key.empty()) {
+      detail += " rule key: " + key;
+    }
+    survey::Record(survey::GapKind::kUnsupportedExpr, detail, loc);
+    // Keep peeling: walk the operands so gaps *behind* this one are found
+    // too, instead of hiding one layer of the onion per run.
+    for (auto *arg : expr->arguments()) {
+      Convert(arg);
+    }
+    computed_expr_type_ = ComputedExprType::FreshValue;
+    return;
+  }
+
+  // FIXME: improve error handling
+  llvm::errs() << "unsupported CXXOperatorCallExpr: " << spelling << " on ("
+               << operands << ")"
+               << (key.empty() ? std::string(" rule key: <unresolved callee>")
+                               : " rule key: " + key)
+               << " at " << loc << '\n';
+  assert(0 && "unsupported CXXOperatorCallExpr\n");
 }
 
 bool Converter::ConvertCXXOperatorCallExpr(clang::CXXOperatorCallExpr *expr) {
@@ -3202,6 +3321,12 @@ bool Converter::ConvertCXXOperatorCallExpr(clang::CXXOperatorCallExpr *expr) {
       ConvertCallToOstream(expr);
       return false;
     }
+    // A non-ostream `operator<<` used to leave the switch here having emitted
+    // NOTHING, which surfaced later as the sentinel assert in
+    // Convert(Expr*, optional<QualType>) rather than as a diagnostic naming the
+    // construct. C++ cannot fall through to `default:` from here, so call the
+    // same reporter that arm calls.
+    ReportUnsupportedOperatorCall(expr);
     break;
   case clang::OverloadedOperatorKind::OO_Call:
     ConvertGenericCallExpr(expr);
@@ -3228,40 +3353,8 @@ bool Converter::ConvertCXXOperatorCallExpr(clang::CXXOperatorCallExpr *expr) {
     computed_expr_type_ = ComputedExprType::FreshValue;
     break;
   default:
-    if (survey::Enabled()) {
-      std::string detail =
-          std::string("CXXOperatorCallExpr: ") +
-          clang::getOperatorSpelling(expr->getOperator()) + " on " +
-          Mapper::ToString(expr->getArg(0)->getType());
-      if (auto *callee = expr->getDirectCallee()) {
-        detail = std::string("CXXOperatorCallExpr: ") +
-                 callee->getQualifiedNameAsString() + "(" + [&] {
-                   std::string params;
-                   for (unsigned i = 0; i < callee->getNumParams(); ++i) {
-                     if (i) {
-                       params += ", ";
-                     }
-                     params += Mapper::ToString(callee->getParamDecl(i)
-                                                    ->getType(),
-                                                Mapper::ScalarSugar::kPreserve);
-                   }
-                   return params;
-                 }() + ")";
-      }
-      survey::Record(survey::GapKind::kUnsupportedExpr, detail,
-                     expr->getExprLoc().printToString(ctx_.getSourceManager()));
-      // Keep peeling: walk the operands so gaps *behind* this one are found
-      // too, instead of hiding one layer of the onion per run.
-      for (auto *arg : expr->arguments()) {
-        Convert(arg);
-      }
-      computed_expr_type_ = ComputedExprType::FreshValue;
-      break;
-    }
-    // FIXME: improve error handling
-    llvm::errs() << "unsupported CXXOperatorCallExpr: "
-                 << clang::getOperatorSpelling(expr->getOperator()) << '\n';
-    assert(0);
+    ReportUnsupportedOperatorCall(expr);
+    break;
   }
   return false;
 }
