@@ -133,3 +133,15 @@ fn f17(a0: Ptr<MlirBlock>) -> Ptr<OpInst> {
 fn f18<T1: ByteRepr + Clone>(a0: Ptr<Vec<T1>>, a1: Ptr<T1>) {
     a0.with_mut(|__v: &mut Vec<T1>| __v.push(a1.read()))
 }
+
+// ROW 2: the MLIR range iterator -- see tgt_unsafe.rs. The pair is the same in
+// both models; only BaseT's own representation differs (`Ptr<_>` rather than
+// `*mut _`), and that is T3, supplied by the caller. No projection is involved,
+// so the f1/f14 wall does not apply here.
+fn t5<T1, T2, T3: Default>() -> (T3, i64) {
+    (T3::default(), 0)
+}
+
+fn f19<T1, T2, T3: PartialEq>(a0: (T3, i64), a1: (T3, i64)) -> bool {
+    a0.0 != a1.0 || a0.1 != a1.1
+}

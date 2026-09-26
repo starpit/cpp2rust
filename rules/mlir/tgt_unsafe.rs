@@ -111,3 +111,19 @@ unsafe fn f17(a0: &mut MlirBlock) -> *mut OpInst {
 unsafe fn f18<T1>(a0: &mut Vec<T1>, a1: *mut T1) {
     a0.push(a1.read())
 }
+
+// ROW 2: the MLIR range iterator. State is `{ BaseT base; ptrdiff_t index; }`,
+// so the representation is that PAIR -- `(T3, i64)`, where T3 is BaseT itself
+// (the key binds the whole `mlir::OpOperand *`, not its pointee). A tuple with
+// concrete members is a legal representation; rules/tuple's t4 is the
+// precedent. T1 and T2 appear because the key names them.
+fn t5<T1, T2, T3: Default>() -> (T3, i64) {
+    (T3::default(), 0)
+}
+
+// `!=` on a range iterator is POSITION IDENTITY over BOTH fields: MLIR's
+// operator== is `base == rhs.base && index == rhs.index`. Comparing only the
+// index would call iterators into two DIFFERENT ranges equal.
+unsafe fn f19<T1, T2, T3: PartialEq>(a0: (T3, i64), a1: (T3, i64)) -> bool {
+    a0.0 != a1.0 || a0.1 != a1.1
+}

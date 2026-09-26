@@ -2204,3 +2204,20 @@ mod tests {
         assert_eq!((st.flags, st.width, st.fill), (CC2_DEC, 0, b' '));
     }
 }
+
+/// `std::chrono::steady_clock::now()`, as nanoseconds since ONE process-wide origin.
+///
+/// This lives in libcc2rs rather than in a rule body for a reason that was measured:
+/// a rule body is INLINED AT EVERY CALL SITE, so a `static OnceLock` inside it becomes
+/// a SEPARATE origin per site.  Each `now()` then returned "nanos since this site's
+/// first call" -- roughly 100 ns at a cold site and 40 ns at a warm one -- so `end`
+/// was systematically SMALLER than `start` and every elapsed-time measurement in the
+/// port was approximately zero.  That also masked an inverted subtraction in
+/// `rules/chrono` f2, because the reversed body came out positive every time.
+///
+/// `Instant` is `CLOCK_MONOTONIC`, which is what `steady_clock` requires; it is never
+/// the wall clock.
+pub fn cc2_steady_now_nanos() -> i64 {
+    static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    ORIGIN.get_or_init(std::time::Instant::now).elapsed().as_nanos() as i64
+}
