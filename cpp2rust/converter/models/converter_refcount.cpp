@@ -2623,7 +2623,7 @@ const char *ConverterRefCount::StreamManipFn() const {
 // `let _os = &mut os;` and did not compile.  The abort it used to hide behind was
 // the `pending_deref_ not consumed` assert at the DeclRefExpr arm above.
 std::string ConverterRefCount::StreamInserterReceiver(
-    const std::string &stream_str) {
+    const std::string &stream_str, bool may_take_stash) {
   if (curr_function_ != nullptr && IsUserStreamInserter(curr_function_)) {
     return "&mut *" + stream_str;
   }
@@ -2645,10 +2645,10 @@ std::string ConverterRefCount::StreamInserterReceiver(
   // file-local IsStashOnlyRemainder is defined further down.)
   const bool stash_only =
       stream_str.find_first_not_of(" \t\n") == std::string::npos;
-  if (!pending_deref_.empty() && stash_only) {
+  if (may_take_stash && !pending_deref_.empty() && stash_only) {
     return "&mut " + pending_deref_.take();
   }
-  return Converter::StreamInserterReceiver(stream_str);
+  return Converter::StreamInserterReceiver(stream_str, may_take_stash);
 }
 
 std::string

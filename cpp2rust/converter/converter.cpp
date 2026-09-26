@@ -3442,7 +3442,8 @@ const char *Converter::StreamManipFn() const {
 // parameter type -- the translation of `std::ostream &`, which is a raw pointer
 // in this model -- so the argument must match that spelling exactly.
 std::string
-Converter::StreamInserterReceiver(const std::string &stream_str) {
+Converter::StreamInserterReceiver(const std::string &stream_str,
+                                 bool /*may_take_stash*/) {
   return "&mut " + stream_str;
 }
 
@@ -4290,7 +4291,7 @@ void Converter::EmitHoistedArgs(CallInfo &info) {
           Convert(ca.expr);
           base_text = std::move(buf).str();
         }
-        StrCat(StreamInserterReceiver(base_text));
+        StrCat(StreamInserterReceiver(base_text, /*may_take_stash=*/true));
       } else {
         StrCat(std::format("let {}: {} =", ca.param_name,
                            ToString(ca.param_type)));

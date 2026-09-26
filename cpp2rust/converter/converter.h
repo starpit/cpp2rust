@@ -376,8 +376,12 @@ public:
   bool ConvertOstreamItem(clang::Expr *arg, const std::string &stream_str,
                           clang::CXXOperatorCallExpr *call);
   // How a user-defined operator<< receives the stream, per model.
-  // NOT const: the refcount override consumes `pending_deref_`.
-  virtual std::string StreamInserterReceiver(const std::string &stream_str);
+  // NOT const: the refcount override consumes `pending_deref_`, but ONLY when
+  // `may_take_stash` is set. The CHAINED path must not consume -- it has its own
+  // consumer downstream, and taking the stash here stole it (measured: it
+  // regressed dsc__superdsc.cpp from rc=0 to the assert).
+  virtual std::string StreamInserterReceiver(const std::string &stream_str,
+                                             bool may_take_stash = false);
   virtual const char *StreamManipFn() const;
   virtual std::string StreamReceiver(const std::string &stream_str) const;
   // How a base manipulator reaches the helper as a value: the two models spell

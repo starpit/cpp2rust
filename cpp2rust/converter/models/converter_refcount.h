@@ -197,7 +197,8 @@ public:
   const char *StreamManipFn() const override;
   std::string StreamReceiver(const std::string &stream_str) const override;
 
-  std::string StreamInserterReceiver(const std::string &stream_str) override;
+  std::string StreamInserterReceiver(const std::string &stream_str,
+                                     bool may_take_stash = false) override;
   std::string StreamManipArg(clang::Expr *arg) override;
 
   bool VisitCXXConstructExpr(clang::CXXConstructExpr *expr) override;
