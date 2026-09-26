@@ -3553,5 +3553,92 @@ unsafe fn f397() -> *mut () {
 // `std::ignore = expr;` -- the value is evaluated (a0/a1 are already evaluated
 // by the caller) and dropped.
 unsafe fn f398<T1>(a0: *mut (), a1: T1) -> *mut () {
-    a0
+    let _ = a1;
+    std::ptr::NonNull::<()>::dangling().as_ptr()
+}
+
+// --- std::tie assignment from a PRVALUE tuple (see src.cpp) ------------------
+//
+// NOT the same body as f275/f279/f284, and their shape is a latent bug: a rule
+// body is inlined TEXTUALLY, so every occurrence of `aN` RE-EVALUATES that
+// argument.  `*a0.0 = a1.0.clone(); *a0.1 = a1.1.clone();` therefore emitted
+// `(&mut a, &mut b).0 = (f2_0()).0.clone(); (&mut a, &mut b).1 = (f2_0()).1...`
+// -- f2() called TWICE where C++ calls it once.  Measured.  So bind each
+// argument ONCE with a `let` (legal: the body is emitted as a block `{ ... }`,
+// confirmed in the emitted Rust) and index the binding.
+//
+// Also: `*a0.0` lost its deref, because the tie tuple substitutes in as
+// `(&mut a, &mut b)` -- Rust's `&mut T` -> `*mut T` coercion does not fire in
+// that position, so `.0` stayed `&mut i32` and the write was E0308.  An explicit
+// `as *mut _` cast pins it and works for both the coerced and raw forms.
+
+unsafe fn f399<T1: Clone, T2: Clone>(a0: &mut (*mut T1, *mut T2), a1: (T1, T2)) {
+    let __d = a0;
+    let __s = a1;
+    *(__d.0 as *mut _) = __s.0.clone();
+    *(__d.1 as *mut _) = __s.1.clone();
+}
+
+unsafe fn f400<T1: Clone, T2: Clone, T3: Clone>(a0: &mut (*mut T1, *mut T2, *mut T3), a1: (T1, T2, T3)) {
+    let __d = a0;
+    let __s = a1;
+    *(__d.0 as *mut _) = __s.0.clone();
+    *(__d.1 as *mut _) = __s.1.clone();
+    *(__d.2 as *mut _) = __s.2.clone();
+}
+
+unsafe fn f401<T1: Clone, T2: Clone, T3: Clone, T4: Clone>(a0: &mut (*mut T1, *mut T2, *mut T3, *mut T4), a1: (T1, T2, T3, T4)) {
+    let __d = a0;
+    let __s = a1;
+    *(__d.0 as *mut _) = __s.0.clone();
+    *(__d.1 as *mut _) = __s.1.clone();
+    *(__d.2 as *mut _) = __s.2.clone();
+    *(__d.3 as *mut _) = __s.3.clone();
+}
+
+// --- std::tie assignment with std::ignore slots -----------------------------
+// The ignored slot's dst element is `*mut ()` (t36); no write is emitted for it
+// and its src element is dropped, matching libc++'s
+// `const __ignore_type &operator=(const _Tp &) const`, which stores nothing.
+// `let __s = a1;` still binds the WHOLE src tuple, so the discarded element is
+// evaluated exactly once and then dropped -- C++ evaluates it too.
+
+unsafe fn f402<T1: Clone, T2>(a0: &mut (*mut T1, *mut ()), a1: (T1, T2)) {
+    let __d = a0;
+    let __s = a1;
+    *(__d.0 as *mut _) = __s.0.clone();
+}
+
+unsafe fn f403<T1, T2: Clone>(a0: &mut (*mut (), *mut T2), a1: (T1, T2)) {
+    let __d = a0;
+    let __s = a1;
+    *(__d.1 as *mut _) = __s.1.clone();
+}
+
+unsafe fn f404<T1: Clone, T2: Clone, T3>(a0: &mut (*mut T1, *mut T2, *mut ()), a1: (T1, T2, T3)) {
+    let __d = a0;
+    let __s = a1;
+    *(__d.0 as *mut _) = __s.0.clone();
+    *(__d.1 as *mut _) = __s.1.clone();
+}
+
+unsafe fn f405<T1, T2: Clone, T3: Clone>(a0: &mut (*mut (), *mut T2, *mut T3), a1: (T1, T2, T3)) {
+    let __d = a0;
+    let __s = a1;
+    *(__d.1 as *mut _) = __s.1.clone();
+    *(__d.2 as *mut _) = __s.2.clone();
+}
+
+unsafe fn f406<T1: Clone, T2, T3: Clone>(a0: &mut (*mut T1, *mut (), *mut T3), a1: (T1, T2, T3)) {
+    let __d = a0;
+    let __s = a1;
+    *(__d.0 as *mut _) = __s.0.clone();
+    *(__d.2 as *mut _) = __s.2.clone();
+}
+
+unsafe fn f407<T1: Clone, T2, T3, T4: Clone>(a0: &mut (*mut T1, *mut (), *mut (), *mut T4), a1: (T1, T2, T3, T4)) {
+    let __d = a0;
+    let __s = a1;
+    *(__d.0 as *mut _) = __s.0.clone();
+    *(__d.3 as *mut _) = __s.3.clone();
 }

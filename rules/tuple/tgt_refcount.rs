@@ -4747,5 +4747,110 @@ fn f397() -> Ptr<()> {
 }
 
 fn f398<T1>(a0: Ptr<()>, a1: T1) -> Ptr<()> {
-    a0
+    let _ = a1;
+    Ptr::alloc(())
+}
+
+// --- std::tie assignment from a PRVALUE tuple (see src.cpp) ------------------
+
+fn f399<T1: Clone + ByteRepr, T2: Clone + ByteRepr>(
+    a0: Ptr<(Ptr<T1>, Ptr<T2>)>,
+    a1: (Value<T1>, Value<T2>),
+) {
+    let __s = a1;
+    a0.with(|__dst: &(Ptr<T1>, Ptr<T2>)| {
+        __dst.0.write(__s.0.borrow().clone());
+        __dst.1.write(__s.1.borrow().clone());
+    })
+}
+
+fn f400<T1: Clone + ByteRepr, T2: Clone + ByteRepr, T3: Clone + ByteRepr>(
+    a0: Ptr<(Ptr<T1>, Ptr<T2>, Ptr<T3>)>,
+    a1: (Value<T1>, Value<T2>, Value<T3>),
+) {
+    let __s = a1;
+    a0.with(|__dst: &(Ptr<T1>, Ptr<T2>, Ptr<T3>)| {
+        __dst.0.write(__s.0.borrow().clone());
+        __dst.1.write(__s.1.borrow().clone());
+        __dst.2.write(__s.2.borrow().clone());
+    })
+}
+
+fn f401<T1: Clone + ByteRepr, T2: Clone + ByteRepr, T3: Clone + ByteRepr, T4: Clone + ByteRepr>(
+    a0: Ptr<(Ptr<T1>, Ptr<T2>, Ptr<T3>, Ptr<T4>)>,
+    a1: (Value<T1>, Value<T2>, Value<T3>, Value<T4>),
+) {
+    let __s = a1;
+    a0.with(|__dst: &(Ptr<T1>, Ptr<T2>, Ptr<T3>, Ptr<T4>)| {
+        __dst.0.write(__s.0.borrow().clone());
+        __dst.1.write(__s.1.borrow().clone());
+        __dst.2.write(__s.2.borrow().clone());
+        __dst.3.write(__s.3.borrow().clone());
+    })
+}
+
+// --- std::tie assignment with std::ignore slots -----------------------------
+
+fn f402<T1: Clone + ByteRepr, T2: Clone + ByteRepr>(
+    a0: Ptr<(Ptr<T1>, Ptr<()>)>,
+    a1: (Value<T1>, Value<T2>),
+) {
+    let __s = a1;
+    a0.with(|__dst: &(Ptr<T1>, Ptr<()>)| {
+        __dst.0.write(__s.0.borrow().clone());
+    })
+}
+
+fn f403<T1: Clone + ByteRepr, T2: Clone + ByteRepr>(
+    a0: Ptr<(Ptr<()>, Ptr<T2>)>,
+    a1: (Value<T1>, Value<T2>),
+) {
+    let __s = a1;
+    a0.with(|__dst: &(Ptr<()>, Ptr<T2>)| {
+        __dst.1.write(__s.1.borrow().clone());
+    })
+}
+
+fn f404<T1: Clone + ByteRepr, T2: Clone + ByteRepr, T3: Clone + ByteRepr>(
+    a0: Ptr<(Ptr<T1>, Ptr<T2>, Ptr<()>)>,
+    a1: (Value<T1>, Value<T2>, Value<T3>),
+) {
+    let __s = a1;
+    a0.with(|__dst: &(Ptr<T1>, Ptr<T2>, Ptr<()>)| {
+        __dst.0.write(__s.0.borrow().clone());
+        __dst.1.write(__s.1.borrow().clone());
+    })
+}
+
+fn f405<T1: Clone + ByteRepr, T2: Clone + ByteRepr, T3: Clone + ByteRepr>(
+    a0: Ptr<(Ptr<()>, Ptr<T2>, Ptr<T3>)>,
+    a1: (Value<T1>, Value<T2>, Value<T3>),
+) {
+    let __s = a1;
+    a0.with(|__dst: &(Ptr<()>, Ptr<T2>, Ptr<T3>)| {
+        __dst.1.write(__s.1.borrow().clone());
+        __dst.2.write(__s.2.borrow().clone());
+    })
+}
+
+fn f406<T1: Clone + ByteRepr, T2: Clone + ByteRepr, T3: Clone + ByteRepr>(
+    a0: Ptr<(Ptr<T1>, Ptr<()>, Ptr<T3>)>,
+    a1: (Value<T1>, Value<T2>, Value<T3>),
+) {
+    let __s = a1;
+    a0.with(|__dst: &(Ptr<T1>, Ptr<()>, Ptr<T3>)| {
+        __dst.0.write(__s.0.borrow().clone());
+        __dst.2.write(__s.2.borrow().clone());
+    })
+}
+
+fn f407<T1: Clone + ByteRepr, T2: Clone + ByteRepr, T3: Clone + ByteRepr, T4: Clone + ByteRepr>(
+    a0: Ptr<(Ptr<T1>, Ptr<()>, Ptr<()>, Ptr<T4>)>,
+    a1: (Value<T1>, Value<T2>, Value<T3>, Value<T4>),
+) {
+    let __s = a1;
+    a0.with(|__dst: &(Ptr<T1>, Ptr<()>, Ptr<()>, Ptr<T4>)| {
+        __dst.0.write(__s.0.borrow().clone());
+        __dst.3.write(__s.3.borrow().clone());
+    })
 }

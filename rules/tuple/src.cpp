@@ -2092,3 +2092,84 @@ template <typename T1>
 const std::__ignore_type &f398(const std::__ignore_type &dst, const T1 &src) {
   return dst.operator=(src);
 }
+
+// --- std::tie assignment from a PRVALUE tuple --------------------------------
+//
+// ROOT CAUSE of "every std::tie(...) = f(); emits non-compiling Rust".  f275/
+// f279/f284 above record the `const tuple<_Up...>&` overload of tuple::operator=,
+// but `std::tie(a, b) = f();` binds the RVALUE-REFERENCE overload, because f()
+// returns a prvalue.  Measured on the clang AST of `std::tie(a,b) = f2();`:
+//     CXXMethod 'operator=' 'tuple<int &, int &> &(tuple<int, int> &&) noexcept(...)'
+// so the const& key never matched, and the converter SILENTLY fell back to a
+// native Rust `=`, emitting `(&mut a, &mut b) = (f2_0());` -- error[E0070],
+// invalid left-hand side of assignment -- with an EMPTY translate log.  Every
+// `std::tie(...) = f();` in the port went through that path.  These entries
+// record the && overload, which is the one real code actually calls.
+
+template <typename T1, typename T2>
+std::tuple<T1 &, T2 &> &f399(std::tuple<T1 &, T2 &> &dst, std::tuple<T1, T2> &&src) {
+  return dst.operator=(std::move(src));
+}
+
+template <typename T1, typename T2, typename T3>
+std::tuple<T1 &, T2 &, T3 &> &f400(std::tuple<T1 &, T2 &, T3 &> &dst, std::tuple<T1, T2, T3> &&src) {
+  return dst.operator=(std::move(src));
+}
+
+template <typename T1, typename T2, typename T3, typename T4>
+std::tuple<T1 &, T2 &, T3 &, T4 &> &f401(std::tuple<T1 &, T2 &, T3 &, T4 &> &dst, std::tuple<T1, T2, T3, T4> &&src) {
+  return dst.operator=(std::move(src));
+}
+
+// --- std::tie assignment with std::ignore slots ------------------------------
+//
+// An ignored slot's DST element type is `const std::__ignore_type &`, which is a
+// DISTINCT type from a kept slot's `T &`, so one entry per (arity, slot pattern)
+// is expressible with no new rule-language machinery: the target body simply
+// omits the write for that slot, which is exactly what libc++'s
+// `const __ignore_type &operator=(const _Tp &) const` does (it takes the value
+// and stores nothing).  The SRC element for an ignored slot still carries the
+// real value type, so it gets its own template parameter and is dropped.
+//
+// Patterns covered are the ones the census actually uses --
+// AddressPinningAndToggle.cpp:2200,2226,2592,3219 (arity 2, ignore last),
+// :2573,2595 (arity 2, ignore FIRST), :2674 and CorrelationAnalysis.cpp:351
+// (arity 3, ignore last) -- plus arity-3 ignore-first/middle and the arity-4
+// two-ignored shape, so a mis-slotted body cannot hide.
+
+template <typename T1, typename T2>
+std::tuple<T1 &, const std::__ignore_type &> &f402(
+    std::tuple<T1 &, const std::__ignore_type &> &dst, std::tuple<T1, T2> &&src) {
+  return dst.operator=(std::move(src));
+}
+
+template <typename T1, typename T2>
+std::tuple<const std::__ignore_type &, T2 &> &f403(
+    std::tuple<const std::__ignore_type &, T2 &> &dst, std::tuple<T1, T2> &&src) {
+  return dst.operator=(std::move(src));
+}
+
+template <typename T1, typename T2, typename T3>
+std::tuple<T1 &, T2 &, const std::__ignore_type &> &f404(
+    std::tuple<T1 &, T2 &, const std::__ignore_type &> &dst, std::tuple<T1, T2, T3> &&src) {
+  return dst.operator=(std::move(src));
+}
+
+template <typename T1, typename T2, typename T3>
+std::tuple<const std::__ignore_type &, T2 &, T3 &> &f405(
+    std::tuple<const std::__ignore_type &, T2 &, T3 &> &dst, std::tuple<T1, T2, T3> &&src) {
+  return dst.operator=(std::move(src));
+}
+
+template <typename T1, typename T2, typename T3>
+std::tuple<T1 &, const std::__ignore_type &, T3 &> &f406(
+    std::tuple<T1 &, const std::__ignore_type &, T3 &> &dst, std::tuple<T1, T2, T3> &&src) {
+  return dst.operator=(std::move(src));
+}
+
+template <typename T1, typename T2, typename T3, typename T4>
+std::tuple<T1 &, const std::__ignore_type &, const std::__ignore_type &, T4 &> &f407(
+    std::tuple<T1 &, const std::__ignore_type &, const std::__ignore_type &, T4 &> &dst,
+    std::tuple<T1, T2, T3, T4> &&src) {
+  return dst.operator=(std::move(src));
+}
