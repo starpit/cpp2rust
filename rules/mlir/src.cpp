@@ -338,6 +338,13 @@ public:
 
   // llvm/ADT/iterator.h:183.
   bool operator!=(const DerivedT &RHS) const;
+
+  // ROW 2: llvm/ADT/iterator.h:155.  PRE-increment, declared ONLY here -- the
+  // nested `iterator` does not declare it, so the recorded key names THIS class
+  // exactly as `operator!=`'s does.  It returns `DerivedT &`, i.e. the NEW
+  // position; the postfix form (iterator.h:159) returns a DerivedT BY VALUE
+  // holding the OLD position, which is why they are two separate rules.
+  DerivedT &operator++();
 };
 
 namespace detail {
@@ -358,6 +365,16 @@ public:
     // recorded key names that base, which is what the signature above says.
     bool operator==(const iterator &rhs) const;
   };
+
+  // ROW 1/2 PRODUCER.  STLExtras.h:1241 -- `indexed_accessor_range_base(BaseT
+  // base, ptrdiff_t count)` is PUBLIC (`public:` at :1215, no intervening access
+  // specifier), and so are begin()/end() at :1244-45.  The range holds exactly
+  // `BaseT base; ptrdiff_t count`, so it takes the SAME `(T3, i64)` shape the
+  // iterator already uses -- no new representation.  begin() is `iterator(base,
+  // 0)` and end() is `iterator(base, count)`, both const.
+  indexed_accessor_range_base(BaseT base, long count);
+  iterator begin() const;
+  iterator end() const;
 };
 } // namespace detail
 } // namespace llvm
@@ -378,4 +395,58 @@ bool f19(
     const typename llvm::detail::indexed_accessor_range_base<T2, T3, T1, T1,
                                                              T1>::iterator &b) {
   return a.operator!=(b);
+}
+
+// ROW 1: `operator==` on the NESTED iterator, not on the facade.  MLIR's
+// definition is POSITION IDENTITY -- `base == rhs.base && index == rhs.index`
+// (llvm/ADT/STLExtras.h:1170) -- and the parameter is the iterator type itself,
+// so the key names the nested class while `!=` above names iterator_facade_base.
+// Needs no new modelling: it reads the same `(T3, i64)` pair f19 already reads,
+// and is exactly f19 negated.
+template <typename T1, typename T2, typename T3>
+bool f20(
+    const typename llvm::detail::indexed_accessor_range_base<T2, T3, T1, T1,
+                                                             T1>::iterator &a,
+    const typename llvm::detail::indexed_accessor_range_base<T2, T3, T1, T1,
+                                                             T1>::iterator &b) {
+  return a.operator==(b);
+}
+
+// ROW 2: PRE-increment, the INHERITED member on iterator_facade_base.  Returns
+// the NEW position by reference.  `a.operator++()` spelled explicitly; `++a`
+// would record no src entry.  Steps the INDEX only -- `base` names the range and
+// is invariant under stepping (STLExtras.h:1179 `this->index += offset`).
+template <typename T1, typename T2, typename T3>
+typename llvm::detail::indexed_accessor_range_base<T2, T3, T1, T1,
+                                                   T1>::iterator &
+f21(typename llvm::detail::indexed_accessor_range_base<T2, T3, T1, T1,
+                                                       T1>::iterator &a) {
+  return a.operator++();
+}
+
+// The RANGE's own type -- `(base, count)`, the same pair shape as its iterator's
+// `(base, index)`.  Nothing else in the rule tree names this key.
+template <typename T1, typename T2, typename T3>
+using t6 = llvm::detail::indexed_accessor_range_base<T2, T3, T1, T1, T1>;
+
+// The public (BaseT, ptrdiff_t) constructor, STLExtras.h:1241.
+template <typename T1, typename T2, typename T3>
+llvm::detail::indexed_accessor_range_base<T2, T3, T1, T1, T1> f22(T3 a0,
+                                                                  long a1) {
+  return llvm::detail::indexed_accessor_range_base<T2, T3, T1, T1, T1>(a0, a1);
+}
+
+// begin() -- STLExtras.h:1244, `iterator(base, 0)`.
+template <typename T1, typename T2, typename T3>
+typename llvm::detail::indexed_accessor_range_base<T2, T3, T1, T1, T1>::iterator
+f23(const llvm::detail::indexed_accessor_range_base<T2, T3, T1, T1, T1> &a0) {
+  return a0.begin();
+}
+
+// end() -- STLExtras.h:1245, `iterator(base, count)`.  SAME base as begin(),
+// which is what makes a base-only `==` body detectable.
+template <typename T1, typename T2, typename T3>
+typename llvm::detail::indexed_accessor_range_base<T2, T3, T1, T1, T1>::iterator
+f24(const llvm::detail::indexed_accessor_range_base<T2, T3, T1, T1, T1> &a0) {
+  return a0.end();
 }

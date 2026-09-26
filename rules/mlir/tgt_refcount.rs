@@ -145,3 +145,41 @@ fn t5<T1, T2, T3: Default>() -> (T3, i64) {
 fn f19<T1, T2, T3: PartialEq>(a0: (T3, i64), a1: (T3, i64)) -> bool {
     a0.0 != a1.0 || a0.1 != a1.1
 }
+
+// ROW 1: `==` is f19 negated -- POSITION IDENTITY over BOTH fields of the pair.
+// `base` alone would call begin() and end() of the same range equal; `index`
+// alone would call iterators into two DIFFERENT ranges equal.
+fn f20<T1, T2, T3: PartialEq>(a0: (T3, i64), a1: (T3, i64)) -> bool {
+    a0.0 == a1.0 && a0.1 == a1.1
+}
+
+// ROW 2: PRE-increment yields the NEW position. `base` is untouched: stepping
+// moves the INDEX (STLExtras.h:1179). One block expression, no `let` holding a
+// borrow -- a rule body is inlined into the caller.
+fn f21<T1, T2, T3: Clone>(a0: &mut (T3, i64)) -> (T3, i64) {
+    {
+        a0.1 += 1;
+        (a0.0.clone(), a0.1)
+    }
+}
+
+// The RANGE, `(base, count)` -- STLExtras.h:1241 stores exactly those two
+// fields, so this is the iterator's pair shape reused, not a new model.
+fn t6<T1, T2, T3: Default>() -> (T3, i64) {
+    (T3::default(), 0)
+}
+
+fn f22<T1, T2, T3>(a0: T3, a1: i64) -> (T3, i64) {
+    (a0, a1)
+}
+
+// begin() = `iterator(base, 0)`; end() = `iterator(base, count)`. Both carry the
+// range's OWN base, so two ranges over distinct bases yield iterators that must
+// compare unequal at equal index.
+fn f23<T1, T2, T3: Clone>(a0: (T3, i64)) -> (T3, i64) {
+    (a0.0.clone(), 0)
+}
+
+fn f24<T1, T2, T3: Clone>(a0: (T3, i64)) -> (T3, i64) {
+    (a0.0.clone(), a0.1)
+}
