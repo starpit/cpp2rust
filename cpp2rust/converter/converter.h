@@ -1388,6 +1388,34 @@ protected:
     std::string body;
   };
   static std::map<std::string, DeferredBlock> virtual_methods_;
+
+  // The `trait <X> { … }` blocks ConvertAbstractClass lowers an abstract class
+  // to, keyed on trait name, held rather than emitted.
+  //
+  // Held because a non-virtual method of a trait-lowered class whose body is
+  // defined OUT OF LINE is visited long after the class, by which time an
+  // inline-emitted trait's braces are closed -- so ConvertOutOfLineMethod
+  // currently emits `impl <trait-name> { … }`, an inherent impl on a name that
+  // is a trait, which is E0782 at every call site (42 of them once the defining
+  // TU is compiled alongside). `virtual_methods_` cannot serve: it accumulates
+  // `impl Trait for X` blocks keyed per implementor, and a non-virtual method
+  // has no single implementor. The refcount model already defers whole traits
+  // (`MethodsOnPtrFor(...).trait.body`); this is the base model's equivalent.
+  //
+  // THIS CHANGE IS DESTINATION-ONLY and must stay byte-identical: the block is
+  // still assembled at exactly the same point and still appears at exactly the
+  // same position in the output, via a placeholder substituted at finalization.
+  // Routing out-of-line methods into it is a separate, measured step.
+  static std::map<std::string, DeferredBlock> trait_blocks_;
+
+  // The inert marker left where a deferred trait block belongs. A `//` comment
+  // terminated by a newline, so if substitution ever failed to fire the output
+  // would lose the trait and fail LOUDLY on an undefined name, rather than
+  // commenting out whatever followed it on the line.
+  static std::string TraitBlockPlaceholder(const std::string &trait_name);
+
+  // Substitutes every held trait block back into `out` at its placeholder.
+  static void EmitTraitBlocks(std::string &out);
   // Turns unbounded converter recursion from a bare SIGSEGV into a diagnostic
   // naming a source location, via clang/Basic/Stack.h. A safety net, not a fix
   // for any particular cycle -- see the comment on the definition.

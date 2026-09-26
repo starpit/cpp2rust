@@ -47,6 +47,7 @@ Converter::RecordIndex Converter::record_decls_;
 std::map<std::string, int64_t> Converter::opaque_enum_constants_;
 std::vector<Converter::GTestCase> Converter::gtest_cases_;
 std::map<std::string, Converter::DeferredBlock> Converter::virtual_methods_;
+std::map<std::string, Converter::DeferredBlock> Converter::trait_blocks_;
 std::map<std::string, std::vector<const clang::FieldDecl *>>
     Converter::trait_accessors_;
 
@@ -163,7 +164,36 @@ void Converter::EmitDeferredBlock(const DeferredBlock &block,
   out += "}\n";
 }
 
+std::string Converter::TraitBlockPlaceholder(const std::string &trait_name) {
+  return "//__CC2_TRAIT_BLOCK_" + trait_name + "__\n";
+}
+
+void Converter::EmitTraitBlocks(std::string &out) {
+  for (const auto &[trait_name, block] : trait_blocks_) {
+    auto marker = TraitBlockPlaceholder(trait_name);
+    auto pos = out.find(marker);
+    if (pos == std::string::npos) {
+      // The class was visited but its marker is not in this output. Not silently
+      // ignorable: the trait would be missing entirely.
+      llvm::errs() << "ERROR: trait block placeholder for '" << trait_name
+                   << "' not found in the emitted output\n";
+      assert(0 && "trait block placeholder missing");
+      continue;
+    }
+    std::string text;
+    EmitDeferredBlock(block, text);
+    out.replace(pos, marker.size(), text);
+  }
+  trait_blocks_.clear();
+}
+
 void Converter::EmitVirtualMethods(std::string &out) {
+  // Traits first, and from here rather than a new call site: this function is
+  // already called at finalization (cpp2rust_lib.cpp:41) and is owned by this
+  // change, the same arrangement ac79ddf used for EmitRuleModuleImports. Order
+  // within the file does not matter to Rust; what matters is that substitution
+  // happens before rustfmt, which it does.
+  EmitTraitBlocks(out);
   for (const auto &[name, impl] : virtual_methods_) {
     EmitDeferredBlock(impl, out);
   }
@@ -7745,10 +7775,16 @@ void Converter::ConvertAbstractClass(clang::CXXRecordDecl *decl) {
                              GetUnsafeTypeAsString(field->getType()));
   }
   if (emitted || !accessors.empty()) {
-    StrCat(signature, token::kOpenCurlyBracket);
-    StrCat(accessors);
-    StrCat(body);
-    StrCat(token::kCloseCurlyBracket);
+    // Held, not emitted -- but the MARKER goes here, so the block lands at this
+    // exact position after substitution and the output is byte-identical.
+    // EmitNestedEnums/EmitNestedRecords above stay outside it (they lower to
+    // top-level items) and `accessors` stays inside these braces, computed from
+    // trait_field_reads_ after the bodies converted, which is why the block is
+    // assembled this late.
+    auto &block = trait_blocks_[trait_name];
+    block.header = signature;
+    block.body = accessors + body;
+    StrCat(TraitBlockPlaceholder(trait_name));
     trait_records_.insert(GetID(decl));
     for (const auto *field : reads) {
       trait_accessors_[GetID(decl)].push_back(field);
