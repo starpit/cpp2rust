@@ -248,6 +248,19 @@ public:
 
   virtual bool ThisIsRustPtr() const { return false; }
 
+  // The function whose `this` a CXXThisExpr currently refers to.
+  //
+  // This is NOT always `curr_function_`. A lambda is INLINED at its use site
+  // (see ConvertLambdaExpr), but its body is converted with `curr_function_`
+  // pushed to the CLOSURE's `operator()` -- needed for the return type. A
+  // `this`-capturing lambda's body still means the ENCLOSING function's `this`,
+  // so every question of the form "what is `this` spelled as here" must be
+  // asked of the enclosing function, not of the closure. Reading
+  // `curr_function_` instead made a captured `this` look like a plain `self` in
+  // the refcount model and emitted `self.key_` on a `Ptr<Holder>` (E0609 no
+  // field `key_`), which blocked every comparator-carrying container.
+  clang::FunctionDecl *ThisContextFunction() const;
+
   virtual void ConvertCXXConstructorBody(clang::CXXConstructorDecl *decl);
   void EmitConstructorFieldInits(clang::CXXConstructorDecl *decl);
 

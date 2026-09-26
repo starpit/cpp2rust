@@ -3694,7 +3694,13 @@ bool ConverterRefCount::ShouldConvertMethod(const clang::CXXMethodDecl *decl) {
 }
 
 bool ConverterRefCount::ThisIsRustPtr() const {
-  auto *method = clang::dyn_cast_or_null<clang::CXXMethodDecl>(curr_function_);
+  // ThisContextFunction, not curr_function_: inside an INLINED lambda body
+  // curr_function_ is the CLOSURE's operator(), whose parent is the closure
+  // class -- never a method-on-Ptr -- so this answered false for a
+  // `this`-capturing lambda in a Ptr-model method and the member access below
+  // was spelled `self.field` on a `Ptr<T>`.
+  auto *method =
+      clang::dyn_cast_or_null<clang::CXXMethodDecl>(ThisContextFunction());
   return method && (IsMethodOnPtr(method) ||
                     clang::isa<clang::CXXConstructorDecl>(method));
 }
@@ -3717,8 +3723,8 @@ void ConverterRefCount::SetUFCSReceiver(clang::Expr *base, bool is_arrow,
   bool base_is_pointer = is_arrow && !clang::isa<clang::CXXOperatorCallExpr>(
                                          base->IgnoreParenImpCasts());
   if (clang::isa<clang::CXXThisExpr>(base->IgnoreParenImpCasts())) {
-    bool in_ctor =
-        curr_function_ && clang::isa<clang::CXXConstructorDecl>(curr_function_);
+    bool in_ctor = clang::isa_and_nonnull<clang::CXXConstructorDecl>(
+        ThisContextFunction());
     if (in_ctor) {
       ufcs_receiver_ = "&this";
     } else if (ThisIsRustPtr()) {
@@ -3969,7 +3975,7 @@ void ConverterRefCount::ConvertCXXConstructorBody(
 bool ConverterRefCount::VisitCXXThisExpr(
     [[maybe_unused]] clang::CXXThisExpr *expr) {
   bool in_ctor =
-      curr_function_ && clang::isa<clang::CXXConstructorDecl>(curr_function_);
+      clang::isa_and_nonnull<clang::CXXConstructorDecl>(ThisContextFunction());
   if (in_ctor) {
     StrCat("this");
   } else {

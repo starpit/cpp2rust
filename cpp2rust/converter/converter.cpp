@@ -5845,8 +5845,8 @@ void Converter::SetUFCSReceiverRecord(clang::Expr *base, bool is_arrow) {
 void Converter::SetUFCSReceiver(clang::Expr *base, bool is_arrow,
                                 const clang::CXXMethodDecl *method) {
   if (clang::isa<clang::CXXThisExpr>(base->IgnoreParenImpCasts())) {
-    bool in_ctor =
-        curr_function_ && clang::isa<clang::CXXConstructorDecl>(curr_function_);
+    bool in_ctor = clang::isa_and_nonnull<clang::CXXConstructorDecl>(
+        ThisContextFunction());
     ufcs_receiver_ = in_ctor ? "&mut this" : keyword::kSelfValue;
     // `this` inside a copied body is the struct the copy was emitted INTO, which
     // is what curr_record_for_ufcs names; falling back to the declaring class
@@ -5955,7 +5955,8 @@ void Converter::ConvertMemberExpr(clang::MemberExpr *expr) {
       clang::isa<clang::CXXThisExpr>(base->IgnoreCasts()) && !ThisIsRustPtr();
   PushExprKind push(*this, isLValue() ? ExprKind::LValue : ExprKind::RValue);
   if (base_is_this) {
-    StrCat(clang::isa<clang::CXXConstructorDecl>(curr_function_)
+    StrCat(clang::isa_and_nonnull<clang::CXXConstructorDecl>(
+               ThisContextFunction())
                ? "this"
                : keyword::kSelfValue);
   } else if (expr->isArrow()) {
@@ -6000,8 +6001,40 @@ Converter::TraitFieldAccessorName(const clang::FieldDecl *field) {
   return std::format("__f_{}", GetNamedDeclAsString(field));
 }
 
+clang::FunctionDecl *Converter::ThisContextFunction() const {
+  auto *fn = curr_function_;
+  // A lambda nested in a lambda needs the loop: each hop leaves the closure and
+  // lands on whatever declared it, which may be another closure's operator().
+  while (auto *method = clang::dyn_cast_or_null<clang::CXXMethodDecl>(fn)) {
+    if (!method->getParent()->isLambda()) {
+      break;
+    }
+    // The closure class is declared where the lambda-expression was written, so
+    // its DeclContext chain reaches the function containing it. Walk the chain
+    // rather than taking one step: a lambda inside a default argument or a
+    // nested block sits deeper than one level.
+    clang::FunctionDecl *enclosing = nullptr;
+    for (auto *dc = method->getParent()->getDeclContext(); dc != nullptr;
+         dc = dc->getParent()) {
+      if (auto *candidate = clang::dyn_cast<clang::FunctionDecl>(dc)) {
+        enclosing = candidate;
+        break;
+      }
+    }
+    if (enclosing == nullptr) {
+      // A lambda at class scope (a default member initializer) has no enclosing
+      // function. Keep the closure rather than returning null: callers only ask
+      // yes/no questions, and null would silently answer "not a constructor".
+      break;
+    }
+    fn = enclosing;
+  }
+  return fn;
+}
+
 bool Converter::VisitCXXThisExpr(clang::CXXThisExpr *expr) {
-  if (clang::isa<clang::CXXConstructorDecl>(curr_function_)) {
+  if (clang::isa_and_nonnull<clang::CXXConstructorDecl>(
+          ThisContextFunction())) {
     StrCat("&raw mut this");
   } else {
     PushParen paren(*this);
