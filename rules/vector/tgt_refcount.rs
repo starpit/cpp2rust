@@ -370,3 +370,16 @@ fn f113<T1: ByteRepr + Clone>(a0: Ptr<Vec<Value<Vec<T1>>>>, init: Vec<T1>) {
     let __init = init;
     a0.with_mut(|__v: &mut Vec<Value<Vec<T1>>>| __v.push(Rc::new(RefCell::new(__init))))
 }
+
+fn f115<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
+    a0 == a1
+}
+fn f116<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
+    a0 != a1
+}
+fn f117<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
+    a0 == a1
+}
+fn f118<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
+    a0 != a1
+}

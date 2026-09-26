@@ -569,3 +569,23 @@ template <typename T1, typename T2 = std::allocator<T1>, typename... Args>
 T1 &f114(std::vector<T1, T2> &o, Init<T1, Args> &&...args) {
   return o.emplace_back(std::forward<Args>(args)...);
 }
+
+template <typename T1>
+bool f115(const std::vector<T1> &a, const std::vector<T1> &b) {
+  return operator==(a, b);
+}
+
+template <typename T1>
+bool f116(const std::vector<T1> &a, const std::vector<T1> &b) {
+  return operator!=(a, b);
+}
+
+template <typename T1, typename T2 = std::allocator<T1>>
+bool f117(const std::vector<T1, T2> &a, const std::vector<T1, T2> &b) {
+  return operator==(a, b);
+}
+
+template <typename T1, typename T2 = std::allocator<T1>>
+bool f118(const std::vector<T1, T2> &a, const std::vector<T1, T2> &b) {
+  return operator!=(a, b);
+}

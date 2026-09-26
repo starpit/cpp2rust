@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# The .td-generated MLIR model, so a rule body may name `dataflowir_gen`.
+dataflowir-gen = { path = "../../dt_src/cpp2rust-port/dataflowir-gen" }
 libcc2rs = { path = "../libcc2rs" }
 rules = { path = "../rules" }
 cfg-expr = "0.20"

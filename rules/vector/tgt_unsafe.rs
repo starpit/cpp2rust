@@ -508,3 +508,16 @@ unsafe fn f114<T1>(a0: &mut Vec<T1>, init: T1) {
     let __init = init;
     a0.push(__init)
 }
+
+unsafe fn f115<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
+    a0 == a1
+}
+unsafe fn f116<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
+    a0 != a1
+}
+unsafe fn f117<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
+    a0 == a1
+}
+unsafe fn f118<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
+    a0 != a1
+}

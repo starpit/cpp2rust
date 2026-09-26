@@ -39,3 +39,8 @@ template <typename T1, std::size_t T2>
 std::array<T1, T2> &f7(std::array<T1, T2> &dst, const std::array<T1, T2> &src) {
   return dst.operator=(src);
 }
+
+template <typename T1, std::size_t T2>
+bool f8(const std::array<T1, T2> &a, const std::array<T1, T2> &b) {
+  return operator==(a, b);
+}

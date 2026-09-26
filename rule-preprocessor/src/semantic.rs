@@ -75,6 +75,12 @@ fn build_rustc_args(crate_root: &Path) -> Vec<String> {
     }
 
     for dep in &[
+        // The .td-generated MLIR model, so a rule body in rules/mlir may name
+        // `dataflowir_gen`. Three places need it and missing any one gives a
+        // bare E0433 in the rule author's own file: rules/Cargo.toml (which
+        // compiles every tgt_*.rs), this --extern list (the rustc type-check
+        // pass here), and the emitted probe crate.
+        "dataflowir_gen",
         "libcc2rs",
         "libcc2rs_macros",
         "libc",
