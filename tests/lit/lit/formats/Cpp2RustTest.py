@@ -18,6 +18,22 @@ import shutil
 MODELS = ("refcount", "unsafe")
 PTR_RE = re.compile(r"0x[0-9a-fA-F]+")
 
+# Placeholder bodies are banned from emitted Rust. See check_no_placeholders.
+#
+# `unimplemented!` / `todo!`  -- the converter emits the first for a trait
+#     default body it cannot fill (converter.cpp, MethodTarget::TraitDefault).
+#     That is the mechanism that lets a TU translate, compile, and then panic:
+#     deferred failure dressed as progress.
+# `UNSUPPORTED`               -- the converter's own unsupported-construct
+#     placeholder text, same argument.
+#
+# Deliberately NOT in this list, so the ban stays meaningful rather than noisy:
+#   `panic!`       -- C++ can legitimately abort or throw, and assert lowering
+#                     uses it; banning it would flag correct translations.
+#   `unreachable!` -- legitimate in an exhaustive match arm. If it starts being
+#                     used as a gap marker, add it and deal with the fallout.
+PLACEHOLDER_MARKERS = ("unimplemented!", "todo!", "UNSUPPORTED")
+
 RE_XFAIL = re.compile(r"//\s*XFAIL:\s*(.*)")
 RE_PANIC_UB = re.compile(r"//\s*panic-ub\s*(?::\s*(.*))?$", re.MULTILINE)
 RE_PANIC = re.compile(r"//\s*panic\s*(?::\s*(.*))?$", re.MULTILINE)
@@ -159,6 +175,52 @@ class TestContext:
 
         self.generated = self.rs_file.read_text()
         return None
+
+    def check_no_placeholders(self):
+        """Fail if the emitted Rust contains a placeholder body.
+
+        A placeholder is not translated code. It converts a translate-time
+        failure into a runtime panic, so the TU "passes" cpp2rust, compiles,
+        and then aborts the moment control reaches it -- and a count of
+        TUs-that-translated reads as progress while nothing works. One TU was
+        measured emitting 75,460 lines containing 1,457 panic sites and was
+        reported as passing.
+
+        This runs BEFORE check_expected and is deliberately NOT skipped when
+        --replace-expected is set: regenerating an expected file must never be
+        able to launder a placeholder into the baseline.
+
+        If dxp_standalone needs a thing, it has to be implemented. A rule that
+        cannot be written correctly must make the converter FAIL LOUDLY at
+        translate time instead of emitting one of these.
+        """
+        exp = self.expectations
+        if exp.should_not_translate or exp.should_not_compile:
+            return None
+
+        hits = []
+        for lineno, line in enumerate(self.generated.splitlines(), 1):
+            for marker in PLACEHOLDER_MARKERS:
+                if marker in line:
+                    hits.append((lineno, marker, line.strip()))
+                    break
+
+        if not hits:
+            return None
+
+        detail = "\n".join(
+            f"  {self.fname}.rs:{n}: {m}  |  {text[:110]}" for n, m, text in hits[:20]
+        )
+        more = "" if len(hits) <= 20 else f"\n  ... and {len(hits) - 20} more"
+        return (
+            lit.Test.FAIL,
+            f"emitted Rust contains {len(hits)} placeholder body/bodies "
+            f"({self.model} model).\n"
+            "A placeholder is a deferred failure, not a translation: it compiles "
+            "and then panics at runtime.\n"
+            "Implement it, or make the converter refuse at translate time.\n"
+            f"{detail}{more}",
+        )
 
     def check_expected(self):
         exp = self.expectations
@@ -358,6 +420,7 @@ class Cpp2RustTest(TestFormat):
         ctx = TestContext.setup(test)
         result = (
             ctx.translate()
+            or ctx.check_no_placeholders()
             or ctx.check_expected()
             or ctx.build_cpp()
             or ctx.build_rust()
