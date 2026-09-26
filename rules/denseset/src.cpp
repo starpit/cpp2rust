@@ -109,9 +109,13 @@
 // constructors, insert_range, postfix operator++, operator->, the
 // iterator-to-const_iterator converting constructor, DenseSetImpl's own
 // namespace-scope operator==/!= (DenseSet.h:241/:256 -- SET equality, a
-// different entity from the ITERATOR comparison mapped here), and SmallDenseSet,
-// whose MapTy is SmallDenseMap and whose canonical string is therefore a
-// different one entirely (dcc/.../GraphStats.cpp uses it; it stays a gap).
+// different entity from the ITERATOR comparison mapped here).
+//
+// SmallDenseSet IS NOW MAPPED, in FAMILY THREE at the bottom of this file: its
+// MapTy is SmallDenseMap, so its canonical string is a different one entirely
+// and it needed its own family.  erase(key) and the COPY CONSTRUCTOR are mapped
+// THERE ONLY -- family three's TU (dcc/.../GraphStats.cpp) calls them and the
+// two closed DenseSet TUs do not, so they stay loud for families one and two.
 //
 // TWO SPELLINGS OF THE KEY-INFO ARGUMENT, TWO RULE FAMILIES.  The census shows
 //     llvm::DenseMapInfo<long>                  (and <mlir::Value>, <unsigned long>)
@@ -164,6 +168,17 @@ public:
 };
 
 } // namespace detail
+
+// The SMALL bucket map -- DenseMap.h's SmallDenseMap, the MapTy of
+// SmallDenseSet.  FIVE parameters and NO DEFAULTS, for the same reason the plain
+// DenseMap below has four: the canonical string spells all five, and an argument
+// equal to a default would be elided and change the key's arity.  The third
+// parameter is the NON-TYPE inline-bucket count, and it is the reason family
+// three exists at all -- see the FAMILY THREE banner.  Only the name is needed;
+// no member of it is reachable through the set.
+template <typename KeyT, typename ValueT, unsigned InlineBuckets,
+          typename KeyInfoT, typename BucketT>
+class SmallDenseMap {};
 
 // The bucket map.  FOUR parameters and NO DEFAULTS: the string the converter
 // asks for spells all four arguments, and a default that an argument equals
@@ -240,6 +255,15 @@ public:
   // at all three abort sites depends on.
   std::pair<iterator, bool> insert(const ValueT &V);
   std::pair<iterator, bool> insert(ValueT &&V);
+
+  // DenseSet.h:180 -- `bool erase(const ValueT &V)`, true iff an element was
+  // removed.  Declared here but mapped ONLY in family three: it is the one
+  // member dcc/.../GraphStats.cpp needs that the two closed TUs do not
+  // (`candidates.erase(v)` at GraphStats.cpp:99), and a declaration with no rule
+  // spelling it contributes no key, so families one and two are unchanged and
+  // erase stays loud for them.  The ITERATOR overload (DenseSet.h:184) is still
+  // not modelled anywhere.
+  bool erase(const ValueT &V);
 };
 
 // DenseSet.h:263 -- an ALIAS TEMPLATE, not a class.  It is what llvm::DenseSet
@@ -270,6 +294,30 @@ class DenseSet : public detail::DenseSet<ValueT, ValueInfoT> {
 public:
   DenseSet();
   explicit DenseSet(unsigned InitialReserve);
+  DenseSet(const DenseSet &Other);
+};
+
+// DenseSet.h:285 -- SmallDenseSet.  NOT an alias: a class template deriving
+// DIRECTLY from DenseSetImpl whose MapTy is SmallDenseMap, with the inline-bucket
+// count threaded through as the map's THIRD argument.  The argument order below
+// is read off the census string, not remembered:
+//   SmallDenseMap<unsigned int, DenseSetEmpty, _, DenseMapInfo<unsigned int>,
+//                 DenseSetPair<unsigned int>>
+// InlineBuckets keeps LLVM's real default of 4 and ValueInfoT its default, so
+// `llvm::SmallDenseSet<unsigned>` -- the only spelling dt_src uses -- elides both
+// and the container key comes out one-argument, matching the use sites.
+template <typename ValueT, unsigned InlineBuckets = 4,
+          typename ValueInfoT = DenseMapInfo<ValueT>>
+class SmallDenseSet
+    : public detail::DenseSetImpl<
+          ValueT,
+          SmallDenseMap<ValueT, detail::DenseSetEmpty, InlineBuckets, ValueInfoT,
+                        detail::DenseSetPair<ValueT>>,
+          ValueInfoT> {
+public:
+  SmallDenseSet();
+  explicit SmallDenseSet(unsigned InitialReserve);
+  SmallDenseSet(const SmallDenseSet &Other);
 };
 
 } // namespace llvm
@@ -600,5 +648,208 @@ f43(typename dsv<T1>::iterator &it) {
 template <typename T1>
 typename dsv<T1>::const_iterator &
 f44(typename dsv<T1>::const_iterator &it) {
+  return it.operator++();
+}
+
+
+// ---------------------------------------------------------------------------
+// FAMILY THREE -- llvm::SmallDenseSet, i.e. the same surface keyed on a MapTy of
+// SmallDenseMap instead of DenseMap.
+//
+// The gap the header comment left named ("SmallDenseSet, whose MapTy is
+// SmallDenseMap and whose canonical string is therefore a different one
+// entirely").  dcc/src/Transform/Sentient/Analyses/GraphStats.cpp asks for
+//   llvm::detail::DenseSetImpl<unsigned int,
+//     llvm::SmallDenseMap<unsigned int, llvm::detail::DenseSetEmpty, _,
+//                         llvm::DenseMapInfo<unsigned int>,
+//                         llvm::detail::DenseSetPair<unsigned int>>,
+//     llvm::DenseMapInfo<unsigned int>>::DenseSetIterator<false>
+// read verbatim off the abort in verif/head/logs/dcc__...__GraphStats.cpp.log.
+// Note the key-info argument arrives in the ONE-argument spelling, so this
+// family mirrors family one, not family two.
+//
+// WHY THE RULES BELOW CARRY A NON-TYPE PARAMETER T2.  mapper.cpp:1263
+// (normalizeTranslationRule) rewrites every free-standing integer in a type
+// string to `_`, which is why the string above has `_` where InlineBuckets=4
+// stands.  A rule that spelled `llvm::SmallDenseSet<T1>` would put the DEFAULT
+// VALUE 4 in that position, and whether the rule-side key is normalized the same
+// way is not something to assume -- rules/smallvector's t2 is recorded in the IR
+// as `llvm::SmallVector<T1, _>`, i.e. a non-type TEMPLATE PARAMETER is printed as
+// `_` unconditionally.  So the members go through `sds<T1, T2>`, whose `_` is
+// guaranteed by the parameter and not by a normalization pass.
+//
+// AND ONLY ONE SPELLING FOR THE MEMBERS.  Writing the inherited members through
+// BOTH `SmallDenseSet<T1>` and `SmallDenseSet<T1, T2>` would be a real hazard:
+// if the literal 4 is normalized to `_` the two spellings collapse to the SAME
+// DenseSetImpl key and the converter exits with "duplicate type rule" on every
+// translation.  The CONSTRUCTORS are the exception -- they are keyed on
+// SmallDenseSet itself, where `<T1>` and `<T1, _>` are different strings by
+// arity, and GraphStats.cpp writes the one-argument form -- so both are mapped.
+//
+// THE INLINE BUCKET COUNT DROPS on the target side, exactly as rules/smallvector
+// drops SmallVector's N and rules/array drops std::array's N: it is an
+// ALLOCATION STRATEGY (how many buckets live inside the object before the first
+// heap allocation), not observable through any member mapped here.  size(),
+// count(), contains(), insert()'s bool and the iteration all read the same for
+// any InlineBuckets; only capacity-style queries and address stability would see
+// it, and none is mapped.  The target functions therefore take T1 alone, the way
+// rules/smallvector's f16 does.
+//
+// TWO MEMBERS BEYOND FAMILY ONE'S SURFACE, both because GraphStats.cpp calls
+// them and neither of the two already-closed TUs does:
+//   * the COPY CONSTRUCTOR -- `SmallDenseSet<unsigned> new_clique(cur_clique)`
+//     (GraphStats.cpp:81) plus two by-value parameters at :41/:42.
+//   * erase(const ValueT &) -- `candidates.erase(v)` (GraphStats.cpp:99).
+// ---------------------------------------------------------------------------
+
+template <typename T1, unsigned T2> using sds = llvm::SmallDenseSet<T1, T2>;
+
+// The container, in both spellings of the bucket count (see the banner: distinct
+// keys by arity, same Rust type, which mapper.cpp:781 accepts), and the two
+// nested iterators.
+template <typename T1> using t7 = llvm::SmallDenseSet<T1>;
+template <typename T1, unsigned T2> using t8 = sds<T1, T2>;
+template <typename T1, unsigned T2> using t9 = typename sds<T1, T2>::iterator;
+template <typename T1, unsigned T2>
+using t10 = typename sds<T1, T2>::const_iterator;
+
+// Construction.  Keyed on SmallDenseSet, so BOTH the one- and two-argument
+// spellings are needed; GraphStats.cpp writes the one-argument form.
+template <typename T1> llvm::SmallDenseSet<T1> f45() {
+  return llvm::SmallDenseSet<T1>();
+}
+
+template <typename T1> llvm::SmallDenseSet<T1> f46(unsigned n) {
+  return llvm::SmallDenseSet<T1>(n);
+}
+
+template <typename T1>
+llvm::SmallDenseSet<T1> f47(const llvm::SmallDenseSet<T1> &o) {
+  return llvm::SmallDenseSet<T1>(o);
+}
+
+template <typename T1, unsigned T2> sds<T1, T2> f48() {
+  return sds<T1, T2>();
+}
+
+template <typename T1, unsigned T2> sds<T1, T2> f49(unsigned n) {
+  return sds<T1, T2>(n);
+}
+
+template <typename T1, unsigned T2>
+sds<T1, T2> f50(const sds<T1, T2> &o) {
+  return sds<T1, T2>(o);
+}
+
+// insert -- keeps the incumbent and reports whether it inserted, family one's
+// contract unchanged.
+template <typename T1, unsigned T2>
+std::pair<typename sds<T1, T2>::iterator, bool> f51(sds<T1, T2> &o,
+                                                    const T1 &v) {
+  return o.insert(v);
+}
+
+template <typename T1, unsigned T2>
+std::pair<typename sds<T1, T2>::iterator, bool> f52(sds<T1, T2> &o, T1 &&v) {
+  return o.insert(static_cast<T1 &&>(v));
+}
+
+// erase(key) -- true iff an element was removed.  Family three only; see the
+// declaration on DenseSetImpl.
+template <typename T1, unsigned T2>
+bool f53(sds<T1, T2> &o, const T1 &v) {
+  return o.erase(v);
+}
+
+template <typename T1, unsigned T2>
+bool f54(const sds<T1, T2> &o, const T1 &v) {
+  return o.contains(v);
+}
+
+template <typename T1, unsigned T2>
+unsigned int f55(const sds<T1, T2> &o, const T1 &v) {
+  return o.count(v);
+}
+
+template <typename T1, unsigned T2>
+unsigned int f56(const sds<T1, T2> &o) {
+  return o.size();
+}
+
+template <typename T1, unsigned T2> bool f57(const sds<T1, T2> &o) {
+  return o.empty();
+}
+
+template <typename T1, unsigned T2>
+typename sds<T1, T2>::iterator f58(sds<T1, T2> &o) {
+  return o.begin();
+}
+
+template <typename T1, unsigned T2>
+typename sds<T1, T2>::iterator f59(sds<T1, T2> &o) {
+  return o.end();
+}
+
+template <typename T1, unsigned T2>
+typename sds<T1, T2>::const_iterator f60(const sds<T1, T2> &o) {
+  return o.begin();
+}
+
+template <typename T1, unsigned T2>
+typename sds<T1, T2>::const_iterator f61(const sds<T1, T2> &o) {
+  return o.end();
+}
+
+template <typename T1, unsigned T2>
+typename sds<T1, T2>::iterator f62(sds<T1, T2> &o, const T1 &v) {
+  return o.find(v);
+}
+
+template <typename T1, unsigned T2>
+typename sds<T1, T2>::const_iterator f63(const sds<T1, T2> &o, const T1 &v) {
+  return o.find(v);
+}
+
+// The iterator comparisons -- hidden friends, so the free-function call form.
+template <typename T1, unsigned T2>
+bool f64(typename sds<T1, T2>::iterator a, typename sds<T1, T2>::iterator b) {
+  return operator==(a, b);
+}
+
+template <typename T1, unsigned T2>
+bool f65(typename sds<T1, T2>::iterator a, typename sds<T1, T2>::iterator b) {
+  return operator!=(a, b);
+}
+
+template <typename T1, unsigned T2>
+bool f66(typename sds<T1, T2>::const_iterator a,
+         typename sds<T1, T2>::const_iterator b) {
+  return operator==(a, b);
+}
+
+template <typename T1, unsigned T2>
+bool f67(typename sds<T1, T2>::const_iterator a,
+         typename sds<T1, T2>::const_iterator b) {
+  return operator!=(a, b);
+}
+
+template <typename T1, unsigned T2>
+T1 &f68(typename sds<T1, T2>::iterator it) {
+  return it.operator*();
+}
+
+template <typename T1, unsigned T2>
+const T1 &f69(typename sds<T1, T2>::const_iterator it) {
+  return it.operator*();
+}
+
+template <typename T1, unsigned T2>
+typename sds<T1, T2>::iterator &f70(typename sds<T1, T2>::iterator &it) {
+  return it.operator++();
+}
+
+template <typename T1, unsigned T2>
+typename sds<T1, T2>::const_iterator &
+f71(typename sds<T1, T2>::const_iterator &it) {
   return it.operator++();
 }

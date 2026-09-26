@@ -358,3 +358,187 @@ unsafe fn f44<T1: Ord + Clone>(
     a0.inc();
     a0.clone()
 }
+
+// FAMILY THREE -- llvm::SmallDenseSet, see src.cpp.  The inline bucket count is
+// an ALLOCATION STRATEGY and is dropped, exactly as rules/smallvector drops
+// SmallVector's N: the non-type parameter appears in the C++ key as `_` and not
+// at all on this side, so these functions take T1 alone.  Bodies are f1..f22's
+// verbatim apart from the two members family three adds.
+
+fn t7<T1>() -> BTreeMap<T1, Box<T1>> {
+    BTreeMap::new()
+}
+
+fn t8<T1>() -> BTreeMap<T1, Box<T1>> {
+    BTreeMap::new()
+}
+
+fn t9<T1: Clone + Ord>() -> UnsafeMapIterator<T1, T1> {
+    UnsafeMapIterator::null()
+}
+
+fn t10<T1: Clone + Ord>() -> UnsafeMapIterator<T1, T1> {
+    UnsafeMapIterator::null()
+}
+
+unsafe fn f45<T1>() -> BTreeMap<T1, Box<T1>> {
+    BTreeMap::new()
+}
+
+unsafe fn f46<T1>(a0: u32) -> BTreeMap<T1, Box<T1>> {
+    let _ = a0;
+    BTreeMap::new()
+}
+
+// The COPY CONSTRUCTOR.  A DEEP copy: BTreeMap's derived Clone clones every
+// Box<T1>, i.e. every stored element, which is what a C++ copy of a value-typed
+// set is.  `SmallDenseSet<unsigned> new_clique(cur_clique)` at
+// GraphStats.cpp:81 must not alias cur_clique -- it is inserted into immediately
+// after.
+unsafe fn f47<T1: Ord + Clone>(a0: BTreeMap<T1, Box<T1>>) -> BTreeMap<T1, Box<T1>> {
+    a0.clone()
+}
+
+unsafe fn f48<T1>() -> BTreeMap<T1, Box<T1>> {
+    BTreeMap::new()
+}
+
+unsafe fn f49<T1>(a0: u32) -> BTreeMap<T1, Box<T1>> {
+    let _ = a0;
+    BTreeMap::new()
+}
+
+unsafe fn f50<T1: Ord + Clone>(a0: BTreeMap<T1, Box<T1>>) -> BTreeMap<T1, Box<T1>> {
+    a0.clone()
+}
+
+unsafe fn f51<T1: Ord + Clone>(
+    a0: &mut BTreeMap<T1, Box<T1>>,
+    a1: T1,
+) -> (UnsafeMapIterator<T1, T1>, bool) {
+    let __inserted = !a0.contains_key(&a1);
+    if __inserted {
+        a0.insert(a1.clone(), Box::new(a1.clone()));
+    }
+    (
+        UnsafeMapIterator::find_key(&*a0 as *const BTreeMap<T1, Box<T1>>, &a1),
+        __inserted,
+    )
+}
+
+unsafe fn f52<T1: Ord + Clone>(
+    a0: &mut BTreeMap<T1, Box<T1>>,
+    a1: T1,
+) -> (UnsafeMapIterator<T1, T1>, bool) {
+    let __inserted = !a0.contains_key(&a1);
+    if __inserted {
+        a0.insert(a1.clone(), Box::new(a1.clone()));
+    }
+    (
+        UnsafeMapIterator::find_key(&*a0 as *const BTreeMap<T1, Box<T1>>, &a1),
+        __inserted,
+    )
+}
+
+// erase(key) -- DenseSet.h:180 returns true iff an element was removed, which is
+// exactly BTreeMap::remove's Option being Some.
+unsafe fn f53<T1: Ord>(a0: &mut BTreeMap<T1, Box<T1>>, a1: T1) -> bool {
+    a0.remove(&a1).is_some()
+}
+
+unsafe fn f54<T1: Ord>(a0: BTreeMap<T1, Box<T1>>, a1: T1) -> bool {
+    a0.contains_key(&a1)
+}
+
+unsafe fn f55<T1: Ord>(a0: BTreeMap<T1, Box<T1>>, a1: T1) -> u32 {
+    if a0.contains_key(&a1) {
+        1_u32
+    } else {
+        0_u32
+    }
+}
+
+unsafe fn f56<T1>(a0: BTreeMap<T1, Box<T1>>) -> u32 {
+    a0.len() as u32
+}
+
+unsafe fn f57<T1>(a0: BTreeMap<T1, Box<T1>>) -> bool {
+    a0.is_empty()
+}
+
+unsafe fn f58<T1: Ord + Clone>(a0: &mut BTreeMap<T1, Box<T1>>) -> UnsafeMapIterator<T1, T1> {
+    UnsafeMapIterator::begin(&*a0 as *const BTreeMap<T1, Box<T1>>)
+}
+
+unsafe fn f59<T1: Ord + Clone>(a0: &mut BTreeMap<T1, Box<T1>>) -> UnsafeMapIterator<T1, T1> {
+    UnsafeMapIterator::end(&*a0 as *const BTreeMap<T1, Box<T1>>)
+}
+
+unsafe fn f60<T1: Ord + Clone>(a0: BTreeMap<T1, Box<T1>>) -> UnsafeMapIterator<T1, T1> {
+    UnsafeMapIterator::begin(&a0 as *const BTreeMap<T1, Box<T1>>)
+}
+
+unsafe fn f61<T1: Ord + Clone>(a0: BTreeMap<T1, Box<T1>>) -> UnsafeMapIterator<T1, T1> {
+    UnsafeMapIterator::end(&a0 as *const BTreeMap<T1, Box<T1>>)
+}
+
+unsafe fn f62<T1: Ord + Clone>(
+    a0: &mut BTreeMap<T1, Box<T1>>,
+    a1: T1,
+) -> UnsafeMapIterator<T1, T1> {
+    UnsafeMapIterator::find_key(&*a0 as *const BTreeMap<T1, Box<T1>>, &a1)
+}
+
+unsafe fn f63<T1: Ord + Clone>(a0: BTreeMap<T1, Box<T1>>, a1: T1) -> UnsafeMapIterator<T1, T1> {
+    UnsafeMapIterator::find_key(&a0 as *const BTreeMap<T1, Box<T1>>, &a1)
+}
+
+unsafe fn f64<T1: PartialEq>(
+    a0: UnsafeMapIterator<T1, T1>,
+    a1: UnsafeMapIterator<T1, T1>,
+) -> bool {
+    a0 == a1
+}
+
+unsafe fn f65<T1: PartialEq>(
+    a0: UnsafeMapIterator<T1, T1>,
+    a1: UnsafeMapIterator<T1, T1>,
+) -> bool {
+    a0 != a1
+}
+
+unsafe fn f66<T1: PartialEq>(
+    a0: UnsafeMapIterator<T1, T1>,
+    a1: UnsafeMapIterator<T1, T1>,
+) -> bool {
+    a0 == a1
+}
+
+unsafe fn f67<T1: PartialEq>(
+    a0: UnsafeMapIterator<T1, T1>,
+    a1: UnsafeMapIterator<T1, T1>,
+) -> bool {
+    a0 != a1
+}
+
+unsafe fn f68<T1: Ord + Clone>(a0: UnsafeMapIterator<T1, T1>) -> *mut T1 {
+    a0.second()
+}
+
+unsafe fn f69<T1: Ord + Clone>(a0: UnsafeMapIterator<T1, T1>) -> *const T1 {
+    a0.second()
+}
+
+unsafe fn f70<T1: Ord + Clone>(
+    a0: &mut UnsafeMapIterator<T1, T1>,
+) -> UnsafeMapIterator<T1, T1> {
+    a0.inc();
+    a0.clone()
+}
+
+unsafe fn f71<T1: Ord + Clone>(
+    a0: &mut UnsafeMapIterator<T1, T1>,
+) -> UnsafeMapIterator<T1, T1> {
+    a0.inc();
+    a0.clone()
+}

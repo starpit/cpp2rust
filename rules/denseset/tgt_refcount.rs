@@ -315,3 +315,185 @@ fn f44<T1: Ord + Clone + 'static>(
     a0.inc();
     a0.clone()
 }
+
+// FAMILY THREE -- llvm::SmallDenseSet, see src.cpp.  The inline bucket count is
+// dropped (rules/smallvector's N), so these take T1 alone.  Bodies are f1..f22's
+// verbatim apart from the copy constructor and erase, which family three adds.
+
+fn t7<T1>() -> BTreeMap<T1, Value<T1>> {
+    BTreeMap::new()
+}
+
+fn t8<T1>() -> BTreeMap<T1, Value<T1>> {
+    BTreeMap::new()
+}
+
+fn t9<T1: Clone + Ord + 'static>() -> RefcountMapIter<T1, T1> {
+    RefcountMapIter::null()
+}
+
+fn t10<T1: Clone + Ord + 'static>() -> RefcountMapIter<T1, T1> {
+    RefcountMapIter::null()
+}
+
+fn f45<T1>() -> BTreeMap<T1, Value<T1>> {
+    BTreeMap::new()
+}
+
+fn f46<T1>(a0: u32) -> BTreeMap<T1, Value<T1>> {
+    let _ = a0;
+    BTreeMap::new()
+}
+
+// The COPY CONSTRUCTOR, and it must be a DEEP copy.  `a0.clone()` would clone the
+// Rc handles and the two sets would SHARE every element, so a later
+// `new_clique.insert(v)` would be visible through cur_clique -- exactly the
+// aliasing GraphStats.cpp:81 must not have.  So each Value is rebuilt from the
+// borrowed element.
+fn f47<T1: Ord + Clone + 'static>(a0: BTreeMap<T1, Value<T1>>) -> BTreeMap<T1, Value<T1>> {
+    a0.iter()
+        .map(|(__k, __v)| (__k.clone(), Rc::new(RefCell::new(__v.borrow().clone()))))
+        .collect()
+}
+
+fn f48<T1>() -> BTreeMap<T1, Value<T1>> {
+    BTreeMap::new()
+}
+
+fn f49<T1>(a0: u32) -> BTreeMap<T1, Value<T1>> {
+    let _ = a0;
+    BTreeMap::new()
+}
+
+fn f50<T1: Ord + Clone + 'static>(a0: BTreeMap<T1, Value<T1>>) -> BTreeMap<T1, Value<T1>> {
+    a0.iter()
+        .map(|(__k, __v)| (__k.clone(), Rc::new(RefCell::new(__v.borrow().clone()))))
+        .collect()
+}
+
+fn f51<T1: Ord + Clone + 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T1>>>,
+    a1: T1,
+) -> (Value<RefcountMapIter<T1, T1>>, Value<bool>) {
+    let __inserted = a0.with_mut(|__v: &mut BTreeMap<T1, Value<T1>>| {
+        let __new = !__v.contains_key(&a1);
+        if __new {
+            __v.insert(a1.clone(), Rc::new(RefCell::new(a1.clone())));
+        }
+        __new
+    });
+    (
+        Rc::new(RefCell::new(RefcountMapIter::find_key(a0, &a1))),
+        Rc::new(RefCell::new(__inserted)),
+    )
+}
+
+fn f52<T1: Ord + Clone + 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T1>>>,
+    a1: T1,
+) -> (Value<RefcountMapIter<T1, T1>>, Value<bool>) {
+    let __inserted = a0.with_mut(|__v: &mut BTreeMap<T1, Value<T1>>| {
+        let __new = !__v.contains_key(&a1);
+        if __new {
+            __v.insert(a1.clone(), Rc::new(RefCell::new(a1.clone())));
+        }
+        __new
+    });
+    (
+        Rc::new(RefCell::new(RefcountMapIter::find_key(a0, &a1))),
+        Rc::new(RefCell::new(__inserted)),
+    )
+}
+
+// erase(key) -- true iff an element was removed.
+fn f53<T1: Ord + Clone + 'static>(a0: Ptr<BTreeMap<T1, Value<T1>>>, a1: T1) -> bool {
+    a0.with_mut(|__v: &mut BTreeMap<T1, Value<T1>>| __v.remove(&a1).is_some())
+}
+
+fn f54<T1: Ord>(a0: BTreeMap<T1, Value<T1>>, a1: T1) -> bool {
+    a0.contains_key(&a1)
+}
+
+fn f55<T1: Ord>(a0: BTreeMap<T1, Value<T1>>, a1: T1) -> u32 {
+    if a0.contains_key(&a1) {
+        1_u32
+    } else {
+        0_u32
+    }
+}
+
+fn f56<T1>(a0: BTreeMap<T1, Value<T1>>) -> u32 {
+    a0.len() as u32
+}
+
+fn f57<T1>(a0: BTreeMap<T1, Value<T1>>) -> bool {
+    a0.is_empty()
+}
+
+fn f58<T1: Ord + Clone + 'static>(a0: Ptr<BTreeMap<T1, Value<T1>>>) -> RefcountMapIter<T1, T1> {
+    RefcountMapIter::begin(a0)
+}
+
+fn f59<T1: Ord + Clone + 'static>(a0: Ptr<BTreeMap<T1, Value<T1>>>) -> RefcountMapIter<T1, T1> {
+    RefcountMapIter::end(a0)
+}
+
+fn f60<T1: Ord + Clone + 'static>(a0: Ptr<BTreeMap<T1, Value<T1>>>) -> RefcountMapIter<T1, T1> {
+    RefcountMapIter::begin(a0)
+}
+
+fn f61<T1: Ord + Clone + 'static>(a0: Ptr<BTreeMap<T1, Value<T1>>>) -> RefcountMapIter<T1, T1> {
+    RefcountMapIter::end(a0)
+}
+
+fn f62<T1: Ord + Clone + 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T1>>>,
+    a1: T1,
+) -> RefcountMapIter<T1, T1> {
+    RefcountMapIter::find_key(a0, &a1)
+}
+
+fn f63<T1: Ord + Clone + 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T1>>>,
+    a1: T1,
+) -> RefcountMapIter<T1, T1> {
+    RefcountMapIter::find_key(a0, &a1)
+}
+
+fn f64<T1: PartialEq>(a0: RefcountMapIter<T1, T1>, a1: RefcountMapIter<T1, T1>) -> bool {
+    a0 == a1
+}
+
+fn f65<T1: PartialEq>(a0: RefcountMapIter<T1, T1>, a1: RefcountMapIter<T1, T1>) -> bool {
+    a0 != a1
+}
+
+fn f66<T1: PartialEq>(a0: RefcountMapIter<T1, T1>, a1: RefcountMapIter<T1, T1>) -> bool {
+    a0 == a1
+}
+
+fn f67<T1: PartialEq>(a0: RefcountMapIter<T1, T1>, a1: RefcountMapIter<T1, T1>) -> bool {
+    a0 != a1
+}
+
+fn f68<T1: Ord + Clone + 'static>(a0: RefcountMapIter<T1, T1>) -> Ptr<T1> {
+    a0.second().as_pointer()
+}
+
+fn f69<T1: Ord + Clone + 'static>(a0: RefcountMapIter<T1, T1>) -> Ptr<T1> {
+    a0.second().as_pointer()
+}
+
+fn f70<T1: Ord + Clone + 'static>(
+    a0: &mut RefcountMapIter<T1, T1>,
+) -> RefcountMapIter<T1, T1> {
+    a0.inc();
+    a0.clone()
+}
+
+fn f71<T1: Ord + Clone + 'static>(
+    a0: &mut RefcountMapIter<T1, T1>,
+) -> RefcountMapIter<T1, T1> {
+    a0.inc();
+    a0.clone()
+}
