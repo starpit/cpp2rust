@@ -8471,6 +8471,52 @@ std::string Converter::GetMappedAsString(clang::Expr *expr, clang::Expr **args,
   return result;
 }
 
+// The type of a mapped call's argument as WRITTEN, looking through a
+// derived-to-base conversion.
+//
+// A rule keyed on a CRTP BASE class sees a receiver whose type clang has already
+// converted to that base: calling an inherited method inserts a derived-to-base
+// cast on the implicit object argument, so `it != e` on an
+// `llvm::iterator_facade_base` operator has a receiver typed
+// `iterator_facade_base<..>` where the source wrote `it`. Keying on the base is
+// not a style choice -- an LLVM iterator built on iterator_facade_base /
+// iterator_adaptor_base usually declares NEITHER `++` nor `==` itself, so the
+// base class is the only decl a rule can name.
+//
+// Reading the placeholder flags off the converted type therefore describes the
+// WRONG type. The base is not itself a mapped type, so `maps_to_rust_ptr` came
+// back false for a receiver whose Rust representation is a pointer, and
+// ConvertPlaceholder took its pointer-receiver arm and emitted
+// `(&mut it as *const i32)` -- a cast of a pointer to its own type, through one
+// extra level of indirection (E0606 in the unsafe model, E0605 in the refcount
+// one, where the same arm produced `(it.as_pointer() as &mut Ptr<i32>)`).
+//
+// The type as written is the only place the derived type survives, which is the
+// same reason SetUFCSReceiverRecord reads through IgnoreImpCasts. Only the
+// derived-to-base conversion is stripped: the other implicit casts on an
+// argument (lvalue-to-rvalue, array decay, integral promotion) genuinely change
+// the type the rule is being handed.
+static clang::QualType GetMappedArgTypeAsWritten(clang::Expr *arg) {
+  auto *written = arg;
+  while (true) {
+    written = written->IgnoreParens();
+    auto *cast = clang::dyn_cast<clang::ImplicitCastExpr>(written);
+    if (cast == nullptr ||
+        (cast->getCastKind() != clang::CK_DerivedToBase &&
+         cast->getCastKind() != clang::CK_UncheckedDerivedToBase)) {
+      return arg->getType();
+    }
+    written = cast->getSubExpr();
+    // A member operator's implicit object argument is a reference, so the
+    // conversion sits under it and the written type comes back as a reference
+    // too; the flags below are read off the pointee either way.
+    if (written->getType().getNonReferenceType()->getAsCXXRecordDecl() !=
+        nullptr) {
+      return written->getType();
+    }
+  }
+}
+
 std::string Converter::ConvertIRFragment(
     const std::vector<TranslationRule::BodyFragment> &fragments,
     clang::Expr *expr, clang::Expr **args, unsigned num_args,
@@ -8511,6 +8557,7 @@ std::string Converter::ConvertIRFragment(
       assert(arg_idx < all_args.size());
       auto *arg = all_args[arg_idx];
       bool is_receiver = HasReceiver(expr) && arg_idx == 0;
+      auto arg_type = GetMappedArgTypeAsWritten(arg);
 
       PlaceholderCtx ph_ctx{
           .arg_idx = arg_idx,
@@ -8520,8 +8567,8 @@ std::string Converter::ConvertIRFragment(
               is_receiver ? -1 : ((int)arg_idx - HasReceiver(expr)),
           .access = ph->access,
           .is_receiver = is_receiver,
-          .is_cpp_ptr = arg->getType()->isPointerType(),
-          .maps_to_rust_ptr = Mapper::MapsToPointer(arg->getType()),
+          .is_cpp_ptr = arg_type->isPointerType(),
+          .maps_to_rust_ptr = Mapper::MapsToPointer(arg_type),
           .declared_in_rule_as_rust_ptr =
               Mapper::ParamIsPointer(GetCalleeOrExpr(expr), arg_idx),
           .is_index_base = ph->is_index_base,
