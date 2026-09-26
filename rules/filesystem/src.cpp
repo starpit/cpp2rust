@@ -296,3 +296,38 @@ std::filesystem::path &f10(std::filesystem::path &a, const std::string &s) {
 std::filesystem::path &f11(std::filesystem::path &a, const char (&s)[15]) {
   return a.operator/=(s);
 }
+
+// path(const char *) and parent_path() -- MEASURED, not predicted.  With
+// operator/= landed the TU translates rc=0, but rc=0 is translation success and
+// NOT correctness: the emitted line 37 read
+//
+//   let build_dir = ({ std_filesystem_path::new_1({ execlistFilename.as_pointer() },
+//                                                 None).parent_path() });
+//
+// i.e. TWO undefined names -- a `const char *` constructor (distinct from f4's
+// `const char (&)[N]`: argv[1] is a pointer, not an array) and parent_path().
+// Both are loud at rustc, which is the correct state, but neither was modelled.
+std::filesystem::path f12(const char *s) { return std::filesystem::path(s); }
+
+// parent_path is LEXICAL -- it touches no filesystem -- and it is NOT "truncate
+// at the last separator", which gets two of these five wrong:
+//     "a/b"  -> "a"      strips the component AND the separator
+//     "a"    -> ""       no separator at all: EMPTY, not "a"
+//     "/a"   -> "/"      the root separator is KEPT, so not "" either
+//     "a/b/" -> "a/b"    the trailing filename is EMPTY and is what gets stripped
+//     "/"    -> "/"      the root is its own parent
+// So: cut at the last separator, and if that leaves nothing while the separator
+// was in FIRST position, the answer is the root "/" rather than "".
+//
+// A SIXTH case the probe caught and a simple truncation gets wrong:
+//     "a//b" -> "a"      NOT "a/" -- the redundant separators go too
+// C++ finds the parent by dropping the last ELEMENT, and the separator run
+// between two elements is one separator's worth of nothing, so every trailing
+// separator is stripped, down to (but not past) the root.  The first body
+// written here printed "a/" where clang printed "a", which is exactly the kind
+// of one-byte path difference that would compile and then open the wrong name.
+// ("//a" is left alone: POSIX gives "//" an implementation-defined meaning and
+// there are zero sites.)
+std::filesystem::path f13(const std::filesystem::path &p) {
+  return p.parent_path();
+}

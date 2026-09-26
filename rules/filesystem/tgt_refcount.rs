@@ -182,3 +182,29 @@ fn f11(a0: Ptr<Vec<u8>>, a1: &[u8]) -> Ptr<Vec<u8>> {
     });
     __o
 }
+
+fn f12(a0: Ptr<u8>) -> Vec<u8> {
+    let mut __o: Vec<u8> = a0.to_c_string_iterator().collect();
+    __o.push(0);
+    __o
+}
+
+fn f13(a0: Vec<u8>) -> Vec<u8> {
+    let __c = &a0[..a0.len().saturating_sub(1)];
+    let mut __o: Vec<u8> = match __c.iter().rposition(|&b| b == b'/') {
+        Some(i) => {
+            let mut __j = i;
+            while __j > 0 && __c[__j - 1] == b'/' {
+                __j -= 1;
+            }
+            if __j == 0 {
+                vec![b'/']
+            } else {
+                __c[..__j].to_vec()
+            }
+        }
+        None => Vec::new(),
+    };
+    __o.push(0);
+    __o
+}

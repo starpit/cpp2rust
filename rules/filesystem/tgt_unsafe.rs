@@ -205,3 +205,38 @@ unsafe fn f11(a0: *mut Vec<libc::c_char>, a1: &[libc::c_char]) -> *mut Vec<libc:
     (*__o).push(0);
     __o
 }
+
+// A `const char *` path argument, walked to its terminator.  Distinct from f4:
+// there the literal is an ARRAY of known extent, here it is a pointer (argv[1]).
+unsafe fn f12(a0: *const libc::c_char) -> Vec<libc::c_char> {
+    let mut __o: Vec<libc::c_char> = ::std::ffi::CStr::from_ptr(a0)
+        .to_bytes()
+        .iter()
+        .map(|&b| b as libc::c_char)
+        .collect();
+    __o.push(0);
+    __o
+}
+
+// parent_path.  See src.cpp for the five cases and why a bare truncation fails
+// two of them; the `i == 0` arm is the root case ("/a" -> "/", "/" -> "/").
+unsafe fn f13(a0: Vec<libc::c_char>) -> Vec<libc::c_char> {
+    let __sep = b'/' as libc::c_char;
+    let __c = &a0[..a0.len().saturating_sub(1)];
+    let mut __o: Vec<libc::c_char> = match __c.iter().rposition(|&b| b == __sep) {
+        Some(i) => {
+            let mut __j = i;
+            while __j > 0 && __c[__j - 1] == __sep {
+                __j -= 1;
+            }
+            if __j == 0 {
+                vec![__sep]
+            } else {
+                __c[..__j].to_vec()
+            }
+        }
+        None => Vec::new(),
+    };
+    __o.push(0);
+    __o
+}
