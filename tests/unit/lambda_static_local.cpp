@@ -1,5 +1,9 @@
-// translation-fail: refcount
-// no-compile: unsafe
+// panic
+// A generic lambda with a STATIC LOCAL.  Translation no longer fails -- refcount now
+// defers a generic lambda var-decl to the base inline-at-each-use strategy -- so the
+// old `translation-fail: refcount` marker is obsolete.  What remains is loud: unsafe
+// does not compile, and refcount compiles then panics, because inlining the closure at
+// each use gives each instantiation its OWN static local where C++ shares one.
 #include <assert.h>
 
 static int a;

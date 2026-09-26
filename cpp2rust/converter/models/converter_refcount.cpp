@@ -954,7 +954,58 @@ void ConverterRefCount::ConvertVaListVarDecl(clang::VarDecl *decl) {
   StrCat(GetNamedDeclAsString(decl), token::kColon, "Value<VaList>");
 }
 
+// `auto f = [](auto x){..};` -- a variable whose initializer is a GENERIC
+// lambda, i.e. one whose call operator is a function template. Asked in both
+// halves of the inline-at-each-use handling below, so the declaration and its
+// uses cannot disagree about which lambdas got no binding. The
+// function-pointer-type exclusion matches Converter::ConvertLambdaVarDecl,
+// which declines those: a captureless lambda assigned to a function pointer is
+// emitted as an `FnPtr`, and it has a binding to refer to.
+static clang::LambdaExpr *GenericLambdaVarInit(clang::Decl *decl) {
+  auto *var = clang::dyn_cast<clang::VarDecl>(decl);
+  if (!var || var->getType()->isFunctionPointerType() || !var->hasInit()) {
+    return nullptr;
+  }
+  auto *lambda = clang::dyn_cast<clang::LambdaExpr>(
+      var->getInit()->IgnoreUnlessSpelledInSource());
+  if (!lambda || !lambda->getLambdaClass()
+                      ->getLambdaCallOperator()
+                      ->getDescribedFunctionTemplate()) {
+    return nullptr;
+  }
+  return lambda;
+}
+
 bool ConverterRefCount::ConvertLambdaVarDecl(clang::VarDecl *decl) {
+  // Refcount binds a lambda as a real variable (`let f : StrongPtr<impl
+  // Fn(..)> = ..`) rather than inlining it at each use as the base model does.
+  // That is deliberate and it is what makes a captured closure shareable. But
+  // it CANNOT express a GENERIC lambda: a Rust closure value is monomorphic,
+  // so one binding has one signature, while `auto f = [](auto&){..}` used at
+  // two argument types needs two.
+  //
+  // So for a generic lambda -- and only then -- fall back on the base model's
+  // inline-at-each-use strategy: emit nothing for the declaration, and let
+  // VisitDeclRefExpr re-expand the LambdaExpr at every use, where the
+  // enclosing `operator()` call names the one specialization meant
+  // (`pending_lambda_call_op_`, consumed by SelectLambdaCallOperator). Each
+  // call site then gets its own closure at its own type.
+  //
+  // Without this, refcount emitted the literal here with no call in scope, so
+  // `pending_lambda_call_op_` was null, SelectLambdaCallOperator correctly
+  // refused to pick one of N>1 specializations, and converter.cpp's
+  // `assert(0 && "generic lambda")` fired. That assert is right and is not the
+  // bug: binding a generic lambda once is not unimplemented, it is
+  // unrepresentable.
+  //
+  // Deliberately NOT unconditional. A non-generic lambda has exactly one
+  // signature, so refcount's binding does represent it, and it is the form the
+  // rest of this model's closure handling is written against; switching every
+  // lambda to inline-at-use would change refcount's output everywhere to fix a
+  // defect that only exists in the generic case.
+  if (GenericLambdaVarInit(decl)) {
+    return Converter::ConvertLambdaVarDecl(decl);
+  }
   return false;
 }
 
@@ -1130,6 +1181,21 @@ bool ConverterRefCount::VisitDeclRefExpr(clang::DeclRefExpr *expr) {
 
   if (clang::isa<clang::EnumConstantDecl>(decl)) {
     StrCat(str);
+    computed_expr_type_ = ComputedExprType::FreshValue;
+    return false;
+  }
+
+  // The other half of ConvertLambdaVarDecl's generic-lambda case: that
+  // declaration emitted NOTHING, so there is no `printVec` to name here --
+  // re-expand the lambda literal in place of the name, exactly as
+  // Converter::VisitDeclRefExpr does. The enclosing `operator()` call has
+  // already set `pending_lambda_call_op_` to the one specialization this use
+  // means, so SelectLambdaCallOperator gives this site its own closure at its
+  // own argument type. Without this arm the fix is half applied and every use
+  // is an undefined identifier (E0425).
+  if (auto *lambda = GenericLambdaVarInit(decl)) {
+    PushParen paren(*this);
+    VisitLambdaExpr(lambda);
     computed_expr_type_ = ComputedExprType::FreshValue;
     return false;
   }
@@ -1450,6 +1516,41 @@ bool ConverterRefCount::VisitCallExpr(clang::CallExpr *expr) {
   auto ref = clang::dyn_cast<clang::ReferenceType>(ty);
 
   if (ref && !isAddrOf() && !isVoid()) {
+    // A MAPPED call whose rule declares a non-pointer Rust return type does
+    // not hand back a `Ptr<..>` even though the C++ signature returns a
+    // reference: the rule body already produced a plain Rust borrow. The
+    // chained stream manipulator rule is the case that bit us --
+    // `sstream/ir_refcount.json` f33 for
+    // `operator>>(istream &, ios_base &(*)(ios_base &))` has
+    //     "return_type": { "type": "&'a mut Box<libcc2rs::StringStream>" }
+    // with no `is_refcount_pointer`, so `ss >> std::hex` evaluates to
+    // `&mut Box<StringStream>`.
+    //
+    // There is nothing to dereference in a borrow, so no downstream consumer
+    // ever took the stash and `ss >> std::hex >> byteVal;` tripped
+    // assert_consumed:
+    //
+    //   PENDING-DEREF at sendefs.cpp:432:7 stmt=CXXOperatorCallExpr
+    //     held='(libcc2rs::manip_refcount(&mut (*ss.borrow_mut()) ,
+    //            libcc2rs::hex_refcount )) '
+    //
+    // This is the same defect 157b01c fixed one arm over, where a user
+    // inserter's `os` parameter is `&mut __S` rather than a Ptr: the text is
+    // emitted verbatim and the enclosing receiver path does the wrapping.
+    // `DerefPtrExpr` on the RValue path below is wrong for the same reason.
+    //
+    // Marked FreshPointer, not Pointer, for 157b01c's reason: a non-fresh
+    // pointer gets `.clone()` appended, which is a Ptr operation a Rust
+    // borrow does not have.
+    if (Mapper::Contains(GetCalleeOrExpr(expr)) &&
+        !Mapper::ReturnsPointer(GetCalleeOrExpr(expr))) {
+      if (ctx && !ctx->temporary_bindings.empty()) {
+        str = std::format("{{ {} {} }}", ctx->temporary_bindings, str);
+      }
+      StrCat(str);
+      computed_expr_type_ = ComputedExprType::FreshPointer;
+      return false;
+    }
     if (isLValue()) {
       if (ctx && !ctx->temporary_bindings.empty()) {
         str = std::format("{{ {} {} }}", ctx->temporary_bindings, str);

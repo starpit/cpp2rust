@@ -1,4 +1,9 @@
-// translation-fail
+// Generic lambdas translate now: refcount defers a GENERIC lambda var-decl to the
+// base model's inline-at-each-use strategy, which is the only one that can express
+// one at two instantiations (a Rust closure value is monomorphic).  This test's
+// `translation-fail` marker documented that limitation and is now obsolete, so the
+// test is promoted to a real end-to-end check: lit translates, compiles, runs and
+// diffs against the same source built with clang.
 #include <assert.h>
 
 int main() {
