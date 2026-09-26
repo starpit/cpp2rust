@@ -2200,6 +2200,17 @@ void ConverterRefCount::ConvertUnionMemberAccessor(clang::MemberExpr *expr) {
   SetValueFreshness(member->getType());
 }
 
+// True when `str` is what Converter::ConvertMemberExpr leaves behind after a
+// base that emitted NOTHING (because it stashed into pending_deref_ instead):
+// the member separator and the name, with no receiver in front of the dot.
+// Used to assert rather than guess in VisitMemberExpr; see the comment there.
+[[maybe_unused]] static bool IsMemberDotRemainder(std::string_view str) {
+  while (!str.empty() && std::isspace(static_cast<unsigned char>(str.front()))) {
+    str.remove_prefix(1);
+  }
+  return !str.empty() && str.front() == '.';
+}
+
 bool ConverterRefCount::VisitMemberExpr(clang::MemberExpr *expr) {
   auto *member = expr->getMemberDecl();
   bool known = Mapper::Contains(expr);
@@ -2225,8 +2236,44 @@ bool ConverterRefCount::VisitMemberExpr(clang::MemberExpr *expr) {
       base_type = base_type->getPointeeType();
     }
     bool needs_mut = NeedsMutAccess(method, base_type);
-    PushExprKind push(*this, needs_mut ? ExprKind::LValue : ExprKind::RValue);
-    Converter::ConvertMemberExpr(expr);
+    // The receiver of a non-const method is converted in an LValue context, and
+    // every pointer-ish arm of this model emits NOTHING there: it stashes the
+    // ptr expression in pending_deref_ for a consumer to shape (see
+    // FinishUFCSReceiverText for the same hole on the UFCS side). This path had
+    // no consumer, so a non-const STL method on a reference-typed receiver came
+    // out with an EMPTY base -- `.fill_libcc_char('0')` with nothing in front of
+    // the dot -- and the stash then outlived the statement and tripped
+    // assert_consumed.
+    //
+    // Measured on senulatorProg.cpp:141 (`auto prevFill = os.fill('0');`, where
+    // `os` is the `std::ostream &` parameter of a plain function, NOT of an
+    // inserter, so 41848be's IsUserStreamInserter guard does not apply and the
+    // DeclRefExpr arm stashes the name):
+    //
+    //     PENDING-DEREF at senulatorProg.cpp:141:5 stmt=DeclStmt held='os'
+    //
+    // A receiver is a place to borrow, so the shape it needs is the plain deref
+    // of the ptr -- exactly what the same arms emit in an RValue context, and
+    // exactly what FinishUFCSReceiverText hands the UFCS path.
+    std::string member_text;
+    {
+      Buffer buf(*this);
+      PushExprKind push(*this, needs_mut ? ExprKind::LValue : ExprKind::RValue);
+      Converter::ConvertMemberExpr(expr);
+      member_text = std::move(buf).str();
+    }
+    if (!pending_deref_.empty()) {
+      // Assert loudly rather than guess. Converter::ConvertMemberExpr emits
+      // base, then `.`, then the member name; if the base stashed instead of
+      // emitting, what is left starts AT the dot. Anything else means the base
+      // both emitted text and stashed a deref, and prepending the deref would
+      // produce two receivers.
+      assert(IsMemberDotRemainder(member_text) &&
+             "member receiver both emitted a value and stashed a deref");
+      member_text =
+          DerefPtrExpr(pending_deref_.take(), base_type) + member_text;
+    }
+    StrCat(member_text);
     SetFreshType(expr->getType());
     return false;
   }
