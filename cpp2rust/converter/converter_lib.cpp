@@ -476,6 +476,26 @@ bool IsConvertibleCXXRecordDecl(const clang::CXXRecordDecl *decl) {
   return decl->isThisDeclarationADefinition() && !decl->isDependentContext();
 }
 
+// The asymmetry below is DELIBERATE: `IsConvertibleImplicitMember` admits an
+// implicit MOVE assignment and there is no arm for an implicit COPY assignment.
+// Do not "fix" that by adding one -- it would be dead code.
+//
+// An implicit copy-assignment operator is never a call target. `ConvertAssignment`
+// emits a record assignment as an assignment of a CLONE (`d = (s).clone();` in the
+// unsafe model, `(*d.borrow_mut()) = (*s.borrow()).clone();` in the refcount one),
+// and the semantics are carried by the synthesized `Clone` impl -- AddCloneTrait
+// plus `impl_deep_clone_leaf!`, which in the refcount model deep-clones a member
+// holding a VALUE and shares one holding a HANDLE. So the copy path never reaches
+// a member function at all.
+//
+// Measured, not assumed: /home/agent/work/probe/implicit_copy_assign.cpp is a
+// struct with no user-declared assignment operator, copy constructor or
+// destructor, plus `std::vector<int>` and `std::string` members. `grep -c
+// 'fn copy_assign'` on both emitted files is 0 -- not defined AND not called --
+// and the probe MATCHES clang-built C++ in both models, including after mutating
+// the source post-assignment (a shared handle where C++ copied a value would drag
+// the destination along, which is the refcount hazard). Re-run it to re-check
+// this claim before changing the predicate.
 bool IsConvertibleCXXMethodDecl(const clang::CXXMethodDecl *decl) {
   if (llvm::isa<clang::CXXDestructorDecl>(decl)) {
     return GetUserDefinedDestructor(decl->getParent()) != nullptr;

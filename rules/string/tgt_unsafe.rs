@@ -512,3 +512,15 @@ unsafe fn f58(a0: libc::c_char, a1: Vec<libc::c_char>) -> Vec<libc::c_char> {
     r.push(0);
     r
 }
+
+unsafe fn f59(a0: *mut Vec<libc::c_char>, a1: *const libc::c_char) -> *mut Vec<libc::c_char> {
+    let __o = a0;
+    (*__o).clear();
+    let __from = a1;
+    (*__o).extend_from_slice(::std::slice::from_raw_parts(
+        __from,
+        (0..).position(|i| *__from.add(i) == 0).unwrap(),
+    ));
+    (*__o).push(0);
+    __o
+}

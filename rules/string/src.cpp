@@ -190,3 +190,25 @@ double f57(const std::string &a0, std::size_t *a1) {
 // `unsupported CXXOperatorCallExpr: +`. progir.cpp is the TU that DEFINES
 // `InstrInfo::empty`, so this rule is on the path to the gtest tests linking.
 std::string f58(char a0, const std::string &a1) { return a0 + a1; }
+
+// `s = "literal"` / `s = ptr`, i.e. `std::string::operator=(const char *)`.
+//
+// Missing until now, and it cost a whole probe: assigning a string literal to a
+// std::string emitted a raw `s.name = c"src".as_ptr()` and failed in BOTH models
+// with `error[E0308]: expected Vec<i8>, found *const i8`, which masked an
+// unrelated investigation entirely.
+//
+// ONE rule, not two. `char (&)[N]` versus `const char *` is the distinction that
+// cost rules/filesystem a round, so the key was read from `-verbose | grep
+// 'search expr'` rather than predicted: BOTH a literal (`s = "xyz"`) and a
+// pointer variable (`const char *p; s = p;`) resolve to the same overload,
+// `std::string & std::basic_string<char>::operator=(const char *)`, because the
+// literal decays. There is no separate array-reference overload of operator= to
+// key on, unlike the filesystem constructor.
+//
+// ASSIGNMENT REPLACES. An `operator+=`-shaped body (f36) would compile and
+// silently CONCATENATE, so the target bodies clear() first rather than popping
+// the terminator. The trailing NUL convention is f36's, read not assumed: the
+// buffer is `Vec<c_char>` holding the bytes plus one 0, so `size()` is `len - 1`
+// and the empty assignment leaves exactly `[0]`.
+std::string &f59(std::string &s, const char *o) { return s.operator=(o); }

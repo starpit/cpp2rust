@@ -517,3 +517,13 @@ fn f58(a0: u8, a1: Vec<u8>) -> Vec<u8> {
     r.push(0);
     r
 }
+
+fn f59(a0: Ptr<Vec<u8>>, a1: Ptr<u8>) -> Ptr<Vec<u8>> {
+    let __o = a0;
+    __o.with_mut(|__v: &mut Vec<u8>| {
+        __v.clear();
+        __v.extend(a1.to_c_string_iterator());
+        __v.push(0);
+    });
+    __o
+}
