@@ -174,6 +174,52 @@ std::string Converter::ForceGlobalInit(const clang::VarDecl *decl) {
                      GetNamedDeclAsString(decl));
 }
 
+// Whether `text` names `word` as a whole identifier. A substring match would
+// fire on `OpInstFoo` or `my_OpInst`, which name nothing this import defines.
+static bool NamesIdentifier(std::string_view text, std::string_view word) {
+  auto is_ident = [](char ch) {
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+           (ch >= '0' && ch <= '9') || ch == '_';
+  };
+  for (size_t pos = text.find(word); pos != std::string_view::npos;
+       pos = text.find(word, pos + 1)) {
+    bool left_ok = pos == 0 || !is_ident(text[pos - 1]);
+    size_t after = pos + word.size();
+    bool right_ok = after >= text.size() || !is_ident(text[after]);
+    if (left_ok && right_ok) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void Converter::EmitRuleModuleImports(std::string &out) {
+  // Match the three names the `use` line DEFINES, not the crate name: the body
+  // never spells `dataflowir_gen`, which is exactly why `MlirBlock`/`MlirRegion`
+  // -- aliases invented by that one line, not MLIR names at all -- came out
+  // undefined. Matching on the crate name would never fire.
+  static constexpr std::string_view kNames[] = {"OpInst", "MlirBlock",
+                                                "MlirRegion"};
+  bool needed = false;
+  for (auto name : kNames) {
+    if (NamesIdentifier(out, name)) {
+      needed = true;
+      break;
+    }
+  }
+  if (!needed) {
+    return;
+  }
+  // Prepend: the preamble is emitted FIRST into the same string (ast_consumer.cpp
+  // calls EmitFilePreamble before traversing), so by the time the body exists the
+  // preamble is already written and an append would put the import after every
+  // item that uses it. Rust does not care where a `use` sits among top-level
+  // items, but a reader does, and nothing the preamble emits is an inner
+  // attribute (`#![..]`), which is the only thing that would have to precede it.
+  out.insert(0, "use dataflowir_gen::fmt::{Block as MlirBlock, OpInst, "
+                "Region as MlirRegion};\n");
+}
+
 void Converter::EmitGlobalInits(Model model, std::string &out) {
   out += model == Model::kUnsafe ? "pub unsafe fn __cpp2rust_init_globals() {\n"
                                  : "pub fn __cpp2rust_init_globals() {\n";
@@ -182,6 +228,12 @@ void Converter::EmitGlobalInits(Model model, std::string &out) {
     out += '\n';
   }
   out += "}\n";
+
+  // Last, and from here rather than from a new call site in cpp2rust_lib.cpp:
+  // this is the final finalization step in BOTH assembly paths
+  // (cpp2rust_lib.cpp:47 and :267), so it is the first point at which the whole
+  // emitted text exists -- and it is in a file this change owns.
+  EmitRuleModuleImports(out);
 }
 
 void Converter::NoteOpaqueRecord(std::string name) {

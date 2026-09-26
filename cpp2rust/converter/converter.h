@@ -87,6 +87,26 @@ public:
   static void EmitGTestHarness(std::string &out);
   static void EmitGlobalInits(Model model, std::string &out);
 
+  // Prepends a rule module's top-level `use` line when, and ONLY when, the
+  // emitted text actually names something that line defines.
+  //
+  // The IR does not carry rule modules' `use` lines (the preprocessor drops
+  // them) and `Converter` never receives `rules_dir` -- factory.cpp:14 hands it
+  // straight to Mapper::LoadTranslationRules and keeps no copy -- so there is
+  // nothing to derive this from. Measured over all 89 modules, the union of
+  // non-local, non-std imports in the whole rule tree is ONE line, so there is
+  // no general mechanism to build here and this deliberately does not build one.
+  //
+  // Emission is CONDITIONAL because `557be22` emitted it unconditionally on the
+  // reasoning that "an unused import is at worst a warning". That is false when
+  // the crate is not a declared dependency of the consumer: tests/lit links
+  // exactly libcc2rs, libc, nix and jiff (Cpp2RustTest.py:256-263), so every
+  // emitted file -- including unit/init.cpp, which has no MLIR content at all --
+  // died on `E0433: cannot find module or crate dataflowir_gen`, taking down all
+  // 1024 lit tests. Conditional emission restores the property that was wrongly
+  // assumed: a consumer needs the crate only when the file genuinely uses it.
+  static void EmitRuleModuleImports(std::string &out);
+
   static void EmitVirtualMethods(std::string &out);
 
   virtual bool VisitBuiltinType(clang::BuiltinType *type);
