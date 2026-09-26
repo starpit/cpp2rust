@@ -19,6 +19,7 @@ impl Clone for Inner {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Inner);
 impl ByteRepr for Inner {
     fn byte_size() -> usize {
         4
@@ -65,6 +66,7 @@ impl Clone for Explicit {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Explicit);
 impl Default for Explicit {
     fn default() -> Self {
         Explicit {
@@ -110,6 +112,7 @@ impl Clone for Implicit {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Implicit);
 impl Default for Implicit {
     fn default() -> Self {
         Implicit {
@@ -167,6 +170,7 @@ impl Clone for DefaultCopyUserMove {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(DefaultCopyUserMove);
 impl ByteRepr for DefaultCopyUserMove {
     fn byte_size() -> usize {
         4
@@ -215,6 +219,7 @@ impl Clone for UserCopyDefaultMove {
         UserCopyDefaultMove::copy_from(__src.as_pointer())
     }
 }
+impl_deep_clone_leaf!(UserCopyDefaultMove);
 impl ByteRepr for UserCopyDefaultMove {
     fn byte_size() -> usize {
         4
@@ -491,10 +496,7 @@ fn main_0() -> i32 {
             && ((*(*l.borrow()).arr.borrow())[(0) as usize] == 5)
     );
     let vec_: Value<Vec<Explicit>> = Rc::new(RefCell::new(Vec::new()));
-    {
-        let a0_clone = (*b.borrow()).clone();
-        (*vec_.borrow_mut()).push(a0_clone)
-    };
+    (*vec_.borrow_mut()).push((*b.borrow()).deep_clone());
     (*vec_.borrow_mut()).push(Explicit::new({ 9 }));
     assert!(
         ((*(*(vec_.as_pointer() as Ptr<Explicit>)
@@ -611,8 +613,8 @@ fn main_0() -> i32 {
     (*(*o1.borrow()).arr.borrow_mut())[(0) as usize] = 5;
     (*(*o1.borrow()).arr.borrow_mut())[(1) as usize] = 6;
     {
-        let _p: Ptr<_> = Ptr::alloc(7);
-        (*(*o1.borrow()).p.borrow_mut()) = _p.to_owned_opt()
+        let _p: Ptr<i32> = Ptr::alloc(7);
+        ((*o1.borrow()).p.as_pointer() as Ptr<Option<Value<i32>>>).write(_p.to_owned_opt())
     };
     let o2: Value<Owner> = Rc::new(RefCell::new(Owner::move_from({ o1.as_pointer() })));
     assert!(
@@ -643,8 +645,8 @@ fn main_0() -> i32 {
     let h1: Value<Holder> = Rc::new(RefCell::new(Holder::new({ 4 })));
     let _dtor_h1 = ScopedDestructor::new(&h1, |__p| __p.destructor());
     {
-        let _p: Ptr<_> = Ptr::alloc(9);
-        (*(*h1.borrow()).p.borrow_mut()) = _p.to_owned_opt()
+        let _p: Ptr<i32> = Ptr::alloc(9);
+        ((*h1.borrow()).p.as_pointer() as Ptr<Option<Value<i32>>>).write(_p.to_owned_opt())
     };
     let h2: Value<Holder> = Rc::new(RefCell::new(Holder::move_from({ h1.as_pointer() })));
     let _dtor_h2 = ScopedDestructor::new(&h2, |__p| __p.destructor());

@@ -17,6 +17,7 @@ impl Clone for widget {
         }
     }
 }
+impl_deep_clone_leaf!(widget);
 impl ByteRepr for widget {
     fn byte_size() -> usize {
         4

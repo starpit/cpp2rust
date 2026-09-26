@@ -37,6 +37,7 @@ impl Clone for Counted {
         Counted::copy_from(__src.as_pointer())
     }
 }
+impl_deep_clone_leaf!(Counted);
 impl ByteRepr for Counted {
     fn byte_size() -> usize {
         4
@@ -85,6 +86,7 @@ impl Clone for NonConst {
         NonConst::NonConst_pmutNonConst(__src.as_pointer())
     }
 }
+impl_deep_clone_leaf!(NonConst);
 impl Default for NonConst {
     fn default() -> Self {
         { NonConst::new() }
@@ -131,6 +133,7 @@ impl Clone for Ignored {
         Ignored::copy_from(__src.as_pointer())
     }
 }
+impl_deep_clone_leaf!(Ignored);
 impl ByteRepr for Ignored {
     fn byte_size() -> usize {
         4
@@ -163,6 +166,7 @@ impl Clone for Holder {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(Holder);
 impl Default for Holder {
     fn default() -> Self {
         Holder {
@@ -240,10 +244,7 @@ fn main_0() -> i32 {
     );
     assert!((copies_0.with(|rc| *rc.borrow()) == 9));
     let vec_: Value<Vec<Counted>> = Rc::new(RefCell::new(Vec::new()));
-    {
-        let a0_clone = (*a.borrow()).clone();
-        (*vec_.borrow_mut()).push(a0_clone)
-    };
+    (*vec_.borrow_mut()).push((*a.borrow()).deep_clone());
     assert!(
         ((*(*(vec_.as_pointer() as Ptr<Counted>)
             .offset(0_usize)

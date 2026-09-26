@@ -11,6 +11,7 @@ pub struct Pair {
     pub x1: Ptr<i32>,
     pub x2: Ptr<i32>,
 }
+impl_deep_clone_leaf!(Pair);
 impl ByteRepr for Pair {}
 pub fn mkPair_0(x1: Ptr<i32>, x2: Ptr<i32>) -> Pair {
     return Pair {

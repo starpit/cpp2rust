@@ -17,6 +17,7 @@ impl S {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(S);
 impl ByteRepr for S {}
 pub fn main() {
     __cpp2rust_init_globals();

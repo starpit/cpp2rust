@@ -43,13 +43,13 @@ unsafe fn main_0() -> i32 {
     return 0;
 }
 impl S {
-    pub unsafe fn new(mut x: i32) -> Self {
+    pub unsafe fn new(x: i32) -> Self {
         let mut this = Self { v: x };
         this
     }
 }
 impl Derived {
-    pub unsafe fn new(mut factor: i32) -> Self {
+    pub unsafe fn new(factor: i32) -> Self {
         let mut this = Self { factor: factor };
         this
     }
@@ -71,7 +71,7 @@ impl S {
 }
 impl Derived {}
 unsafe impl Base for Derived {
-    unsafe fn apply(&mut self, x: i32) -> i32 {
+    unsafe fn apply(&mut self, mut x: i32) -> i32 {
         return ((self.factor) * (x));
     }
 }

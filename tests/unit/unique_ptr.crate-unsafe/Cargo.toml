@@ -1,0 +1,15 @@
+[package]
+name="probe"
+version="0.0.0"
+edition="2021"
+[dependencies]
+libcc2rs = { path = "/home/agent/work/repos/cpp2rust/libcc2rs" }
+libc = "0.2"
+# The .td-generated MLIR model: OpInst/Block/Region/Value/Ty/Attr, verified
+# byte-exact against 9,075 lines of real DataflowIR. This is what lets mlir types
+# have REAL Rust models instead of the fieldless u64 that --opaque-namespace=mlir
+# emits, which is why `++` over Block::getOperations() was unimplementable.
+dataflowir-gen = { path = "/home/agent/work/repos/dt_src/cpp2rust-port/dataflowir-gen" }
+[[bin]]
+name="probe"
+path="src/main.rs"

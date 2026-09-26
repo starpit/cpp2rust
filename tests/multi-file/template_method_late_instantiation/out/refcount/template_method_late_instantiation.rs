@@ -19,10 +19,13 @@ impl Clone for S_int_ {
         Rc::try_unwrap(__this).ok().unwrap().into_inner()
     }
 }
+impl_deep_clone_leaf!(S_int_);
 impl Default for S_int_ {
     fn default() -> Self {
-        S_int_ {
-            x: Rc::new(RefCell::new(0)),
+        {
+            S_int_ {
+                x: Rc::new(RefCell::new(0)),
+            }
         }
     }
 }
