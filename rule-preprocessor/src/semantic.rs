@@ -13,12 +13,23 @@ impl SemanticAnalysis {
         let args = build_rustc_args(&crate_root);
         let mut resolver = MethodResolver { ir };
 
+        // A rustc ERROR must ABORT, not warn.  This used to print a warning and then
+        // write ir_*.json anyway, so a target that did not type-check still produced
+        // `OK <module>` from regen-rule.sh and a module that loaded -- a gate that
+        // silently passes broken targets.  Measured before changing it: 0 of the 92
+        // published modules trip this, so failing hard breaks nothing that works.
+        // rustc has already printed the diagnostics (error[Ennnn] with the offending
+        // target line) above this point; the exit only stops us acting on them.
         if rustc_driver::catch_fatal_errors(|| {
             rustc_driver::run_compiler(&args, &mut resolver);
         })
         .is_err()
         {
-            eprintln!("warning: rustc compilation had errors during semantic analysis");
+            eprintln!(
+                "error: rustc rejected a target body during semantic analysis -- \
+                 see the error[Ennnn] diagnostics above.  No IR written."
+            );
+            std::process::exit(1);
         }
 
         resolver.assert_no_unknowns();
