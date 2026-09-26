@@ -27,6 +27,23 @@ private:
 bool Contains(clang::QualType qual_type);
 bool Contains(const clang::Expr *expr);
 
+// Does the rule table hold ANY row for `op` on `record`, regardless of the
+// overload's signature?
+//
+// `Contains(const Expr *)` cannot answer this: it asks about the ONE overload
+// the call site resolved to, so a miss conflates two cases the converter must
+// separate. When an operator's lookup misses, the converter falls back to a
+// native Rust operator and records NO gap -- correct by construction for
+// `std::vector`'s `[]`, `std::string`'s `=` and `std::ostream`'s `<<`, which are
+// handled by deliberate shape-based handlers, but SILENTLY WRONG when the type
+// does have operator rules and merely none that matched this signature (a
+// `std::tie` assignment needs `T1 = int &` and `T1 = int` at once, so
+// rules/tuple's f13/f14 cannot match and the native `=` is emitted instead).
+// `obj_mapped && !callee_has_rule` is therefore not a usable discriminator;
+// "rows exist for this operator on this type" is.
+bool HasAnyRuleForOperator(const clang::CXXRecordDecl *record,
+                           clang::OverloadedOperatorKind op);
+
 std::string Map(clang::QualType qual_type);
 std::string MapInitializer(clang::QualType qual_type);
 const TranslationRule::ExprRule *GetExprRule(const clang::Expr *expr);

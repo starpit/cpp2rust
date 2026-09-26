@@ -1318,6 +1318,53 @@ bool Contains(clang::QualType qual_type) {
 
 bool Contains(const clang::Expr *expr) { return search(expr) != nullptr; }
 
+bool HasAnyRuleForOperator(const clang::CXXRecordDecl *record,
+                           clang::OverloadedOperatorKind op) {
+  if (record == nullptr || op == clang::OverloadedOperatorKind::OO_None) {
+    return false;
+  }
+  if (const auto *def = record->getDefinition()) {
+    record = def;
+  }
+  // Asked through the SAME spelling the rule table is keyed by: reduce each of
+  // the record's own declarations of this operator to an expr map key exactly
+  // as AddExprRule reduced the rule's src. Reconstructing the key by hand would
+  // have to re-implement ToString's operator-name renaming (`operator lt`,
+  // `operator shl` -- see IsAngleBracketOperator) and would drift the moment
+  // that changes.
+  for (const auto *method : record->methods()) {
+    if (method->getOverloadedOperator() != op) {
+      continue;
+    }
+    auto key = GetExprMapKey(ToString(method));
+    auto [b, e] = exprs_.equal_range(key);
+    if (b == e) {
+      continue;
+    }
+    // A key that does not carry the class name cannot discriminate on its own.
+    // ToString spells an angle-bracket operator `operator lt` WITH A SPACE, and
+    // GetExprMapKey stops walking back at the first space outside all angle
+    // brackets, so every `operator<` rule in the whole tree shares the bucket
+    // `lt` -- answering true off the bucket alone would claim rules for a type
+    // that has none. Ask instead whether some row in that bucket actually names
+    // this record.
+    if (key.find("::") != std::string::npos) {
+      return true;
+    }
+    auto printed = ToString(clang::cast<clang::NamedDecl>(record));
+    auto name = printed.substr(0, printed.find('<'));
+    if (name.empty()) {
+      continue;
+    }
+    for (; b != e; ++b) {
+      if (b->second.src.find(name) != std::string::npos) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 const TranslationRule::ExprRule *GetExprRule(const clang::Expr *expr) {
   return search(expr);
 }
