@@ -53,7 +53,12 @@ class Region {};
 // `Type()`, a null return), which is why the target files' `init` for these
 // three is load-bearing in a way `Operation`'s is not; tgt_unsafe.rs records the
 // sentinel each one uses and why the sentinel is unreachable as a real value.
-class Value {};
+class Value {
+public:
+  // mlir/include/mlir/IR/Value.h -- `bool operator==(Value other) const
+  // { return impl == other.impl; }`, the SSA-identity comparison.
+  bool operator==(Value rhs) const;
+};
 
 class Type {};
 
@@ -105,6 +110,45 @@ bool operator==(StringAttr lhs, std::nullptr_t rhs);
 bool operator==(StringAttr lhs, StringAttr rhs);
 bool operator!=(StringAttr lhs, StringAttr rhs);
 
+// mlir/include/mlir/IR/AffineMap.h.  `mlir::AffineMap` is the SAME handle shape
+// as Attribute: `AffineMap() : map(nullptr) {}`, one uniquer pointer, and
+//     bool operator==(AffineMap other) const { return other.map == map; }
+//     bool operator!=(AffineMap other) const { return !(other.map == map); }
+// It is the #1 first-abort gate in dxp_standalone: 84 of the survey-v2 TSVs
+// record `unmapped-type mlir::AffineMap`, i.e. the mapper had NO rule for the
+// type at all, and 8 more record `mlir::AffineMap::operator!=(mlir::AffineMap)`
+// (PropagationAnalysis.h:58).
+//
+// THE MODEL IS NOT INVENTED HERE.  dataflowir-gen already carries a faithful
+// one, generated/hand-transliterated for the .td printer:
+//     dataflowir-gen/src/ir.rs:313  /// `mlir::AffineMap` -- what
+//                                   /// `AffineMap::get(nDims,nSymbols,results,ctx)` builds
+//     dataflowir-gen/src/ir.rs:315  pub struct AffineMap { n_dims, n_symbols, results }
+//     dataflowir-gen/src/ir.rs:322  pub fn get(n_dims, n_symbols, results) -> Self
+//     dataflowir-gen/src/ir.rs:326  pub fn permutation(..)   // getPermutationMap
+// with `AffineExpr` at ir.rs:124 as the result tree.
+//
+// ⛔ ONE DOCUMENTED LIMIT, ir.rs:119-123: the model is CONSTRUCTION ONLY and
+// does NOT canonicalise.  MLIR flattens/constant-folds on construction and
+// `simplifyAffineMap` is a real simplifier; this corpus DOES call it
+// (SentientOps.cpp:2123, :2141, PropagationAnalysis.h:92).  Those keys are
+// therefore deliberately NOT added here -- a `simplifyAffineMap` that returned
+// its argument unchanged would compile and lie.  Only the handle-level
+// operations, whose semantics the value model reproduces exactly, are mapped.
+class AffineMap {
+public:
+  bool operator==(AffineMap rhs) const;
+  bool operator!=(AffineMap rhs) const;
+};
+
+// mlir/include/mlir/IR/Value.h -- `bool operator==(Value other) const { return
+// impl == other.impl; }`.  A single-site gate in the 68-TU sample, and the same
+// handle comparison as Attribute's: a Value is a pointer to its defining
+// op-result / block-argument, so two Values are equal exactly when they are the
+// same SSA value.  `ir::Value` (ir.rs:21) carries the value's NAME including its
+// `%` sigil, and a name is unique within a function in MLIR's own printer, so
+// name+type equality is SSA identity here.
+
 } // namespace mlir
 
 // ---- type rules, and nothing else ----------------------------------------
@@ -115,6 +159,7 @@ using t4 = mlir::Value;
 using t5 = mlir::Type;
 using t6 = mlir::Attribute;
 using t7 = mlir::StringAttr;
+using t8 = mlir::AffineMap;
 
 // ---- the two operator rules ----------------------------------------------
 // The member `==` on mlir::Attribute.  Spelled `.operator==(...)` rather than
@@ -167,3 +212,19 @@ bool f9(mlir::StringAttr a, std::nullptr_t b) { return mlir::operator==(a, b); }
 bool f10(mlir::Attribute a, mlir::Attribute b) { return a.operator!=(b); }
 
 bool f11(mlir::Attribute a) { return a.operator!(); }
+
+// ---- mlir::AffineMap: the comparison family and the CONSTRUCTORS -----------
+// A TYPE RULE ALONE IS NOT ENOUGH, measured: `rules/mlir` mapped
+// `mlir::Attribute` and `mlir::Attribute a;` still lowered to
+// `mlir_Attribute::new()`, which no rule defined -- the TU translated rc=0 and
+// THEN failed to compile with `error[E0433]: cannot find module or crate
+// mlir_Attribute`.  `PropagationAnalysis.h:99` is exactly that shape for this
+// type (`AffineMap propagated_map_;`, a member with no initializer), so the
+// default and copy constructors are mapped alongside the type.
+mlir::AffineMap f12() { return mlir::AffineMap(); }
+mlir::AffineMap f13(const mlir::AffineMap &o) { return mlir::AffineMap(o); }
+bool f14(mlir::AffineMap a, mlir::AffineMap b) { return a.operator==(b); }
+bool f15(mlir::AffineMap a, mlir::AffineMap b) { return a.operator!=(b); }
+
+// ---- mlir::Value::operator== ----------------------------------------------
+bool f16(mlir::Value a, mlir::Value b) { return a.operator==(b); }

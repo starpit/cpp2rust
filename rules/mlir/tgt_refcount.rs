@@ -92,6 +92,26 @@ fn t7() -> dataflowir_gen::ir::Attr {
     dataflowir_gen::ir::Attr::Raw(::std::string::String::new())
 }
 
+// t8 `mlir::AffineMap` -> `dataflowir_gen::ir::AffineMap` (ir.rs:315), whose own
+// doc comment names the C++ type it models and the factory it corresponds to.
+// The `init` is the NULL HANDLE (`AffineMap() : map(nullptr)`), represented as
+// the empty map.  WHY THAT SENTINEL IS SOUND HERE, with evidence: MLIR can in
+// principle build a 0-dim/0-symbol/0-result map via `AffineMap::get(0,0,{},ctx)`,
+// so the sentinel is not unreachable in MLIR-at-large -- it is unreachable in
+// THIS corpus.  Every `AffineMap::get` call site in dt_src passes a non-empty
+// result list and >=1 dim (PCFGToDataflowIR.cpp:993/1387/1607/1671/1752-4/2042/
+// 2086/2130/2646/2660/3137/4093/4967/5014, SNSyncLowering.cpp:188,
+// SNComputeLowering.cpp:137/142/149, PropagationAnalysis.h:91,
+// SentientOps.cpp:2122/2140), and `getMultiDimIdentityMap(1,..)`
+// (SentientOps.cpp:2106) yields one result.  So no constructible map in this
+// program equals the sentinel, and a null test cannot collide with real data.
+// ⚠ If a future site builds an empty map, this sentinel becomes AMBIGUOUS and
+// the honest fix is an `Option<AffineMap>` representation, not a different
+// magic value.
+fn t8() -> dataflowir_gen::ir::AffineMap {
+    dataflowir_gen::ir::AffineMap::get(0, 0, ::std::vec::Vec::new())
+}
+
 // ---------------------------------------------------------------------------
 // f1 -- `bool mlir::Attribute::operator==(mlir::Attribute) const`.
 // MLIR UNIQUES attributes, so C++ handle equality is instance equality, which is
@@ -160,4 +180,52 @@ fn f10(a0: dataflowir_gen::ir::Attr, a1: dataflowir_gen::ir::Attr) -> bool {
 
 fn f11(a0: dataflowir_gen::ir::Attr) -> bool {
     a0 == dataflowir_gen::ir::Attr::Raw(::std::string::String::new())
+}
+
+// ---------------------------------------------------------------------------
+// f12/f13 -- `mlir::AffineMap`'s DEFAULT and COPY constructors.  Mapped for the
+// same reason `mlir::Attribute`'s were: without them a TU translates rc=0 and
+// then fails to compile with `error[E0433]: cannot find module or crate
+// mlir_AffineMap`.  f12's body is byte-identical to t8's `init` on purpose --
+// `AffineMap m;` and a defaulted member must produce the same null handle.
+// f13 is `clone()`: a C++ AffineMap is one uniquer pointer, so a copy is a second
+// handle to the same uniqued map and compares equal to its source.
+fn f12() -> dataflowir_gen::ir::AffineMap {
+    dataflowir_gen::ir::AffineMap::get(0, 0, ::std::vec::Vec::new())
+}
+
+fn f13(a0: dataflowir_gen::ir::AffineMap) -> dataflowir_gen::ir::AffineMap {
+    a0.clone()
+}
+
+// f14/f15 -- `bool mlir::AffineMap::operator==(mlir::AffineMap) const` and its
+// `!=`.  AffineMap.h spells them `other.map == map` / `!(other.map == map)`:
+// a UNIQUER-HANDLE comparison, and MLIR uniques affine maps on
+// (nDims, nSymbols, results), so handle identity IS structural equality of
+// exactly those three fields.  `ir::AffineMap` derives `PartialEq, Eq`
+// (ir.rs:314) over exactly n_dims/n_symbols/results, with `AffineExpr`'s own
+// derived `PartialEq` (ir.rs:123) comparing the result trees structurally.  So
+// the two agree, and `!=` is the exact negation MLIR itself writes.
+// ⚠ ONE KNOWN DIVERGENCE, stated rather than hidden: MLIR canonicalises on
+// construction (constant folding, flattening) and this model does not, so two
+// maps that MLIR would unique to one instance -- e.g. `d0 + 0` vs `d0` -- compare
+// UNEQUAL here.  Both operands in this corpus come from the same builder path, so
+// the shapes match; a `simplifyAffineMap` rule would be required to close it and
+// is deliberately absent (see src.cpp).
+fn f14(a0: dataflowir_gen::ir::AffineMap, a1: dataflowir_gen::ir::AffineMap) -> bool {
+    a0 == a1
+}
+
+fn f15(a0: dataflowir_gen::ir::AffineMap, a1: dataflowir_gen::ir::AffineMap) -> bool {
+    a0 != a1
+}
+
+// f16 -- `bool mlir::Value::operator==(mlir::Value) const`, `impl == other.impl`.
+// `ir::Value` (ir.rs:21) carries the printed name INCLUDING its `%` sigil plus the
+// type; MLIR's printer gives every distinct SSA value in a region a distinct name,
+// so name equality is SSA identity and the derived `PartialEq` is the C++
+// semantics.  Note this is NOT value-content equality: two structurally identical
+// but distinct SSA values have different names and correctly compare unequal.
+fn f16(a0: dataflowir_gen::ir::Value, a1: dataflowir_gen::ir::Value) -> bool {
+    a0 == a1
 }
