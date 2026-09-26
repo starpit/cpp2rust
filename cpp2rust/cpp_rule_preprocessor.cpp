@@ -62,6 +62,11 @@ struct LookupInfo {
   clang::DeclarationName name;
   LookupKind kind;
   llvm::ArrayRef<clang::TemplateArgumentLoc> explicitArgs;
+  // The written qualifier of a QUALIFIED call, e.g. the `llvm::` of
+  // `llvm::isa<T1>(a0)`.  Without it regularNameLookup can only see `std` and
+  // the translation unit, so a free function template in any other namespace
+  // resolves to nothing and the rule fails with "No viable function".
+  clang::NestedNameSpecifier qualifier = std::nullopt;
 
   LookupInfo(const clang::Expr *expr) {
     if (const auto *ul = llvm::dyn_cast<clang::UnresolvedLookupExpr>(expr)) {
@@ -73,6 +78,7 @@ struct LookupInfo {
         kind = LookupKind::RegularName;
       }
       explicitArgs = ul->template_arguments();
+      qualifier = ul->getQualifier();
     } else if (const auto *dm =
                    llvm::dyn_cast<clang::CXXDependentScopeMemberExpr>(expr)) {
       name = dm->getMember();
@@ -697,14 +703,47 @@ private:
     return nullptr;
   }
 
+  // The DeclContext a written qualifier names, or null when there is none /
+  // it is not a namespace or class (e.g. a dependent qualifier).
+  static clang::DeclContext *
+  qualifiedDeclContext(clang::NestedNameSpecifier qualifier) {
+    if (!qualifier) {
+      return nullptr;
+    }
+    if (clang::CXXRecordDecl *rdecl = qualifier.getAsRecordDecl()) {
+      return rdecl;
+    }
+    if (qualifier.getKind() == clang::NestedNameSpecifier::Kind::Namespace) {
+      const clang::NamespaceBaseDecl *nbase =
+          qualifier.getAsNamespaceAndPrefix().Namespace;
+      if (const auto *nsd = llvm::dyn_cast_or_null<clang::NamespaceDecl>(nbase)) {
+        return const_cast<clang::NamespaceDecl *>(nsd);
+      }
+    }
+    return nullptr;
+  }
+
   void regularNameLookup(llvm::ArrayRef<clang::Expr *> callArgs,
                          clang::TemplateArgumentListInfo *explicitTArgs,
                          clang::DeclarationName &name,
-                         clang::OverloadCandidateSet &candidates) {
+                         clang::OverloadCandidateSet &candidates,
+                         clang::NestedNameSpecifier qualifier = std::nullopt) {
     clang::LookupResult decls(*sema_, name, loc_,
                               clang::Sema::LookupOrdinaryName);
-    if (clang::NamespaceDecl *std_ns = sema_->getStdNamespace()) {
-      sema_->LookupQualifiedName(decls, std_ns);
+    // A QUALIFIED call names its own scope: look there FIRST.  `std` and the
+    // translation unit were the only two scopes searched, so `llvm::isa<T1>(a0)`
+    // -- and every other free function template outside `std` -- found no
+    // candidate at all.  That is a LOOKUP gap, not a deduction one: the
+    // explicit-template-argument path below (explicitTArgs) already handles a
+    // non-deducible parameter such as isa's `To`.
+    if (clang::DeclContext *qdc = qualifiedDeclContext(qualifier)) {
+      sema_->LookupQualifiedName(decls, qdc);
+    }
+    if (decls.empty()) {
+      decls.clear();
+      if (clang::NamespaceDecl *std_ns = sema_->getStdNamespace()) {
+        sema_->LookupQualifiedName(decls, std_ns);
+      }
     }
     if (decls.empty()) {
       decls.clear();
@@ -869,7 +908,8 @@ private:
     clang::OverloadCandidateSet candidates(loc_, csk);
     switch (lookup.kind) {
     case LookupKind::RegularName:
-      regularNameLookup(callArgs, &explicitTArgs, name, candidates);
+      regularNameLookup(callArgs, &explicitTArgs, name, candidates,
+                        lookup.qualifier);
       break;
     case LookupKind::CXXMethodName: {
       llvm::ArrayRef<clang::Expr *> margs = callArgs;
@@ -881,7 +921,8 @@ private:
       cxxConstructorNameLookup(rule->getReturnType(), callArgs, candidates);
       break;
     case LookupKind::ADL:
-      regularNameLookup(callArgs, &explicitTArgs, name, candidates);
+      regularNameLookup(callArgs, &explicitTArgs, name, candidates,
+                        lookup.qualifier);
       adlLookup(callArgs, name, candidates);
       break;
     }
