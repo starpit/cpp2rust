@@ -2623,9 +2623,30 @@ const char *ConverterRefCount::StreamManipFn() const {
 // `let _os = &mut os;` and did not compile.  The abort it used to hide behind was
 // the `pending_deref_ not consumed` assert at the DeclRefExpr arm above.
 std::string ConverterRefCount::StreamInserterReceiver(
-    const std::string &stream_str) const {
+    const std::string &stream_str) {
   if (curr_function_ != nullptr && IsUserStreamInserter(curr_function_)) {
     return "&mut *" + stream_str;
+  }
+  // A LONE (unchained) call to a translated inserter from a plain function
+  // reaches here through EmitHoistedArgs, where the receiver was converted in
+  // LValue context -- so every pointer-ish arm of this model STASHED it and
+  // emitted nothing.  Consume the stash.
+  //
+  // The stash is used AS THE PTR, not dereferenced: libcc2rs implements
+  // `Cc2Insert` for `Ptr<T>`, and a Ptr is a handle, so `&mut <ptr>` reaches the
+  // same underlying stream.  `StreamReceiver` above takes the same view for the
+  // same reason (`"&" + stream_str`, with its own note on why not by value).
+  // Dereferencing instead gives `&mut (*p.upgrade().deref())`, which is E0596 --
+  // `Ref<'_, File>` is a read-only guard -- plus E0716 because the guard is a
+  // temporary.  Both measured on dpc.cpp:1648's shape.
+  // The guard: the converted text must be whitespace only, i.e. the arm really
+  // emitted nothing and stashed instead.  If it emitted a value AND stashed,
+  // fall through rather than silently picking one.  (Spelled inline because the
+  // file-local IsStashOnlyRemainder is defined further down.)
+  const bool stash_only =
+      stream_str.find_first_not_of(" \t\n") == std::string::npos;
+  if (!pending_deref_.empty() && stash_only) {
+    return "&mut " + pending_deref_.take();
   }
   return Converter::StreamInserterReceiver(stream_str);
 }

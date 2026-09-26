@@ -376,7 +376,8 @@ public:
   bool ConvertOstreamItem(clang::Expr *arg, const std::string &stream_str,
                           clang::CXXOperatorCallExpr *call);
   // How a user-defined operator<< receives the stream, per model.
-  virtual std::string StreamInserterReceiver(const std::string &stream_str) const;
+  // NOT const: the refcount override consumes `pending_deref_`.
+  virtual std::string StreamInserterReceiver(const std::string &stream_str);
   virtual const char *StreamManipFn() const;
   virtual std::string StreamReceiver(const std::string &stream_str) const;
   // How a base manipulator reaches the helper as a value: the two models spell

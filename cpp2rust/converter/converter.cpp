@@ -3442,7 +3442,7 @@ const char *Converter::StreamManipFn() const {
 // parameter type -- the translation of `std::ostream &`, which is a raw pointer
 // in this model -- so the argument must match that spelling exactly.
 std::string
-Converter::StreamInserterReceiver(const std::string &stream_str) const {
+Converter::StreamInserterReceiver(const std::string &stream_str) {
   return "&mut " + stream_str;
 }
 
@@ -4263,11 +4263,34 @@ void Converter::EmitHoistedArgs(CallInfo &info) {
     case Kind::Hoisted:
       if (ca.infer_type) {
         StrCat(std::format("let {} =", ca.param_name));
+        // `infer_type` is set only for argument 0 of a translated stream
+        // inserter, and this used to emit `StrCat("&mut"); Convert(ca.expr);`
+        // inline.  In the refcount model every pointer-ish arm emits NOTHING in
+        // LValue context -- it stashes the ptr in `pending_deref_` for a consumer
+        // to shape -- so that produced `let _os = &mut ;` and the stash outlived
+        // the statement, tripping assert_consumed.  Measured on
+        // `dpc.cpp:1648` (`outStream << OpCodeT::JCMP;`) and
+        // `designSpaceConfig.cpp:1044` (`os << pcfg_[c];`), both a LONE
+        // (unchained) call to a user inserter from a plain function, where the
+        // stream parameter genuinely IS a Ptr:
+        //
+        //     PENDING-DEREF at dpc.cpp:1648:11 stmt=CXXOperatorCallExpr held='outStream'
+        //
+        // The CHAINED spelling never had this problem because converter.cpp:3738
+        // routes its receiver through the virtual `StreamInserterReceiver`.  This
+        // hoist branch was the one path to a translated inserter that bypassed
+        // that hook.  It now goes through BOTH hooks: `FinishUFCSReceiverText`
+        // consumes the stash (identical need to the UFCS receiver, and its
+        // refcount override already does exactly this), and
+        // `StreamInserterReceiver` then spells the `&mut` each model wants.
+        std::string base_text;
         {
+          Buffer buf(*this);
           PushExprKind push(*this, ExprKind::LValue);
-          StrCat("&mut");
           Convert(ca.expr);
+          base_text = std::move(buf).str();
         }
+        StrCat(StreamInserterReceiver(base_text));
       } else {
         StrCat(std::format("let {}: {} =", ca.param_name,
                            ToString(ca.param_type)));
