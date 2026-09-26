@@ -6981,13 +6981,44 @@ std::string Converter::GetDefaultAsStringFallback(clang::QualType qual_type) {
 
   if (qual_type->isEnumeralType()) {
     auto enum_decl = qual_type->castAs<clang::EnumType>()->getDecl();
-    if (enum_decl->enumerators().empty()) {
+    // VisitEnumDecl lowers an enum to `pub type E = <underlying int>;` plus one
+    // `pub const` per enumerator, so value-initialising one is the ZERO of the
+    // underlying integer type -- exactly what C++ `E()` / `E{}` means.
+    //
+    // It is NOT the first enumerator, which is what this used to return. That
+    // is only right when the first enumerator happens to be 0, and for
+    // `std::errc` it is `address_family_not_supported` (EAFNOSUPPORT, 97), so
+    // `res.ec == std::errc()` -- the standard success test after
+    // `std::from_chars` -- compared against 97 and read every SUCCESSFUL parse
+    // as a failure. Spelling zero also needs no name for the enum itself,
+    // which matters for a boundary enum whose alias was never emitted: the old
+    // spelling emitted an undefined enumerator identifier there.
+    auto int_type = enum_decl->getIntegerType();
+    if (int_type.isNull()) {
+      // Opaque / incomplete enum: no underlying type to suffix with. An
+      // unsuffixed 0 still compares against whatever the use site inferred.
       return std::string(1, token::kZero);
     }
-    return EnumeratorName(*enum_decl->enumerator_begin());
+    return getTypedLiteral("0", GetUnsafeTypeAsString(int_type));
   }
 
-  return std::format("<{}>::default()", ToString(qual_type));
+  auto type_str = ToString(qual_type);
+  if (type_str.empty()) {
+    // A type with no Rust spelling concatenated here produced `<>::default()`,
+    // which is not Rust at all ("error: expected type, found `>`") and so cost
+    // the whole TU while recording no gap -- invisible to both instruments.
+    // Refuse instead, so it becomes one ranked `UnmappedType` row, the same
+    // shape as the refusal at the materialized-temporary site above.
+    auto cpp_type = Mapper::ToString(qual_type);
+    if (!ReportUnsupported("UnmappedType", cpp_type)) {
+      llvm::errs() << "default-initialized value of a type with no Rust "
+                      "spelling: "
+                   << cpp_type << '\n';
+      assert(0 && "default init of a type with no Rust spelling");
+    }
+    return UnsupportedPlaceholder("UnmappedType", cpp_type);
+  }
+  return std::format("<{}>::default()", type_str);
 }
 
 std::string Converter::ConvertVarDefaultInit(clang::QualType qual_type) {

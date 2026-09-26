@@ -2859,9 +2859,19 @@ std::string ConverterRefCount::GetDefaultAsString(clang::QualType qual_type) {
 std::string
 ConverterRefCount::GetDefaultAsStringFallback(clang::QualType qual_type) {
   auto canonical = qual_type.getUnqualifiedType().getCanonicalType();
-  if (canonical->isBooleanType() ||
-      (canonical->isIntegerType() && !canonical->isEnumeralType()) ||
-      canonical->isFloatingType()) {
+  // Enums are deliberately included: the base spells a value-initialised enum
+  // as the zero of its underlying integer, which is a scalar and needs boxing
+  // exactly like any other. Excluding them sent enums to the `<{}>::default()`
+  // line below, where `ToString` of an unspelled boundary enum returned "" and
+  // emitted `<>::default()` -- unparseable, and it cost every TU that tested
+  // `std::from_chars`'s `ec == std::errc()`.
+  //
+  // `isEnumeralType()` is spelled out rather than leaning on `isIntegerType()`:
+  // the latter is FALSE for a SCOPED enum (clang excludes `enum class`
+  // deliberately), and `std::errc` -- the enum that produced this bug -- is
+  // scoped, so the integer test alone still missed it.
+  if (canonical->isBooleanType() || canonical->isIntegerType() ||
+      canonical->isEnumeralType() || canonical->isFloatingType()) {
     std::string unboxed;
     {
       PushConversionKind push(*this, ConversionKind::Unboxed);
@@ -2870,7 +2880,20 @@ ConverterRefCount::GetDefaultAsStringFallback(clang::QualType qual_type) {
     return BoxValue(std::move(unboxed));
   }
 
-  return std::format("<{}>::default()", ToString(qual_type));
+  auto type_str = ToString(qual_type);
+  if (type_str.empty()) {
+    // Same refusal as the base: an empty spelling here is unparseable output,
+    // so record a ranked gap instead of emitting `<>::default()`.
+    auto cpp_type = Mapper::ToString(qual_type);
+    if (!ReportUnsupported("UnmappedType", cpp_type)) {
+      llvm::errs() << "default-initialized value of a type with no Rust "
+                      "spelling: "
+                   << cpp_type << '\n';
+      assert(0 && "default init of a type with no Rust spelling");
+    }
+    return UnsupportedPlaceholder("UnmappedType", cpp_type);
+  }
+  return std::format("<{}>::default()", type_str);
 }
 
 std::string
