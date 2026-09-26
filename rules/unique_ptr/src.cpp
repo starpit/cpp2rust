@@ -188,3 +188,35 @@ template <typename T1>
 bool f21(std::nullptr_t n, const std::unique_ptr<T1> &p) {
   return operator==(n, p);
 }
+
+// ---------------------------------------------------------------------------
+// std::unique_ptr's EXPLICIT operator bool.
+//
+// This is the actual shape that failed, and it failed SILENTLY-ADJACENT: with
+// no rule here, `if (tag_)` on a `std::unique_ptr<std::string> tag_` member
+// (dt_src/sys-arch-spec/progir/progir.h:277 and :317) came out of the unsafe
+// model as `(*other).tag_()` -- the converter's fallback for an unmatched
+// conversion operator turns the FIELD into a CALL, naming a method that never
+// existed.  Measured as 10 of dbo__src__InitBin.cpp's 69 E0599 rows
+// (`tag_` 5, `comment_` 5, across `InstrInfo`, `&InstrInfo` and
+// `&mut InstrInfo`).  The refcount model HIDES this class, because an unmapped
+// member there becomes an `unimplemented!()` default trait body that compiles,
+// so the unsafe leg is the one that proves it.
+//
+// Spelled `a0.operator bool()` -- never a bare `if (a0)`.  An implicit
+// spelling records no src entry and then aborts every translation with
+// `Expr rule loaded from IR but has no src`.  The spelling is copied verbatim
+// from the two in-repo precedents, rules/shared_ptr/src.cpp:201-203 and
+// rules/optional/src.cpp:79, rather than invented.
+//
+// Body is `.is_some()`, identical to f18: `operator bool` and `p != nullptr`
+// are the SAME predicate on a unique_ptr, and f18's body is already verified.
+// It answers from the CURRENT value, not the declared type, which is what makes
+// the moved-from / reset() transition come out false after being true.
+//
+// Inherits f3's pre-existing defect noted above: `unique_ptr<T> p(q)` with a
+// null q builds `Some(Box::from_raw(null))`, so this would answer true where
+// C++ answers false.  That is f3's bug, not this one's, and is recorded there.
+template <typename T1> bool f22(const std::unique_ptr<T1> &a0) {
+  return a0.operator bool();
+}

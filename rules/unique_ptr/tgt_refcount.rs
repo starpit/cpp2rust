@@ -121,3 +121,7 @@ fn f21<T1>(a0: (), a1: &Option<Value<T1>>) -> bool {
     let () = a0;
     a1.is_none()
 }
+
+fn f22<T1>(a0: &Option<Value<T1>>) -> bool {
+    a0.is_some()
+}
