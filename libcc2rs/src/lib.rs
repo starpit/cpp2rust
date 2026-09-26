@@ -65,4 +65,10 @@ pub use variant::*;
 mod deep_clone;
 pub use deep_clone::*;
 
+mod cmp_set;
+pub use cmp_set::*;
+
+mod vec_map_iter;
+pub use vec_map_iter::*;
+
 pub use libcc2rs_macros::{ByteRepr, goto, goto_block, switch};
