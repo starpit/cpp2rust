@@ -8,3 +8,7 @@ fn t1() -> libcc2rs::IgnoreRule {
 fn t2() -> libcc2rs::IgnoreRule {
     libcc2rs::IgnoreRule
 }
+
+fn t3() -> libcc2rs::IgnoreRule {
+    libcc2rs::IgnoreRule
+}

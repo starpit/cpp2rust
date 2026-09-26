@@ -10,3 +10,7 @@ fn t1<T1>() -> Box<[Value<Box<[T1]>>]> {
 fn t2<T1>() -> Box<[Value<Box<[Value<Box<[T1]>>]>>]> {
     Box::new([Default::default()])
 }
+
+fn t3() -> libcc2rs::IgnoreRule {
+    libcc2rs::IgnoreRule
+}
