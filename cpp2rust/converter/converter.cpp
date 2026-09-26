@@ -2230,7 +2230,67 @@ bool Converter::ShouldConvertMethod(const clang::CXXMethodDecl *decl) {
 }
 
 bool Converter::ConvertOutOfLineMethod(clang::CXXMethodDecl *decl) {
-  StrCat(keyword::kImpl, GetRecordName(decl->getParent()));
+  const auto *parent = decl->getParent();
+  // A method of a TRAIT-LOWERED class cannot go in `impl <name> { … }`: that name
+  // is a trait, so the block is an inherent impl on a trait and every call
+  // `Trait::method(self, …)` is E0782 "expected a type, found a trait" -- 11 in
+  // dbo-opt alone and 42 once progir.cpp (which DEFINES these methods) is
+  // compiled alongside. Measured: compiling the defining TU alongside supplies
+  // the bodies (`fn addStandardBlock` 0 -> 1) but MULTIPLIED the error, because
+  // the body landed in `impl ProgIrGraph { … }` and progir.cpp adds call sites.
+  //
+  // So route it into the trait block itself as a DEFAULT body. Default, not
+  // required: a required item would turn every `impl Trait for X` into E0046
+  // missing-member, and the body is right here, so there is no reason to demand
+  // one from each implementor.
+  //
+  // Only for a method whose class took the trait path AND whose block is still
+  // held; otherwise fall through to the inherent impl, which is correct for an
+  // ordinary ported struct.
+  if (parent != nullptr && abstract_structs_.contains(GetID(parent))) {
+    auto trait_name = GetRecordName(parent);
+    if (auto it = trait_blocks_.find(trait_name); it != trait_blocks_.end()) {
+      // Fields this body reads through `self` have to reach the same required
+      // accessors the trait already declares -- `Self` has no fields, so a bare
+      // `self.f` is E0609. PushTraitBody routes them, and it RECORDS the reads,
+      // so a field this body is the first to read needs its accessor declared
+      // too: ConvertAbstractClass already consumed trait_field_reads_ and
+      // emitted the accessors it knew about, and nothing else would emit a
+      // newly-discovered one.
+      auto saved_reads = std::move(trait_field_reads_);
+      trait_field_reads_.clear();
+      std::string method_text;
+      {
+        Buffer buf(*this);
+        PushMethodTarget push(*this, MethodTarget::TraitDefault);
+        PushTraitBody push_body(*this);
+        ConvertCXXMethodDecl(decl);
+        method_text = std::move(buf).str();
+      }
+      auto reads = std::move(trait_field_reads_);
+      trait_field_reads_ = std::move(saved_reads);
+
+      // Deduped against what the trait already declared, keyed the same way
+      // ConvertAbstractClass keys it, so a field read by two out-of-line bodies
+      // does not get two declarations (E0428).
+      auto &declared = trait_accessors_[GetID(parent)];
+      std::string accessors;
+      for (const auto *field : reads) {
+        if (std::find(declared.begin(), declared.end(), field) !=
+            declared.end()) {
+          continue;
+        }
+        declared.push_back(field);
+        accessors += std::format("{} fn {}(&self) -> {};", keyword_unsafe_,
+                                 TraitFieldAccessorName(field),
+                                 GetUnsafeTypeAsString(field->getType()));
+      }
+      it->second.body += accessors;
+      it->second.body += method_text;
+      return false;
+    }
+  }
+  StrCat(keyword::kImpl, GetRecordName(parent));
   PushBrace impl_brace(*this);
   return ConvertCXXMethodDecl(decl);
 }
