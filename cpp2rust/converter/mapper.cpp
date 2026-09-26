@@ -106,6 +106,47 @@ std::string GetExprMapKey(const std::string &str) {
 
 constexpr const char kPackMarker[] = "&&...";
 
+// The ARITY-AGNOSTIC spelling of a pack, and deliberately NOT a run of one
+// kPackMarker: a pack with exactly one element prints identically that way, so
+// `try_emplace(const T1 &, &&...)` would mean both "one more argument" and "any
+// number of them" -- the very collapse this change exists to undo (measured:
+// with a shared token f50 and f51 came back identical). No digits, because
+// normalizeTranslationRule wildcards integers, and no angle brackets, because
+// matchTemplate counts those for template depth.
+constexpr const char kPackWildcard[] = "&&...any";
+
+// Pack printing is ARITY-AWARE: an instantiated parameter pack prints one
+// kPackMarker per element, so `m.try_emplace(k)` and `m.try_emplace(k, v)` get
+// DIFFERENT signatures. Before that, a whole pack printed as one marker and
+// arity was absent from the key, so every rule for a pack-taking function
+// collapsed onto one string and whichever entry reached the multimap first
+// answered every call at every arity: rules/map's one-argument f51
+// (`try_emplace(k)`, used by every dt_src try_emplace site) was shadowed by the
+// two-argument f50, and `symbolicDimInfo_.emplace(*symIt)` in dsc/dims.cpp got
+// the two-argument emplace body and tripped the `$2` bounds assert.
+//
+// A rule whose pack is UNEXPANDED -- a pack parameter in a template the rule
+// preprocessor never instantiates, as in rules/unique_ptr's
+// `f8(Init<T1, Args> &&...args)` -- has no arity to print and means "any
+// arity". It gets the kPackWildcard spelling instead, and searchExpr asks a
+// second time in that spelling after the exact-arity spelling misses. That is
+// the two tiers: an exact-arity rule wins when one exists, and one general rule
+// still serves every arity (`std::make_unique<T>(Args &&...)` has exactly one,
+// and encoding arity with no fallback made it match only arity 1 -- 22 new
+// suite failures, 14 of them the unique_ptr tests).
+//
+// Deliberately NOT done: registering an arity-SPECIFIC rule under the wildcard
+// spelling too. That would put f50 back in front of an arity-1 try_emplace via
+// the fallback tier and re-trip the very assert this fixes. Only a rule that
+// declares itself arity-agnostic gets to answer the wildcard tier.
+bool pack_wildcard_ = false;
+
+struct PackWildcardScope {
+  bool saved;
+  PackWildcardScope() : saved(pack_wildcard_) { pack_wildcard_ = true; }
+  ~PackWildcardScope() { pack_wildcard_ = saved; }
+};
+
 std::string GetTypeMapKey(const std::string &str) {
   auto n = str.find_first_of("<[");
   if (n == std::string::npos || str[n] == '<') {
@@ -727,8 +768,26 @@ ExprMatch searchExpr(const clang::Expr *expr) {
       return {res.first, std::move(res.second), std::move(with_targs)};
     }
   }
-  auto res = search(exprs_, plain, GetExprMapKey(plain));
-  return {res.first, std::move(res.second), std::move(plain)};
+  if (auto res = search(exprs_, plain, GetExprMapKey(plain)); res.first) {
+    return {res.first, std::move(res.second), std::move(plain)};
+  }
+  // Tier two: the arity-agnostic pack spelling. Only a rule whose own pack was
+  // unexpanded is written in it (see kPackMarker), so this cannot resurrect an
+  // arity-specific rule at the wrong arity -- it exists so that ONE general
+  // rule, `std::make_unique<T1>(&&...any)`, keeps serving every arity.
+  std::string wildcard;
+  {
+    PackWildcardScope scope;
+    wildcard = ToString(expr);
+  }
+  if (wildcard != plain) {
+    log() << "search expr pack wildcard " << wildcard << '\n';
+    auto res = search(exprs_, wildcard, GetExprMapKey(wildcard));
+    if (res.first) {
+      return {res.first, std::move(res.second), std::move(wildcard)};
+    }
+  }
+  return {nullptr, {}, std::move(plain)};
 }
 
 TranslationRule::ExprRule *search(const clang::Expr *expr) {
@@ -1993,10 +2052,37 @@ std::string ToString(const clang::NamedDecl *decl, TemplateArgs targs) {
     os << ToString(func_decl->getParamDecl(i)->getType());
   }
   if (has_pack) {
-    if (num_params) {
-      os << ", ";
+    // How many elements the pack actually has -- see kPackMarker above. An
+    // unexpanded pack parameter (a template that was never instantiated) has no
+    // answer, and so does an instantiation whose parameter count came out below
+    // the primary's fixed count; both fall back to the arity-agnostic wildcard.
+    bool unexpanded = func_decl->getNumParams() <= num_params;
+    for (unsigned i = 0, n = func_decl->getNumParams(); i < n && !unexpanded;
+         ++i) {
+      unexpanded = func_decl->getParamDecl(i)->isParameterPack();
     }
-    os << kPackMarker;
+    // An EMPTY instantiated pack counts as unexpanded, i.e. as the wildcard.
+    // That is how rules/unique_ptr's f8 is reached: cpp-rule-preprocessor does
+    // instantiate it, with `Args` empty, so the arity-aware spelling would be
+    // `std::make_unique()` -- a claim of arity zero, which is exactly the rule
+    // the module does NOT want. Measured: keyed that way, f8 answers only the
+    // zero-argument call and every other arity goes unmapped. Printing the
+    // wildcard instead makes the zero-argument call match it on tier one (the
+    // spellings coincide) and every other arity on tier two.
+    if (unexpanded || pack_wildcard_) {
+      if (num_params) {
+        os << ", ";
+      }
+      os << kPackWildcard;
+    } else {
+      for (unsigned i = 0, n = func_decl->getNumParams() - num_params; i < n;
+           ++i) {
+        if (num_params || i) {
+          os << ", ";
+        }
+        os << kPackMarker;
+      }
+    }
   }
   if (func_decl->isVariadic()) {
     if (func_decl->getNumParams()) {
