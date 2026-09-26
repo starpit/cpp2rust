@@ -142,6 +142,27 @@ void Converter::ConvertUniquePtrDeref(clang::CXXOperatorCallExpr *expr) {
   }
 }
 
+// A rule module's top-level imports are NOT reproduced by the IR: the
+// preprocessor drops them, so `grep -c dataflowir_gen` on an emitted file was 0
+// while `Ptr<OpInst>` was referenced from line 4965. `MlirBlock`/`MlirRegion`
+// are the proof this is an IMPORT gap and not a missing rule -- they are not
+// MLIR names at all, they are aliases invented by one `use` line in
+// rules/mlir/tgt_{unsafe,refcount}.rs, and they were undefined in the output too.
+//
+// The line below is the UNION of every rule module's non-local, non-std imports,
+// and today that union is ONE line: rules/mlir is the only module with a
+// top-level import that is neither `libcc2rs::*` nor `std::` (measured over all
+// 89 modules -- the others' `use` lines are function-local and travel inside the
+// body text). Union rather than used-modules-only, deliberately: an unused
+// import is at worst a warning, a missing one was an undefined name.
+//
+// Spelled here rather than DERIVED from the loaded modules because the converter
+// cannot currently derive it. The IR does not carry `use` lines (the
+// preprocessor drops them), and the converter never receives the rules directory
+// either -- factory.cpp:14 hands it straight to Mapper::LoadTranslationRules and
+// keeps no copy -- so there is nothing to read them back from. Deriving it needs
+// either the preprocessor to emit the imports into the IR or a Mapper accessor
+// for the loaded modules; until one exists, this line IS the union.
 void Converter::EmitFilePreamble() {
   StrCat(R"(
 extern crate libc;
@@ -152,6 +173,7 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write, Seek};
 use std::os::fd::{AsFd, FromRawFd, IntoRawFd};
 use std::rc::Rc;
+use dataflowir_gen::fmt::{Block as MlirBlock, OpInst, Region as MlirRegion};
 )");
 }
 
