@@ -877,6 +877,26 @@ protected:
   virtual std::string
   GetOverloadedFunctionName(const clang::FunctionDecl *decl);
 
+  // The mangler PROPER: base name plus the Rust spelling of every parameter.
+  // Two C++ overloads whose parameters have the SAME Rust spelling come out of
+  // this identical -- that is a collision, and it is not hypothetical:
+  // progir.h:154 and :157 declare `setOperand(const long, SdscFoldIdInput)` and
+  // `setOperand(const long long, SdscFoldIdInput)`, distinct C++ types that are
+  // both `i64`, and they were emitted as one name. That single collision wore
+  // four different error codes -- E0592 in the unsafe model, E0201+E0428+E0046
+  // in the refcount one -- across most sampled TUs.
+  std::string GetOverloadedFunctionNameRaw(const clang::FunctionDecl *decl);
+
+  // Whether some OTHER member of `decl`'s overload set mangles to `raw`.
+  bool OverloadNameCollides(const clang::FunctionDecl *decl,
+                            std::string_view raw);
+
+  // What to append when it does. Overridden by the refcount model, which has a
+  // cheaper answer for the axis it erases (pointee constness) and falls back to
+  // this one otherwise. Empty means "cannot tell them apart", which is left
+  // LOUD as a collision rather than papered over.
+  virtual std::string OverloadCollisionSuffix(const clang::FunctionDecl *decl);
+
   virtual std::string GetRecordName(const clang::NamedDecl *decl) const;
 
   virtual std::vector<const char *>

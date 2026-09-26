@@ -815,38 +815,28 @@ ConverterRefCount::GetOverloadedFunctionName(const clang::FunctionDecl *decl) {
       it != overload_name_cache_.end()) {
     return it->second;
   }
-
-  auto base = Converter::GetOverloadedFunctionName(decl);
-
-  // Only a real collision earns a suffix.  Scan the overload set the name came
-  // out of: if some OTHER member mangles to the same string, constness is the
-  // only thing left that could still tell them apart, so disambiguate with the
-  // fingerprint.  Every name that is already unique is left byte-identical,
-  // which is what keeps this from churning the expected .rs files.
-  const auto *method = clang::dyn_cast<clang::CXXMethodDecl>(decl);
-  bool collides = false;
-  if (method != nullptr) {
-    for (const auto *sibling : method->getParent()->methods()) {
-      if (sibling == method ||
-          sibling->getDeclName() != method->getDeclName()) {
-        continue;
-      }
-      if (Converter::GetOverloadedFunctionName(sibling) == base) {
-        collides = true;
-        break;
-      }
-    }
-  }
-
-  auto name = base;
-  if (collides) {
-    if (auto fingerprint = ConstnessFingerprint(decl); !fingerprint.empty()) {
-      name += '_';
-      name += fingerprint;
-    }
-  }
+  // The collision scan and the suffix append now live in the base, so BOTH
+  // models get them: the unsafe model was missing the scan entirely, which is
+  // why the same `setOperand` collision showed up there as a bare E0592. This
+  // override is now only the memo -- the scan walks the whole overload set and
+  // mangles every member of it, which is O(n^2) per record without it.
+  auto name = Converter::GetOverloadedFunctionName(decl);
   overload_name_cache_.emplace(decl, name);
   return name;
+}
+
+std::string
+ConverterRefCount::OverloadCollisionSuffix(const clang::FunctionDecl *decl) {
+  // Constness first, so every name this model already disambiguated keeps the
+  // exact suffix it had and no expected .rs file churns. It is empty whenever
+  // the overloads do not differ in a pointee's constness -- `long` vs
+  // `long long` being the measured case -- and then the base's C++ parameter
+  // fingerprint answers instead. Before this, empty meant NO suffix and the
+  // collision simply stood.
+  if (auto fingerprint = ConstnessFingerprint(decl); !fingerprint.empty()) {
+    return fingerprint;
+  }
+  return Converter::OverloadCollisionSuffix(decl);
 }
 
 bool ConverterRefCount::VisitCXXConstructorDecl(

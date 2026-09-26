@@ -72,6 +72,9 @@ public:
   std::string
   GetOverloadedFunctionName(const clang::FunctionDecl *decl) override;
 
+  std::string
+  OverloadCollisionSuffix(const clang::FunctionDecl *decl) override;
+
   // Memo for the above: the collision scan walks the whole overload set and
   // mangles every member of it, which is O(n^2) per record without this.
   std::unordered_map<const clang::FunctionDecl *, std::string>

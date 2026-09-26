@@ -7060,7 +7060,7 @@ std::string Converter::ConvertVarDefaultInit(clang::QualType qual_type) {
 }
 
 std::string
-Converter::GetOverloadedFunctionName(const clang::FunctionDecl *decl) {
+Converter::GetOverloadedFunctionNameRaw(const clang::FunctionDecl *decl) {
   auto name = GetFunctionBaseName(decl);
   if (auto *conversion = clang::dyn_cast<clang::CXXConversionDecl>(decl)) {
     name = GetConversionName(
@@ -7144,6 +7144,65 @@ Converter::GetOverloadedFunctionName(const clang::FunctionDecl *decl) {
   // four more: the two spellings agree on every input.
   ToIdentifier(name);
   return name;
+}
+
+bool Converter::OverloadNameCollides(const clang::FunctionDecl *decl,
+                                     std::string_view raw) {
+  // Methods only: a free function's overload set is not enumerable from the decl
+  // the way a record's `methods()` is, and every measured collision is a method.
+  const auto *method = clang::dyn_cast<clang::CXXMethodDecl>(decl);
+  if (method == nullptr) {
+    return false;
+  }
+  for (const auto *sibling : method->getParent()->methods()) {
+    if (sibling == method || sibling->getDeclName() != method->getDeclName()) {
+      continue;
+    }
+    // Raw, NOT the disambiguating wrapper: the wrapper calls this, so asking it
+    // here would recurse forever.
+    if (GetOverloadedFunctionNameRaw(sibling) == raw) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::string
+Converter::OverloadCollisionSuffix(const clang::FunctionDecl *decl) {
+  // The C++ parameter types, canonically spelled. This is the information the
+  // Rust spelling threw away and is therefore the only thing that can separate
+  // the overloads: `long` and `long long` are distinct C++ types that are both
+  // `i64`, and `int64_t` is a typedef for one of them, so the CANONICAL spelling
+  // is what must be used (the written spelling would make `int64_t` and `long`
+  // look different when they are the same overload).
+  //
+  // Only ever appended on a real collision, so every already-unique name stays
+  // byte-identical and no existing expected .rs file churns.
+  std::string out;
+  for (auto *parameter : decl->parameters()) {
+    out += '_';
+    out += Mapper::ToRustName(
+        parameter->getType().getCanonicalType().getUnqualifiedType().getAsString());
+  }
+  ToIdentifier(out);
+  return out;
+}
+
+std::string
+Converter::GetOverloadedFunctionName(const clang::FunctionDecl *decl) {
+  auto raw = GetOverloadedFunctionNameRaw(decl);
+  if (!OverloadNameCollides(decl, raw)) {
+    return raw;
+  }
+  auto suffix = OverloadCollisionSuffix(decl);
+  if (suffix.empty()) {
+    return raw;
+  }
+  if (suffix.front() != '_') {
+    raw += '_';
+  }
+  raw += suffix;
+  return raw;
 }
 
 std::string Converter::GetRecordName(const clang::NamedDecl *decl) const {
