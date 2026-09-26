@@ -22,6 +22,7 @@
 #include "converter/converter_lib.h"
 #include "converter/lex.h"
 #include "converter/mapper.h"
+#include "converter/survey.h"
 
 namespace cpp2rust {
 std::unordered_map<std::string, std::string> Converter::inner_structs_;
@@ -201,6 +202,13 @@ bool Converter::VisitBuiltinType(clang::BuiltinType *type) {
     Convert(ctx_.VoidPtrTy);
     break;
   default:
+    if (survey::Enabled()) {
+      survey::Record(survey::GapKind::kUnmappedType,
+                     std::string("builtin: ") +
+                         type->getName(ctx_.getPrintingPolicy()).str(),
+                     {});
+      break;
+    }
     llvm::errs() << "unsupported builtin type: "
                  << type->getName(ctx_.getPrintingPolicy()) << '\n';
     assert(0 && "unsupported builtin type\n");
@@ -389,6 +397,9 @@ bool Converter::VisitTranslationUnitDecl(clang::TranslationUnitDecl *decl) {
 }
 
 bool Converter::VisitFunctionDecl(clang::FunctionDecl *decl) {
+  if (survey::Enabled()) {
+    survey::SetScope(decl->getQualifiedNameAsString());
+  }
   if (auto method = clang::dyn_cast<clang::CXXMethodDecl>(decl)) {
     return VisitCXXMethodDecl(method);
   }
@@ -1009,6 +1020,10 @@ bool Converter::VisitCXXRecordDecl(clang::CXXRecordDecl *decl) {
       return false;
     }
     EmitRustStructOrUnion(decl);
+  } else if (survey::Enabled()) {
+    survey::Record(survey::GapKind::kUnsupportedConstruct,
+                   "record kind: " + std::string(decl->getKindName()),
+                   decl->getLocation().printToString(ctx_.getSourceManager()));
   } else {
     // FIXME: improve error handling
     assert(0 && "unsupported record kind");
@@ -1064,6 +1079,9 @@ void Converter::DefineImplicitMembers(clang::CXXRecordDecl *decl) {
 }
 
 bool Converter::VisitCXXMethodDecl(clang::CXXMethodDecl *decl) {
+  if (survey::Enabled()) {
+    survey::SetScope(decl->getQualifiedNameAsString());
+  }
   decl->dump(log());
   if (!ShouldConvertMethod(decl)) {
     return false;
@@ -1135,6 +1153,14 @@ bool Converter::ConvertCXXMethodDecl(clang::CXXMethodDecl *decl) {
   }
   ConvertFunctionReturnType(decl);
   if (decl->isPureVirtual() || method_target_ == MethodTarget::TraitDecl) {
+    StrCat(token::kSemiColon);
+  } else if (method_target_ == MethodTarget::TraitDefault &&
+             survey::Enabled()) {
+    survey::Record(
+        survey::GapKind::kMissingTraitBody,
+        decl->getParent()->getQualifiedNameAsString() + "::" +
+            GetMethodName(decl),
+        decl->getLocation().printToString(ctx_.getSourceManager()));
     StrCat(token::kSemiColon);
   } else if (method_target_ == MethodTarget::TraitDefault) {
     // No definition of this method is visible, so there is no body to
@@ -1980,6 +2006,15 @@ Converter::CallInfo Converter::CollectCallInfo(clang::CallExpr *expr) {
     }
   }
   if (!function && !proto) {
+    if (survey::Enabled()) {
+      survey::Record(survey::GapKind::kUnsupportedConstruct,
+                     "call with neither function decl nor prototype: " +
+                         Mapper::ToString(callee->getType()),
+                     expr->getExprLoc().printToString(ctx_.getSourceManager()));
+      CallInfo info{};
+      info.expr = expr;
+      return info;
+    }
     llvm::report_fatal_error(
         "Either function decl or function prototype should be known");
   }
@@ -3193,6 +3228,36 @@ bool Converter::ConvertCXXOperatorCallExpr(clang::CXXOperatorCallExpr *expr) {
     computed_expr_type_ = ComputedExprType::FreshValue;
     break;
   default:
+    if (survey::Enabled()) {
+      std::string detail =
+          std::string("CXXOperatorCallExpr: ") +
+          clang::getOperatorSpelling(expr->getOperator()) + " on " +
+          Mapper::ToString(expr->getArg(0)->getType());
+      if (auto *callee = expr->getDirectCallee()) {
+        detail = std::string("CXXOperatorCallExpr: ") +
+                 callee->getQualifiedNameAsString() + "(" + [&] {
+                   std::string params;
+                   for (unsigned i = 0; i < callee->getNumParams(); ++i) {
+                     if (i) {
+                       params += ", ";
+                     }
+                     params += Mapper::ToString(callee->getParamDecl(i)
+                                                    ->getType(),
+                                                Mapper::ScalarSugar::kPreserve);
+                   }
+                   return params;
+                 }() + ")";
+      }
+      survey::Record(survey::GapKind::kUnsupportedExpr, detail,
+                     expr->getExprLoc().printToString(ctx_.getSourceManager()));
+      // Keep peeling: walk the operands so gaps *behind* this one are found
+      // too, instead of hiding one layer of the onion per run.
+      for (auto *arg : expr->arguments()) {
+        Convert(arg);
+      }
+      computed_expr_type_ = ComputedExprType::FreshValue;
+      break;
+    }
     // FIXME: improve error handling
     llvm::errs() << "unsupported CXXOperatorCallExpr: "
                  << clang::getOperatorSpelling(expr->getOperator()) << '\n';
@@ -4030,6 +4095,11 @@ std::string Converter::GetArrayDefaultAsString(clang::QualType qual_type) {
       break;
     }
     default:
+      if (survey::Enabled()) {
+        survey::Record(survey::GapKind::kUnsupportedConstruct,
+                       "array size kind", {});
+        break;
+      }
       assert(0 && "Unsupported array size kind");
       break;
     }
@@ -4785,6 +4855,13 @@ void Converter::ConvertUnsignedArithBinaryOperator(clang::BinaryOperator *op,
     StrCat("wrapping_rem");
     break;
   default:
+    if (survey::Enabled()) {
+      survey::Record(survey::GapKind::kUnsupportedExpr,
+                     std::string("unsigned binary operator: ") +
+                         clang::BinaryOperator::getOpcodeStr(opcode).str(),
+                     op->getExprLoc().printToString(ctx_.getSourceManager()));
+      break;
+    }
     // FIXME: improve error handling
     llvm::errs() << "unsupported unsigned binary operator: " << opcode << '\n';
     op->dump();

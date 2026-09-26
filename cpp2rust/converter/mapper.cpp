@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "converter/converter_lib.h"
+#include "converter/survey.h"
 #include "converter/translation_rule.h"
 
 namespace cpp2rust::Mapper {
@@ -630,6 +631,12 @@ clang::QualType normalizeQualType(clang::QualType qual_type) {
 std::string mapTypeStringRecursive(const std::string &cpp_type) {
   auto [rule, subs] = search(types_, cpp_type, GetTypeMapKey(cpp_type));
   if (!rule) {
+    if (survey::Enabled()) {
+      survey::Record(survey::GapKind::kUnmappedType, cpp_type, {});
+      // No Rust is emitted in survey mode, so the returned spelling is never
+      // written anywhere; it only keeps the walk going.
+      return cpp_type;
+    }
     llvm::errs() << "cpp_type: " << cpp_type << '\n';
     assert(0 && "Type is not present in types_");
   }
@@ -987,6 +994,14 @@ std::string ToString(const clang::NamedDecl *decl) {
       os << "shreq";
       break;
     default:
+      if (survey::Enabled()) {
+        survey::Record(survey::GapKind::kUnsupportedExpr,
+                       std::string("mapped operator name: ") +
+                           clang::getOperatorSpelling(op),
+                       {});
+        os << "unmapped_op";
+        break;
+      }
       assert(0 && "Unexpected overloaded operator kind");
     }
   } else if (const auto *method_decl =

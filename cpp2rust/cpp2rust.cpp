@@ -18,6 +18,7 @@
 
 #include <llvm/Support/CommandLine.h>
 
+#include "converter/survey.h"
 #include "cpp2rust_lib.h"
 #include "logging.h"
 
@@ -42,7 +43,6 @@ llvm::cl::opt<std::string>
 
 llvm::cl::opt<std::string> RsFile("o", llvm::cl::desc("Path to the Rust file"),
                                   llvm::cl::value_desc("output.rs"),
-                                  llvm::cl::Required,
                                   llvm::cl::cat(cpp2rust_cmdargs));
 
 llvm::cl::opt<std::string>
@@ -56,6 +56,18 @@ llvm::cl::opt<std::string>
     RulesDir("rules",
              llvm::cl::desc("Directory where translation rules are located"),
              llvm::cl::value_desc("rules"), llvm::cl::cat(cpp2rust_cmdargs));
+
+llvm::cl::opt<bool>
+    Survey("survey",
+           llvm::cl::desc("Discovery mode: record every translation gap in the "
+                          "TU instead of aborting on the first one. Emits NO "
+                          "Rust output at all"),
+           llvm::cl::init(false), llvm::cl::cat(cpp2rust_cmdargs));
+
+llvm::cl::opt<std::string>
+    SurveyOut("survey-out",
+              llvm::cl::desc("Path for the --survey gap report (TSV)"),
+              llvm::cl::value_desc("gaps.tsv"), llvm::cl::cat(cpp2rust_cmdargs));
 
 llvm::cl::list<std::string> CXXFlags("cxxflags",
                                      llvm::cl::desc("Additional CXXFLAGS"),
@@ -122,6 +134,20 @@ int main(int argc, char *argv[]) {
 
   cpp2rust::SetVerbose(Verbose);
 
+  if (Survey) {
+    if (SurveyOut.empty()) {
+      llvm::errs() << "ERROR: --survey requires --survey-out=<file>\n";
+      return EXIT_FAILURE;
+    }
+    cpp2rust::survey::Enable(SurveyOut, CcFile.empty() ? BuildDir : CcFile);
+  } else if (!SurveyOut.empty()) {
+    llvm::errs() << "ERROR: --survey-out requires --survey\n";
+    return EXIT_FAILURE;
+  } else if (RsFile.empty()) {
+    llvm::errs() << "ERROR: -o is required\n";
+    return EXIT_FAILURE;
+  }
+
   if (CcFile.empty() && BuildDir.empty()) {
     llvm::errs() << "ERROR: please provide either --file or --dir\n";
     return EXIT_FAILURE;
@@ -174,6 +200,15 @@ int main(int argc, char *argv[]) {
       BuildDir.empty()
           ? cpp2rust::TranspileSrc(cc_code, model, cxx_flags, RulesDir, CcFile)
           : cpp2rust::TranspileDir(BuildDir, model, RulesDir);
+
+  if (Survey) {
+    // Survey mode is a discovery pass: gaps out, no code out. Deliberately
+    // never writes -o, never runs rustfmt, never leaves a partial .rs behind.
+    cpp2rust::survey::Write();
+    llvm::errs() << "survey: " << cpp2rust::survey::state().gaps.size()
+                 << " distinct gaps written to " << SurveyOut << '\n';
+    return EXIT_SUCCESS;
+  }
 
   if (rs_code.empty()) {
     llvm::errs() << "ERROR: empty output file\n";

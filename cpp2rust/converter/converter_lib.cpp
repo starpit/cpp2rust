@@ -3,6 +3,8 @@
 
 #include "converter/converter_lib.h"
 
+#include "converter/survey.h"
+
 #include <clang/AST/DeclTemplate.h>
 #include <clang/AST/ExprCXX.h>
 #include <clang/AST/ExprConcepts.h>
@@ -834,6 +836,13 @@ std::string GetNamedDeclAsString(const clang::NamedDecl *decl) {
   if (name.empty()) {
     auto *pdecl = llvm::dyn_cast<clang::ParmVarDecl>(decl);
     if (!pdecl) {
+      if (survey::Enabled()) {
+        survey::Record(survey::GapKind::kUnsupportedConstruct,
+                       std::string("unnamed construct: ") + decl->getDeclKindName(),
+                       decl->getLocation().printToString(
+                           decl->getASTContext().getSourceManager()));
+        return "unnamed_decl";
+      }
       decl->dump();
       llvm::report_fatal_error("Unexpected unnamed construct");
     }
@@ -889,6 +898,11 @@ clang::QualType GetReturnTypeOfFunction(const clang::CallExpr *expr) {
     }
   }
 
+  if (survey::Enabled()) {
+    survey::Record(survey::GapKind::kUnsupportedConstruct,
+                   "function prototype: " + callee_ty.getAsString(), {});
+    return {};
+  }
   assert(0 && "Unhandled function prototype");
   return {};
 }
@@ -975,6 +989,16 @@ const char *GetOverloadedOperator(const clang::FunctionDecl *decl) {
   case clang::OO_Subscript:
     return "operator_index";
   default:
+    if (survey::Enabled()) {
+      survey::Record(survey::GapKind::kUnsupportedExpr,
+                     std::string("overloaded operator: ") +
+                         clang::getOperatorSpelling(
+                             decl->getOverloadedOperator()) +
+                         " (" + std::to_string(operands) + " operands)",
+                     decl->getLocation().printToString(
+                         decl->getASTContext().getSourceManager()));
+      return "";
+    }
     assert(0 && "unsupported overloaded operator");
     return "";
   }
