@@ -1115,6 +1115,41 @@ std::string mapTypeStringRecursive(const std::string &cpp_type) {
     }
   }
   if (!rule) {
+    // `std::nullptr_t`, reached as a DEDUCED TEMPLATE ARGUMENT
+    // (std::make_pair(nullptr, nullptr) at dlOps.cpp:1351,
+    // std::make_tuple(nullptr, 0, 0, 0, 0) at Sentient/Utils.cpp:164).
+    //
+    // The QualType path never needs this: a nullptr_t spelled in the source
+    // reaches Converter::VisitBuiltinType, whose BuiltinType::NullPtr case
+    // converts `void *` instead (converter.cpp:670), so the representation is
+    // the model's void-pointer one. The STRING path has no QualType and no
+    // builtin traversal to fall back to, so the same spelling aborted here.
+    // Delegate to that SAME void-pointer mapping by looking `void *` up: the
+    // rule is registered per model by addBuiltinTypes (`*mut ::libc::c_void`
+    // unsafe, `AnyPtr` refcount), so the two paths cannot drift apart.
+    //
+    // NOT registered as a type rule for `std::nullptr_t`, and deliberately so
+    // (see 391b97b): a rule would also be found by search(clang::QualType) and
+    // would PRE-EMPT the builtin traversal above, and a type rule's target is
+    // normalized to one `Value<..>` layer, which cannot reproduce the
+    // `Value<Value<AnyPtr>>` a nullptr_t VARIABLE has (tests/unit/types.cpp).
+    // Confining it to this function leaves every QualType-reachable site
+    // exactly as it was.
+    if (ctx_) {
+      // Built the same way addBuiltinTypes registers it, so the key cannot
+      // disagree with the registration if clang's spelling of `void` changes.
+      const std::string void_ptr = ToString(ctx_->VoidTy) + " *";
+      if (cpp_type == "std::nullptr_t" || cpp_type == "nullptr_t" ||
+          cpp_type == "decltype(nullptr)") {
+        return mapTypeStringRecursive(void_ptr);
+      }
+      if (cpp_type == "const std::nullptr_t" ||
+          cpp_type == "const nullptr_t" ||
+          cpp_type == "const decltype(nullptr)") {
+        return mapTypeStringRecursive("const " + void_ptr);
+      }
+    }
+
     // Pointer-to-a-library-type, reached as a container's element type
     // (std::map<K, std::vector<regInfo>*>). Deliberately handled HERE and not
     // by registering `std::vector<T> *` as a real type rule: the converter's

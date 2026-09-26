@@ -642,3 +642,17 @@ unsafe fn f136<T1>(a0: *mut T1, a1: *mut T1) -> bool {
 unsafe fn f137<T1>(a0: *mut T1, a1: *mut T1) -> bool {
     a0 != a1
 }
+
+// Random-access `>=` and `+=` on std::vector's iterator. See src.cpp.
+
+// `long` arrives as i64, so the cast to isize is load-bearing: the inlined
+// body substitutes the caller's own i64 expression for a1 (measured: E0308
+// `expected isize, found i64` without it).
+unsafe fn f139<T1>(a0: &mut *mut T1, a1: i64) -> *mut T1 {
+    let __n = (*a0).offset(a1 as isize);
+    *a0 = __n;
+    *a0
+}
+unsafe fn f138<T1>(a0: *const T1, a1: *const T1) -> bool {
+    a0 >= a1
+}

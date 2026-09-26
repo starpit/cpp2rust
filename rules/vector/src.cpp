@@ -897,3 +897,57 @@ bool f137(const std::reverse_iterator<T1 *> &a,
           const std::reverse_iterator<T1 *> &b) {
   return operator!=(a, b);
 }
+
+// ---------------------------------------------------------------------------
+// The remaining RANDOM-ACCESS operations on std::vector's iterator
+// (std::__wrap_iter<T1 *>): relational `>=` and compound `+=`.
+//
+// Both were RULES gaps: Sentient__Analyses__Liveness.cpp calls
+// `operator>=(const std::__wrap_iter<int *> &, const std::__wrap_iter<int *> &)`
+// and Sentient__Analyses__RegisterPressureAnalysis.cpp calls
+// `std::__wrap_iter<...> & std::__wrap_iter<...>::operator+=(long)`.
+//
+// MODEL: identical to the representation f22-f33/f84-f89/f128 already
+// established for this type -- a forward iterator into a contiguous buffer IS
+// the pointer (unsafe: `*mut T1`; refcount: `Ptr<T1>`, a (kind, offset) pair).
+// Over that representation both ops are EXACT:
+//   * `>=` is a POSITION COMPARISON. Raw pointers have Ord and Ptr has Ord
+//     (kind first, then byte offset), so two iterators into one buffer order
+//     correctly at equality and on both sides of it. Agrees with f26/f27
+//     (`!=`/`==`) and f33 (difference) rather than inventing anything.
+//   * `+=` advances by n and yields the UPDATED iterator, so the receiver is
+//     `&mut` and the body both stores and returns. Same shape as f89's
+//     `it.operator++()`, which also returns `iterator &` and is modelled as
+//     returning the new value.
+//
+// The `+=` step is SIGNED (`long` = difference_type, so `it += -2` is legal
+// C++), which is why the bodies use `offset`/`offset` and not `add`. Note
+// Ptr::offset walks a `usize` with wrapping_add, so a negative step lands on
+// the wrapped offset -- the same arithmetic that lets f115's rend() be
+// `to_end().offset(-(len + 1))`; it round-trips as long as the C++ iterator
+// itself stays in range, which is exactly the standard's precondition.
+//
+// SPELLING: `operator>=(a, b)` free-function form because that is what libc++
+// declares, and `a0.operator+=(a1)` because `+=` IS a member -- the other way
+// round for either one and the rule silently never resolves. `+=`'s parameter
+// is spelled `long`, not std::size_t as f25 is, to match the resolved key
+// `operator+=(long)`.
+//
+// The recorded key for `>=` reads `bool operator ge(...)`: this IR spells
+// operators whose punctuation would collide with template brackets in their
+// Itanium-mangled form, the same convention as the `operator shl`/`operator
+// shr` keys that carry every `<<`/`>>` in rules/iostream. It is NOT a sign the
+// rule failed to bind -- verified against a call site below.
+// ---------------------------------------------------------------------------
+
+template <typename T1>
+typename std::vector<T1>::iterator &
+f139(typename std::vector<T1>::iterator &it, long n) {
+  return it.operator+=(n);
+}
+
+template <typename T1>
+bool f138(const typename std::vector<T1>::iterator &it1,
+          const typename std::vector<T1>::iterator &it2) {
+  return operator>=(it1, it2);
+}

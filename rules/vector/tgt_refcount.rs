@@ -556,3 +556,21 @@ fn f136<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
 fn f137<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
     a0 != a1
 }
+
+// Random-access `>=` and `+=` on std::vector's iterator. See src.cpp.
+
+// The `let` is load-bearing, and so is its ORDER. Each occurrence of a0 is
+// substituted independently, a read as `(*x.borrow())` and the assignment as
+// `(*x.borrow_mut())`; written as the single statement
+// `*a0 = a0.offset(..)` the two guards are alive at once and the run dies with
+// "RefCell already borrowed" (measured). Sequencing the read into its own
+// statement drops the shared guard before the mutable one is taken. No E0716:
+// __n is an owned Ptr, not a reference into the temporary guard.
+fn f139<T1>(a0: &mut Ptr<T1>, a1: i64) -> Ptr<T1> {
+    let __n = a0.offset(a1 as isize);
+    *a0 = __n;
+    a0.clone()
+}
+fn f138<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
+    a0 >= a1
+}
