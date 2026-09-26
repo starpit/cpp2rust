@@ -170,3 +170,32 @@ std::pair<typename std::set<T1>::iterator, bool> f26(std::set<T1> &o,
                                                      const T1 &v) {
   return o.emplace(v);
 }
+
+// std::set::erase(const_iterator) -- MISSING until now, and its absence was not
+// a silent gap: the converter synthesised `erase_UnsafeMapIteratori32_i32` as a
+// method on BTreeMap, a name nothing defines, so every TU using it failed to
+// compile (E0599).  Found by the rules/set guard probe before the CmpSet
+// migration, which is exactly what that probe exists for.
+//
+// THE KEY, from `-verbose` (mapper.cpp:759) rather than predicted:
+//   std::__tree_const_iterator<T1, std::__tree_node<T1, void *> *, long>
+//     std::set<T1>::erase(std::__tree_const_iterator<T1, std::__tree_node<T1, void *> *, long>)
+// Worth recording that `__tree_const_iterator` is REACHABLE IN A FUNCTION KEY --
+// f5/f6 (`find`) already carry it in their RETURN type.  The collision that
+// blocks the comparator family is specific to the TYPE key in `types_`, where one
+// string must map to one Rust type; a function key naming the same spelling is
+// fine.  libc++ spells `iterator` and `const_iterator` identically for a set, so
+// there is ONE overload here, not two.
+//
+// SEMANTICS THAT MUST NOT BE FUDGED.  This overload removes the element AT the
+// iterator's POSITION and returns an ITERATOR TO THE FOLLOWING ELEMENT.  It is
+// not f12: f12 is `erase(const T1 &)` and returns a COUNT (`unsigned long`).
+// Two ways to get this wrong that a size-only check cannot see -- erasing by the
+// pointed-to VALUE rather than by position, and returning the wrong iterator --
+// so the guard probe reads the RETURNED iterator and prints the element it
+// denotes, not just the new size.
+template <typename T1>
+typename std::set<T1>::iterator f27(std::set<T1> &o,
+                                    typename std::set<T1>::iterator it) {
+  return o.erase(it);
+}

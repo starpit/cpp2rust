@@ -200,3 +200,13 @@ fn f26<T1: Ord + Clone + 'static>(
         Rc::new(RefCell::new(__inserted)),
     )
 }
+
+// erase(const_iterator): by POSITION, returning an iterator to the FOLLOWING
+// element.  MapIter::erase (libcc2rs/src/iterators.rs:127) is that exact
+// operation -- no libcc2rs change was needed.
+fn f27<T1: Ord + Clone + 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T1>>>,
+    a1: RefcountMapIter<T1, T1>,
+) -> RefcountMapIter<T1, T1> {
+    RefcountMapIter::erase(a0, &a1)
+}

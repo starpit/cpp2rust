@@ -186,3 +186,14 @@ unsafe fn f26<T1: Ord + Clone>(
         __inserted,
     )
 }
+
+// erase(const_iterator): by POSITION, returning an iterator to the FOLLOWING
+// element.  MapIter::erase (libcc2rs/src/iterators.rs:127) is that exact
+// operation -- no libcc2rs change was needed.  `a0` and `a1` are each named
+// once; the body is one expression.
+unsafe fn f27<T1: Ord + Clone>(
+    a0: &mut BTreeMap<T1, Box<T1>>,
+    a1: UnsafeMapIterator<T1, T1>,
+) -> UnsafeMapIterator<T1, T1> {
+    UnsafeMapIterator::erase(&*a0 as *const BTreeMap<T1, Box<T1>>, &a1)
+}
