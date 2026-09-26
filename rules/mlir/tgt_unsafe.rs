@@ -136,3 +136,41 @@ unsafe fn f5() -> dataflowir_gen::ir::Attr {
 unsafe fn f6(a0: dataflowir_gen::ir::Attr) -> dataflowir_gen::ir::Attr {
     a0.clone()
 }
+
+// ---------------------------------------------------------------------------
+// f7/f8 -- the FREE `==`/`!=` on two `mlir::StringAttr`.  BuiltinAttributes.h
+// defines the free `==` as `(Attribute)lhs == (Attribute)rhs`, i.e. it is the
+// SAME uniquer-handle comparison as f1, reached through a derived handle.  t7
+// maps StringAttr onto the same `ir::Attr`, so `a0 == a1` is that comparison with
+// no conversion step to model, and `!=` is its exact negation -- which is how
+// MLIR spells it (`!(lhs == rhs)`).
+unsafe fn f7(a0: dataflowir_gen::ir::Attr, a1: dataflowir_gen::ir::Attr) -> bool {
+    a0 == a1
+}
+
+unsafe fn f8(a0: dataflowir_gen::ir::Attr, a1: dataflowir_gen::ir::Attr) -> bool {
+    a0 != a1
+}
+
+// f9 -- the free `==` against `nullptr`, f2's counterpart and its exact negation.
+// `a1` is the `nullptr` literal, emitted as `Default::default()`, carrying no
+// information; the answer depends only on a0 being the null sentinel.
+unsafe fn f9(a0: dataflowir_gen::ir::Attr, a1: ()) -> bool {
+    a0 == dataflowir_gen::ir::Attr::Raw(::std::string::String::new())
+}
+
+// f10 -- the MEMBER `!=` on mlir::Attribute, `!(*this == other)`.
+unsafe fn f10(a0: dataflowir_gen::ir::Attr, a1: dataflowir_gen::ir::Attr) -> bool {
+    a0 != a1
+}
+
+// f11 -- `bool mlir::Attribute::operator!() const`, MLIR's null-handle test
+// (`return !impl;`).  True exactly when the handle is null, which in this model is
+// exactly the `Attr::Raw("")` sentinel that t6/t7's `init` and f3/f5 produce.
+// COMPARED BY VALUE, NOT BY DISPLAY: `Attr::Unit` also prints as the empty string
+// (ir.rs), so a Display-based test would report a PRESENT UnitAttr as null.  The
+// derived `PartialEq` compares the variant first, so `Raw("") != Unit` and the
+// test answers correctly.
+unsafe fn f11(a0: dataflowir_gen::ir::Attr) -> bool {
+    a0 == dataflowir_gen::ir::Attr::Raw(::std::string::String::new())
+}

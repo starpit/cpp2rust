@@ -67,6 +67,18 @@ public:
   // in dxp_standalone: its call sites are inside tablegen-GENERATED verify()
   // bodies (Dataflow.h.inc:408, KTDF.h.inc:528), so every dialect TU needs it.
   bool operator==(Attribute rhs) const;
+
+  // mlir/include/mlir/IR/Attributes.h -- `bool operator!=(Attribute other) const
+  // { return !(*this == other); }`.  A SEPARATE rule key from the `==` above:
+  // the converter keys on the resolved callee signature, and C++17 has no
+  // rewriting of `!=` into `==`, so a TU spelling `a != b` consults this key and
+  // no other.
+  bool operator!=(Attribute rhs) const;
+
+  // mlir/include/mlir/IR/Attributes.h -- `bool operator!() const { return !impl; }`,
+  // the NULL-HANDLE TEST.  Distinct from `operator bool`: `!attr` resolves to this
+  // member directly, not to a negation of the conversion.
+  bool operator!() const;
 };
 
 // mlir/include/mlir/IR/Attributes.h -- a DISTINCT key from the member `==`
@@ -76,6 +88,22 @@ public:
 class StringAttr {};
 
 bool operator!=(StringAttr lhs, std::nullptr_t rhs);
+
+// mlir/include/mlir/IR/BuiltinAttributes.h declares FOUR free comparisons for
+// StringAttr in one block, whose own comment says they exist "to avoid the
+// StringRef overloads from being chosen when not desirable":
+//     inline bool operator==(StringAttr lhs, std::nullptr_t)
+//     inline bool operator!=(StringAttr lhs, std::nullptr_t)
+//     inline bool operator==(StringAttr lhs, StringAttr rhs)
+//     inline bool operator!=(StringAttr lhs, StringAttr rhs)
+// The second was already f2.  The other three are declared here because the
+// StringAttr-vs-StringAttr `==` is the SINGLE LARGEST first-abort gate measured
+// in dxp_standalone (21 of 68 sampled TUs, and 3 of the 6 TUs measured for this
+// row), and because the `!=` and the nullptr `==` are separate rule keys that
+// the same generated verify()/parse() bodies reach.
+bool operator==(StringAttr lhs, std::nullptr_t rhs);
+bool operator==(StringAttr lhs, StringAttr rhs);
+bool operator!=(StringAttr lhs, StringAttr rhs);
 
 } // namespace mlir
 
@@ -124,3 +152,18 @@ mlir::Attribute f3() { return mlir::Attribute(); }
 mlir::Attribute f4(const mlir::Attribute &o) { return mlir::Attribute(o); }
 mlir::StringAttr f5() { return mlir::StringAttr(); }
 mlir::StringAttr f6(const mlir::StringAttr &o) { return mlir::StringAttr(o); }
+
+// ---- the rest of the comparison family ------------------------------------
+// Each is spelled in the UNAMBIGUOUS form (`.operator==(..)` for a member,
+// `mlir::operator==(..)` for a free one) so the recorded callee cannot be some
+// other ADL candidate.  Every one of these is real MLIR API, quoted above at its
+// declaration site; nothing here is invented.
+bool f7(mlir::StringAttr a, mlir::StringAttr b) { return mlir::operator==(a, b); }
+
+bool f8(mlir::StringAttr a, mlir::StringAttr b) { return mlir::operator!=(a, b); }
+
+bool f9(mlir::StringAttr a, std::nullptr_t b) { return mlir::operator==(a, b); }
+
+bool f10(mlir::Attribute a, mlir::Attribute b) { return a.operator!=(b); }
+
+bool f11(mlir::Attribute a) { return a.operator!(); }

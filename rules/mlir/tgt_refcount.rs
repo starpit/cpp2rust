@@ -137,3 +137,27 @@ fn f5() -> dataflowir_gen::ir::Attr {
 fn f6(a0: dataflowir_gen::ir::Attr) -> dataflowir_gen::ir::Attr {
     a0.clone()
 }
+
+// ---------------------------------------------------------------------------
+// f7-f11 -- byte-for-byte the same bodies as tgt_unsafe.rs; see that file for
+// every argument.  All five are pure value comparisons over `ir::Attr`, so
+// neither model's pointer representation appears and the two halves must agree.
+fn f7(a0: dataflowir_gen::ir::Attr, a1: dataflowir_gen::ir::Attr) -> bool {
+    a0 == a1
+}
+
+fn f8(a0: dataflowir_gen::ir::Attr, a1: dataflowir_gen::ir::Attr) -> bool {
+    a0 != a1
+}
+
+fn f9(a0: dataflowir_gen::ir::Attr, a1: ()) -> bool {
+    a0 == dataflowir_gen::ir::Attr::Raw(::std::string::String::new())
+}
+
+fn f10(a0: dataflowir_gen::ir::Attr, a1: dataflowir_gen::ir::Attr) -> bool {
+    a0 != a1
+}
+
+fn f11(a0: dataflowir_gen::ir::Attr) -> bool {
+    a0 == dataflowir_gen::ir::Attr::Raw(::std::string::String::new())
+}
