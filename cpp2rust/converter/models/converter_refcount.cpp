@@ -1827,8 +1827,37 @@ bool ConverterRefCount::VisitExplicitCastExpr(clang::ExplicitCastExpr *expr) {
     computed_expr_type_ = ComputedExprType::FreshPointer;
     return false;
   }
+  // `reinterpret_cast<int64_t>(p)` / `reinterpret_cast<T *>(n)` are ordinary
+  // pointer<->integral conversions: the same cast kind, and the same meaning, as
+  // the C-style and static_cast spellings handled below -- only the spelling
+  // differs. Shared so that the reinterpret_cast arm does not have to assert on
+  // a non-pointer result type it in fact can model.
+  auto convert_pointer_integral = [&]() -> bool {
+    if (expr->getCastKind() != clang::CastKind::CK_PointerToIntegral &&
+        expr->getCastKind() != clang::CastKind::CK_IntegralToPointer) {
+      return false;
+    }
+    std::string dst_type;
+    {
+      PushConversionKind push(*this, ConversionKind::Unboxed);
+      dst_type = ToString(expr->getType());
+    }
+    if (expr->getCastKind() == clang::CastKind::CK_PointerToIntegral) {
+      StrCat(std::format("{}.to_int()", ToString(expr->getSubExpr())));
+      computed_expr_type_ = ComputedExprType::FreshValue;
+    } else {
+      StrCat(std::format("<{}>::from_int({})", dst_type,
+                         ToString(expr->getSubExpr())));
+      computed_expr_type_ = ComputedExprType::FreshPointer;
+    }
+    return true;
+  };
+
   switch (expr->getStmtClass()) {
   case clang::Stmt::CXXReinterpretCastExprClass:
+    if (convert_pointer_integral()) {
+      return false;
+    }
     assert(expr->getType()->isPointerType() &&
            "Only pointer casts are supported in reinterpret_cast");
     StrCat(
@@ -1838,21 +1867,7 @@ bool ConverterRefCount::VisitExplicitCastExpr(clang::ExplicitCastExpr *expr) {
     return false;
   case clang::Stmt::CStyleCastExprClass:
   case clang::Stmt::CXXStaticCastExprClass:
-    if (expr->getCastKind() == clang::CastKind::CK_PointerToIntegral ||
-        expr->getCastKind() == clang::CastKind::CK_IntegralToPointer) {
-      std::string dst_type;
-      {
-        PushConversionKind push(*this, ConversionKind::Unboxed);
-        dst_type = ToString(expr->getType());
-      }
-      if (expr->getCastKind() == clang::CastKind::CK_PointerToIntegral) {
-        StrCat(std::format("{}.to_int()", ToString(expr->getSubExpr())));
-        computed_expr_type_ = ComputedExprType::FreshValue;
-      } else {
-        StrCat(std::format("<{}>::from_int({})", dst_type,
-                           ToString(expr->getSubExpr())));
-        computed_expr_type_ = ComputedExprType::FreshPointer;
-      }
+    if (convert_pointer_integral()) {
       return false;
     }
 

@@ -2922,13 +2922,36 @@ bool Converter::VisitIfStmt(clang::IfStmt *stmt) {
 }
 
 bool Converter::VisitWhileStmt(clang::WhileStmt *stmt) {
-  // A condition variable on a `while` is re-declared and re-initialized on
-  // every iteration, so hoisting it out of the loop the way VisitIfStmt does
-  // would be wrong. Left unsupported and LOUD rather than silently dropped:
-  // no site in dcg/ ddc/ dsc/ dbo/ or in the four gtest test TUs uses it.
-  assert(stmt->getConditionVariableDeclStmt() == nullptr &&
-         "unsupported condition variable on a while statement");
   PushBreakTarget push(break_target_, BreakTarget::Loop);
+  // A condition variable on a `while` -- `while (auto *v = f())` -- is
+  // re-declared and re-initialized on EVERY iteration, and the condition tests
+  // the freshly initialized `v`. Hoisting the declaration out of the loop the
+  // way VisitIfStmt does would evaluate the initializer exactly once, which
+  // changes the number of calls to `f()` silently; so the loop is lowered to the
+  // shape that keeps one evaluation per iteration:
+  //
+  //   'loop_: loop { let v = f(); if !(v) { break; } body }
+  //
+  // `continue` in the body re-enters the declaration, which is what C++ does,
+  // and a plain `break` binds to this innermost loop.
+  if (stmt->getConditionVariableDeclStmt() != nullptr) {
+    StrCat("'loop_:", keyword::kLoop);
+    PushBrace brace(*this);
+    Convert(stmt->getConditionVariableDeclStmt());
+    StrCat(keyword::kIf, token::kNot);
+    {
+      PushParen paren(*this);
+      ConvertCondition(stmt->getCond());
+    }
+    {
+      PushBrace break_brace(*this);
+      StrCat(keyword::kBreak, token::kSemiColon);
+    }
+    curr_for_inc_.emplace_back(nullptr);
+    ConvertBodyStmts(stmt->getBody());
+    curr_for_inc_.pop_back();
+    return false;
+  }
   StrCat("'loop_:");
   StrCat(keyword::kWhile);
   ConvertCondition(stmt->getCond());
