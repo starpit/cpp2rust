@@ -229,6 +229,37 @@ impl<T: PartialOrd, S> Default for CmpSet<T, S> {
     }
 }
 
+/// Two sets are equal when they hold the SAME ELEMENTS IN THE SAME COMPARATOR
+/// ORDER.  Slot sequences are compared directly rather than via `to_vec()`, which
+/// would allocate two Vecs on every `std::set` comparison.  The comparators
+/// themselves are NOT compared: C++ `operator==` on `std::set` compares elements
+/// only (`[associative.reqmts]`), and two sets built with different but
+/// order-equivalent comparators are equal there too.
+impl<T: PartialEq, S: SetSlot<T>> PartialEq for CmpSet<T, S> {
+    fn eq(&self, other: &Self) -> bool {
+        self.items.len() == other.items.len()
+            && self
+                .items
+                .iter()
+                .zip(other.items.iter())
+                .all(|(a, b)| a.with_slot(|x| b.with_slot(|y| x == y)))
+    }
+}
+
+/// `deep_clone` -- the refcount model's copy constructor.  Each SLOT is deep-cloned
+/// (a `Value<T>` must become a NEW `Rc`, not a shared one, or a copy-constructed
+/// `std::set` would alias its source's elements); the comparator is a `fn` pointer,
+/// so it is simply copied.
+impl<T, S: crate::DeepClone> crate::DeepClone for CmpSet<T, S> {
+    fn deep_clone(&self) -> Self {
+        Self {
+            items: self.items.iter().map(crate::DeepClone::deep_clone).collect(),
+            cmp: self.cmp,
+            _elem: PhantomData,
+        }
+    }
+}
+
 impl<T, S: Clone> Clone for CmpSet<T, S> {
     fn clone(&self) -> Self {
         Self {
@@ -787,6 +818,35 @@ mod tests {
             s.insert(v);
         }
         assert_eq!(s.to_vec(), vec![1, 2, 3], "ASCENDING despite reverse=true");
+    }
+
+    #[test]
+    fn set_equality_is_elements_in_comparator_order() {
+        let mut a = newset();
+        let mut b = newset();
+        for v in [di(3, false), di(1, true)] {
+            a.insert(v);
+        }
+        // Inserted in the OTHER order -- comparator order makes them equal.
+        for v in [di(1, true), di(3, false)] {
+            b.insert(v);
+        }
+        assert!(a == b);
+        // A differing element makes them unequal...
+        let mut c = newset();
+        c.insert(di(1, true));
+        c.insert(di(4, false));
+        assert!(a != c);
+        // ...and so does a differing length.
+        let mut d = newset();
+        d.insert(di(1, true));
+        assert!(a != d);
+        // The IGNORED field still participates in EQUALITY (PartialEq on T),
+        // even though it does not participate in ORDERING.
+        let mut e = newset();
+        e.insert(di(3, true));
+        e.insert(di(1, true));
+        assert!(a != e, "high differs, so the elements are not ==");
     }
 
     #[test]
