@@ -2729,6 +2729,34 @@ static bool IsaSemiColonStmt(const clang::Stmt *stmt) {
 
 bool Converter::Convert(clang::Stmt *stmt) {
   PushExprKind push(*this, ExprKind::Void);
+  // A DISCARDED-VALUE EXPRESSION STATEMENT is a statement position, so it is a
+  // place a hoisted `let __tmp_N = ...;` may legally be emitted -- and it needs
+  // to be one. Every OTHER context that can materialise a temporary (a var
+  // decl, a return value, a constructor argument list, a goto block) already
+  // opens a HoistMaterializedTempBindings scope; a bare expression statement
+  // did not, so any `Kind::Materialized` call argument appearing in one hit the
+  // assert in EmitMaterializedTempBinding with no binding buffer to write to.
+  // dt_src reaches it through an ostream-insertion chain --
+  // `os << t.DataType()` against a user-written `operator<<(std::ostream &,
+  // const BaseTensor &)`, where `t.DataType()` is a by-value temporary bound to
+  // a `const &` parameter -- but nothing about that is ostream-specific: any
+  // `f(MakeTemp())` taking `const T &` as a statement on its own has the same
+  // shape, so the scope is established for the statement class, not for the
+  // ostream chain.
+  //
+  // Not `as_block`: a statement in a compound body may be PRECEDED by `let`
+  // bindings at the same brace level, so wrapping in `{ ... }` would only
+  // shorten the temporaries' lifetime for no reason. The two other callers that
+  // reach here with an expression (a for-loop's init and its increment) are
+  // likewise emitted in statement position, before the `while` and inside the
+  // loop brace respectively.
+  //
+  // When the expression materialises nothing the scope is output-identical: an
+  // empty `bindings` makes the destructor re-emit the captured body verbatim.
+  std::optional<HoistMaterializedTempBindings> hoist_temps;
+  if (clang::isa_and_nonnull<clang::Expr>(stmt)) {
+    hoist_temps.emplace(*this);
+  }
   auto exited_visit = TraverseStmt(stmt);
   if (stmt && IsaSemiColonStmt(stmt)) {
     StrCat(token::kSemiColon);
