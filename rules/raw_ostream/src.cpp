@@ -77,7 +77,10 @@
 // std::ostream's num_put uses hex|showbase and prints a bare `0`.
 // `bool` needs no rule of its own: bool -> int is an integral promotion and
 // bool -> char only a conversion, so C++ always picks operator<<(int) for it.
-// llvm::StringRef has no type rule anywhere in rules/, so the ARGUMENT of f7
+// llvm::StringRef IS mapped -- rules/stringref t1, to the same eager
+// NUL-terminated Vec representation this module and rules/twine use.  (This line
+// previously claimed it had no type rule anywhere; that was stale and TWO agents
+// read it as a measurement and acted on it.), so the ARGUMENT of f7
 // still translates as an opaque llvm_StringRef; the rule itself resolves,
 // which is what unblocks the enum printers.
 

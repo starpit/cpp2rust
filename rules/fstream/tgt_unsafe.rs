@@ -112,7 +112,7 @@ unsafe fn f16(a0: ::std::fs::File) -> bool {
 }
 
 unsafe fn f17(a0: &mut ::std::fs::File) {
-    libcc2rs::reset_file_fmt(a0);
+    libcc2rs::reset_file_fmt(&a0);
     *a0 = libcc2rs::fresh_file(
         ::std::fs::OpenOptions::new()
             .write(true)
@@ -122,6 +122,6 @@ unsafe fn f17(a0: &mut ::std::fs::File) {
 }
 
 unsafe fn f18(a0: &mut ::std::fs::File) {
-    libcc2rs::reset_file_fmt(a0);
+    libcc2rs::reset_file_fmt(&a0);
     *a0 = libcc2rs::fresh_file(::std::fs::File::open("/dev/null").unwrap());
 }
