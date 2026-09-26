@@ -191,3 +191,115 @@ fn f29(a0: Ptr<Vec<u8>>, a1: Vec<u8>) {
 fn f30(a0: Ptr<Vec<u8>>, a1: &mut Vec<u8>) {
     a0.write(std::mem::take(&mut *a1))
 }
+
+fn f31(a0: Vec<u8>, a1: u8) -> Vec<u8> {
+    let mut __tmp = a0;
+    __tmp.pop();
+    __tmp.push(a1);
+    __tmp.push(0);
+    __tmp
+}
+
+fn f32(a0: Vec<u8>, a1: Vec<u8>) -> Vec<u8> {
+    let mut __tmp = a0;
+    __tmp.pop();
+    __tmp.extend_from_slice(&a1[..a1.len() - 1]);
+    __tmp.push(0);
+    __tmp
+}
+fn f33(a0: Vec<u8>, a1: Vec<u8>) -> Vec<u8> {
+    let mut __tmp = a0;
+    __tmp.pop();
+    __tmp.extend_from_slice(&a1[..a1.len() - 1]);
+    __tmp.push(0);
+    __tmp
+}
+fn f34(a0: Vec<u8>, a1: Vec<u8>) -> Vec<u8> {
+    let mut __tmp = a0;
+    __tmp.pop();
+    __tmp.extend_from_slice(&a1[..a1.len() - 1]);
+    __tmp.push(0);
+    __tmp
+}
+fn f35(a0: Vec<u8>, a1: Vec<u8>) -> Vec<u8> {
+    let mut __tmp = a0;
+    __tmp.pop();
+    __tmp.extend_from_slice(&a1[..a1.len() - 1]);
+    __tmp.push(0);
+    __tmp
+}
+fn f36(a0: Vec<u8>, a1: u8) -> Vec<u8> {
+    let mut __tmp = a0;
+    __tmp.pop();
+    __tmp.push(a1);
+    __tmp.push(0);
+    __tmp
+}
+fn f37(a0: Ptr<u8>, a1: Vec<u8>) -> Vec<u8> {
+    let mut __tmp: Vec<u8> = Vec::new();
+    a0.with_c_str(|__s| __tmp.extend_from_slice(__s));
+    __tmp.extend_from_slice(&a1[..a1.len() - 1]);
+    __tmp.push(0);
+    __tmp
+}
+
+fn f38(a0: &mut Vec<u8>, a1: Vec<u8>) {
+    a0.pop();
+    a0.extend_from_slice(&a1[..a1.len() - 1]);
+    a0.push(0);
+}
+fn f39(a0: &mut Vec<u8>, a1: u8) {
+    a0.pop();
+    a0.push(a1);
+    a0.push(0);
+}
+fn f40(a0: &mut Vec<u8>, a1: Ptr<u8>) {
+    a0.pop();
+    a1.with_c_str(|__s| a0.extend_from_slice(__s));
+    a0.push(0);
+}
+
+fn f41(a0: Ptr<u8>, a1: Vec<u8>) -> Vec<u8> {
+    let mut __tmp: Vec<u8> = Vec::new();
+    a0.with_c_str(|__s| __tmp.extend_from_slice(__s));
+    __tmp.extend_from_slice(&a1[..a1.len() - 1]);
+    __tmp.push(0);
+    __tmp
+}
+fn f42(a0: u8, a1: Vec<u8>) -> Vec<u8> {
+    let mut __tmp = vec![a0];
+    __tmp.extend_from_slice(&a1[..a1.len() - 1]);
+    __tmp.push(0);
+    __tmp
+}
+fn f43(a0: u8, a1: Vec<u8>) -> Vec<u8> {
+    let mut __tmp = vec![a0];
+    __tmp.extend_from_slice(&a1[..a1.len() - 1]);
+    __tmp.push(0);
+    __tmp
+}
+
+fn f44(a0: Vec<u8>, a1: Vec<u8>) -> bool {
+    a0 == a1
+}
+fn f45(a0: Ptr<u8>, a1: Vec<u8>) -> bool {
+    a1.iter()
+        .copied()
+        .take(a1.len().saturating_sub(1))
+        .eq(a0.to_c_string_iterator())
+}
+fn f46(a0: Vec<u8>, a1: Vec<u8>) -> bool {
+    a0 != a1
+}
+fn f47(a0: Vec<u8>, a1: Ptr<u8>) -> bool {
+    !a0.iter()
+        .copied()
+        .take(a0.len().saturating_sub(1))
+        .eq(a1.to_c_string_iterator())
+}
+fn f48(a0: Ptr<u8>, a1: Vec<u8>) -> bool {
+    !a1.iter()
+        .copied()
+        .take(a1.len().saturating_sub(1))
+        .eq(a0.to_c_string_iterator())
+}
