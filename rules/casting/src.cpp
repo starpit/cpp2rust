@@ -418,3 +418,30 @@ using t173 = mlir::vectorchain::SelectOp;
 using t174 = mlir::vectorchain::ShuffleOp;
 using t175 = mlir::vectorchain::SigmoidEstimateOp;
 using t176 = mlir::vectorchain::TanhEstimateOp;
+
+// ---------------------------------------------------------------------------
+// dyn_cast / cast / dyn_cast_or_null: DELIBERATELY UNMODELLED.  Measured, not
+// assumed -- `-verbose` over VectorOperands.cpp gives the full shape census:
+//
+//   125  llvm::dyn_cast<Op>(mlir::Operation *)      -> returns the Op WRAPPER BY VALUE
+//    10  llvm::dyn_cast<Ty>(const mlir::VectorType &)   mlir TYPE, no marker exists
+//    20  llvm::cast<Attr>(mlir::Attribute &) / (const mlir::TypedAttr &)
+//
+// ZERO sites return a pointer, so there is no pointer-shaped subset that could
+// be done today: the whole row is the by-value wrapper.
+//
+// WHY IT CANNOT BE MODELLED YET -- the missing property, named.
+// `if (auto x = dyn_cast<T>(op))` lowers to a typed let of the wrapper followed
+// by `if (unsafe { x() })` (emitted at DC.rs:5212): the implicit operator bool
+// becomes a CALL ON THE VALUE.  So `Option<T>` is NOT a usable return shape --
+// the emitted test is `x()`, not `x.is_some()`.  And the value must ALSO answer
+// member calls (`x.getSendData()`), so it has to carry the Operation.  What is
+// needed is an Op-wrapper VALUE model -- an operation handle carried together
+// with a validity bit, typed by the op -- which is a different thing from the
+// generated marker: a marker is a unit struct with NO fields, type-level
+// identity only.  `isa` needed only that identity, which is why it closed.
+//
+// cast and dyn_cast_or_null need the SAME value model (cast without the
+// validity bit, dyn_cast_or_null with an extra null test), so the three are ONE
+// row behind ONE decision -- not three independent attempts.
+// ---------------------------------------------------------------------------
