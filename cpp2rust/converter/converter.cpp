@@ -1137,8 +1137,15 @@ bool Converter::ConvertCXXMethodDecl(clang::CXXMethodDecl *decl) {
   if (decl->isPureVirtual() || method_target_ == MethodTarget::TraitDecl) {
     StrCat(token::kSemiColon);
   } else if (method_target_ == MethodTarget::TraitDefault) {
-    PushBrace body(*this);
-    StrCat("unimplemented!()");
+    // No definition of this method is visible, so there is no body to
+    // translate. Refuse the translation instead of emitting a placeholder:
+    // an `unimplemented!()` default would compile and then panic at runtime.
+    llvm::errs() << "unsupported trait default body: no visible definition for "
+                 << decl->getParent()->getQualifiedNameAsString() << "::"
+                 << GetMethodName(decl) << " (declared at "
+                 << decl->getLocation().printToString(ctx_.getSourceManager())
+                 << ")\n";
+    assert(0 && "unsupported trait default body: method has no definition");
   } else {
     PushBrace body(*this);
     EmitFunctionPreamble(decl);
