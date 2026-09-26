@@ -122,6 +122,44 @@ where
     }
 }
 
+/// `bool (*)(const T&, const T&)` -- the comparator as a RUNTIME VALUE.
+///
+/// It is a plain `fn` pointer and NOT a type parameter, and that is the whole
+/// point of this shape: `CmpSetIter`'s type must not mention the comparator, or
+/// two `std::set` families need two different Rust iterator types while libc++
+/// spells both C++ iterators identically as
+/// `std::__tree_const_iterator<T, std::__tree_node<T, void *> *, long>` -- one
+/// string, two types, which is a duplicate type rule and rc=1 for the whole
+/// tree.  A `fn` pointer also keeps `Clone`/`Copy`/`ByteRepr` free, where a
+/// `Box<dyn Comparator<T>>` would lose `Clone` and need a supertrait.
+pub type CmpFn<T> = fn(&T, &T) -> bool;
+
+/// The NATURAL ordering as a named monomorphic function.
+///
+/// Named, not a closure, so `CmpSet::default()` has something to store and the
+/// `cmp` field never needs to be an `Option`.  That matters: an `Option<CmpFn<T>>`
+/// whose `None` arm fell back to some ordering would be a state that COMPARES
+/// WRONGLY rather than failing, which is the failure shape this port keeps
+/// finding.  There is no such state here.
+pub fn natural_lt<T: PartialOrd>(a: &T, b: &T) -> bool {
+    a < b
+}
+
+/// The comparator VALUE for a stateless comparator TYPE, as a `fn` pointer.
+///
+/// ** LOAD-BEARING ASSUMPTION: `C` MUST BE STATELESS. ** `C::default()` is
+/// constructed fresh on every comparison, so any state a comparator carries is
+/// DISCARDED -- a comparator holding, say, a sort direction would silently
+/// compare by whatever `Default` gives instead of by what the caller built.
+/// That is sound for every comparator the converter produces (a ported
+/// comparator is an empty struct with an `operator()`), and `stateful_comparator_
+/// state_is_discarded` pins the behaviour so nobody discovers it by debugging.
+/// The type system cannot reject a stateful `C` here: `C: Default` is satisfiable
+/// by a stateful type.
+pub fn cmp_fn_of<T, C: Comparator<T> + Default>() -> CmpFn<T> {
+    |a, b| C::default().cmp_lt(a, b)
+}
+
 /// `std::less<T>`, for a `CmpSet` that wants the natural ordering.
 #[derive(Clone, Copy, Default, Debug)]
 pub struct StdLess;
@@ -163,32 +201,35 @@ impl<T> SetSlot<T> for Value<T> {
 }
 
 /// `std::set<T, C>` modelled as a comparator-sorted `Vec` of slots.
-pub struct CmpSet<T, C, S = Box<T>> {
+pub struct CmpSet<T, S = Box<T>> {
     items: Vec<S>,
-    cmp: C,
+    cmp: CmpFn<T>,
     _elem: PhantomData<fn() -> T>,
 }
 
 /// Element storage for the unsafe model (mirrors `BTreeMap<T, Box<T>>`).
-pub type UnsafeCmpSet<T, C> = CmpSet<T, C, Box<T>>;
+pub type UnsafeCmpSet<T> = CmpSet<T, Box<T>>;
 /// Element storage for the refcount model (mirrors `BTreeMap<T, Value<T>>`).
-pub type RefcountCmpSet<T, C> = CmpSet<T, C, Value<T>>;
+pub type RefcountCmpSet<T> = CmpSet<T, Value<T>>;
 
 // Marker impl, exactly like `impl<K, V> ByteRepr for BTreeMap<K, V>`: it lets
 // `Ptr<CmpSet<..>>::with` be called without demanding `T: ByteRepr`.
-impl<T: 'static, C: 'static, S: 'static> ByteRepr for CmpSet<T, C, S> {}
+impl<T: 'static, S: 'static> ByteRepr for CmpSet<T, S> {}
 
-impl<T, C: Default, S> Default for CmpSet<T, C, S> {
+// BOUND CHANGE, called out deliberately: this was `C: Default` and is now
+// `T: PartialOrd`.  The comparator is no longer a type, so there is nothing to
+// default-construct; the natural ordering is the default instead.
+impl<T: PartialOrd, S> Default for CmpSet<T, S> {
     fn default() -> Self {
         Self {
             items: Vec::new(),
-            cmp: C::default(),
+            cmp: natural_lt::<T>,
             _elem: PhantomData,
         }
     }
 }
 
-impl<T, C: Clone, S: Clone> Clone for CmpSet<T, C, S> {
+impl<T, S: Clone> Clone for CmpSet<T, S> {
     fn clone(&self) -> Self {
         Self {
             items: self.items.clone(),
@@ -198,9 +239,9 @@ impl<T, C: Clone, S: Clone> Clone for CmpSet<T, C, S> {
     }
 }
 
-impl<T, C, S> CmpSet<T, C, S> {
+impl<T, S> CmpSet<T, S> {
     /// The comparator is stored BY VALUE, like libc++'s `__compare` member.
-    pub fn new(cmp: C) -> Self {
+    pub fn new(cmp: CmpFn<T>) -> Self {
         Self {
             items: Vec::new(),
             cmp,
@@ -209,16 +250,15 @@ impl<T, C, S> CmpSet<T, C, S> {
     }
 
     /// For the converter's current shape, which hands a comparator over as an
-    /// `&`-to-temporary.  Requires `C: Clone`.
-    pub fn from_comparator_ref(cmp: &C) -> Self
-    where
-        C: Clone,
-    {
-        Self::new(cmp.clone())
+    /// `&`-to-temporary.  The reference is DISCARDED and the comparator is
+    /// rebuilt from its TYPE via [`cmp_fn_of`] -- see the stateless assumption
+    /// documented there.  No `C: Clone` bound any more: a `fn` pointer is `Copy`.
+    pub fn from_comparator_ref<C: Comparator<T> + Default>(_cmp: &C) -> Self {
+        Self::new(cmp_fn_of::<T, C>())
     }
 
-    pub fn comparator(&self) -> &C {
-        &self.cmp
+    pub fn comparator(&self) -> CmpFn<T> {
+        self.cmp
     }
 
     pub fn len(&self) -> usize {
@@ -248,7 +288,7 @@ impl<T, C, S> CmpSet<T, C, S> {
     }
 }
 
-impl<T, C: Comparator<T>, S: SetSlot<T>> CmpSet<T, C, S> {
+impl<T, S: SetSlot<T>> CmpSet<T, S> {
     /// `std::lower_bound`: the first index whose element is NOT less than
     /// `value`, i.e. the insertion point.
     pub fn lower_bound(&self, value: &T) -> usize {
@@ -257,7 +297,7 @@ impl<T, C: Comparator<T>, S: SetSlot<T>> CmpSet<T, C, S> {
         // order in practice.  Sets in dt_src are small.
         self.items
             .iter()
-            .position(|slot| slot.with_slot(|e| !self.cmp.cmp_lt(e, value)))
+            .position(|slot| slot.with_slot(|e| !(self.cmp)(e, value)))
             .unwrap_or(self.items.len())
     }
 
@@ -267,7 +307,7 @@ impl<T, C: Comparator<T>, S: SetSlot<T>> CmpSet<T, C, S> {
     pub fn find_index(&self, value: &T) -> Option<usize> {
         let i = self.lower_bound(value);
         match self.items.get(i) {
-            Some(slot) if slot.with_slot(|e| !self.cmp.cmp_lt(value, e)) => Some(i),
+            Some(slot) if slot.with_slot(|e| !(self.cmp)(value, e)) => Some(i),
             _ => None,
         }
     }
@@ -278,7 +318,7 @@ impl<T, C: Comparator<T>, S: SetSlot<T>> CmpSet<T, C, S> {
     pub fn insert(&mut self, value: T) -> (usize, bool) {
         let i = self.lower_bound(&value);
         if let Some(slot) = self.items.get(i) {
-            if slot.with_slot(|e| !self.cmp.cmp_lt(&value, e)) {
+            if slot.with_slot(|e| !(self.cmp)(&value, e)) {
                 return (i, false);
             }
         }
@@ -350,16 +390,16 @@ impl<V> ContainerRef for *const V {
 
 /// Iterator into a [`CmpSet`].  Position is an INDEX; `end` is `len`; `==` is
 /// index equality.
-pub struct CmpSetIter<T, C, S, R> {
+pub struct CmpSetIter<T, S, R> {
     set: R,
     index: usize,
-    _p: PhantomData<fn() -> (T, C, S)>,
+    _p: PhantomData<fn() -> (T, S)>,
 }
 
-pub type UnsafeCmpSetIterator<T, C> = CmpSetIter<T, C, Box<T>, *const UnsafeCmpSet<T, C>>;
-pub type RefcountCmpSetIter<T, C> = CmpSetIter<T, C, Value<T>, Ptr<RefcountCmpSet<T, C>>>;
+pub type UnsafeCmpSetIterator<T> = CmpSetIter<T, Box<T>, *const UnsafeCmpSet<T>>;
+pub type RefcountCmpSetIter<T> = CmpSetIter<T, Value<T>, Ptr<RefcountCmpSet<T>>>;
 
-impl<T, C, S, R: Clone> Clone for CmpSetIter<T, C, S, R> {
+impl<T, S, R: Clone> Clone for CmpSetIter<T, S, R> {
     fn clone(&self) -> Self {
         Self {
             set: self.set.clone(),
@@ -369,15 +409,15 @@ impl<T, C, S, R: Clone> Clone for CmpSetIter<T, C, S, R> {
     }
 }
 
-impl<T, C, S, R> PartialEq for CmpSetIter<T, C, S, R> {
+impl<T, S, R> PartialEq for CmpSetIter<T, S, R> {
     fn eq(&self, other: &Self) -> bool {
         self.index == other.index
     }
 }
 
-impl<T, C, S, R> CmpSetIter<T, C, S, R>
+impl<T, S, R> CmpSetIter<T, S, R>
 where
-    R: ContainerRef<Target = CmpSet<T, C, S>>,
+    R: ContainerRef<Target = CmpSet<T, S>>,
 {
     /// A default-constructed (singular) iterator: index 0 over a null handle.
     pub fn null() -> Self {
@@ -437,11 +477,10 @@ where
     }
 }
 
-impl<T, C, S, R> CmpSetIter<T, C, S, R>
+impl<T, S, R> CmpSetIter<T, S, R>
 where
-    C: Comparator<T>,
     S: SetSlot<T>,
-    R: ContainerRef<Target = CmpSet<T, C, S>>,
+    R: ContainerRef<Target = CmpSet<T, S>>,
 {
     /// `std::set::find` -- comparator equivalence, so a probe value differing
     /// only in an IGNORED field still finds the member.
@@ -465,9 +504,9 @@ where
     }
 }
 
-impl<T, C, S, R> Iterator for CmpSetIter<T, C, S, R>
+impl<T, S, R> Iterator for CmpSetIter<T, S, R>
 where
-    R: ContainerRef<Target = CmpSet<T, C, S>>,
+    R: ContainerRef<Target = CmpSet<T, S>>,
 {
     type Item = Self;
 
@@ -481,9 +520,9 @@ where
     }
 }
 
-impl<T, C, S, R> PrefixInc for CmpSetIter<T, C, S, R>
+impl<T, S, R> PrefixInc for CmpSetIter<T, S, R>
 where
-    R: ContainerRef<Target = CmpSet<T, C, S>>,
+    R: ContainerRef<Target = CmpSet<T, S>>,
 {
     fn prefix_inc(&mut self) -> Self {
         self.inc();
@@ -491,9 +530,9 @@ where
     }
 }
 
-impl<T, C, S, R> PostfixInc for CmpSetIter<T, C, S, R>
+impl<T, S, R> PostfixInc for CmpSetIter<T, S, R>
 where
-    R: ContainerRef<Target = CmpSet<T, C, S>>,
+    R: ContainerRef<Target = CmpSet<T, S>>,
 {
     fn postfix_inc(&mut self) -> Self {
         let ret = self.clone();
@@ -502,9 +541,9 @@ where
     }
 }
 
-impl<T, C, S, R> PrefixDec for CmpSetIter<T, C, S, R>
+impl<T, S, R> PrefixDec for CmpSetIter<T, S, R>
 where
-    R: ContainerRef<Target = CmpSet<T, C, S>>,
+    R: ContainerRef<Target = CmpSet<T, S>>,
 {
     fn prefix_dec(&mut self) -> Self {
         self.dec();
@@ -512,9 +551,9 @@ where
     }
 }
 
-impl<T, C, S, R> PostfixDec for CmpSetIter<T, C, S, R>
+impl<T, S, R> PostfixDec for CmpSetIter<T, S, R>
 where
-    R: ContainerRef<Target = CmpSet<T, C, S>>,
+    R: ContainerRef<Target = CmpSet<T, S>>,
 {
     fn postfix_dec(&mut self) -> Self {
         let ret = self.clone();
@@ -523,7 +562,7 @@ where
     }
 }
 
-impl<T: 'static, C: 'static> UnsafeCmpSetIterator<T, C> {
+impl<T: 'static> UnsafeCmpSetIterator<T> {
     /// `*it` in the unsafe model.
     pub fn deref(&self) -> *const T {
         self.set.with(|s| {
@@ -538,7 +577,7 @@ impl<T: 'static, C: 'static> UnsafeCmpSetIterator<T, C> {
     }
 }
 
-impl<T: 'static, C: 'static> RefcountCmpSetIter<T, C> {
+impl<T: 'static> RefcountCmpSetIter<T> {
     /// `*it` in the refcount model.
     pub fn value(&self) -> Value<T> {
         self.set.with(|s| {
@@ -577,12 +616,21 @@ mod tests {
         DimIndex { dim, high }
     }
 
-    type Set = UnsafeCmpSet<DimIndex, DimIndexDimComparator>;
-    type Iter = UnsafeCmpSetIterator<DimIndex, DimIndexDimComparator>;
+    type Set = UnsafeCmpSet<DimIndex>;
+    type Iter = UnsafeCmpSetIterator<DimIndex>;
+
+    // THE STRUCTURAL POINT OF THE REDESIGN: neither `Set` nor `Iter` mentions
+    // DimIndexDimComparator.  The comparator is now supplied at CONSTRUCTION,
+    // which is also why `Set::default()` is no longer usable here -- DimIndex is
+    // deliberately not PartialOrd, so the natural-ordering default cannot be
+    // reached by accident with the wrong comparator.
+    fn newset() -> Set {
+        Set::new(cmp_fn_of::<DimIndex, DimIndexDimComparator>())
+    }
 
     #[test]
     fn non_injective_comparator_keeps_first_inserted() {
-        let mut s = Set::default();
+        let mut s = newset();
         assert_eq!(s.insert(di(3, false)), (0, true));
         // EQUIVALENT under the comparator (it ignores `high`).
         assert_eq!(s.insert(di(3, true)), (0, false));
@@ -594,7 +642,7 @@ mod tests {
 
     #[test]
     fn find_matches_on_ignored_field() {
-        let mut s = Set::default();
+        let mut s = newset();
         s.insert(di(7, false));
         // Differs only in the IGNORED field -- must still be found.
         assert!(s.contains(&di(7, true)));
@@ -606,7 +654,7 @@ mod tests {
 
     #[test]
     fn iteration_is_comparator_order() {
-        let mut s = Set::default();
+        let mut s = newset();
         // Neither sorted nor reverse-sorted.
         for v in [di(5, true), di(1, false), di(9, true), di(3, false)] {
             assert!(s.insert(v).1);
@@ -626,7 +674,7 @@ mod tests {
 
     #[test]
     fn erase_by_equivalent_but_unequal_value() {
-        let mut s = Set::default();
+        let mut s = newset();
         s.insert(di(2, false));
         s.insert(di(4, true));
         // Equal under the comparator, NOT `==` to the member.
@@ -641,7 +689,7 @@ mod tests {
 
     #[test]
     fn iterator_positions_compare_by_index_not_value() {
-        let mut s = Set::default();
+        let mut s = newset();
         // Two DISTINCT members whose values are equal in every read field.
         s.insert(di(1, false));
         s.insert(di(2, false));
@@ -660,7 +708,7 @@ mod tests {
 
     #[test]
     fn find_via_iterator_and_erase_via_iterator() {
-        let mut s = Set::default();
+        let mut s = newset();
         s.insert(di(10, true));
         s.insert(di(20, false));
         s.insert(di(30, true));
@@ -677,14 +725,27 @@ mod tests {
     #[test]
     fn closure_comparator_and_std_less() {
         // The blanket `Fn(&T, &T) -> bool` impl -- the obvious bound.
-        let mut s: CmpSet<DimIndex, fn(&DimIndex, &DimIndex) -> bool> =
+        let mut s: UnsafeCmpSet<DimIndex> =
             CmpSet::new(|a: &DimIndex, b: &DimIndex| a.dim > b.dim); // DESCENDING
         s.insert(di(1, false));
         s.insert(di(5, true));
         s.insert(di(3, false));
         assert_eq!(s.to_vec(), vec![di(5, true), di(3, false), di(1, false)]);
 
-        let mut n: CmpSet<i32, StdLess> = CmpSet::default();
+        // SAME PROPERTY as before the redesign: a closure comparator and the
+        // natural ordering agree on an injective comparison.  Previously this was
+        // `CmpSet<i32, StdLess>` with the comparator in the TYPE; now both sides
+        // are values, and `cmp_fn_of::<i32, StdLess>()` is shown to agree with
+        // `natural_lt` and with a closure spelling the same thing.
+        let mut n: UnsafeCmpSet<i32> = CmpSet::new(natural_lt);
+        let mut n2: UnsafeCmpSet<i32> = CmpSet::new(cmp_fn_of::<i32, StdLess>());
+        let mut n3: UnsafeCmpSet<i32> = CmpSet::new(|a: &i32, b: &i32| a < b);
+        for v in [30, 10, 20] {
+            n2.insert(v);
+            n3.insert(v);
+        }
+        assert_eq!(n2.to_vec(), vec![10, 20, 30]);
+        assert_eq!(n3.to_vec(), n2.to_vec());
         n.insert(30);
         n.insert(10);
         n.insert(20);
@@ -692,17 +753,56 @@ mod tests {
         assert_eq!(n.insert(20), (1, false));
     }
 
+    /// PINS THE LOAD-BEARING ASSUMPTION behind `cmp_fn_of`.
+    ///
+    /// The type system CANNOT reject a stateful comparator -- `C: Default` is
+    /// satisfiable by a stateful type -- so this records what actually happens:
+    /// the state is DISCARDED and comparison proceeds with `C::default()`.  A
+    /// `Descending` built with `reverse: true` therefore sorts ASCENDING, because
+    /// `Default` gives `reverse: false`.  If a future comparator carries state,
+    /// this test is the thing that says why it silently misbehaves.
+    #[derive(Default)]
+    struct StatefulCmp {
+        reverse: bool,
+    }
+
+    impl Comparator<i32> for StatefulCmp {
+        fn cmp_lt(&self, a: &i32, b: &i32) -> bool {
+            if self.reverse { b < a } else { a < b }
+        }
+    }
+
+    #[test]
+    fn stateful_comparator_state_is_discarded() {
+        let stateful = StatefulCmp { reverse: true };
+        // Used DIRECTLY as a Comparator, the state is honoured.
+        assert!(stateful.cmp_lt(&5, &1));
+        // Routed through the fn pointer, it is NOT: Default gives reverse=false.
+        let f = cmp_fn_of::<i32, StatefulCmp>();
+        assert!(!f(&5, &1), "state is discarded -- documented, not a bug here");
+        assert!(f(&1, &5));
+        // And from_comparator_ref discards it the same way.
+        let mut s: UnsafeCmpSet<i32> = CmpSet::from_comparator_ref(&stateful);
+        for v in [3, 1, 2] {
+            s.insert(v);
+        }
+        assert_eq!(s.to_vec(), vec![1, 2, 3], "ASCENDING despite reverse=true");
+    }
+
     #[test]
     fn comparator_by_ref_is_cloned() {
         // The converter currently passes a comparator as an &-to-temporary.
         let s: Set = CmpSet::from_comparator_ref(&DimIndexDimComparator);
+        // The reference is discarded and the comparator rebuilt from its TYPE;
+        // the resulting set still orders by `dim`, ignoring `high`.
         assert!(s.is_empty());
     }
 
     #[test]
     fn refcount_flavour_matches_unsafe_flavour() {
-        let owner: Value<RefcountCmpSet<DimIndex, DimIndexDimComparator>> =
-            Rc::new(RefCell::new(RefcountCmpSet::default()));
+        let owner: Value<RefcountCmpSet<DimIndex>> = Rc::new(RefCell::new(
+                RefcountCmpSet::new(cmp_fn_of::<DimIndex, DimIndexDimComparator>()),
+            ));
         let ptr = owner.as_pointer();
         ptr.with_mut(|s| {
             s.insert(di(5, true));
