@@ -41,5 +41,3 @@ std::byte f4(std::byte &a0, unsigned a1) { return operator>>=(a0, a1); }
 // `std::pair<Operation *, int>` is a SEPARATE rule in the pair/tuple modules;
 // with `()` here, a site that needs it fails LOUDLY on the missing conversion
 // instead of compiling against a guessed pointer width.
-// ---------------------------------------------------------------------------
-using t2 = std::nullptr_t;
