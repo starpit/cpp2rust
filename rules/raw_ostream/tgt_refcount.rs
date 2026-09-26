@@ -156,12 +156,18 @@ fn f17(a0: Ptr<std::fs::File>, a1: f64) -> Ptr<std::fs::File> {
     __o
 }
 
-// See tgt_unsafe.rs f18.  AnyPtr is the refcount model's `const void *`; its
-// cc2_addr_of is the identity `to_int` already uses for casts, so the digits
-// agree with any comparison the translated program makes on the same pointer.
+// See tgt_unsafe.rs f18.  `AnyPtr` is the refcount model's `const void *`, and
+// `AnyPtr::to_int` (libcc2rs/src/void.rs:106) is the same address a translated
+// cast produces, so the printed digits agree with any comparison the program
+// makes on that pointer.
+//
+// The ported version called `libcc2rs::cc2_addr_of`, which lives in
+// `libcc2rs/src/stream_fmt.rs` -- a file present only on the `dt-src-port`
+// branch. That dependency made this module fail to generate its targets and
+// left an INCOMPLETE MODULE DIR, which aborts every translation in the project.
 fn f18(a0: Ptr<std::fs::File>, a1: AnyPtr) -> Ptr<std::fs::File> {
     let __o = a0;
-    let __b = format!("0x{:x}", libcc2rs::cc2_addr_of(&a1));
+    let __b = format!("0x{:x}", a1.to_int());
     let _ = __o.write_all(__b.as_bytes());
     __o
 }
