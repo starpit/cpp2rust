@@ -45,3 +45,16 @@ unsafe fn f5(a0: Vec<libc::c_char>, a1: *const libc::c_char) -> Vec<libc::c_char
 unsafe fn f6(a0: Vec<libc::c_char>) -> Vec<libc::c_char> {
     a0.clone()
 }
+
+// The mirror of f5.  The literal is on the LEFT, so its byte walk is bounded by
+// `count()` rather than `count() + 1` -- it must NOT emit its own terminator --
+// and the StringRef appended after it carries the single terminator the result
+// ends with.  Nothing is popped, which is the whole difference from f5.
+unsafe fn f7(a0: *const libc::c_char, a1: Vec<libc::c_char>) -> Vec<libc::c_char> {
+    let __l = a0;
+    std::slice::from_raw_parts(__l, (0..).take_while(|&i| *__l.add(i) != 0).count())
+        .iter()
+        .copied()
+        .chain(a1.iter().copied())
+        .collect::<Vec<libc::c_char>>()
+}

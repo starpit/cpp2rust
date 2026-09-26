@@ -85,6 +85,44 @@
 // llvm::StringRef &`), matching LLVM, and that is what the resolved signature
 // says: `llvm::Twine llvm::operator+(llvm::StringRef, const char *)`.
 //
+// THE MIRROR-IMAGE FAST PATH -- f7, added for SentientToTrace.cpp
+// --------------------------------------------------------------
+// The NOT COVERED list below used to end with `operator+(const char *,
+// StringRef)` "which has zero sites".  It has sites now.
+// dcc/src/Conversion/SentientToTrace/SentientToTrace.cpp reaches it four
+// times over, always with the literal on the LEFT and an MLIR name on the
+// right:
+//
+//     annotate(op_a, "attr `" + op_b_attr.getName().strref() + "` mismatch");
+//                                                          // :822, :823
+//     annotate(op_b, "missing attr `" + I_a->getName().strref() + "`");
+//                                                          // :829, :830
+//     setTraceFail(op_a, "expected op type " + op_b.getName().getStringRef());
+//                                                          // :844, :845
+//     setTraceFail(op_a, "mismatch on operand `" + operandName + "`");
+//                                                          // :873, :874
+//
+// `strref()`, `getStringRef()` and the lambda parameter `operandName` (:866)
+// are each an `llvm::StringRef`, so a StringRef operand makes Twine.h:533
+// `Twine operator+(const char *, StringRef)` a better match than converting
+// both sides to Twine, exactly as it does for f5 in the other order -- which
+// is why f4 plus f1 does NOT answer these and the translation aborted on the
+// resolved signature `llvm::Twine llvm::operator+(const char *,
+// llvm::StringRef)`.
+//
+// Three of the four sites then feed the result to a further `+ "literal"`,
+// which is `Twine + const char *` and resolves to f4 with f1 converting the
+// right operand -- already covered, and the reason the probe exercises a
+// three-term chain: getting f7 right in isolation but leaving a stale
+// terminator in the middle would only show up once something is appended
+// after it.
+//
+// ORDER IS THE WHOLE CONTENT of this rule -- f5 and f7 have byte-identical
+// argument SETS and differ only in which side the literal is on, so a body
+// that concatenated its operands the wrong way round would still typecheck
+// and still produce the right LENGTH.  The probe pins it with operands that
+// are not each other's reverse.
+//
 // NOT COVERED, deliberately -- nothing in the target scope reaches them, and
 // each would need a type rule for its own argument type first:
 //   Twine(const StringLiteral &),
@@ -94,8 +132,7 @@
 //   print/dump, the `Twine(StringRef, const char *)` two-operand CONSTRUCTOR
 //   (LLVM's operator+ fast path is implemented in terms of it, but a rule for
 //   the operator answers the call site directly, so the constructor is never
-//   reached through a translated program), and the mirror-image
-//   `operator+(const char *, StringRef)` fast path, which has zero sites.
+//   reached through a translated program).
 //   Twine(std::nullptr_t) is `= delete` in LLVM and so can never be called.
 //
 // The default constructor is NOT covered either.  LLVM's is
@@ -156,6 +193,8 @@ public:
 Twine operator+(const Twine &LHS, const Twine &RHS);
 // llvm/ADT/Twine.h:540 -- inline Twine operator+(StringRef, const char *)
 Twine operator+(StringRef LHS, const char *RHS);
+// llvm/ADT/Twine.h:533 -- inline Twine operator+(const char *, StringRef)
+Twine operator+(const char *LHS, StringRef RHS);
 
 } // namespace llvm
 
@@ -176,3 +215,7 @@ llvm::Twine f5(llvm::StringRef a, const char *b) {
 }
 
 llvm::Twine f6(llvm::StringRef s) { return llvm::Twine(s); }
+
+llvm::Twine f7(const char *a, llvm::StringRef b) {
+  return llvm::operator+(a, b);
+}
