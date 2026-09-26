@@ -4736,3 +4736,16 @@ fn f396<T1: PartialEq, T2: PartialEq, T3: PartialEq, T4: PartialEq, T5: PartialE
 fn t35<T1: Default, T2: Default, T3: Default, T4: Default, T5: Default>() -> (Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>) {
     <(Value<T1>, Value<T2>, Value<T3>, Value<T4>, Value<T5>)>::default()
 }
+
+// std::__ignore_type -- see src.cpp and tgt_unsafe.rs.
+fn t36() -> () {
+    ()
+}
+
+fn f397() -> Ptr<()> {
+    Ptr::alloc(())
+}
+
+fn f398<T1>(a0: Ptr<()>, a1: T1) -> Ptr<()> {
+    a0
+}

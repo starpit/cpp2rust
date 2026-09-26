@@ -3535,3 +3535,23 @@ unsafe fn f396<T1: PartialEq, T2: PartialEq, T3: PartialEq, T4: PartialEq, T5: P
 fn t35<T1: Default, T2: Default, T3: Default, T4: Default, T5: Default>() -> (T1, T2, T3, T4, T5) {
     <(T1, T2, T3, T4, T5)>::default()
 }
+
+// std::__ignore_type -- see src.cpp.  The unit type: it holds nothing, and a
+// write to it must vanish.
+fn t36() -> () {
+    ()
+}
+
+// `std::ignore` as a place that can be assigned to.  A ZST needs no storage, and
+// `NonNull::dangling()` is the documented way to get a valid, aligned, non-null
+// pointer for one -- writing `()` through it is sound and stores nothing.  A
+// null pointer would NOT be: `*p = ()` on null is UB even for a ZST.
+unsafe fn f397() -> *mut () {
+    std::ptr::NonNull::<()>::dangling().as_ptr()
+}
+
+// `std::ignore = expr;` -- the value is evaluated (a0/a1 are already evaluated
+// by the caller) and dropped.
+unsafe fn f398<T1>(a0: *mut (), a1: T1) -> *mut () {
+    a0
+}

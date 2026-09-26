@@ -2053,3 +2053,42 @@ template <typename T1, typename T2, typename T3, typename T4, typename T5>
 bool f396(const std::tuple<T1, T2, T3, T4, T5> &a, const std::tuple<T1, T2, T3, T4, T5> &b) {
   return operator!=(a, b);
 }
+
+// --- std::ignore ------------------------------------------------------------
+//
+// `std::__ignore_type` is libc++'s type for `std::ignore`, the write-only sink
+// used as `std::tie(a, std::ignore) = f();` to discard one element.  It belongs
+// here and not in a module of its own because it only ever appears INSIDE a
+// std::tie: `std::tie(a, std::ignore)` is `std::tuple<A &, const
+// std::__ignore_type &>`, so the tie rules t4/f274/f275 (and the arity-3 ones)
+// already match it GENERICALLY with T2 = `const std::__ignore_type`.  The only
+// thing missing at HEAD was a type mapping for that element type, which is why
+// two TUs aborted with `cpp_type: const std::__ignore_type` and nothing else.
+//
+// NOT RESTATED.  `__ignore_type` is a libc++ implementation detail, so the
+// printed spelling of the key is whatever clang resolves out of the real
+// header; a local restatement would be a different declaration and could record
+// a different string while still generating and validating cleanly (rules/
+// densemap's header records the same trap for DenseMapPair).  <tuple> is
+// already included above, so `std::ignore` and its type are the real ones.
+//
+// The model is the unit type `()`.  That is the honest one: __ignore_type holds
+// nothing, and its `operator=` (libcxx/__tuple/ignore.h:24) is
+// `const __ignore_type &operator=(const _Tp &) const` -- it takes the value and
+// returns *this without storing anything.  So assigning to it must DISCARD, and
+// `*p = ()` for a ZST does exactly that while leaving the OTHER tie elements to
+// be written by f275/f279 as normal.
+
+using t36 = std::__ignore_type;
+
+// `std::ignore` itself, as a reference -- same shape as rules/iostream's
+// `std::ostream &f1() { return std::cout; }` for a global.
+const std::__ignore_type &f397() { return std::ignore; }
+
+// `std::ignore = expr;` written bare, without a tie (EnsureDeviceDeclaration.cpp
+// :109 and four siblings).  libc++ declares operator= as a member template on a
+// const object, so `dst` is a const reference.
+template <typename T1>
+const std::__ignore_type &f398(const std::__ignore_type &dst, const T1 &src) {
+  return dst.operator=(src);
+}
