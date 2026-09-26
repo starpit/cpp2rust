@@ -444,14 +444,36 @@ void addRulesFromDirectory(const std::filesystem::path &dir, Model model) {
     for (auto &[_, rule] : type_rules) {
       auto key = GetTypeMapKey(rule.src);
       auto [begin, end] = types_.equal_range(key);
+      bool already_present = false;
       for (auto it = begin; it != end; ++it) {
-        if (it->second.src == rule.src) {
-          llvm::errs() << "ERROR: duplicate type rule for C++ type '"
-                       << rule.src << "': maps to both '"
-                       << it->second.type_info.type << "' and '"
-                       << rule.type_info.type << "'\n";
-          std::exit(EXIT_FAILURE);
+        if (it->second.src != rule.src) {
+          continue;
         }
+        // An AGREEING duplicate is not a conflict. Several modules legitimately
+        // restate the same library type -- with this toolchain's libc++,
+        // rules/vector, rules/string and rules/algorithm each declare
+        // `std::__wrap_iter<const T1 *>` and all three map it to the same Rust
+        // type. Rejecting that made the converter unable to translate a single
+        // file: it exited during rule loading, before parsing any C++, with
+        // "maps to both 'Ptr<T1>' and 'Ptr<T1>'" -- naming two identical
+        // mappings as if they disagreed.
+        //
+        // Only a DISAGREEMENT is a real defect, because type lookup must be
+        // single-valued: `types_` is keyed on the printed C++ type string and
+        // every consultation takes the first match, so two different Rust types
+        // under one key would silently resolve per load order.
+        if (it->second.type_info.type == rule.type_info.type) {
+          already_present = true;
+          break;
+        }
+        llvm::errs() << "ERROR: conflicting type rules for C++ type '"
+                     << rule.src << "': maps to both '"
+                     << it->second.type_info.type << "' and '"
+                     << rule.type_info.type << "'\n";
+        std::exit(EXIT_FAILURE);
+      }
+      if (already_present) {
+        continue;
       }
       types_.emplace(std::move(key), std::move(rule));
     }
