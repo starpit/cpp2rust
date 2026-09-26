@@ -116,3 +116,69 @@ fn f7(a0: Vec<u8>) -> Vec<u8> {
     __o.push(0);
     __o
 }
+
+// operator/= overlay.  Same four-clause rule as f2/f9; the receiver of a
+// reference-returning mutator is a `Ptr<Vec<u8>>` mutated through `with_mut`,
+// as rules/string's f35 does.  ONE `with_mut` per body: the rhs bytes are
+// copied out into `__r` FIRST, before the mutable borrow is taken, so no
+// statement ever holds two guards on the same receiver.
+fn f9(a0: Ptr<Vec<u8>>, a1: Vec<u8>) -> Ptr<Vec<u8>> {
+    let __o = a0;
+    let __r: Vec<u8> = a1[..a1.len().saturating_sub(1)].to_vec();
+    __o.with_mut(|__v: &mut Vec<u8>| {
+        __v.pop();
+        if __r.first() == Some(&b'/') || __v.is_empty() {
+            __v.clear();
+        } else if __v.last() != Some(&b'/') {
+            __v.push(b'/');
+        }
+        __v.extend_from_slice(&__r);
+        __v.push(0);
+    });
+    __o
+}
+
+fn f10(a0: Ptr<Vec<u8>>, a1: Vec<u8>) -> Ptr<Vec<u8>> {
+    let __o = a0;
+    let __r: Vec<u8> = a1[..a1.len().saturating_sub(1)].to_vec();
+    __o.with_mut(|__v: &mut Vec<u8>| {
+        __v.pop();
+        if __r.first() == Some(&b'/') || __v.is_empty() {
+            __v.clear();
+        } else if __v.last() != Some(&b'/') {
+            __v.push(b'/');
+        }
+        __v.extend_from_slice(&__r);
+        __v.push(0);
+    });
+    __o
+}
+
+fn f11(a0: Ptr<Vec<u8>>, a1: &[u8]) -> Ptr<Vec<u8>> {
+    trait __Cc2PathAppLit {
+        fn __cc2_path_app_bytes(&self) -> Vec<u8>;
+    }
+    impl __Cc2PathAppLit for [u8] {
+        fn __cc2_path_app_bytes(&self) -> Vec<u8> {
+            self.iter().copied().take_while(|&c| c != 0).collect()
+        }
+    }
+    impl __Cc2PathAppLit for ::std::ffi::CStr {
+        fn __cc2_path_app_bytes(&self) -> Vec<u8> {
+            self.to_bytes().to_vec()
+        }
+    }
+    let __o = a0;
+    let __r = a1.__cc2_path_app_bytes();
+    __o.with_mut(|__v: &mut Vec<u8>| {
+        __v.pop();
+        if __r.first() == Some(&b'/') || __v.is_empty() {
+            __v.clear();
+        } else if __v.last() != Some(&b'/') {
+            __v.push(b'/');
+        }
+        __v.extend_from_slice(&__r);
+        __v.push(0);
+    });
+    __o
+}

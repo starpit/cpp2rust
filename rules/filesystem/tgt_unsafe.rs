@@ -138,3 +138,70 @@ unsafe fn f7(a0: Vec<libc::c_char>) -> Vec<libc::c_char> {
     __o.push(0);
     __o
 }
+
+// operator/= -- f2's four-clause [fs.path.append] rule applied IN PLACE.  The
+// receiver of a reference-returning mutator is a `*mut Vec<_>` and the rule
+// returns it, exactly as rules/string's f35 (`std::string::operator+=`) does.
+// The `clear()` in the first clause is what makes an ABSOLUTE right operand
+// REPLACE rather than append -- dropping it would silently build "a//b" where
+// C++ builds "/b", i.e. a path under the wrong root.
+unsafe fn f9(a0: *mut Vec<libc::c_char>, a1: Vec<libc::c_char>) -> *mut Vec<libc::c_char> {
+    let __sep = b'/' as libc::c_char;
+    let __o = a0;
+    let __r: Vec<libc::c_char> = a1[..a1.len().saturating_sub(1)].to_vec();
+    (*__o).pop();
+    if __r.first() == Some(&__sep) || (*__o).is_empty() {
+        (*__o).clear();
+    } else if (*__o).last() != Some(&__sep) {
+        (*__o).push(__sep);
+    }
+    (*__o).extend_from_slice(&__r);
+    (*__o).push(0);
+    __o
+}
+
+unsafe fn f10(a0: *mut Vec<libc::c_char>, a1: Vec<libc::c_char>) -> *mut Vec<libc::c_char> {
+    let __sep = b'/' as libc::c_char;
+    let __o = a0;
+    let __r: Vec<libc::c_char> = a1[..a1.len().saturating_sub(1)].to_vec();
+    (*__o).pop();
+    if __r.first() == Some(&__sep) || (*__o).is_empty() {
+        (*__o).clear();
+    } else if (*__o).last() != Some(&__sep) {
+        (*__o).push(__sep);
+    }
+    (*__o).extend_from_slice(&__r);
+    (*__o).push(0);
+    __o
+}
+
+// The literal rhs reaches this rule either as a byte slice or as a `c"..."`
+// CStr, for the reason f4's comment records, so it dispatches with the same
+// private trait rather than assuming one of the two.
+unsafe fn f11(a0: *mut Vec<libc::c_char>, a1: &[libc::c_char]) -> *mut Vec<libc::c_char> {
+    trait __Cc2PathAppLit {
+        fn __cc2_path_app_bytes(&self) -> Vec<libc::c_char>;
+    }
+    impl __Cc2PathAppLit for [libc::c_char] {
+        fn __cc2_path_app_bytes(&self) -> Vec<libc::c_char> {
+            self.iter().copied().take_while(|&c| c != 0).collect()
+        }
+    }
+    impl __Cc2PathAppLit for ::std::ffi::CStr {
+        fn __cc2_path_app_bytes(&self) -> Vec<libc::c_char> {
+            self.to_bytes().iter().map(|&b| b as libc::c_char).collect()
+        }
+    }
+    let __sep = b'/' as libc::c_char;
+    let __o = a0;
+    let __r = a1.__cc2_path_app_bytes();
+    (*__o).pop();
+    if __r.first() == Some(&__sep) || (*__o).is_empty() {
+        (*__o).clear();
+    } else if (*__o).last() != Some(&__sep) {
+        (*__o).push(__sep);
+    }
+    (*__o).extend_from_slice(&__r);
+    (*__o).push(0);
+    __o
+}

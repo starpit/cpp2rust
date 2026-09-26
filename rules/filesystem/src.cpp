@@ -257,3 +257,42 @@ std::filesystem::path f6(const std::filesystem::path &p) {
 std::filesystem::path f7(const std::filesystem::path &p) {
   return p.filename();
 }
+
+// operator/= -- THE MUTATING FORM, and the current blocker of
+// progtailor_analyze_execlist_standalone.cpp:43-44 (converter.cpp's
+// unsupported-`/=` path).  The earlier note in this file said it had "zero
+// sites"; it has three, all in that TU:
+//
+//     auto senprog_path = build_dir;   // path copy
+//     senprog_path /= line;            // std::string rhs
+//     senprog_path /= "senprog.txt";   // string-literal rhs
+//
+// libc++ declares ONE non-template `operator/=(const path&)` plus a
+// `template <class _Src> path& operator/=(const _Src&)` (__filesystem/path.h),
+// so a std::string rhs and a char-array rhs are SEPARATE instantiated
+// signatures from the path rhs, and each needs its own rule.  Keys were read
+// back out of ir_src.json, not copied from the header.
+//
+// THE SEMANTICS ARE [fs.path.append], NOT string concatenation, and the
+// difference is silent:
+//     path("a")  /= "b"   -> "a/b"     separator inserted
+//     path("a/") /= "b"   -> "a/b"     NOT "a//b" -- no doubled separator
+//     path("a")  /= "/b"  -> "/b"      ABSOLUTE RHS REPLACES ENTIRELY
+//     path("")   /= "b"   -> "b"       empty lhs contributes no separator
+//     path("a//")/= "b"   -> "a//b"    an existing redundant separator is KEPT
+// A body spelled `a0.push_str(a1)` is wrong on three of those five and
+// compiles.  The bodies below are the same four-clause rule operator/ (f2)
+// already implements, applied in place, so the two forms cannot drift.
+
+std::filesystem::path &f9(std::filesystem::path &a,
+                          const std::filesystem::path &b) {
+  return a.operator/=(b);
+}
+
+std::filesystem::path &f10(std::filesystem::path &a, const std::string &s) {
+  return a.operator/=(s);
+}
+
+std::filesystem::path &f11(std::filesystem::path &a, const char (&s)[15]) {
+  return a.operator/=(s);
+}
