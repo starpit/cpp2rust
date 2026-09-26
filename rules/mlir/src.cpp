@@ -450,3 +450,119 @@ typename llvm::detail::indexed_accessor_range_base<T2, T3, T1, T1, T1>::iterator
 f24(const llvm::detail::indexed_accessor_range_base<T2, T3, T1, T1, T1> &a0) {
   return a0.end();
 }
+
+// ---------------------------------------------------------------------------
+// ROW 3: `!=` ON AN mlir::Operation USER ITERATOR.
+//
+// `dcc/src/Conversion/VectorChainLowering/CommonHelpers/VectorOperands.cpp:339`
+//   if (op.getOperation()->user_begin() != op.getOperation()->user_end())
+// aborts the TU with `unsupported CXXOperatorCallExpr: !=`.
+//
+// WHICH CLASS THE KEY NAMES, read out of the real headers rather than guessed:
+//   Operation.h:866    using user_iterator = ValueUserIterator<use_iterator, OpOperand>;
+//   UseDefLists.h:246  using use_iterator  = ValueUseIterator<OperandType>;
+//   UseDefLists.h:341  ValueUserIterator final
+//                        : llvm::mapped_iterator_base<ValueUserIterator<UseIteratorT,
+//                                                     OperandType>, UseIteratorT, Operation *>
+//   STLExtras.h:374    mapped_iterator_base : iterator_adaptor_base<DerivedT, ItTy,
+//                        iterator_category, remove_reference_t<ReferenceTy>,
+//                        difference_type, remove_reference_t<ReferenceTy> *, ReferenceTy>
+//   iterator.h:238     iterator_adaptor_base : iterator_facade_base<DerivedT,
+//                        IteratorCategoryT, T, DifferenceTypeT, PointerT, ReferenceT>
+//   iterator.h:183     bool iterator_facade_base::operator!=(const DerivedT &) const
+// So `operator!=` is declared ONLY on iterator_facade_base -- three levels up --
+// and the two intermediate bases are FLATTENED AWAY below, because only the
+// facade's own name appears in the recorded key.
+//
+// NOTHING IS ELIDED FROM THE FACADE'S ARGUMENT LIST, and the reason is worth
+// recording because the defaulted-template-args trap points the other way.
+// Substituting the chain gives T = `mlir::Operation *`, DifferenceTypeT = `long`
+// (its default), PointerT = `mlir::Operation **` (= the default `T *`), but
+// ReferenceT = `mlir::Operation *` where the default is `T &`, i.e.
+// `mlir::Operation *&`.  A defaulted argument is suppressed only while every
+// argument after it is also defaulted, so the LAST one differing keeps all six
+// printed -- the same six-argument shape f19 needs, not the elided shape
+// `ValueUseIterator` (UseDefLists.h:303, a DIFFERENT class that is not the
+// receiver here) would need.
+//
+// REPRESENTATION: A SINGLE POINTER, and that is the whole state.
+// `ValueUseIterator`'s only member is `detail::IROperandBase *current`
+// (UseDefLists.h:332) and its `operator==` is `current == rhs.current`
+// (UseDefLists.h:326); `ValueUserIterator` adds no member of its own -- it
+// stores the wrapped use iterator (`ItTy I`, iterator.h:244).  So POSITION
+// IDENTITY IS POINTER IDENTITY here, and no model of `mlir::OpOperand`'s
+// contents is needed for `!=` -- which is exactly what the row needs, since
+// dereferencing (`mapElement` -> `value.getOwner()`) would need one.
+//
+// The ctor parameter is spelled `OperandType *` rather than
+// `detail::IROperandBase *`: the class itself treats `current` as an
+// `OperandType *` (UseDefLists.h:317, `return (OperandType *)current;`), the real
+// call site converts an `OpOperand *` to the base implicitly, and keeping one
+// pointer type avoids inventing a cast between two representations that are the
+// same address.  `Operation::user_begin()/user_end()` are deliberately NOT
+// mapped: they walk the object's use list, which this port has no model of.
+// They are also not what the probe needs -- both ctors are public
+// (UseDefLists.h:308, STLExtras.h:384), so an iterator is producible from a bare
+// pointer, which is what makes `!=` verifiable at all.
+//
+// `ValueUseIterator` is restated WITHOUT its own facade base on purpose: it is
+// only a template argument and a producer here, and giving it a base would
+// record a second, three-argument facade key that nothing below implements.
+
+namespace std {
+// The category ValueUseIterator passes, hence what the facade instantiation
+// prints.  Restated for the reason at the top of this file.
+struct forward_iterator_tag {};
+} // namespace std
+
+namespace mlir {
+
+// UseDefLists.h:303, reduced to what these rules name.
+template <typename OperandType> class ValueUseIterator {
+public:
+  ValueUseIterator(OperandType *use);
+};
+
+// UseDefLists.h:341, with mapped_iterator_base and iterator_adaptor_base
+// flattened into the facade instantiation they produce.
+template <typename UseIteratorT, typename OperandType>
+class ValueUserIterator final
+    : public llvm::iterator_facade_base<
+          ValueUserIterator<UseIteratorT, OperandType>,
+          std::forward_iterator_tag, Operation *, long, Operation **,
+          Operation *> {
+public:
+  ValueUserIterator(UseIteratorT u);
+};
+
+} // namespace mlir
+
+// Both iterators ARE the one pointer.  Two parameters on t8 because the use site
+// spells both (`ValueUserIterator<ValueUseIterator<OpOperand>, OpOperand>`).
+template <typename T1> using t7 = mlir::ValueUseIterator<T1>;
+template <typename T1, typename T2> using t8 = mlir::ValueUserIterator<T1, T2>;
+
+// The row's blocker: the INHERITED facade member.  Spelled `a.operator!=(b)`;
+// a bare `a != b` records no src entry and aborts every translation.
+// The parameters are BY VALUE even though the real member is
+// `operator!=(const DerivedT &) const`: with a reference receiver the converter
+// emits `&mut a as *mut i32` for a representation that IS a pointer, which is
+// `error[E0606]: casting &mut *mut i32 as *mut i32 is invalid` (unsafe) and
+// `error[E0605]: non-primitive cast Ptr<Ptr<i32>> as Ptr<i32>` (refcount).
+// The recorded key comes from the CALLEE's signature, not from f25's own
+// parameter spelling, so it is unchanged -- verified by reading ir_src.json back.
+template <typename T1, typename T2>
+bool f25(mlir::ValueUserIterator<T1, T2> a, mlir::ValueUserIterator<T1, T2> b) {
+  return a.operator!=(b);
+}
+
+// PRODUCERS.  Both are identity on the pointer -- see the representation note.
+template <typename T1> mlir::ValueUseIterator<T1> f26(T1 *a0) {
+  return mlir::ValueUseIterator<T1>(a0);
+}
+
+template <typename T1>
+mlir::ValueUserIterator<mlir::ValueUseIterator<T1>, T1>
+f27(mlir::ValueUseIterator<T1> a0) {
+  return mlir::ValueUserIterator<mlir::ValueUseIterator<T1>, T1>(a0);
+}

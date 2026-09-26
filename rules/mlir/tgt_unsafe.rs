@@ -165,3 +165,31 @@ unsafe fn f23<T1, T2, T3: Clone>(a0: (T3, i64)) -> (T3, i64) {
 unsafe fn f24<T1, T2, T3: Clone>(a0: (T3, i64)) -> (T3, i64) {
     (a0.0.clone(), a0.1)
 }
+
+// ROW 3: mlir::Operation's USER iterator. A single pointer is the entire state
+// (UseDefLists.h:332 `detail::IROperandBase *current`; ValueUserIterator adds no
+// member, it stores the wrapped iterator at iterator.h:244), and operator== is
+// `current == rhs.current` (UseDefLists.h:326). So POSITION IDENTITY IS POINTER
+// IDENTITY and no model of mlir::OpOperand's contents is needed.
+fn t7<T1>() -> *mut T1 {
+    std::ptr::null_mut()
+}
+
+fn t8<T1, T2>() -> *mut T2 {
+    std::ptr::null_mut()
+}
+
+// Pointer identity, NOT value equality: two iterators over distinct OpOperands
+// holding equal values must compare UNEQUAL.
+unsafe fn f25<T1, T2>(a0: *mut T2, a1: *mut T2) -> bool {
+    a0 != a1
+}
+
+// Both producers are identity on the pointer.
+unsafe fn f26<T1>(a0: *mut T1) -> *mut T1 {
+    a0
+}
+
+unsafe fn f27<T1>(a0: *mut T1) -> *mut T1 {
+    a0
+}

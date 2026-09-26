@@ -183,3 +183,27 @@ fn f23<T1, T2, T3: Clone>(a0: (T3, i64)) -> (T3, i64) {
 fn f24<T1, T2, T3: Clone>(a0: (T3, i64)) -> (T3, i64) {
     (a0.0.clone(), a0.1)
 }
+
+// ROW 3: mlir::Operation's USER iterator -- see tgt_unsafe.rs for why the whole
+// state is one pointer. `Ptr<T>` is the refcount model's pointer and it compares
+// by identity (libcc2rs rc.rs:166 `impl<T> PartialEq for Ptr<T>`), so the body is
+// the same relation in both models.
+fn t7<T1>() -> Ptr<T1> {
+    Ptr::null()
+}
+
+fn t8<T1, T2>() -> Ptr<T2> {
+    Ptr::null()
+}
+
+fn f25<T1, T2>(a0: Ptr<T2>, a1: Ptr<T2>) -> bool {
+    a0 != a1
+}
+
+fn f26<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0
+}
+
+fn f27<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0
+}
