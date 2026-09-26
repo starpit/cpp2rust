@@ -151,6 +151,96 @@ struct DenseMapInfoEnableDefault;
 template <typename KeyT, typename Enable = DenseMapInfoEnableDefault>
 struct DenseMapInfo;
 
+// THE PRIMITIVE SPECIALISATION ITSELF, in the TWO-ARGUMENT spelling.
+// ------------------------------------------------------------------
+// Everything above only NAMES DenseMapInfo in order to key the DenseSet
+// families; nothing maps DenseMapInfo's own static surface.  The emitted code
+// needs it because the converter PORTS user specialisations for enums, which
+// delegate to the primitive one:  InitBin.cpp.rs's
+// llvm_DenseMapInfo_mlir_sdscbundle_InputArgExtractKind__void_::getEmptyKey()
+// is `(unsigned)llvm::DenseMapInfo<unsigned int, void>::getEmptyKey()`.  That
+// name is undefined in every emitted TU -- 519 rustc errors, 3966 references,
+// all of them `::getEmptyKey` / `::getTombstoneKey` / `::getHashValue` (1322
+// each) and NOT ONE `::isEqual`.
+//
+// WHICH LLVM DECLARATION THESE BODIES COME FROM, verbatim from
+// LLVM-22.1.3 llvm/ADT/DenseMapInfo.h:111-134, the partial specialisation
+//     template <typename T>
+//     struct DenseMapInfo<
+//         T, std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, char>>> {
+//       static constexpr T getEmptyKey() { return std::numeric_limits<T>::max(); }
+//       static constexpr T getTombstoneKey() {
+//         if constexpr (std::is_unsigned_v<T> || std::is_same_v<T, long>)
+//           return std::numeric_limits<T>::max() - 1;
+//         else
+//           return std::numeric_limits<T>::min();
+//       }
+//       static unsigned getHashValue(const T &Val) {
+//         if constexpr (std::is_unsigned_v<T> && sizeof(T) > sizeof(unsigned))
+//           return densemap::detail::mix(Val);
+//         else
+//           return static_cast<unsigned>(Val *
+//                                        static_cast<std::make_unsigned_t<T>>(37U));
+//       }
+//       static bool isEqual(const T &LHS, const T &RHS) { return LHS == RHS; }
+//     };
+// For T = unsigned int that resolves to EXACTLY:
+//     getEmptyKey()     = 0xFFFFFFFF   (numeric_limits<unsigned>::max())
+//     getTombstoneKey() = 0xFFFFFFFE   (unsigned, so max() - 1)
+//     getHashValue(v)   = (unsigned)(v * 37u)   -- sizeof(unsigned) is NOT >
+//                         sizeof(unsigned), so the `mix` branch is not taken;
+//                         the multiply WRAPS (unsigned arithmetic is modular).
+//     isEqual(a, b)     = a == b
+// The hash is therefore reproduced EXACTLY, not merely "consistently": the
+// bodies below are `a0.wrapping_mul(37)`, which is the same function on the
+// same domain.  (A hash only needs to be consistent and to agree with isEqual,
+// but there is no reason to settle for that when the real body is one multiply.)
+// The SENTINELS, by contrast, are NOT free: an enum specialisation casts them
+// back to its enum, so they must round-trip and must stay distinct from every
+// real key or a DenseMap silently loses or misfinds an entry.
+//
+// Only `unsigned int` is specialised.  That is the only primitive DenseMapInfo
+// the 18-TU emission asks for (`llvm_DenseMapInfo_unsigned_int__void_`); the
+// other spellings in that output are enums (ported) or 4-argument DenseMap
+// types.  int / long / unsigned long would each need their own specialisation
+// because getTombstoneKey and getHashValue BRANCH on signedness and width --
+// do not generalise these four bodies to a template.
+//
+// THE KEY IS THE ONE-ARGUMENT SPELLING -- MEASURED, not deduced.  Running the
+// converter with `-verbose` on probe/dmi.cpp prints, for every one of these
+// calls:
+//     search expr unsigned int llvm::DenseMapInfo<unsigned int>::getEmptyKey()
+// i.e. the `Enable` argument is ELIDED, because in the REAL header the default
+// is `void` and `void` is exactly what the use site writes -- clang's
+// SuppressDefaultTemplateArgs then drops it.  The MANGLED FALLBACK NAME the
+// converter emits when no rule matches is printed by a different printer that
+// keeps it, which is why the undefined symbol reads
+// `llvm_DenseMapInfo_unsigned_int__void_` while the string searched for has one
+// argument.  Keying on the two-argument spelling therefore matched nothing, and
+// the first draft of this family did exactly that.
+//
+// Both spellings are covered below, because which one a TU asks for depends on
+// whether ITS use site wrote the `void`:
+//   * `DenseMapInfo<unsigned int, DenseMapInfoEnableDefault>` is what
+//     `llvm::DenseMapInfo<unsigned int>` in a rule resolves to; the sentinel
+//     default is elided, so the recorded key has ONE argument -- this is the one
+//     the emission actually needs.
+//   * `DenseMapInfo<unsigned int, void>` keeps its second argument (void differs
+//     from the sentinel), for a use site that spells it out.
+template <> struct DenseMapInfo<unsigned int, DenseMapInfoEnableDefault> {
+  static unsigned int getEmptyKey();
+  static unsigned int getTombstoneKey();
+  static unsigned int getHashValue(const unsigned int &Val);
+  static bool isEqual(const unsigned int &LHS, const unsigned int &RHS);
+};
+
+template <> struct DenseMapInfo<unsigned int, void> {
+  static unsigned int getEmptyKey();
+  static unsigned int getTombstoneKey();
+  static unsigned int getHashValue(const unsigned int &Val);
+  static bool isEqual(const unsigned int &LHS, const unsigned int &RHS);
+};
+
 namespace detail {
 
 // DenseSet.h:32 / :35.  DenseSetPair derives from DenseSetEmpty (the empty base
@@ -852,4 +942,46 @@ template <typename T1, unsigned T2>
 typename sds<T1, T2>::const_iterator &
 f71(typename sds<T1, T2>::const_iterator &it) {
   return it.operator++();
+}
+
+// ---------------------------------------------------------------------------
+// FAMILY FOUR -- llvm::DenseMapInfo<unsigned int, void>'s static surface.
+// See the banner at the top of this file for the LLVM source of every body and
+// for why only `unsigned int` appears.  A STATIC member function has no
+// receiver, so none of these takes an a0 for `this`.
+// ---------------------------------------------------------------------------
+
+using t11 = llvm::DenseMapInfo<unsigned int, void>;
+
+unsigned int f72() { return llvm::DenseMapInfo<unsigned int, void>::getEmptyKey(); }
+
+unsigned int f73() {
+  return llvm::DenseMapInfo<unsigned int, void>::getTombstoneKey();
+}
+
+unsigned int f74(const unsigned int &v) {
+  return llvm::DenseMapInfo<unsigned int, void>::getHashValue(v);
+}
+
+bool f75(const unsigned int &a, const unsigned int &b) {
+  return llvm::DenseMapInfo<unsigned int, void>::isEqual(a, b);
+}
+
+// ---------------------------------------------------------------------------
+// FAMILY FIVE -- the SAME static surface keyed on the ONE-ARGUMENT spelling,
+// which is what the converter actually searches for (see the banner above).
+// ---------------------------------------------------------------------------
+
+using t12 = llvm::DenseMapInfo<unsigned int>;
+
+unsigned int f76() { return llvm::DenseMapInfo<unsigned int>::getEmptyKey(); }
+
+unsigned int f77() { return llvm::DenseMapInfo<unsigned int>::getTombstoneKey(); }
+
+unsigned int f78(const unsigned int &v) {
+  return llvm::DenseMapInfo<unsigned int>::getHashValue(v);
+}
+
+bool f79(const unsigned int &a, const unsigned int &b) {
+  return llvm::DenseMapInfo<unsigned int>::isEqual(a, b);
 }

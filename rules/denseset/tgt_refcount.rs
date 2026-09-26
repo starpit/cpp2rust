@@ -497,3 +497,52 @@ fn f71<T1: Ord + Clone + 'static>(
     a0.inc();
     a0.clone()
 }
+
+// llvm::DenseMapInfo<unsigned int, void> is an EMPTY struct -- four statics and
+// no members -- so the unit type carries exactly the same (zero) information.
+// Same mapping rules/stringmap t4 uses for llvm::EmptyStringSetTag.
+fn t11() -> () {
+    ()
+}
+
+// numeric_limits<unsigned>::max()
+fn f72() -> u32 {
+    u32::MAX
+}
+
+// numeric_limits<unsigned>::max() - 1
+fn f73() -> u32 {
+    u32::MAX - 1
+}
+
+// (unsigned)(Val * 37u) -- unsigned multiply is modular in C++, so wrapping_mul
+// is the exact body, not an approximation.
+fn f74(a0: u32) -> u32 {
+    a0.wrapping_mul(37)
+}
+
+fn f75(a0: u32, a1: u32) -> bool {
+    a0 == a1
+}
+
+// See t11/f72..f75: same bodies, ONE-ARGUMENT key.  This is the family the
+// emitted code actually resolves against.
+fn t12() -> () {
+    ()
+}
+
+fn f76() -> u32 {
+    u32::MAX
+}
+
+fn f77() -> u32 {
+    u32::MAX - 1
+}
+
+fn f78(a0: u32) -> u32 {
+    a0.wrapping_mul(37)
+}
+
+fn f79(a0: u32, a1: u32) -> bool {
+    a0 == a1
+}
