@@ -148,6 +148,33 @@ fn f31<T1: PartialEq>(a0: Option<Value<T1>>, a1: T1) -> bool {
     a0 != Some(Rc::new(RefCell::new(a1)))
 }
 
+// --- optional RELATIONAL vs a BARE VALUE (see src.cpp) ----------------------
+// The bare value is wrapped into a Value<T1> so the comparison is the same
+// Option<Value<T1>> ordering f32-f35's unsafe twins use: Rc<T> and RefCell<T>
+// both delegate PartialOrd to what they hold, and Option orders None before
+// every Some, which is exactly the standard's "a disengaged optional is less
+// than any value".  So `<`/`<=` are true for a disengaged optional and
+// `>`/`>=` are false, and an engaged one compares its contained value.
+//
+// The Some(...) temporary is a fresh Rc, so only ONE borrow of the receiver is
+// live across the comparison and there is no RefCell double-borrow here.
+
+fn f32<T1: PartialOrd>(a0: Option<Value<T1>>, a1: T1) -> bool {
+    a0 < Some(Rc::new(RefCell::new(a1)))
+}
+
+fn f33<T1: PartialOrd>(a0: Option<Value<T1>>, a1: T1) -> bool {
+    a0 > Some(Rc::new(RefCell::new(a1)))
+}
+
+fn f34<T1: PartialOrd>(a0: Option<Value<T1>>, a1: T1) -> bool {
+    a0 <= Some(Rc::new(RefCell::new(a1)))
+}
+
+fn f35<T1: PartialOrd>(a0: Option<Value<T1>>, a1: T1) -> bool {
+    a0 >= Some(Rc::new(RefCell::new(a1)))
+}
+
 // --- has_value()/reset() ---------------------------------------------------
 // libc++ declares these two in private base classes of std::optional, so both
 // the type rules and the expression rules name the base class (see src.cpp).

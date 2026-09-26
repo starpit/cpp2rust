@@ -142,6 +142,32 @@ unsafe fn f31<T1: PartialEq>(a0: Option<T1>, a1: T1) -> bool {
     a0 != Some(a1)
 }
 
+// --- optional RELATIONAL vs a BARE VALUE (see src.cpp) ----------------------
+// `Some(a1)` then Option's own PartialOrd is exactly the standard's rule,
+// because Rust derives Option's ordering with None < Some(_): a disengaged
+// optional compares LESS THAN every bare value, so `<`/`<=` are true for it and
+// `>`/`>=` are false, which is what [optional.comparewitht] specifies.  An
+// engaged one compares its contained VALUE.  Writing these as an engagement
+// test, or as `a0.unwrap() <= a1`, would be wrong on the disengaged case (and
+// the unwrap would panic there).  This is NOT the same shape as f30/f31: for ==
+// disengaged is unequal both ways, here it has a definite side.
+
+unsafe fn f32<T1: PartialOrd>(a0: Option<T1>, a1: T1) -> bool {
+    a0 < Some(a1)
+}
+
+unsafe fn f33<T1: PartialOrd>(a0: Option<T1>, a1: T1) -> bool {
+    a0 > Some(a1)
+}
+
+unsafe fn f34<T1: PartialOrd>(a0: Option<T1>, a1: T1) -> bool {
+    a0 <= Some(a1)
+}
+
+unsafe fn f35<T1: PartialOrd>(a0: Option<T1>, a1: T1) -> bool {
+    a0 >= Some(a1)
+}
+
 // --- has_value()/reset() ---------------------------------------------------
 // libc++ declares these two in private base classes of std::optional, so both
 // the type rules and the expression rules name the base class (see src.cpp).

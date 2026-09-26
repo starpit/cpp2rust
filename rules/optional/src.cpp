@@ -176,6 +176,61 @@ bool f31(const std::optional<T1> &a0, const T2 &a1) {
   return operator!=(a0, a1);
 }
 
+// The MIXED-VALUE RELATIONAL overloads, the <,>,<=,>= twins of f30/f31.  libc++
+// declares each as a free function TEMPLATE with a second, independent template
+// parameter, e.g.
+//   template <class _Tp, class _Up> bool operator>=(const optional<_Tp>&, const _Up&)
+// so they are spelled FREE here, exactly like f30/f31, and T2 is DROPPED on the
+// target side for the same reason (the model represents the bare value at the
+// same Rust type as the contained one; a genuinely heterogeneous comparison
+// would need T1: PartialOrd<T2> and no site in scope has one).
+//
+// NOTE ON THE MANGLED NAME, because it has already cost one agent a cycle: the
+// IR spells `>=` as `operator ge` (and `<=` as `operator le`, `<<` as
+// `operator shl`).  Seeing `operator ge` in a --verbose dump is the NORMAL
+// spelling, not evidence that a rule failed to bind.
+//
+// THE SITE: dcc/src/Transform/Sentient/AnnotateMacXRFWtRange.cpp:104 and :106,
+// `min_val < 64` and `max_val >= 64`, where min_val/max_val are
+// std::optional<int64_t> (declared :97/:100) and 64 is a bare int.  So this TU
+// needs BOTH `<` and `>=`; `>` and `<=` are here because they are the same
+// one-liner and a hole in the table aborts a whole TU at the next site.
+//
+// SEMANTICS, AND THEY ARE NOT ==' s.  [optional.comparewitht] gives
+//     x <  v  ==  bool(x) ? *x <  v : true
+//     x >  v  ==  bool(x) ? *x >  v : false
+//     x <= v  ==  bool(x) ? *x <= v : true
+//     x >= v  ==  bool(x) ? *x >= v : false
+// i.e. a DISENGAGED optional is strictly LESS THAN every bare value -- so
+// `nullopt >= x` is FALSE and `nullopt < x` is TRUE.  That is a different rule
+// from ==, where disengaged is merely unequal in both directions, and it is the
+// case a plausible-looking body (test engagement, or unwrap and compare) gets
+// wrong.  It also means `min_val < 64` at the site above is TRUE when the
+// analysis found no constant, which is load-bearing for that pass.
+//
+// ORDER MATTERS here in a way it did not for ==/!=: these operators are not
+// commutative, so the probe checks engaged-and-greater against
+// engaged-and-less and not merely that the thing compiles.
+template <typename T1, typename T2>
+bool f32(const std::optional<T1> &a0, const T2 &a1) {
+  return operator<(a0, a1);
+}
+
+template <typename T1, typename T2>
+bool f33(const std::optional<T1> &a0, const T2 &a1) {
+  return operator>(a0, a1);
+}
+
+template <typename T1, typename T2>
+bool f34(const std::optional<T1> &a0, const T2 &a1) {
+  return operator<=(a0, a1);
+}
+
+template <typename T1, typename T2>
+bool f35(const std::optional<T1> &a0, const T2 &a1) {
+  return operator>=(a0, a1);
+}
+
 // ---------------------------------------------------------------------------
 // modifiers / has_value()
 //

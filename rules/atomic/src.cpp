@@ -189,3 +189,70 @@ int f4(std::__atomic_base<int> &o) { return o.operator++(); }
 unsigned long f5(std::__atomic_base<unsigned long> &o) {
   return o.operator++();
 }
+
+// ---------------------------------------------------------------------------
+// The -- table, and the `long` width.
+//
+// util/variabledefinition/VariableDefinition.cpp needs PREFIX `--` on a
+// std::atomic<long>.  Two things about the key are worth recording because each
+// of them costs a cycle:
+//
+//   1. THE KEY NAMES THE BASE, not std::atomic.  libc++ puts the integral
+//      read-modify-write operations on std::__atomic_base<_Tp, bool>, and
+//      std::atomic<_Tp> inherits them, so the converter asks for
+//      `std::__atomic_base<long>::operator--()`.  A rule keyed on
+//      `std::atomic<long>::operator--` resolves fine as C++ and then matches
+//      NOTHING.  Same reason f2-f5 above are spelled on the base.
+//
+//   2. THE WIDTH IS CONCRETE for the defaulted-bool reason spelled out at
+//      length above f2: `long` is a distinct width from the `int` and
+//      `unsigned long` already here, so it needs its own rules even though the
+//      body is identical.
+//
+// PREFIX vs POSTFIX is the trap this block must not fall into, and it is
+// SILENT: libc++ (__atomic/atomic.h) is
+//
+//     _Tp operator--(int) { return fetch_sub(_Tp(1)); }          // OLD value
+//     _Tp operator--()    { return fetch_sub(_Tp(1)) - _Tp(1); } // NEW value
+//
+// so prefix answers the DECREMENTED value and postfix the value before.  Both
+// return a prvalue of _Tp -- prefix does NOT return a reference to the atomic,
+// because an atomic's value is only observable through a load -- which is why
+// these are spelled with a `T` return and map onto libcc2rs's PrefixDec
+// ("*self = self.wrapping_sub(1); *self") and PostfixDec ("let copy = *self;
+// *self = self.wrapping_sub(1); copy") respectively.  Using the wrong one
+// compiles and answers one off; the probe therefore prints BOTH the returned
+// value and the stored value after the operation.
+//
+// WRAPPING IS CORRECT FOR THE SIGNED WIDTHS, the same non-obvious point made
+// above f3: signed overflow on a plain `long` is UB, but
+// [atomics.types.int] specifies the atomic arithmetic operations as
+// two's-complement with "no undefined results", and libc++ implements them as
+// fetch_sub, so std::atomic<long> underflow is DEFINED to wrap.  A checked
+// `-= 1` would introduce a panic C++ does not have.
+//
+// The `++` pair for `long` and the `--` pairs for `int`/`unsigned long` are
+// here as well: they complete a table that was already three quarters written,
+// each is the same one-liner, and leaving a hole in it means the next site on a
+// width already present aborts the whole TU.
+// ---------------------------------------------------------------------------
+
+long f6(std::__atomic_base<long> &o) { return o.operator--(); }
+
+long f7(std::__atomic_base<long> &o, int a1) { return o.operator--(a1); }
+
+long f8(std::__atomic_base<long> &o) { return o.operator++(); }
+
+long f9(std::__atomic_base<long> &o, int a1) { return o.operator++(a1); }
+
+int f10(std::__atomic_base<int> &o) { return o.operator--(); }
+
+int f11(std::__atomic_base<int> &o, int a1) { return o.operator--(a1); }
+
+unsigned long f12(std::__atomic_base<unsigned long> &o) {
+  return o.operator--();
+}
+
+unsigned long f13(std::__atomic_base<unsigned long> &o, int a1) {
+  return o.operator--(a1);
+}

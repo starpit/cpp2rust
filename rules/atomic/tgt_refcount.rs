@@ -55,3 +55,73 @@ fn f5(a0: Ptr<u64>) -> u64 {
         __new
     })
 }
+
+// The -- table and the `long` width.  As with f2-f5 the increment/decrement is
+// spelled out on the POINTEE via read/write rather than through libcc2rs's
+// PrefixDec/PostfixDec: the Ptr impls of those move the HANDLE by one element,
+// which would compile, leave the counter untouched and hand back aliases to it.
+// Prefix answers the NEW value, postfix the OLD one (see src.cpp).
+
+fn f6(a0: Ptr<i64>) -> i64 {
+    ({
+        let __new: i64 = a0.read().wrapping_sub(1);
+        a0.write(__new);
+        __new
+    })
+}
+
+fn f7(a0: Ptr<i64>) -> i64 {
+    ({
+        let __old: i64 = a0.read();
+        a0.write(__old.wrapping_sub(1));
+        __old
+    })
+}
+
+fn f8(a0: Ptr<i64>) -> i64 {
+    ({
+        let __new: i64 = a0.read().wrapping_add(1);
+        a0.write(__new);
+        __new
+    })
+}
+
+fn f9(a0: Ptr<i64>) -> i64 {
+    ({
+        let __old: i64 = a0.read();
+        a0.write(__old.wrapping_add(1));
+        __old
+    })
+}
+
+fn f10(a0: Ptr<i32>) -> i32 {
+    ({
+        let __new: i32 = a0.read().wrapping_sub(1);
+        a0.write(__new);
+        __new
+    })
+}
+
+fn f11(a0: Ptr<i32>) -> i32 {
+    ({
+        let __old: i32 = a0.read();
+        a0.write(__old.wrapping_sub(1));
+        __old
+    })
+}
+
+fn f12(a0: Ptr<u64>) -> u64 {
+    ({
+        let __new: u64 = a0.read().wrapping_sub(1);
+        a0.write(__new);
+        __new
+    })
+}
+
+fn f13(a0: Ptr<u64>) -> u64 {
+    ({
+        let __old: u64 = a0.read();
+        a0.write(__old.wrapping_sub(1));
+        __old
+    })
+}
