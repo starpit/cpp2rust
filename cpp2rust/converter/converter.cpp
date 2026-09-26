@@ -11,6 +11,7 @@
 #include <clang/Basic/Version.h>
 #include <clang/Sema/Template.h>
 #include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/DenseSet.h>
 #include <llvm/Support/ConvertUTF.h>
 #include <llvm/Support/ErrorHandling.h>
 
@@ -8612,6 +8613,46 @@ std::string Converter::ConvertIRFragment(
 
   auto all_args = BuildUnifiedArgs(expr, args, num_args);
 
+  // A placeholder that appears MORE THAN ONCE in a rule body re-converts its
+  // argument at every occurrence, so an argument with a SIDE EFFECT runs once
+  // per occurrence. Measured on rules/mlir f19 (`==` over the `(base, index)`
+  // pair), whose body reads `a0` twice -- once per field: chaining f21
+  // (`iterator &operator++()`) into it emitted
+  //   { (*w.borrow_mut()).1 += 1; (..) }.0 == (..).0
+  //     && { (*w.borrow_mut()).1 += 1; (..) }.1 == (..).1
+  // i.e. `index += 1` TWICE in one comparison. That COMPILES and RUNS, and it
+  // silently DOUBLE STEPS: the probe printed pos 2/4/6 where 1/2/3 were owed.
+  // A compile error would have been better; no rule author can work around it,
+  // because the repetition is in the body they must write to read two fields.
+  //
+  // So convert such an argument ONCE into a `let`, and spell every occurrence as
+  // that binding. Gated on HasSideEffects: a plain variable or literal is free
+  // to re-spell, and binding it would churn every existing rule's output.
+  //
+  // Only when every occurrence of the index shares one Access: the converted
+  // text depends on it, so differing accesses are genuinely different
+  // expressions and collapsing them would be wrong. That case does not arise in
+  // any current rule -- f19 reads `a0` with one access and appends `.0`/`.1` as
+  // TEXT fragments -- and leaving it alone keeps this from silently changing
+  // output it has not reasoned about.
+  llvm::DenseMap<unsigned, unsigned> ph_counts;
+  llvm::DenseMap<unsigned, TranslationRule::Access> ph_access;
+  llvm::DenseSet<unsigned> ph_mixed_access;
+  for (auto &frag : fragments) {
+    if (auto *ph = std::get_if<PlaceholderFragment>(&frag)) {
+      if (ph_counts[ph->n]++ == 0) {
+        ph_access[ph->n] = ph->access;
+      } else if (ph_access[ph->n] != ph->access) {
+        ph_mixed_access.insert(ph->n);
+      }
+    }
+  }
+  // Name and text of the binding for each index that earned one, filled lazily
+  // at the FIRST occurrence so the binding's text is produced in the same
+  // converter state the un-memoized code would have used.
+  llvm::DenseMap<unsigned, std::string> ph_bindings;
+  std::string ph_prelude;
+
   std::string result;
   for (size_t frag_idx = 0, frag_end = fragments.size(); frag_idx < frag_end;
        ++frag_idx) {
@@ -8660,7 +8701,22 @@ std::string Converter::ConvertIRFragment(
               Mapper::ParamIsPointer(GetCalleeOrExpr(expr), arg_idx),
           .is_index_base = ph->is_index_base,
       };
-      AppendCode(result, ConvertPlaceholder(expr, arg, ph_ctx));
+      bool memoize = ph_counts[arg_idx] > 1 &&
+                     !ph_mixed_access.contains(arg_idx) &&
+                     arg != nullptr && arg->HasSideEffects(ctx_);
+      if (!memoize) {
+        AppendCode(result, ConvertPlaceholder(expr, arg, ph_ctx));
+      } else {
+        auto [it, inserted] = ph_bindings.try_emplace(arg_idx, std::string());
+        if (inserted) {
+          it->second = std::format("__rule_a{}_{}", arg_idx,
+                                   materialized_temp_id_++);
+          AppendCode(ph_prelude,
+                     std::format("let {} = {};", it->second,
+                                 ConvertPlaceholder(expr, arg, ph_ctx)));
+        }
+        AppendCode(result, it->second);
+      }
     } else if (std::get_if<TranslationRule::VaArgsFragment>(&frag)) {
       AppendCode(result, ConvertVariadicTail(expr, all_args));
     } else if (std::get_if<TranslationRule::InitFragment>(&frag)) {
@@ -8677,6 +8733,14 @@ std::string Converter::ConvertIRFragment(
     }
   }
 
+  if (!ph_prelude.empty()) {
+    // A Rust block is an EXPRESSION, so this is self-contained and needs no
+    // caller cooperation -- unlike materialized_temp_bindings_, which is only
+    // non-null inside a HoistMaterializedTempBindings scope and a mapped
+    // operator body in rvalue position is not always inside one. The trailing
+    // `result` is the block's value, so the body keeps its type.
+    return '{' + ph_prelude + result + '}';
+  }
   return result;
 }
 
