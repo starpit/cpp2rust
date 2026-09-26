@@ -55,12 +55,30 @@ class Region {};
 // sentinel each one uses and why the sentinel is unreachable as a real value.
 class Value {
 public:
-  // mlir/include/mlir/IR/Value.h -- `bool operator==(Value other) const
-  // { return impl == other.impl; }`, the SSA-identity comparison.
-  bool operator==(Value rhs) const;
+  // mlir/include/mlir/IR/Value.h -- the SSA-identity comparison.
+  //
+  // TAKE THE PARAMETER BY CONST REFERENCE, not by value. This was written as
+  // `operator==(Value rhs)` from MLIR's documented signature, and the resulting
+  // key never matched: the converter's own diagnostic asks for
+  //     bool mlir::Value::operator==(const mlir::Value &) const
+  // because THIS toolchain's Value.h declares it that way. The rule was
+  // committed, regenerated, and silently did nothing.
+  //
+  // And the convention is NOT uniform across the handles -- mlir::Attribute
+  // really is by value (`bool mlir::Attribute::operator==(mlir::Attribute)
+  // const`, f1, which does match). So the parameter form has to be read off the
+  // diagnostic PER TYPE; it cannot be inferred from a sibling handle.
+  bool operator==(const Value &rhs) const;
+  bool operator!=(const Value &rhs) const;
 };
 
-class Type {};
+class Type {
+public:
+  // Same const-reference form as Value, confirmed from the diagnostic rather
+  // than assumed from Attribute's by-value spelling.
+  bool operator==(const Type &rhs) const;
+  bool operator!=(const Type &rhs) const;
+};
 
 class Attribute {
 public:
@@ -228,3 +246,9 @@ bool f15(mlir::AffineMap a, mlir::AffineMap b) { return a.operator!=(b); }
 
 // ---- mlir::Value::operator== ----------------------------------------------
 bool f16(mlir::Value a, mlir::Value b) { return a.operator==(b); }
+
+bool f17(mlir::Value a, mlir::Value b) { return a.operator!=(b); }
+
+bool f18(mlir::Type a, mlir::Type b) { return a.operator==(b); }
+
+bool f19(mlir::Type a, mlir::Type b) { return a.operator!=(b); }

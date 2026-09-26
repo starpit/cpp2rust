@@ -242,3 +242,21 @@ unsafe fn f15(a0: dataflowir_gen::ir::AffineMap, a1: dataflowir_gen::ir::AffineM
 unsafe fn f16(a0: dataflowir_gen::ir::Value, a1: dataflowir_gen::ir::Value) -> bool {
     a0 == a1
 }
+
+// f17-f19 -- the `!=` partners and the mlir::Type pair. Each is a SEPARATE rule
+// key: the converter keys on the resolved callee signature and C++17 does not
+// rewrite `!=` into `==`, so a TU spelling `a != b` consults f17/f19 and nothing
+// else. Both handles compare by the identity their model carries: ir::Value is
+// the %-sigilled SSA name (unique per region in MLIR's printer) and ir::Type is
+// the printed type, so derived PartialEq is the right relation.
+unsafe fn f17(a0: dataflowir_gen::ir::Value, a1: dataflowir_gen::ir::Value) -> bool {
+    a0 != a1
+}
+
+unsafe fn f18(a0: dataflowir_gen::ir::Ty, a1: dataflowir_gen::ir::Ty) -> bool {
+    a0 == a1
+}
+
+unsafe fn f19(a0: dataflowir_gen::ir::Ty, a1: dataflowir_gen::ir::Ty) -> bool {
+    a0 != a1
+}
