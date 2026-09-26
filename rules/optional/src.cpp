@@ -140,6 +140,42 @@ bool f29(const std::optional<T1> &a0, std::nullopt_t a1) {
   return operator!=(a0, a1);
 }
 
+// The MIXED-VALUE overloads: libc++ declares
+//   template <class _Tp, class _Up> bool operator==(const optional<_Tp>&, const _Up&)
+// (and the != twin) as free function TEMPLATES with a SECOND, independent
+// template parameter -- the optional is compared against a BARE VALUE, not
+// against another optional and not against nullopt_t.  That is the shape at
+// dcc/src/Transform/Sentient/Analyses/PropagationAnalysis.cpp:316,
+// `common_value != const_op.getValue()`, where common_value is a
+// std::optional<int64_t> (declared :291) and getValue() yields an int64_t.
+// Neither f26/f27 (optional vs optional) nor f28/f29 (optional vs nullopt_t)
+// covers it, so those four resolving is not evidence that this one does.
+//
+// SEMANTICS, stated because two wrong bodies pass a careless test.  The
+// standard says ([optional.comparewitht]) the result is
+// `bool(x) ? *x == v : false` for == and `bool(x) ? *x != v : true` for !=.
+// So a DISENGAGED optional is NEVER equal to a bare value -- it is not "equal
+// because there is nothing to disagree with", and it is not an unwrap of an
+// empty optional either.  A body that only tests engagement, or one that
+// unwraps unconditionally, is silently wrong on exactly one of the two cases,
+// which is why the probe exercises engaged-and-equal, engaged-and-unequal AND
+// disengaged.
+//
+// T2 is DROPPED on the target side, exactly as f5 already drops it for the
+// converting constructor: the model represents the bare value at the same Rust
+// type as the contained one, which is what the sites mean (int64_t vs
+// int64_t).  A genuinely heterogeneous comparison would need
+// T1: PartialEq<T2>; no site in scope has one.
+template <typename T1, typename T2>
+bool f30(const std::optional<T1> &a0, const T2 &a1) {
+  return operator==(a0, a1);
+}
+
+template <typename T1, typename T2>
+bool f31(const std::optional<T1> &a0, const T2 &a1) {
+  return operator!=(a0, a1);
+}
+
 // ---------------------------------------------------------------------------
 // modifiers / has_value()
 //

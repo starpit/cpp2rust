@@ -127,6 +127,21 @@ unsafe fn f29<T1>(a0: Option<T1>) -> bool {
     a0.is_some()
 }
 
+// --- optional vs a BARE VALUE (see src.cpp) --------------------------------
+// `Some(a1)` then Option's own PartialEq is exactly the standard's rule:
+// Some(x) == Some(v) compares the values, and None == Some(v) is false, so a
+// disengaged optional is never equal to a bare value and `!=` is true for it.
+// Writing this as an engagement test, or as `a0.unwrap() == a1`, would be
+// wrong on one of those cases and would also panic on the disengaged one.
+
+unsafe fn f30<T1: PartialEq>(a0: Option<T1>, a1: T1) -> bool {
+    a0 == Some(a1)
+}
+
+unsafe fn f31<T1: PartialEq>(a0: Option<T1>, a1: T1) -> bool {
+    a0 != Some(a1)
+}
+
 // --- has_value()/reset() ---------------------------------------------------
 // libc++ declares these two in private base classes of std::optional, so both
 // the type rules and the expression rules name the base class (see src.cpp).

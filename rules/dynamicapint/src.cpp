@@ -98,6 +98,21 @@ public:
   bool operator==(const DynamicAPInt &O) const;
   // llvm/ADT/DynamicAPInt.h:158 -- bool operator!=(const DynamicAPInt &) const
   bool operator!=(const DynamicAPInt &O) const;
+
+  // llvm/ADT/DynamicAPInt.h:200-201 -- the int64_t MIXED comparisons, declared
+  // as HIDDEN FRIENDS in-class.  The header comment above said these "are not
+  // reached by the sites in scope"; they now are --
+  // `coefficients[dim_id] == 1` compares a DynamicAPInt element against a bare
+  // integer literal, which resolves to this overload after the int -> int64_t
+  // conversion, NOT to the member operator== above.  A hidden friend MUST be
+  // restated in-class: declared at namespace scope the rule silently never
+  // resolves (the trap rules/smallvector's operator== pair records).
+  //
+  // These are safe under the i64 model for the same reason == / != on two
+  // DynamicAPInts are: a COMPARISON cannot create a value, so it cannot leave
+  // the fast path.  This does NOT extend the module's contract on arithmetic.
+  friend bool operator==(const DynamicAPInt &A, long B);
+  friend bool operator!=(const DynamicAPInt &A, long B);
 };
 
 } // namespace llvm
@@ -117,3 +132,11 @@ bool f3(const llvm::DynamicAPInt &a, const llvm::DynamicAPInt &b) {
 bool f4(const llvm::DynamicAPInt &a, const llvm::DynamicAPInt &b) {
   return a.operator!=(b);
 }
+
+// A hidden friend is reached by the FREE-function spelling, not `a.operator==`
+// (the member overload above is the only candidate for the member syntax, and
+// it cannot bind a long).  Still never the bare `a == b`, which records no src
+// entry.
+bool f5(const llvm::DynamicAPInt &a, long b) { return operator==(a, b); }
+
+bool f6(const llvm::DynamicAPInt &a, long b) { return operator!=(a, b); }

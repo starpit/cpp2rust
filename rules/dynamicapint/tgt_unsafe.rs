@@ -25,3 +25,14 @@ unsafe fn f3(a0: i64, a1: i64) -> bool {
 unsafe fn f4(a0: i64, a1: i64) -> bool {
     a0 != a1
 }
+
+// The int64_t mixed comparisons (see src.cpp).  Comparison cannot overflow, so
+// these need no widening decision; arithmetic still does, and still aborts.
+
+unsafe fn f5(a0: i64, a1: i64) -> bool {
+    a0 == a1
+}
+
+unsafe fn f6(a0: i64, a1: i64) -> bool {
+    a0 != a1
+}

@@ -133,6 +133,21 @@ fn f29<T1>(a0: Option<Value<T1>>) -> bool {
     a0.is_some()
 }
 
+// --- optional vs a BARE VALUE (see src.cpp) --------------------------------
+// The bare value is wrapped into a Value<T1> so the comparison is the same
+// Option<Value<T1>> PartialEq f26/f27 use; that delegates to the INNER value
+// (elements are Rc<RefCell<T>> and PartialEq compares what they hold), which
+// is what C++ means.  None vs Some is false, so a disengaged optional is never
+// equal to a bare value.
+
+fn f30<T1: PartialEq>(a0: Option<Value<T1>>, a1: T1) -> bool {
+    a0 == Some(Rc::new(RefCell::new(a1)))
+}
+
+fn f31<T1: PartialEq>(a0: Option<Value<T1>>, a1: T1) -> bool {
+    a0 != Some(Rc::new(RefCell::new(a1)))
+}
+
 // --- has_value()/reset() ---------------------------------------------------
 // libc++ declares these two in private base classes of std::optional, so both
 // the type rules and the expression rules name the base class (see src.cpp).
