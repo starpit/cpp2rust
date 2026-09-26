@@ -148,3 +148,25 @@ bool f23(const std::set<T1> &a, const std::set<T1> &b) {
 template <typename T1> std::set<T1> f24(std::initializer_list<T1> a0) {
   return std::set<T1>(a0);
 }
+
+// emplace.  A set's element IS the single constructor argument, so the only two
+// arities that occur are emplace(T1 &&) and emplace(const T1 &) -- exactly as in
+// rules/unordered_set (:150, :156).  There is no `arg_idx` hazard here (the one
+// that hits std::map::emplace, whose element is a pair built from two args).
+//
+// SEMANTICS: emplace returns pair<iterator, bool> with the bool true only when
+// the element was NOT already present, and on collision the INCUMBENT is kept --
+// the newcomer is destroyed, not assigned over the old element.  The targets are
+// therefore probe-and-insert, like f11/f19 and like rules/denseset, NOT
+// BTreeMap::insert (which would overwrite the mapped copy while keeping the old
+// key, blending two elements that a subset-comparing Ord calls equal).
+template <typename T1>
+std::pair<typename std::set<T1>::iterator, bool> f25(std::set<T1> &o, T1 &&v) {
+  return o.emplace(std::move(v));
+}
+
+template <typename T1>
+std::pair<typename std::set<T1>::iterator, bool> f26(std::set<T1> &o,
+                                                     const T1 &v) {
+  return o.emplace(v);
+}

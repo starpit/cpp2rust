@@ -248,3 +248,66 @@ unsafe fn f7(a0: Box<libcc2rs::StringStream>) -> bool {
         a0.__cc2_iostate() & 5 != 0
     })
 }
+
+// std::basic_ios<char>::fill() -- the current pad character.
+//
+// Declared `-> u8` rather than `-> libc::c_char` on purpose.  `char` is spelled
+// i8 by the unsafe model and u8 by the refcount model, and rules/basic_ios has
+// ONE target file shared by both, so a body that names either concretely is
+// wrong in one model -- while `as _` cannot infer at a call site that casts the
+// result (`(..) as u8`, which is what an insertion emits) or discards it.  u8 is
+// what every consumer of a char casts to, so it serves both; the one shape it
+// does not serve is a bare `char c = os.fill();` in the UNSAFE model, which
+// would want i8.  The setter below dodges this by typing its result from its own
+// char parameter; fixing the getter properly means giving this module a
+// per-model tgt_refcount.rs.
+unsafe fn f8(a0: &mut Box<libcc2rs::StringStream>) -> u8 {
+    ({
+        use libcc2rs::Cc2Insert;
+        a0.cc2_fill() as u8
+    })
+}
+
+// std::basic_ios<char>::fill(char) -- set it, return the PREVIOUS one.
+unsafe fn f9(a0: &mut Box<libcc2rs::StringStream>, a1: libc::c_char) -> libc::c_char {
+    ({
+        use libcc2rs::Cc2Insert;
+        let mut __prev = a1;
+        __prev = a0.cc2_fill() as _;
+        a0.cc2_set_fill(a1 as u8);
+        __prev
+    })
+}
+
+// std::ios_base::width() -- read the pending width WITHOUT consuming it.
+unsafe fn f10(a0: &mut Box<libcc2rs::StringStream>) -> libc::c_long {
+    ({
+        use libcc2rs::Cc2Insert;
+        let __w = a0.cc2_take_width();
+        a0.cc2_set_width(__w);
+        __w as i64
+    })
+}
+
+// std::ios_base::width(streamsize) -- set it, return the PREVIOUS one.  The
+// pending width is consumed by the next insertion, not by this call.
+unsafe fn f11(a0: &mut Box<libcc2rs::StringStream>, a1: libc::c_long) -> libc::c_long {
+    ({
+        use libcc2rs::Cc2Insert;
+        let __prev = a0.cc2_take_width() as i64;
+        a0.cc2_set_width(if a1 > 0 { a1 as usize } else { 0 });
+        __prev
+    })
+}
+
+// std::basic_ostream<char>::put(char) -- unformatted, so NO padding.
+unsafe fn f12<'a>(
+    a0: &'a mut Box<libcc2rs::StringStream>,
+    a1: libc::c_char,
+) -> &'a mut Box<libcc2rs::StringStream> {
+    ({
+        use libcc2rs::Cc2Insert;
+        a0.cc2_write(&[a1 as u8]);
+        libcc2rs::stream_mut(&mut *a0)
+    })
+}

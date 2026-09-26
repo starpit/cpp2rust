@@ -166,3 +166,37 @@ fn f24<T1: Ord + Clone>(a0: Vec<T1>, a1: Option<()>) -> BTreeMap<T1, Value<T1>> 
     }
     __m
 }
+
+fn f25<T1: Ord + Clone + 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T1>>>,
+    a1: T1,
+) -> (Value<RefcountMapIter<T1, T1>>, Value<bool>) {
+    let __inserted = a0.with_mut(|__v: &mut BTreeMap<T1, Value<T1>>| {
+        let __new = !__v.contains_key(&a1);
+        if __new {
+            __v.insert(a1.clone(), Rc::new(RefCell::new(a1.clone())));
+        }
+        __new
+    });
+    (
+        Rc::new(RefCell::new(RefcountMapIter::find_key(a0, &a1))),
+        Rc::new(RefCell::new(__inserted)),
+    )
+}
+
+fn f26<T1: Ord + Clone + 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T1>>>,
+    a1: T1,
+) -> (Value<RefcountMapIter<T1, T1>>, Value<bool>) {
+    let __inserted = a0.with_mut(|__v: &mut BTreeMap<T1, Value<T1>>| {
+        let __new = !__v.contains_key(&a1);
+        if __new {
+            __v.insert(a1.clone(), Rc::new(RefCell::new(a1.clone())));
+        }
+        __new
+    });
+    (
+        Rc::new(RefCell::new(RefcountMapIter::find_key(a0, &a1))),
+        Rc::new(RefCell::new(__inserted)),
+    )
+}

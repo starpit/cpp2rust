@@ -114,3 +114,43 @@ void f5(std::stringstream &o) { return o.clear(); }
 bool f6(const std::stringstream &o) { return o.operator bool(); }
 
 bool f7(const std::stringstream &o) { return o.operator!(); }
+
+// ---------------------------------------------------------------------------
+// fill(), width() and put() -- the same dispatch problem, the same answer.
+//
+// fill/width are STREAM STATE, not operations, and the state they need already
+// exists: libcc2rs::Cc2Insert carries a per-stream pending width and fill
+// character (a field on StringStream, a thread-local table keyed by descriptor
+// for ::std::fs::File) because std::setw/std::setfill needed exactly that.
+// These four rules are therefore only the MEMBER spelling of state the runtime
+// already keeps, and they agree with the manipulator spelling by construction:
+// `os.width(6)` and `os << std::setw(6)` set the same word.
+//
+// The bodies call the library trait directly rather than declaring a private
+// one, for the reason libcc2rs/src/stream_fmt.rs gives for the extractors: the
+// trait is declared once in the library with an impl per representation
+// (StringStream, ::std::fs::File, and the Box/&mut/*mut/Ptr wrappers), so
+// dispatch is still static and still chosen from the receiver's Rust type, and
+// a representation nobody implemented is a compile error naming the trait.
+//
+// C++ semantics being reproduced, and the asymmetry is the point:
+//   * width(n) applies to the NEXT inserted item only, then resets to 0 --
+//     cc2_take_width() is what every insertion already calls;
+//   * fill(c) PERSISTS until changed;
+//   * both setters return the PREVIOUS value (`auto prev = os.fill('0');` at
+//     util/sendefs/senulatorProg.cpp:141 depends on it);
+//   * the width getter must NOT consume the pending width, so it takes and puts
+//     it straight back -- the only way to read it through this trait.
+//
+// put(c) is UNFORMATTED output: it writes one byte and the pending width does
+// NOT pad it (measured against clang). So it calls cc2_write, not
+// cc2_pad_and_write, which is the one-line difference from `os << c`.
+char f8(const std::stringstream &o) { return o.fill(); }
+
+char f9(std::stringstream &o, char c) { return o.fill(c); }
+
+std::streamsize f10(std::stringstream &o) { return o.width(); }
+
+std::streamsize f11(std::stringstream &o, std::streamsize n) { return o.width(n); }
+
+std::ostream &f12(std::ostream &o, char c) { return o.put(c); }
