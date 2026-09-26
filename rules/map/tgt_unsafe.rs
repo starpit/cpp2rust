@@ -1,7 +1,7 @@
 // Copyright (c) 2022-present INESC-ID.
 // Distributed under the MIT license that can be found in the LICENSE file.
 
-use libcc2rs::{MapIterator, UnsafeMapIterator};
+use libcc2rs::{MapIterator, PostfixInc, PrefixInc, UnsafeMapIterator};
 use std::collections::BTreeMap;
 
 fn t1<T1, T2>() -> BTreeMap<T1, Box<T2>> {
@@ -113,4 +113,37 @@ unsafe fn f25<T1, T2>(a0: &mut BTreeMap<T1, Box<T2>>, a1: &mut BTreeMap<T1, Box<
 
 unsafe fn f26<T1: Clone, T2: Clone>(a0: &mut BTreeMap<T1, Box<T2>>, a1: BTreeMap<T1, Box<T2>>) {
     *a0 = a1.clone()
+}
+
+unsafe fn f27<T1: Ord + Clone, T2>(a0: BTreeMap<T1, Box<T2>>) -> UnsafeMapIterator<T1, T2> {
+    UnsafeMapIterator::begin(&a0 as *const BTreeMap<T1, Box<T2>>)
+}
+unsafe fn f28<T1: PartialEq, T2: PartialEq>(
+    a0: UnsafeMapIterator<T1, T2>,
+    a1: UnsafeMapIterator<T1, T2>,
+) -> bool {
+    a0 != a1
+}
+unsafe fn f29<T1: PartialEq, T2: PartialEq>(
+    a0: &BTreeMap<T1, Box<T2>>,
+    a1: &BTreeMap<T1, Box<T2>>,
+) -> bool {
+    a0 == a1
+}
+unsafe fn f30<T1: PartialEq, T2: PartialEq>(
+    a0: &BTreeMap<T1, Box<T2>>,
+    a1: &BTreeMap<T1, Box<T2>>,
+) -> bool {
+    a0 != a1
+}
+
+unsafe fn f31<T1: Ord + Clone, T2>(
+    a0: &mut UnsafeMapIterator<T1, T2>,
+) -> UnsafeMapIterator<T1, T2> {
+    a0.prefix_inc()
+}
+unsafe fn f32<T1: Ord + Clone, T2>(
+    a0: &mut UnsafeMapIterator<T1, T2>,
+) -> UnsafeMapIterator<T1, T2> {
+    a0.postfix_inc()
 }
