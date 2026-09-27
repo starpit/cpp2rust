@@ -1473,20 +1473,39 @@ void Converter::ReportUnsupportedException(const clang::Stmt *stmt,
   assert(0 && "unsupported C++ exception construct (throw/try/catch)");
 }
 
+// `throw <expr>` lowers to `std::panic::panic_any(<expr>)`.
+//
+// This is context-free: the payload is carried as `Box<dyn Any + Send>` and the
+// unwind IS the C++ unwind. Proven byte-exact end to end against
+// $TC/shim4/clang++ (probe/excmech): throw from a callee, caught by `const&` in
+// main, `what()` printed, rc=7 -- same stdout, same exit code.
+//
+// It relies on `-C panic=unwind`, which is the default everywhere in this repo
+// (no Cargo.toml sets a `[profile.*] panic`). The lit suite's hand-rolled rustc
+// line is the only place that ever said otherwise; see the comment at
+// tests/lit/lit/formats/Cpp2RustTest.py:310. Under `panic=abort` this output
+// compiles clean and then silently loses the control flow, so the two must stay
+// in sync.
+//
+// A bare `throw;` (rethrow of the active exception) has no equivalent -- it
+// needs the in-flight payload, which only a `catch` lowering can supply -- so it
+// stays LOUD.
 bool Converter::VisitCXXThrowExpr(clang::CXXThrowExpr *expr) {
-  std::string detail;
   if (expr->getSubExpr() == nullptr) {
-    detail = "`throw;` (rethrow of the active exception) has no Rust lowering";
-  } else {
-    detail = "`throw` of type `" +
-             Mapper::ToString(expr->getSubExpr()->getType()) +
-             "` has no Rust lowering (the exception object was being "
-             "constructed and DISCARDED)";
+    ReportUnsupportedException(
+        expr, "`throw;` (rethrow of the active exception) has no Rust lowering");
+    // Do not traverse into the operand: under --survey that would emit the
+    // construction of the thrown object as a discarded statement expression,
+    // which is exactly the silent wrongness being reported.
+    return false;
   }
-  ReportUnsupportedException(expr, detail);
-  // Do not traverse into the operand: under --survey that would emit the
-  // construction of the thrown object as a discarded statement expression,
-  // which is exactly the silent wrongness being reported.
+  StrCat("std::panic::panic_any", token::kOpenParen);
+  {
+    PushExprKind push(*this, ExprKind::RValue);
+    Convert(expr->getSubExpr());
+  }
+  StrCat(token::kCloseParen);
+  computed_expr_type_ = ComputedExprType::FreshValue;
   return false;
 }
 

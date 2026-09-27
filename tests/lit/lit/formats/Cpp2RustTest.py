@@ -307,7 +307,21 @@ class TestContext:
             "-C",
             "strip=symbols",
             "-C",
-            "panic=abort",
+            # MUST stay `unwind`. This is NOT a perf knob, and it is not part of
+            # cargo's release profile either: commit a6d3427 ("Speedup test
+            # running by running rustc directly instead of cargo (#113)")
+            # replaced `cargo build --release` with this hand-rolled rustc line
+            # and added `panic=abort` next to `opt-level=3 # Equivalent to
+            # --release` -- but `--release` does NOT set panic=abort. Before
+            # a6d3427 this suite ran UNWIND, and pin/probe.sh (which still uses
+            # cargo) runs unwind today.
+            # `throw` lowers to `std::panic::panic_any`, so the unwind is the
+            # exception. Under `panic=abort` that code COMPILES CLEAN and then
+            # SILENTLY BREAKS CONTROL FLOW: measured on probe/excmech, the C++
+            # returns rc=7 after catching, and the identical Rust aborts rc=134
+            # with stdout stopping at the throw. Flipping this back would make
+            # the suite certify wrong behaviour as passing.
+            "panic=unwind",
             "--out-dir",
             str(self.tmp_dir),
             "-L",
