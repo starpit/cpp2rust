@@ -55,4 +55,10 @@ pub use fd::*;
 mod format;
 pub use format::*;
 
+mod variant;
+pub use variant::*;
+
+mod sync;
+pub use sync::*;
+
 pub use libcc2rs_macros::{ByteRepr, goto, goto_block, switch};
