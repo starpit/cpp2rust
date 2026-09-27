@@ -628,16 +628,97 @@ clang::QualType normalizeQualType(clang::QualType qual_type) {
       *ctx_);
 }
 
+// mapTypeStringRecursive works on STRINGS and has no clang::Decl in hand, so a
+// bare leaf name is unactionable: it names neither the outer type it came from
+// nor where the leaf is declared. These entry-point-set contexts thread that in.
+struct MapContext {
+  std::string outer;
+  clang::QualType outer_type;
+};
+MapContext map_ctx_;
+
+struct PushMapContext {
+  MapContext prev;
+  PushMapContext(std::string outer, clang::QualType ty = clang::QualType())
+      : prev(map_ctx_) {
+    map_ctx_ = MapContext{std::move(outer), ty};
+  }
+  PushMapContext(const PushMapContext &) = delete;
+  PushMapContext &operator=(const PushMapContext &) = delete;
+  ~PushMapContext() { map_ctx_ = prev; }
+};
+
+// Collects every tag (enum/class/struct/union) decl reachable from `ty` through
+// pointers, references and template arguments, so an unmapped leaf spelling can
+// be matched against a real declaration with a location.
+void CollectTagDecls(clang::QualType ty,
+                     std::vector<const clang::TagDecl *> &out, int depth = 0) {
+  if (ty.isNull() || depth > 8 || out.size() > 32) {
+    return;
+  }
+  ty = ty.getCanonicalType();
+  if (const auto *tag = ty->getAsTagDecl()) {
+    out.push_back(tag);
+    if (const auto *spec =
+            llvm::dyn_cast<clang::ClassTemplateSpecializationDecl>(tag)) {
+      for (const auto &arg : spec->getTemplateArgs().asArray()) {
+        if (arg.getKind() == clang::TemplateArgument::Type) {
+          CollectTagDecls(arg.getAsType(), out, depth + 1);
+        }
+      }
+    }
+  }
+  if (!ty->getPointeeType().isNull()) {
+    CollectTagDecls(ty->getPointeeType(), out, depth + 1);
+  }
+  if (const auto *arr = ctx_ ? ctx_->getAsArrayType(ty) : nullptr) {
+    CollectTagDecls(arr->getElementType(), out, depth + 1);
+  }
+}
+
+std::string DescribeUnmappedLeaf(const std::string &cpp_type) {
+  std::string msg = "type `" + cpp_type + "` has no model in types_";
+  if (!map_ctx_.outer.empty()) {
+    msg += ", while mapping `" + map_ctx_.outer + "`";
+  }
+  if (!map_ctx_.outer_type.isNull() && ctx_ != nullptr) {
+    std::vector<const clang::TagDecl *> tags;
+    CollectTagDecls(map_ctx_.outer_type, tags);
+    for (const auto *tag : tags) {
+      const std::string name = tag->getQualifiedNameAsString();
+      const bool is_leaf = cpp_type.find(name) != std::string::npos;
+      msg += std::string("\n    ") + (is_leaf ? "LEAF " : "") +
+             (llvm::isa<clang::EnumDecl>(tag) ? "enum" : "record") + " `" +
+             name + "` declared at " +
+             tag->getLocation().printToString(ctx_->getSourceManager()) +
+             (IsUserDefinedDecl(tag) ? " [project type]" : " [system type]");
+    }
+    if (tags.empty()) {
+      msg += "\n    (no tag decl reachable from the outer type)";
+    }
+  } else {
+    msg += "\n    (no outer QualType in hand -- mapped from an expression or "
+           "rule-setup context, so VisitEnumDecl/VisitRecordDecl may not have "
+           "run for it yet)";
+  }
+  return msg;
+}
+
 std::string mapTypeStringRecursive(const std::string &cpp_type) {
   auto [rule, subs] = search(types_, cpp_type, GetTypeMapKey(cpp_type));
   if (!rule) {
     if (survey::Enabled()) {
-      survey::Record(survey::GapKind::kUnmappedType, cpp_type, {});
+      // Keep the DETAIL exactly the bare spelling: it is the survey's grouping
+      // key and the work queue's row label. The new context goes in the
+      // location field, which is free-form.
+      survey::Record(survey::GapKind::kUnmappedType, cpp_type,
+                     DescribeUnmappedLeaf(cpp_type));
       // No Rust is emitted in survey mode, so the returned spelling is never
       // written anywhere; it only keeps the walk going.
       return cpp_type;
     }
-    llvm::errs() << "cpp_type: " << cpp_type << '\n';
+    llvm::errs() << "unsupported unmapped " << DescribeUnmappedLeaf(cpp_type)
+                 << '\n';
     assert(0 && "Type is not present in types_");
   }
   for (auto &ty : subs) {
@@ -703,11 +784,42 @@ std::string MapFunctionName(const clang::FunctionDecl *decl) {
     return std::format("libcc2rs::{}_{}", decl->getNameAsString(),
                        model_ == Model::kRefCount ? "refcount" : "unsafe");
   }
+  // SECOND mangled-name fallback, the function twin of the type one in
+  // Converter::VisitRecordType. A SYSTEM function with no exprs_ rule has no
+  // body to emit in this TU, so GetNamedDeclAsString's disambiguating decl-id
+  // suffix (converter_lib.cpp:803-819) invents a callee -- `std::next` becomes
+  // `next_19` / `next_20` -- that is called and never defined. Measured: 140 of
+  // the 1589 rustc errors on KTDF/Utils/Utils.cpp are exactly these two names.
+  // Same defect class as the mangled TYPE name: a missing model turns into an
+  // undefined symbol at rc=0 instead of a translate-time failure.
+  //
+  // Project functions are fine: their definition is emitted in this TU (or, for
+  // an out-of-line sibling-TU definition, is a known cross-TU limitation --
+  // AGENT-COMMON, "A MISSING METHOD IS OFTEN NOT A DEFECT AT ALL"), so only the
+  // system case is reported.
+  if (!IsUserDefinedDecl(decl)) {
+    const std::string key = ToString(decl);
+    const std::string loc =
+        ctx_ != nullptr
+            ? decl->getLocation().printToString(ctx_->getSourceManager())
+            : std::string("<no ASTContext>");
+    const std::string mangled = GetNamedDeclAsString(decl->getCanonicalDecl());
+    std::string detail = "system function has no rule: `" + key +
+                         "` (would be called as the undefined name `" + mangled +
+                         "`) rule key: " + key;
+    if (survey::Enabled()) {
+      survey::Record(survey::GapKind::kUnsupportedExpr, detail, loc);
+      return mangled;
+    }
+    llvm::errs() << "unsupported " << detail << " at " << loc << '\n';
+    assert(0 && "unsupported system function: no rule in exprs_");
+  }
   return GetNamedDeclAsString(decl->getCanonicalDecl());
 }
 
 std::string InstantiateTemplate(const clang::Expr *expr, unsigned n) {
   auto expr_str = ToString(expr);
+  PushMapContext ctx("expression " + expr_str);
   auto [rule, subs] = search(exprs_, expr_str, GetExprMapKey(expr_str));
   auto text = std::format("T{}", n);
   if (!rule) {
@@ -721,6 +833,7 @@ std::string InstantiateTemplate(const clang::Expr *expr, unsigned n) {
 }
 
 std::string Map(clang::QualType qual_type) {
+  PushMapContext ctx(ToString(qual_type), qual_type);
   auto [rule, subs] = search(qual_type);
   if (rule) {
     for (auto &ty : subs) {
@@ -734,6 +847,7 @@ std::string Map(clang::QualType qual_type) {
 }
 
 std::string MapInitializer(clang::QualType qual_type) {
+  PushMapContext ctx(ToString(qual_type), qual_type);
   auto [rule, subs] = search(qual_type);
   if (rule && !rule->initializer.empty()) {
     for (auto &ty : subs) {
@@ -780,6 +894,7 @@ const TranslationRule::TypeInfo &GetParamInfo(const clang::Expr *expr,
 
 std::string GetParamType(const clang::Expr *expr, unsigned index) {
   auto expr_str = ToString(expr);
+  PushMapContext ctx("parameter " + std::to_string(index) + " of " + expr_str);
   auto [rule, subs] = search(exprs_, expr_str, GetExprMapKey(expr_str));
   for (auto &ty : subs) {
     if (ty) {

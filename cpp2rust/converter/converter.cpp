@@ -234,6 +234,30 @@ bool Converter::VisitRecordType(clang::RecordType *type) {
     }
   }
 
+  // A SYSTEM record with no type rule must NOT be mangled into a name.
+  //
+  // Reaching here means Mapper::Map() found no rule (Convert(QualType) only
+  // falls through to TraverseType when the lookup came back empty). For a
+  // PROJECT type that is correct and expected: VisitRecordDecl emits a
+  // `pub struct <mangled>` for it in this same TU, so the mangled name resolves.
+  // For a SYSTEM type nothing is ever emitted, so `GetRecordName` invents an
+  // identifier (`mlir::DictionaryAttr` -> `mlir_DictionaryAttr`) that is
+  // referenced and never defined -- and `AddRuleForUserDefinedType` then
+  // REGISTERS that invention as a type rule, so every later lookup "succeeds"
+  // and the mapper's own loud `Type is not present in types_` path
+  // (mapper.cpp:722) is never reached. The TU reports rc=0 and then fails
+  // rustc with `cannot find type`. Measured on
+  // dataflow-scheduler/lib/Dialect/KTDF/Utils/Utils.cpp: rc=0, 0 placeholders,
+  // 1589 rustc errors, ALL of them this class.
+  //
+  // This is the same defect the `unimplemented!()`/`todo!()` ban was written to
+  // stop -- a missing model deferred past translate time -- by a different
+  // mechanism, so it gets the same treatment: loud here, recorded in --survey.
+  if (!IsUserDefinedDecl(decl)) {
+    ReportUnmappedSystemType(decl);
+    return false;
+  }
+
   StrCat(GetRecordName(decl));
   Mapper::AddRuleForUserDefinedType(decl);
   return false;
@@ -1982,6 +2006,117 @@ std::string Converter::ConvertFnPtrPlaceholder(clang::Expr *arg) {
                      ConvertFunctionPointerType(proto));
 }
 
+namespace {
+
+// Strips the qualifiers/refs clang adds around an argument or parameter type so
+// an exact overload match can be tested on the underlying type.
+clang::QualType StripForOverloadMatch(clang::QualType ty) {
+  ty = ty.getNonReferenceType().getCanonicalType().getUnqualifiedType();
+  return ty;
+}
+
+} // namespace
+
+const clang::FunctionDecl *
+Converter::ResolveOverloadedCallee(clang::CallExpr *expr) {
+  auto *callee = GetCallee(expr);
+  if (!callee) {
+    return nullptr;
+  }
+  const auto *ovl =
+      llvm::dyn_cast<clang::OverloadExpr>(callee->IgnoreParenImpCasts());
+  if (!ovl) {
+    return nullptr;
+  }
+
+  const unsigned num_args = expr->getNumArgs();
+  const clang::FunctionDecl *match = nullptr;
+  unsigned num_matches = 0;
+  for (const auto *d : ovl->decls()) {
+    const auto *fn =
+        llvm::dyn_cast<clang::FunctionDecl>(d->getUnderlyingDecl());
+    if (!fn || fn->getNumParams() != num_args || fn->isVariadic()) {
+      continue;
+    }
+    // An unqualified call to an INSTANCE method has an implicit `this`
+    // receiver, a different emission shape; refuse rather than guess.
+    if (const auto *method = llvm::dyn_cast<clang::CXXMethodDecl>(fn)) {
+      if (method->isInstance()) {
+        continue;
+      }
+    }
+    bool ok = true;
+    for (unsigned i = 0; i < num_args && ok; ++i) {
+      ok = StripForOverloadMatch(fn->getParamDecl(i)->getType()) ==
+           StripForOverloadMatch(expr->getArg(i)->getType());
+    }
+    if (ok) {
+      ++num_matches;
+      match = fn;
+    }
+  }
+  // Exactly one exact match, or nothing. Ambiguity must stay loud.
+  return num_matches == 1 ? match : nullptr;
+}
+
+void Converter::ReportUnresolvedCall(clang::CallExpr *expr,
+                                     clang::Expr *callee) {
+  std::string name = "<unknown callee>";
+  std::string candidates;
+  if (const auto *ovl = callee ? llvm::dyn_cast<clang::OverloadExpr>(
+                                     callee->IgnoreParenImpCasts())
+                               : nullptr) {
+    name = ovl->getName().getAsString();
+    for (const auto *d : ovl->decls()) {
+      const auto *nd =
+          llvm::dyn_cast<clang::NamedDecl>(d->getUnderlyingDecl());
+      candidates += "\n    candidate: ";
+      candidates += nd ? Mapper::ToString(nd) : std::string("<non-named decl>");
+      if (const auto *fn =
+              llvm::dyn_cast_or_null<clang::FunctionDecl>(
+                  nd ? nd->getUnderlyingDecl() : nullptr)) {
+        candidates +=
+            " declared at " +
+            fn->getLocation().printToString(ctx_.getSourceManager());
+      }
+    }
+  } else if (callee) {
+    name = Mapper::ToString(callee->getType(), Mapper::ScalarSugar::kPreserve);
+  }
+
+  std::string args;
+  for (unsigned i = 0; i < expr->getNumArgs(); ++i) {
+    if (i) {
+      args += ", ";
+    }
+    const auto *arg = expr->getArg(i);
+    args += arg ? Mapper::ToString(arg->getType(),
+                                   Mapper::ScalarSugar::kPreserve)
+                : "<null>";
+  }
+
+  const std::string loc =
+      expr->getExprLoc().printToString(ctx_.getSourceManager());
+
+  std::string detail = "unresolved call: callee `" + name +
+                       "` has neither a function decl nor a prototype"
+                       " (callee type: " +
+                       (callee ? Mapper::ToString(
+                                     callee->getType(),
+                                     Mapper::ScalarSugar::kPreserve)
+                               : std::string("<null>")) +
+                       "); supplied argument types: (" + args + ")" +
+                       candidates;
+
+  if (survey::Enabled()) {
+    survey::Record(survey::GapKind::kUnsupportedConstruct, detail, loc);
+    return;
+  }
+
+  llvm::errs() << "unsupported " << detail << " at " << loc << '\n';
+  assert(0 && "call with neither function decl nor function prototype\n");
+}
+
 Converter::CallInfo Converter::CollectCallInfo(clang::CallExpr *expr) {
   using Kind = CallArg::Kind;
 
@@ -2006,17 +2141,19 @@ Converter::CallInfo Converter::CollectCallInfo(clang::CallExpr *expr) {
     }
   }
   if (!function && !proto) {
-    if (survey::Enabled()) {
-      survey::Record(survey::GapKind::kUnsupportedConstruct,
-                     "call with neither function decl nor prototype: " +
-                         Mapper::ToString(callee->getType()),
-                     expr->getExprLoc().printToString(ctx_.getSourceManager()));
-      CallInfo info{};
-      info.expr = expr;
-      return info;
-    }
-    llvm::report_fatal_error(
-        "Either function decl or function prototype should be known");
+    // The callee may have survived instantiation as an unresolved overload set
+    // (a recursive unqualified call to an overloaded static member inside a
+    // class template, e.g. KTDFArchAttributes.h's `classof`). Resolve it here:
+    // getCalleeDecl() is null, but the candidate set and the argument types are
+    // both in hand.
+    function = ResolveOverloadedCallee(expr);
+    info.resolved_overload = function;
+  }
+  if (!function && !proto) {
+    ReportUnresolvedCall(expr, callee);
+    CallInfo bail{};
+    bail.expr = expr;
+    return bail;
   }
 
   unsigned num_args = expr->getNumArgs() - arg_begin;
@@ -2212,7 +2349,16 @@ void Converter::EmitArgList(const CallInfo &info) {
 void Converter::EmitCall(CallInfo &&info) {
   EmitHoistedArgs(info);
 
-  if (info.is_fn_ptr_call) {
+  if (info.resolved_overload) {
+    // Callee is still an OverloadExpr in the AST, so converting it would reach
+    // VisitUnresolvedLookupExpr. Spell the resolved decl instead.
+    if (const auto *method =
+            llvm::dyn_cast<clang::CXXMethodDecl>(info.resolved_overload)) {
+      StrCat(GetUFCSName(method), token::kDoubleColon, GetMethodName(method));
+    } else {
+      StrCat(Mapper::MapFunctionName(info.resolved_overload));
+    }
+  } else if (info.is_fn_ptr_call) {
     EmitFnPtrCall(GetCallee(info.expr));
   } else if (info.is_libc_passthrough) {
     auto *direct_callee = info.expr->getDirectCallee();
@@ -3221,6 +3367,45 @@ bool Converter::VisitParenExpr(clang::ParenExpr *expr) {
   }
 
   return false;
+}
+
+// Report a SYSTEM record type that has no entry in the mapper's types_ table.
+//
+// Names the rule key someone has to add -- in the MAPPER's spelling, which is
+// what a rule key must use, not clang's -- plus the outer type it was reached
+// through and where the type is declared, so the message is actionable by
+// itself. Precedent: ReportUnsupportedOperatorCall, whose printing of its exact
+// rule key unblocked the three largest gates in this project.
+//
+// In --survey mode this RECORDS and KEEPS GOING: survey data feeds the whole
+// work queue, and a survey run must enumerate every gap in one pass. Only the
+// non-survey path asserts. The mangled spelling is still emitted under survey
+// because survey output is never compiled, and emitting nothing would trip the
+// `computed_expr_type_` sentinel (converter.cpp:1649) and hide the real gap.
+void Converter::ReportUnmappedSystemType(const clang::RecordDecl *decl) {
+  const std::string key = Mapper::ToString(Mapper::GetTypeForDecl(decl));
+  const std::string loc =
+      decl->getLocation().printToString(ctx_.getSourceManager());
+  const std::string mangled = GetRecordName(decl);
+
+  std::string detail = "system type has no rule: `" + key +
+                       "` (would be emitted as the undefined name `" + mangled +
+                       "`)";
+  if (curr_function_ != nullptr) {
+    detail += ", reached while converting `" +
+              curr_function_->getQualifiedNameAsString() + "`";
+  }
+  detail += " rule key: " + key;
+
+  if (survey::Enabled()) {
+    survey::Record(survey::GapKind::kUnmappedType, detail, loc);
+    StrCat(mangled);
+    Mapper::AddRuleForUserDefinedType(const_cast<clang::RecordDecl *>(decl));
+    return;
+  }
+
+  llvm::errs() << "unsupported " << detail << " at " << loc << '\n';
+  assert(0 && "unsupported system type: no rule in types_");
 }
 
 // Report an overloaded-operator call the converter has no lowering for.

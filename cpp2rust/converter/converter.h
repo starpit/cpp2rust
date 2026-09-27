@@ -300,12 +300,29 @@ public:
     std::vector<CallArg> args;
     std::vector<clang::Expr *> variadic_args;
     clang::CallExpr *expr;
+    // Non-null when the callee survived instantiation as an unresolved
+    // OverloadExpr and CollectCallInfo picked the unique exact-match
+    // candidate. EmitCall must then spell that decl instead of converting the
+    // callee subexpression, which would hit VisitUnresolvedLookupExpr.
+    const clang::FunctionDecl *resolved_overload = nullptr;
     bool is_variadic;
     bool is_fn_ptr_call;
     bool is_libc_passthrough;
   };
 
   CallInfo CollectCallInfo(clang::CallExpr *expr);
+
+  // Resolves a call whose callee is still an OverloadExpr
+  // (UnresolvedLookupExpr / UnresolvedMemberExpr, type `<overloaded function
+  // type>`) by exact argument-type match. Returns nullptr unless exactly one
+  // non-instance candidate matches, so ambiguity stays LOUD.
+  const clang::FunctionDecl *ResolveOverloadedCallee(clang::CallExpr *expr);
+
+  // LOUD failure for a call with no callee decl, no prototype and no
+  // resolvable overload set. Names the callee, every candidate with its
+  // parameter types in the mapper's spelling, the supplied argument types and
+  // the location. Mirrors ReportUnsupportedOperatorCall.
+  void ReportUnresolvedCall(clang::CallExpr *expr, clang::Expr *callee);
 
   void ConvertParamTy(clang::QualType param_type, clang::Expr *expr);
 
@@ -695,6 +712,10 @@ protected:
   // Loud, actionable report for an overloaded-operator call with no lowering.
   // Callable (not a `default:` body) so the OO_LessLess arm can reach it.
   void ReportUnsupportedOperatorCall(clang::CXXOperatorCallExpr *expr);
+
+  // Loud, actionable report for a SYSTEM record type with no types_ rule, which
+  // would otherwise be mangled into an identifier nothing ever defines.
+  void ReportUnmappedSystemType(const clang::RecordDecl *decl);
 
   std::string GetMappedAsString(clang::Expr *expr, clang::Expr **args = nullptr,
                                 unsigned num_args = 0,
