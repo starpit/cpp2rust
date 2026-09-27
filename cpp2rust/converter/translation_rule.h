@@ -105,6 +105,35 @@ struct TypeInfo {
     return s.starts_with("mut ") || s.starts_with("mut\t");
   }
 
+  // True when the rule declared this parameter (or return) as a Rust SHARED
+  // reference -- `&T`, `&'a [u8]`, but NOT `&mut T`. Same reasoning and same
+  // lifetime-skipping as is_mut_ref(): `type` is the declaration verbatim, and
+  // a generic substitution can never introduce a leading `&`.
+  bool is_shared_ref() const {
+    std::string_view s = type;
+    if (!s.starts_with("&")) {
+      return false;
+    }
+    s.remove_prefix(1);
+    // `&&T` is a shared reference too, but nothing in the converter needs to
+    // add a borrow for it and treating it as one would be a guess; refuse.
+    if (s.starts_with("&")) {
+      return false;
+    }
+    while (!s.empty() && isspace((unsigned char)s.front()))
+      s.remove_prefix(1);
+    if (s.starts_with("'")) {
+      auto end = s.find_first_of(" \t");
+      if (end == std::string_view::npos) {
+        return false;
+      }
+      s.remove_prefix(end);
+      while (!s.empty() && isspace((unsigned char)s.front()))
+        s.remove_prefix(1);
+    }
+    return !s.empty() && !s.starts_with("mut ") && !s.starts_with("mut\t");
+  }
+
   void dump() const;
 };
 

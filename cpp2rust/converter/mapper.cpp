@@ -1465,6 +1465,14 @@ bool ParamIsMutRef(const clang::Expr *expr, unsigned index) {
   return rule->params[index].is_mut_ref();
 }
 
+bool ParamIsSharedRef(const clang::Expr *expr, unsigned index) {
+  auto rule = search(expr);
+  if (!rule || index >= rule->params.size()) {
+    return false;
+  }
+  return rule->params[index].is_shared_ref();
+}
+
 bool ReturnsMutRef(const clang::Expr *expr) {
   auto rule = search(expr);
   return rule && rule->return_type.is_mut_ref();

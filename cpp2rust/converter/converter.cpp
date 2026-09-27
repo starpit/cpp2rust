@@ -3029,10 +3029,17 @@ bool Converter::VisitStringLiteral(clang::StringLiteral *expr) {
     out += getTypedLiteral("0", CharRustType()) + "])";
     StrCat(out);
     computed_expr_type_ = ComputedExprType::FreshValue;
+    // `(&[...])` IS a Rust reference. See emitted_a_reference_.
+    emitted_a_reference_ = true;
     return false;
   }
   StrCat(std::format("c{}", GetEscapedStringLiteral(expr, 0)));
   computed_expr_type_ = ComputedExprType::FreshValue;
+  // `c"x"` has type `&'static CStr` -- it is ALREADY a reference, so a rule
+  // parameter declared `&std::ffi::CStr` is satisfied by it verbatim and adding
+  // a borrow would give `&&CStr`. This is the case that made the shared-`&` half
+  // undecidable from the rule IR.
+  emitted_a_reference_ = true;
   return false;
 }
 
@@ -6039,6 +6046,36 @@ void Converter::PlaceholderCtx::dump() const {
 
 std::string Converter::ConvertPlaceholder(clang::Expr *expr, clang::Expr *arg,
                                           const PlaceholderCtx &ph_ctx) {
+  if (!ph_ctx.needs_explicit_shared_borrow) {
+    return ConvertPlaceholderImpl(expr, arg, ph_ctx);
+  }
+  // SHARED-`&` DECLARATION. The rule says `a1: &T`; a rule body is INLINED, so
+  // whatever we emit here lands in argument position of a real Rust call and
+  // must actually BE a `&T`. Two cases, and they are not distinguishable from
+  // the IR -- only from what the emission turned out to be:
+  //   * already a reference (`c"bad name "` is `&CStr`) -> leave it alone,
+  //     prefixing would give `&&CStr`;
+  //   * a place (`(*s)`, the by-value deref a C++ reference argument gets)
+  //     -> borrow it.
+  // Hence the bit: clear, convert, then ask.
+  bool saved = emitted_a_reference_;
+  emitted_a_reference_ = false;
+  auto emitted = ConvertPlaceholderImpl(expr, arg, ph_ctx);
+  bool was_reference = emitted_a_reference_;
+  emitted_a_reference_ = saved;
+  if (was_reference || emitted.empty()) {
+    return emitted;
+  }
+  // Parenthesised: the emission is an arbitrary expression, and `&` binds
+  // tighter than any binary operator, so `&a as *const _` / `&x + y` would
+  // re-associate. A shared borrow of a place coerces (`&Vec<T>` -> `&[T]`) at
+  // the call site, which is exactly where this lands.
+  return "&(" + std::move(emitted) + ")";
+}
+
+std::string Converter::ConvertPlaceholderImpl(clang::Expr *expr,
+                                              clang::Expr *arg,
+                                              const PlaceholderCtx &ph_ctx) {
   if (arg->getType()->isFunctionPointerType()) {
     return ConvertFnPtrPlaceholder(arg);
   }
@@ -6184,6 +6221,12 @@ std::string Converter::ConvertIRFragment(
           .needs_explicit_mut_borrow =
               !is_method_call_receiver &&
               Mapper::ParamIsMutRef(GetCalleeOrExpr(expr), arg_idx),
+          // Same gate as the `&mut` case, for the same reason: on a method-call
+          // receiver Rust's autoref supplies the borrow, and adding one would
+          // perturb every existing reference-declared iterator rule.
+          .needs_explicit_shared_borrow =
+              !is_method_call_receiver &&
+              Mapper::ParamIsSharedRef(GetCalleeOrExpr(expr), arg_idx),
       };
       result += ConvertPlaceholder(expr, arg, ph_ctx);
     } else if (std::get_if<TranslationRule::VaArgsFragment>(&frag)) {
