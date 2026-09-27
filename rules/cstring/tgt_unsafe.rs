@@ -76,6 +76,11 @@ unsafe fn f14(a0: *mut libc::c_char, a1: i32) -> *mut libc::c_char {
     libc::strrchr(a0, a1)
 }
 
+// non-const strchr; same shape as f14 is to f13.
+unsafe fn f29(a0: *mut libc::c_char, a1: i32) -> *mut libc::c_char {
+    libc::strchr(a0, a1)
+}
+
 unsafe fn f15(a0: *const libc::c_char) -> *mut libc::c_char {
     libcc2rs::strdup_unsafe(a0)
 }

@@ -290,6 +290,22 @@ fn f14(a0: Ptr<u8>, a1: i32) -> Ptr<u8> {
     }
 }
 
+// non-const strchr; same body as f6, which is the const overload.
+fn f29(a0: Ptr<u8>, a1: i32) -> Ptr<u8> {
+    let __s = a0;
+    let __t = a1 as u8;
+    match __s.to_c_string_iterator().position(|__c| __c == __t) {
+        Some(__i) => __s.offset(__i),
+        None => {
+            if __t == 0 {
+                __s.offset(__s.to_c_string_iterator().count())
+            } else {
+                Ptr::null()
+            }
+        }
+    }
+}
+
 fn f19(a0: Ptr<u8>, a1: Ptr<u8>) -> Ptr<u8> {
     let __needle = a1;
     let mut __p = a0;

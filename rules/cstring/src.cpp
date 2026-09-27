@@ -11,6 +11,11 @@ const char *f13(const char *a0, int a1) { return strrchr(a0, a1); }
 
 char *f14(char *a0, int a1) { return strrchr(a0, a1); }
 
+// The NON-CONST C++ overload of strchr.  src.cpp:6 already keys the const one
+// (f6) and this module keys BOTH strrchr overloads (f13/f14); the non-const
+// strchr was simply missing -- the right-overload asymmetry.
+char *f29(char *a0, int a1) { return strchr(a0, a1); }
+
 const char *f19(const char *a0, const char *a1) { return strstr(a0, a1); }
 
 char *f20(char *a0, const char *a1) { return strstr(a0, a1); }

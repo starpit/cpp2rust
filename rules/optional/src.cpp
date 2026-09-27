@@ -46,11 +46,28 @@ using t4 = std::nullopt_t;
 
 template <typename T1> std::optional<T1> f1() { return std::optional<T1>(); }
 
-// NO RULE FOR `optional(T1 &&)`: the preprocessor resolves
-// `std::optional<T1>(std::move(v))` in this dependent context to the COPY
-// constructor, so the entry records `optional(const std::optional<T1> &)` --
-// a DUPLICATE of f4 with a different body, i.e. an ambiguous rule.  Left out
-// rather than shipped wrong.  `operator=(T1 &&)` (f7) does record correctly.
+// THE CONVERTING CONSTRUCTOR `optional(T1 &&)` IS THE MISSING KEY, AND IT STILL
+// CANNOT BE RECORDED.  HARVESTED 2026-09-27 with `-verbose` on
+// `std::optional<S> a{S{7}};`:
+//     search expr void std::optional<S>::optional(S &&), result:
+//     None
+// after which the converter emitted `let mut a: Option<S> = S { v: 7 };` -- the
+// initializer BARE, with the `Some(...)` wrap MISSING (unsafe: `expected
+// Option<S>, found S`).  So the missing `Some` is a MISSING KEY, not a converter
+// defect: the converter simply found no rule for the converting constructor and
+// fell through to emitting the initializer.
+//
+// MEASURED ATTEMPTS, both recording the WRONG key and therefore NOT SHIPPED
+// (either would be a duplicate of f4 with a different body, i.e. an ambiguous
+// rule):
+//   * `return std::optional<T1>(std::move(a0));`  -> records
+//     `void std::optional<T1>::optional(const std::optional<T1> &)`
+//   * `return std::optional<T1>{std::move(a0)};`  -> records the SAME thing
+//     (brace-init does NOT change the recorded overload; checked in ir_src.json)
+// The preprocessor's synthetic resolution picks the COPY constructor over
+// libc++'s `template<class U = T> optional(U&&)` in this dependent context.  The
+// next step is a spelling that forces U, which probably needs the
+// `explicit-template-args` marker (regen-rule.sh:68) -- it has no user today.
 
 template <typename T1> std::optional<T1> f3(std::nullopt_t n) {
   return std::optional<T1>(n);
