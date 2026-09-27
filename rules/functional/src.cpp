@@ -37,3 +37,29 @@ template <typename T1> using t2 = std::function<T1()>;
 template <typename T1> T1 f4(const std::function<T1()> &a0) {
   return a0.operator()();
 }
+
+// THE ONE-ARGUMENT ARROW SHAPE `std::function<T1 (T2)>` IS LEFT OUT DELIBERATELY.
+// Measured 2026-09-27, both halves:
+//  1. It does NOT rescue a user-typed argument.  On the only unary instantiation in
+//     the 403-TU sweep -- `std::function<bool (const scheduler::PipelineTreeNode *)>`
+//     in dataflow-scheduler/lib/Analysis/PipelineTree.cpp -- the key BINDS and then
+//     aborts anyway: `unmapped type `const scheduler::PipelineTreeNode *` has no
+//     model in types_, while mapping `std::function<bool (const ...PipelineTreeNode *)>`.
+//     So binding an argument as T2 still requires that argument to have a model; the
+//     arrow shape only helps when the thing with no model is the FUNCTION TYPE itself.
+//  2. It REGRESSES the nullary key.  With t3 present, Pipeline.cpp (rc=0, 685 lines
+//     with t2 alone) aborts with `unmapped type `` has no model in types_, while
+//     mapping `std::function<std::unique_ptr<mlir::Pass> ()>` -- i.e. `T1 (T2)` also
+//     matches the ZERO-argument instantiation, binding T2 to the EMPTY type.  The
+//     matcher does not check arrow-shape arity.  Until that is fixed in the converter,
+//     a unary key cannot coexist with the nullary one.
+
+// `std::function<R()>::function(F)` -- the CONSTRUCTOR, needed because every
+// registration site is `registerPass([]{ return createXPass(); })` and the harvested
+// key renders the parameter as the CLOSURE TYPE via its own operator():
+//   void std::function<std::unique_ptr<mlir::Pass> ()>::function(
+//         std::unique_ptr<mlir::Pass> operator()() const)
+// There is no nameable parameter type, so the parameter is taken generically as T2.
+template <typename T1, typename T2> std::function<T1()> f5(T2 a0) {
+  return std::function<T1()>(a0);
+}

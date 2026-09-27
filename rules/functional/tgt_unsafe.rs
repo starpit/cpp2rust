@@ -24,3 +24,7 @@ fn t2<T1>() -> Option<Box<dyn Fn() -> T1>> {
 unsafe fn f4<T1>(a0: &Option<Box<dyn Fn() -> T1>>) -> T1 {
     (a0.as_ref().unwrap())()
 }
+
+unsafe fn f5<T1, T2: Fn() -> T1 + 'static>(a0: T2) -> Option<Box<dyn Fn() -> T1>> {
+    Some(Box::new(a0))
+}
