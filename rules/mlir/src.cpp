@@ -714,6 +714,17 @@ public:
 };
 } // namespace detail
 
+// ---------------------------------------------------------------------------
+// PASS 2026-09-27 (third rules/mlir slot).  Declared ONLY so the key can be
+// SPELLED; argued at `using t69 =` below.
+// ---------------------------------------------------------------------------
+// `mlir::OpPrintingFlags` -- OperationSupport.h:1176:7, `class OpPrintingFlags`.
+// A plain namespace-scope class, no template, no nesting: the key is the bare
+// name.  NO MEMBER IS DECLARED -- `enableDebugInfo`, `printGenericOpForm`,
+// `useLocalScope`, `skipRegions`, `elideLargeElementsAttrs` are all absent, and
+// that absence is what keeps the opaque claim enforceable (see t69).
+class OpPrintingFlags {};
+
 } // namespace mlir
 
 // ---- type rules, and nothing else ----------------------------------------
@@ -1108,6 +1119,55 @@ using t67 = mlir::detail::PassOptions::ListOption<std::string>;
 // carries the concrete argument.  ⛔ Same absent members.
 using t68 = mlir::detail::PassOptions::ListOption<int>;
 
+// ---------------------------------------------------------------------------
+// PASS 2026-09-27 (third slot).  ONE key, deliberately.  The slot's other two
+// queue rows are resolved WITHOUT a new key and the reasons are recorded at the
+// bottom of this file -- one was ALREADY DONE, one FAILED ITS GATE.
+// ---------------------------------------------------------------------------
+// t69: `mlir::OpPrintingFlags` -> AN OPAQUE UNIT.  59 TUs.  MLIR's PRINTING-
+// OPTIONS BAG (OperationSupport.h:1176) -- debug-info, generic-op form,
+// local-scope and elision switches consulted by `Operation::print`/`AsmState`.
+// ⭐ SPELLING, READ NOT INFERRED.  Taken verbatim from the converter's own
+// unmapped-type diagnostic in the baseline survey TSVs, which prints both sides:
+//     searched as: mlir::OpPrintingFlags;
+//     from decl (NOT a key -- canonicalised, defaulted args kept):
+//       mlir::OpPrintingFlags
+// Both sides agree here (no template, no defaulted args), so unlike t66-t68
+// there is no dead sibling spelling to drift onto.
+// GATE, MEASURED on TWO TUs that PROVABLY REACH the type (the third TU tried,
+// StageCoarsening/Materializer.cpp, has ZERO OpPrintingFlags mentions in its log
+// and its zero is therefore WORTHLESS -- the same trap the t59 note records):
+//     SplitDFIROutput.cpp   3691 `search expr` lookups, 168 raw mentions, 0 hits
+//     WriteSetScan.cpp      3267 `search expr` lookups, 192 raw mentions, 0 hits
+// i.e. 0 of 6958 rule lookups mention OpPrintingFlags, while 360 raw mentions
+// are clang AST-dump and signature text (`ParmVarDecl ... '::mlir::
+// OpPrintingFlags'`) -- DECLARATIONS being lowered, never EXPRESSIONS looked up.
+// So the converter needs the TYPE and nothing else at every site it reaches.
+// ⛔ WHY OPAQUE AND NOT A STRUCT OF FLAGS.  `dataflowir-gen` has ONE printer and
+// it is not configurable: `grep -rn 'PrintingFlags\|printGenericOpForm\|
+// enableDebugInfo' dataflowir-gen/src` is empty.  Modelling this as a bag of
+// bools would let a TU SET a switch that the Rust printer then IGNORES -- the
+// output would differ from C++ while the code looked like it had asked for the
+// change.  That is the silently-wrong class, ranked below an abort.  A unit
+// cannot lie about a switch it does not have.
+// ⛔ THE COST, STATED AND ENFORCED -- and this row's honest caveat.  The
+// measured gate zero was taken with the type UNMAPPED, so it cannot prove what
+// gets looked up AFTER the declaration stops being a gap.  The source says
+// plainly that at least one member IS called:
+//     SplitDFIROutput.cpp:130   flags.enableDebugInfo(false);
+//     dr5/src/Passes/SPMDizer/DebugIndexer.h:60
+//                               OpPrintingFlags().useLocalScope().skipRegions()
+// NOT ONE OF THEM IS MAPPED, deliberately -- an unmapped member ABORTS LOUDLY,
+// and that abort is the enforcement that makes this unit TRUE rather than
+// convenient.  This is exactly t59's bargain (`mlir::Builder`, opaque, every
+// real call through it still aborting), and the same reasoning: the bare
+// DECLARATION sites -- `mlir::OpPrintingFlags flags;` at dcc.cpp:95 and
+// PCFGToDFManager.cpp:132, plus every `const OpPrintingFlags &` parameter -- are
+// the 59-TU row, and they need the type alone.  The mutator chain still stops.
+// (It would stop anyway one call later: `mod.print(os, flags)` is a ModuleOp
+// member and t61 maps no member either.)
+using t69 = mlir::OpPrintingFlags;
+
 // ---- WHAT THIS PASS DELIBERATELY LEFT OUT, and why -------------------------
 // * `mlir::IndexType::get(mlir::MLIRContext *)`, the ONE factory the verbose logs
 //   show in expression position (see t60).  NOT ADDED, because its only honest
@@ -1128,6 +1188,47 @@ using t68 = mlir::detail::PassOptions::ListOption<int>;
 //   line off, and the whole point of t65-t68 is that the spelling must be READ,
 //   never inferred from a sibling.  A key in the wrong spelling is a DEAD key
 //   that LOOKS like coverage, so these wait for a slot that can measure them.
+//
+// ---- THIRD SLOT (2026-09-27): the two rows that got NO key, and why --------
+// * `mlir::detail::TypedValue<mlir::VectorType>` (queue row g047, 82 TUs) --
+//   NOT LEFT OUT: **ALREADY DONE**, it is `t47` above, landed before this slot
+//   began.  Read back out of ir_src.json to be certain (`/t47 ::
+//   mlir::detail::TypedValue<mlir::VectorType>`), and the spelling is
+//   CHARACTER-FOR-CHARACTER the survey's `searched as:` line.  The queue row is
+//   STALE, not open; keying it again would have produced a DUPLICATE, not
+//   coverage.  Recorded here so the next slot does not re-derive it.  For the
+//   record, the concrete-vs-generic question it poses was already settled by the
+//   seven siblings t47-t53: CONCRETE, because a generic `TypedValue<T1>` forces
+//   the converter to map the template ARGUMENT and turns a countable mangled
+//   name into a hard abort at mapper.cpp:722/:835.
+//
+// * `mlir::OwningOpRef<mlir::ModuleOp>` (queue row g055, 59 TUs) -- LEFT OUT.
+//   ITS GATE FAILS, and it fails on the axis that matters for an OWNING handle.
+//   An OwningOpRef is `unique_ptr` for an MLIR op: its DESTRUCTOR ERASES the
+//   operation it adopted.  The corpus says so in its own words at
+//   dcc/src/Driver/dcc.cpp:63 -- "module_ (OwningOpRef) erases the module it
+//   adopted".  So unlike t59/t61/t64/t69, this type has an OBSERVABLE EFFECT AT
+//   END OF SCOPE, and an opaque unit has no destructor: mapping it to `()` would
+//   SILENTLY DROP the erase rather than abort on it.  That is the one outcome
+//   this project ranks below a loud abort, and it is why "no member is mapped, so
+//   reads abort" does NOT rescue this row the way it rescues the other four.
+//   AND the reads are there too -- `release()`/`get()`/`operator*`/`operator->`
+//   are really called on `OwningOpRef<ModuleOp>` values in the 403 TUs:
+//       SplitDFIROutput.cpp:158  global_mod->getBodyRegion()
+//       SplitDFIROutput.cpp:166  writeModule(global_mod.get(), "global.mlir")
+//       SplitDFIROutput.cpp:181  impl_mod->getBodyRegion()
+//       SplitDFIROutput.cpp:187  writeModule(impl_mod.get(), filename)
+//       dcc/src/Driver/dcc.cpp:96 module_->print(llvm::outs(), flags)
+//       dr5/src/Driver/DR5.h:84   returns `OwningOpRef<ModuleOp> &` by reference
+//   That is the same TU this slot used as its OpPrintingFlags gate, so it is
+//   unambiguously in scope.  ⭐ NOTE the measurement limit that makes this row
+//   different from t69's: the verbose logs show 0 raw mentions of OwningOpRef at
+//   all, so the log neither confirms nor denies a lookup -- the SOURCE is the
+//   evidence, and it is decisive.  A slot that wants this row must model the
+//   OWNERSHIP (an owning wrapper whose drop erases), not a unit; there are two
+//   further instantiations waiting behind it (`OwningOpRef<mlir::Operation *>`
+//   and `OwningOpRef<mlir::ktdf_arch::DeviceOp>`, both with `searched as:` lines
+//   already in the baseline TSVs) and they want the same model.
 
 
 

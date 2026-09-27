@@ -812,3 +812,26 @@ fn t67() -> () {
 fn t68() -> () {
     ()
 }
+
+// t69 `mlir::OpPrintingFlags` -> AN OPAQUE UNIT.  59 TUs.  MLIR's PRINTING-OPTIONS
+//   BAG (OperationSupport.h:1176): the debug-info / generic-op-form / local-scope
+//   / region-elision switches that `Operation::print` and `AsmState` consult.
+//   ⛔ NOT A STRUCT OF BOOLS: `dataflowir-gen` has ONE printer and it is NOT
+//   configurable (`grep -rn "PrintingFlags|printGenericOpForm|enableDebugInfo"
+//   dataflowir-gen/src` is EMPTY).  A bag of bools would let a TU SET a switch
+//   the Rust printer then IGNORES -- output silently differing from C++ while the
+//   code looks like it asked for the change.  A unit cannot lie about a switch it
+//   does not have.
+//   GATE: 0 of 6958 `search expr` rule lookups mention it, across the two TUs
+//   that PROVABLY reach it (SplitDFIROutput.cpp 3691 lookups / 168 raw mentions;
+//   WriteSetScan.cpp 3267 / 192).  All 360 raw mentions are clang AST-dump and
+//   signature text -- declarations being lowered, not expressions looked up.
+//   ⛔ NO MEMBER MAPPED, and the source DOES call two of them
+//   (`flags.enableDebugInfo(false)` at SplitDFIROutput.cpp:130,
+//   `OpPrintingFlags().useLocalScope().skipRegions()` at DebugIndexer.h:60).
+//   They ABORT LOUDLY, and that abort is what makes this unit true rather than
+//   convenient -- exactly t59's (`mlir::Builder`) bargain.  What the row buys is
+//   the 59 TUs' bare DECLARATION and PARAMETER sites.  Body is `()`.
+fn t69() -> () {
+    ()
+}
