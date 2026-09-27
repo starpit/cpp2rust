@@ -916,8 +916,21 @@ impl<T> Ptr<Vec<T>> {
 }
 
 impl<T> Ptr<Box<[T]>> {
+    // Named `decay_array`, NOT `decay`, because a second inherent `decay` here made the
+    // method UNRESOLVABLE whenever the receiver's pointee is still an inference variable.
+    // Measured in scratch-fo/probe.refcount.rs:56, where the converter emits
+    //   (Value::as_pointer(opt.as_ref().expect(..)).decay() as Ptr<u8>)
+    // over a `Value<Vec<u8>>`: `Rc<RefCell<Vec<u8>>>` satisfies BOTH `AsPointer<Vec<u8>>`
+    // (the generic impl above) and `AsPointer<u8>` (the Vec shortcut), so `as_pointer`
+    // hands back `Ptr<_>` and rustc reported
+    //   error[E0034]: multiple applicable items in scope ... multiple `decay` found
+    //     candidate #1 ... `Ptr<Box<[T]>>`   candidate #2 ... `Ptr<Vec<T>>`
+    // With one candidate left, the method probe UNIFIES the receiver with `Ptr<Vec<_>>`,
+    // which in turn kills the `AsPointer<u8>` candidate and the chain type-checks.
+    // (The same overlap is why `decay_stack_array_cannot_be_freed` below has to spell its
+    // `as_pointer` through `&dyn AsPointer<Box<[i32]>>`.)
     #[inline]
-    pub fn decay(&self) -> Ptr<T> {
+    pub fn decay_array(&self) -> Ptr<T> {
         match &self.kind {
             PtrKind::Null => Ptr::null(),
             PtrKind::StackSingle(weak) => Ptr {
@@ -1041,7 +1054,7 @@ mod tests {
     #[test]
     fn decay_heap_array_can_be_freed() {
         let p: Ptr<Box<[i32]>> = Ptr::alloc(vec![1, 2, 3].into_boxed_slice());
-        let q = p.decay();
+        let q = p.decay_array();
         assert_eq!(q.offset(2).read(), 3);
         q.delete();
     }
@@ -1059,7 +1072,23 @@ mod tests {
     fn decay_stack_array_cannot_be_freed() {
         let v: Value<Box<[i32]>> = Rc::new(RefCell::new(vec![1, 2, 3].into_boxed_slice()));
         let p: Ptr<Box<[i32]>> = (&v as &dyn AsPointer<Box<[i32]>>).as_pointer();
-        p.decay().delete();
+        p.decay_array().delete();
+    }
+
+    // Reproduces the converter's refcount emission for `*opt` on an
+    // `std::optional<std::vector<char>>` (scratch-fo/probe.refcount.rs:56): the pointee of
+    // `as_pointer` is NOT annotated, so this whole chain fails to compile at all while a
+    // second inherent `decay` exists (E0034).  It can also FAIL AT RUNTIME rather than
+    // merely compile: if `decay` picked the array kind, or dropped `offset`, the reads
+    // below land on the wrong element or panic with "ub: invalid decay", and reading
+    // element 2 (not 0) makes a zero-offset bug observable.
+    #[test]
+    fn decay_of_unannotated_as_pointer_resolves_to_vec() {
+        let v: Value<Vec<u8>> = Rc::new(RefCell::new(b"abc".to_vec()));
+        let p = Value::as_pointer(&v).decay() as Ptr<u8>;
+        assert_eq!(p.read(), b'a');
+        assert_eq!(p.offset(2).read(), b'c');
+        assert!(matches!(p.kind, PtrKind::StackVec(_)));
     }
 
     #[test]
