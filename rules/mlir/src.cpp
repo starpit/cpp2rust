@@ -458,6 +458,16 @@ class TypedValue {};
 template <typename T>
 class DenseArrayAttrImpl {};
 
+// mlir/Pass/AnalysisManager.h:30 -- `class PreservedAnalyses`, whose ONLY member
+// is `SmallPtrSet<TypeID, 2> preservedIDs`.  Declared with ONLY the default
+// constructor (implicit: AnalysisManager.h declares none, so `PreservedAnalyses()`
+// is the one ported code can reach); preserveAll/isAll/isNone/preserve/isPreserved
+// are deliberately NOT declared because none is mapped (see t80).
+class PreservedAnalyses {
+public:
+  PreservedAnalyses();
+};
+
 } // namespace detail
 
 namespace scf {
@@ -891,6 +901,16 @@ class StringLiteral {};
 // spelled.  NOT mapped (no `using tN =`).
 template <typename... PTs>
 class PointerUnion {};
+
+// llvm/ADT/BitVector.h:101 -- `class BitVector { Storage Bits; unsigned Size = 0;
+// ... BitVector() = default; }`.  A plain non-template class, so the key is the
+// bare name.  Declared with ONLY the default constructor, read off
+// BitVector.h:164 (`BitVector() = default;`); no member is declared because no
+// member is mapped (see t79).
+class BitVector {
+public:
+  BitVector();
+};
 
 namespace sys {
 // llvm/Support/Mutex.h:27-28 -- `template<bool mt_only> class SmartMutex`.
@@ -1471,6 +1491,54 @@ using t77 = llvm::sys::SmartMutex<true>;
 // `-help` renderer would read.
 using t78 = llvm::cl::desc;
 
+// t79: `llvm::BitVector` -> `Vec<bool>`, one Rust bool per bit.  Queue row g105,
+// 13 TUs; the row is a LEAF inside `std::array<std::vector<llvm::BitVector>, _>`,
+// i.e. the type is needed for a MEMBER's shape, which is exactly the case where
+// an unmapped leaf aborts before any call site is reached.  Non-template, so the
+// key is the bare name and nothing generic is involved.
+//
+// DESTRUCTOR TEST: `grep -rn '~BitVector' llvm/ADT/BitVector.h` finds ZERO hits
+// -- the class is `SmallVector<uintptr_t> Bits; unsigned Size = 0;` and its only
+// destruction effect is the implicit one of the contained SmallVector.  No
+// observable program effect, so an ordinary mapped value is permitted.
+//
+// WHY `Vec<bool>` AND NOT A UNIT: the payload IS read (`operator[]`, `test`,
+// `count`, `any`), so a unit would be the kind of model that silently loses what
+// the program reads.  `Vec<bool>` keeps the bits exactly; the difference from
+// LLVM's packed words is not observable through any mapped operation.
+//
+// WHAT IS LOST: EVERY member.  `set`/`reset`/`operator[]`/`test`/`count`/`any`/
+// `all`/`none`/`resize`/`flip` and the bitwise operators are NOT declared above
+// and NOT mapped, so each call ABORTS LOUDLY -- the t72 TypeID precedent: map the
+// type, omit the members that would lie.  In particular `BitVector::reference`,
+// the proxy `operator[]` returns, is absent, so no rule can pretend a bit write
+// happened.
+using t79 = llvm::BitVector;
+
+// t80: `mlir::detail::PreservedAnalyses` -> `()`.  Queue row g062, 32 TUs, and
+// its `searched as:` line is `mlir::detail::PreservedAnalyses` -- a plain
+// non-template class reached while converting
+// `mlir::ktdf_arch::DeviceManager::isInvalidated(const PreservedAnalyses &)`,
+// i.e. in PARAMETER position, which is why the abort happens before any member
+// call.
+//
+// DESTRUCTOR TEST: `grep -rn '~PreservedAnalyses' mlir/` finds ZERO hits; the
+// class holds one `SmallPtrSet<TypeID, 2>` and destroys it implicitly.  No
+// observable program effect.
+//
+// WHY A UNIT IS THE HONEST MODEL HERE, unlike t79: the payload is a set of
+// `mlir::TypeID`, and t72 maps `mlir::TypeID` ITSELF to `()` with its `==`/`!=`
+// DELIBERATELY ABSENT, because mapping them would make every type compare equal.
+// A set keyed on a type that cannot be compared has no representable contents, so
+// `Vec<()>`/`HashSet` would be a fiction with a size that means nothing.  `()`
+// says exactly as much as t72 already says.
+//
+// WHAT IS LOST: every member -- `preserveAll`, `isAll`, `isNone`, `preserve(TypeID)`,
+// `isPreserved(TypeID)` and the template forms.  None is declared above and none
+// is mapped, so a call ABORTS LOUDLY instead of answering a preservation query
+// from an empty model.  This is the t72 rule applied one level up.
+using t80 = mlir::detail::PreservedAnalyses;
+
 // ---- WHAT THIS PASS DELIBERATELY LEFT OUT, and why -------------------------
 // * `mlir::IndexType::get(mlir::MLIRContext *)`, the ONE factory the verbose logs
 //   show in expression position (see t60).  NOT ADDED, because its only honest
@@ -1817,3 +1885,19 @@ llvm::sys::SmartMutex<true> f46() { return llvm::sys::SmartMutex<true>(); }
 // (CommandLine.h:413, `desc(StringRef Str)`, BY VALUE).  There is no default
 // constructor, so this is the one key ported code can reach.
 llvm::cl::desc f47(llvm::StringRef s) { return llvm::cl::desc(s); }
+
+// ---- f48/f49: THE CONSTRUCTORS FOR t79/t80 ---------------------------------
+// f39's note above is the whole argument and applies verbatim: a `using tN =`
+// maps the TYPE ONLY, and the converter looks the default constructor up as an
+// ORDINARY EXPR RULE (`search expr void T::T()`).  On a miss it emits
+// `<mangled type>::new()`, so the TU gets rc=0 and then `error[E0433]`.
+// Appended AFTER f47, which renumbers nothing.
+//
+// f48 -- `llvm::BitVector v;`, the DEFAULT constructor (BitVector.h:164,
+// `BitVector() = default;`).  Body is an EMPTY bit vector, which is what that
+// default does: `Bits` empty, `Size = 0`.
+llvm::BitVector f48() { return llvm::BitVector(); }
+
+// f49 -- `mlir::detail::PreservedAnalyses pa;`, the implicit default constructor
+// (AnalysisManager.h declares none).  Body is the unit, per t80.
+mlir::detail::PreservedAnalyses f49() { return mlir::detail::PreservedAnalyses(); }

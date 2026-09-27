@@ -1161,3 +1161,28 @@ unsafe fn f46() -> ::std::sync::Mutex<()> {
 unsafe fn f47(a0: Vec<libc::c_char>) -> Vec<libc::c_char> {
     a0
 }
+
+// t79 -- `llvm::BitVector` -> one Rust bool per bit.  The payload IS read by the
+// C++ (operator[]/test/count), so a unit would lose it; no member is keyed, so the
+// packed-word representation difference is unobservable.  See the src.cpp note.
+fn t79() -> Vec<bool> {
+    Vec::new()
+}
+
+// t80 -- `mlir::detail::PreservedAnalyses` -> `()`.  Its payload is a set of
+// `mlir::TypeID`, and t72 maps TypeID to `()` with `==` deliberately absent, so a
+// set of them has no representable contents.  `()` says exactly as much as t72.
+fn t80() -> () {
+    ()
+}
+
+// f48 -- the default constructor for t79: `BitVector() = default;` leaves the
+// storage empty and Size = 0, i.e. an empty Vec.
+unsafe fn f48() -> Vec<bool> {
+    Vec::new()
+}
+
+// f49 -- the implicit default constructor for t80; the unit, per t80.
+unsafe fn f49() -> () {
+    ()
+}
