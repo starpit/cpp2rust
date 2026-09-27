@@ -1540,3 +1540,21 @@ mlir::InFlightDiagnostic &&f37(mlir::InFlightDiagnostic &&d, mlir::StringAttr a)
 mlir::InFlightDiagnostic &&f38(mlir::InFlightDiagnostic &&d, llvm::StringLiteral s) {
   return std::move(d).operator<<(std::move(s));
 }
+
+// ---- f39: THE DEFAULT CONSTRUCTOR, defect (5) of queue row c020 ------------
+// MEASURED, this tree, `pin/cpp2rust -verbose` on
+// /home/agent/work/probe/mlirdiag/probe.cpp:
+//     search expr void mlir::InFlightDiagnostic::InFlightDiagnostic(), result:
+//     None
+// so `mlir::InFlightDiagnostic d;` lowered to the undefined name
+// `mlir_InFlightDiagnostic::new()` -- `error[E0433]: cannot find module or crate
+// mlir_InFlightDiagnostic` x3 in BOTH models, which stops rustc before borrowck
+// and therefore before any of the SHAPE defects can be measured.
+//
+// ⭐ A TYPE RULE IS NOT A CONSTRUCTOR.  t70 maps the TYPE; the converter looks
+// the default ctor up as an ORDINARY EXPR RULE under the key above, and with no
+// such rule it falls back to `<mangled type name>::new()`.  Third measured
+// instance of this trap today after `mlir::Attribute` (t*/f* note at :1370) and
+// `std::__thread_id` (rules/thread_id/src.cpp:63) -- the pattern is: every
+// mapped type that ported code DEFAULT-CONSTRUCTS needs its ctor keyed too.
+mlir::InFlightDiagnostic f39() { return mlir::InFlightDiagnostic(); }

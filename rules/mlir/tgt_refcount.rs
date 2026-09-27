@@ -965,3 +965,9 @@ fn f37(a0: libcc2rs::InFlightDiagnostic, a1: dataflowir_gen::ir::Attr) -> libcc2
 fn f38(a0: libcc2rs::InFlightDiagnostic, a1: Vec<u8>) -> libcc2rs::InFlightDiagnostic {
     libcc2rs::InFlightDiagnostic::shl_bytes(a0, &a1)
 }
+
+// f39 -- the default constructor, `mlir::InFlightDiagnostic d;`.  A fresh,
+// in-flight, empty diagnostic; `live` is true so Drop reports it (diag.rs).
+fn f39() -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::new()
+}
