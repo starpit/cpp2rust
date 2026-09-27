@@ -1231,6 +1231,11 @@ bool ConverterRefCount::VisitStringLiteral(clang::StringLiteral *expr) {
   }
   StrCat(std::format("b{}", GetEscapedStringLiteral(expr, 0)));
   computed_expr_type_ = ComputedExprType::FreshValue;
+  // `b"x"` has type `&'static [u8; N]` -- it is ALREADY a reference, exactly
+  // like the `c"x"` and embedded-NUL arms of the base model's
+  // VisitStringLiteral. Without this bit the ParamIsSharedRef path prefixes a
+  // borrow and a `&[u8]` rule parameter gets `&&'static [u8; N]`.
+  emitted_a_reference_ = true;
   return false;
 }
 

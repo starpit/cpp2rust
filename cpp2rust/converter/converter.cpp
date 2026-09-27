@@ -6201,7 +6201,27 @@ std::string Converter::ConvertIRFragment(
       result += Mapper::InstantiateTemplate(GetCalleeOrExpr(expr), g->n);
     } else if (auto *ph = std::get_if<PlaceholderFragment>(&frag)) {
       auto arg_idx = ph->n;
-      assert(arg_idx < all_args.size());
+      // NDEBUG: `assert(arg_idx < all_args.size())` is compiled to NOTHING in
+      // the release build, so this used to read `all_args` OUT OF BOUNDS and
+      // fault on `arg->getType()` -- the rc=139 segfault the assert existed to
+      // prevent. Must survive NDEBUG. Under --survey this is a recoverable gap:
+      // the 403-TU survey is the fleet's work list, so RECORD AND CONTINUE.
+      if (arg_idx >= all_args.size()) {
+        std::string detail =
+            std::format("rule body references placeholder a{} but the call site "
+                        "supplies only {} argument(s)",
+                        arg_idx, all_args.size());
+        const std::string loc =
+            expr != nullptr
+                ? expr->getExprLoc().printToString(ctx_.getSourceManager())
+                : std::string("<no expr>");
+        if (survey::Enabled()) {
+          survey::Record(survey::GapKind::kUnsupportedConstruct, detail, loc);
+          continue;
+        }
+        llvm::report_fatal_error(llvm::Twine(detail) + " at " + loc,
+                                 /*gen_crash_diag=*/false);
+      }
       auto *arg = all_args[arg_idx];
       bool is_receiver = HasReceiver(expr) && arg_idx == 0;
 

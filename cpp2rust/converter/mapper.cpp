@@ -7,6 +7,7 @@
 #include <clang/Basic/OperatorKinds.h>
 #include <clang/Basic/SourceManager.h>
 #include <clang/Lex/Lexer.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/ThreadPool.h>
 
 #include <cctype>
@@ -1228,9 +1229,16 @@ std::string mapTypeStringRecursive(const std::string &cpp_type) {
       // compile and rc=0 here means even less than usual.
       return ToRustName(cpp_type);
     }
-    llvm::errs() << "unsupported unmapped " << DescribeUnmappedLeaf(cpp_type)
-                 << '\n';
-    assert(0 && "Type is not present in types_");
+    // NDEBUG: the release build compiles `assert(0 && ...)` to NOTHING, so this
+    // used to FALL THROUGH to the `rule->type_info.type` below with
+    // `rule == nullptr` -- forming a null `const std::string&` that
+    // instantiateTgt copies, i.e. the rc=139 segfault this assert existed to
+    // prevent. It must be a failure that SURVIVES NDEBUG.
+    llvm::report_fatal_error(
+        llvm::Twine("unsupported unmapped ") + DescribeUnmappedLeaf(cpp_type) +
+            ": type `" + cpp_type + "` is not present in types_ (rule key `" +
+            GetTypeMapKey(cpp_type) + "`)",
+        /*gen_crash_diag=*/false);
   }
   for (auto &ty : subs) {
     if (ty) {
