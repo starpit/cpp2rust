@@ -427,6 +427,60 @@ namespace scf {
 class ForOp {};
 } // namespace scf
 
+// mlir/include/mlir/Pass/Pass.h -- `class Pass`, an ABSTRACT BASE with the pure
+// virtual `runOnOperation()`.  Mapped as an OPAQUE TYPE: no members, no init
+// beyond the unit, exactly like `mlir::MLIRContext` (t23) and
+// `mlir::EmptyProperties` (t13).
+//
+// WHY OPAQUE IS THE HONEST ANSWER HERE, and what it costs.  The crate models
+// DataflowIR's DATA (ops, types, attrs, regions); it models no PASS
+// INFRASTRUCTURE at all -- there is no PassManager, no pipeline, no
+// runOnOperation in `dataflowir-gen`.  So there is nothing to map Pass's
+// BEHAVIOUR onto and this rule deliberately maps none of it.  What the corpus
+// needs is not behaviour: the five blocked TUs reach this type only through
+// `std::unique_ptr<mlir::Pass>` -- a pass is CONSTRUCTED by a factory
+// (`createXPass()`), MOVED into a `std::function<std::unique_ptr<Pass>()>`
+// registration callback, and handed to a PassManager.  An OWNED OPAQUE HANDLE
+// is a faithful model of exactly that, and it is what unblocks the
+// `std::unique_ptr<mlir::Pass, std::default_delete<mlir::Pass>>` lookup that
+// aborts at mapper.cpp:835 with `Type is not present in types_`.
+//
+// ⛔ AND THE COST IS STATED, NOT HIDDEN: because NO MEMBER IS MAPPED, any
+// translated call THROUGH a Pass -- `pass->runOnOperation()`,
+// `getArgument()`, `pm.addPass(...)`'s own body -- still ABORTS LOUDLY in the
+// mapper rather than emitting something that compiles and lies.  That is the
+// intended state.  This rule buys the TYPE and nothing else.
+class Pass {};
+
+// mlir/include/mlir/IR/BuiltinTypeInterfaces.h -- `ShapedType`, a TYPE
+// INTERFACE (not a class hierarchy) over the shaped builtin types: vector,
+// memref, tensor.  Every ShapedType IS a `mlir::Type`, and it is passed and
+// returned BY VALUE like every other Type handle.
+//
+// -> `dataflowir_gen::ir::Ty` (ir.rs:37), WHICH IS A WIDENING and is the same
+// widening this module already performs five times (t24/t30-t35 widen
+// OpResult/TypedValue<T>/BlockArgument to `ir::Value`; t10-t12/t20/t26/t29
+// widen six concrete attribute classes to `ir::Attr`).  Here the widening is
+// ShapedType -> the whole `Ty` enum, i.e. the rule forgets the INTERFACE
+// CONSTRAINT "this type is shaped".
+//
+// THE SHAPE ITSELF IS NOT LOST -- that is what makes this widening a good one
+// rather than a lossy one.  `ir::Ty` carries shape in the variants that have
+// it: `Ty::Vector(Vec<i64>, Box<Ty>)` (ir.rs:30) and
+// `Ty::MemRef(Vec<i64>, Box<Ty>)` (ir.rs:32) both hold the dimension list and
+// the element type, and a negative dimension is the dynamic `?` (ir.rs:60).
+// So a future `getShape()` / `getElementType()` / `hasRank()` rule has real
+// data to read.  ⛔ What the widening costs, stated plainly: `Ty` has no
+// TENSOR variant, so `mlir::RankedTensorType` lands in `Ty::Opaque(spelling)`
+// and its shape is then only recoverable by reparsing the spelling.
+//
+// ⛔ NO SHAPE ACCESSOR IS MAPPED, deliberately.  `getShape()`,
+// `getElementType()`, `getRank()`, `hasStaticShape()`, `cloneWith()` are ALL
+// absent, so every shape QUERY still aborts loudly in the mapper.  The rule
+// buys the abort at `mlir::ktdp::AccessTileType::cloneWith`'s SIGNATURE (which
+// is where KtdpTypes.cpp dies today) and nothing more.
+class ShapedType {};
+
 } // namespace mlir
 
 // ---- type rules, and nothing else ----------------------------------------
@@ -547,6 +601,12 @@ using t39 = llvm::detail::indexed_accessor_range_base<
                                              std::default_delete<mlir::Region>> *,
                        mlir::Region **>,
     mlir::Region *, mlir::Region *, mlir::Region *>;
+
+// t40/t41: see the class declarations above for the full reasoning.  t40 is an
+// OPAQUE OWNED HANDLE (no members mapped, every call through it still aborts);
+// t41 is a WIDENING to `ir::Ty` (no shape accessor mapped).
+using t40 = mlir::Pass;
+using t41 = mlir::ShapedType;
 
 // ---- the two operator rules ----------------------------------------------
 // The member `==` on mlir::Attribute.  Spelled `.operator==(...)` rather than

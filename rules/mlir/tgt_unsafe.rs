@@ -520,6 +520,44 @@ fn t39() -> Vec<dataflowir_gen::fmt::Region> {
     Default::default()
 }
 
+// t40 `mlir::Pass` -> AN OPAQUE UNIT, the same representation `mlir::MLIRContext`
+//   (t23) and `mlir::EmptyProperties` (t13) already use, and for the same reason:
+//   `dataflowir-gen` models DataflowIR's DATA and carries NO pass
+//   infrastructure -- no PassManager, no pipeline, no runOnOperation -- so there
+//   is nothing to map a Pass's behaviour onto and this rule maps none of it.
+//   What the corpus needs is an OWNED OPAQUE HANDLE: every blocked site reaches
+//   the type only as `std::unique_ptr<mlir::Pass>`, constructed by a
+//   `createXPass()` factory, moved into a
+//   `std::function<std::unique_ptr<Pass>()>` and registered.  `()` is a faithful
+//   model of a handle whose contents the port never inspects, and the `init` is
+//   the unit value -- which is also the ONLY init this type can have, since
+//   `mlir::Pass` is ABSTRACT and no translated program can construct one
+//   directly.  (The body is `()`, not empty: `fn t40() -> () {}` panics at
+//   syntactic.rs:591 because a type rule's target must YIELD an initializer.)
+//   THE COST, STATED: no member is mapped, so any call THROUGH a Pass still
+//   aborts loudly in the mapper instead of compiling and lying.
+fn t40() -> () {
+    ()
+}
+
+// t41 `mlir::ShapedType` -> `ir::Ty` (ir.rs:37).  A WIDENING, and the same one
+//   this module performs five times over for Value-likes and six times for
+//   Attribute-likes: ShapedType is MLIR's type INTERFACE over vector/memref/
+//   tensor, every ShapedType IS a `mlir::Type`, and t5 already maps
+//   `mlir::Type -> ir::Ty`.  Mapping the interface to the same enum forgets only
+//   the CONSTRAINT "this type is shaped"; the SHAPE ITSELF SURVIVES, because
+//   `Ty::Vector(Vec<i64>, Box<Ty>)` and `Ty::MemRef(Vec<i64>, Box<Ty>)` carry
+//   the dimension list and element type (negative dim = dynamic `?`).  What it
+//   costs: `Ty` has no tensor variant, so a RankedTensorType lands in
+//   `Ty::Opaque(spelling)` and its shape is only recoverable by reparsing.
+//   The `init` is t5's: the EMPTY SPELLING, the null-handle sentinel no real
+//   MLIR type can print as.  NO shape accessor is mapped -- getShape,
+//   getElementType, getRank, hasStaticShape and cloneWith are all absent and
+//   still abort loudly.
+fn t41() -> dataflowir_gen::ir::Ty {
+    dataflowir_gen::ir::Ty::Opaque(::std::string::String::new())
+}
+
 // --- WHAT THIS PASS DELIBERATELY LEFT OUT, with the reason ------------------
 // * `mlir::OpOperand` (23 rustc errors).  NOT GROUNDED.  It is not a Value: it is
 //   the USE EDGE (`IROperand`, an intrusive node in a value's use-list holding
