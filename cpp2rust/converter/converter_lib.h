@@ -189,6 +189,16 @@ std::string GetConversionName(const clang::CXXConversionDecl *decl,
 bool IsImplicitAssignmentCall(const clang::CallExpr *expr);
 bool IsUserOperatorCall(const clang::CXXOperatorCallExpr *expr);
 
+// True when `expr` is the result of an overloaded `operator->` that resolved to a
+// RULE rather than to user code.  Such a result is a Rust PLACE, never a pointer, so
+// any pointer-to-pointer cast on it must be suppressed: measured as E0599
+// `no method named cast_const found for &mut Vec<i8>` on
+// scratch-fo/probe.cpp's `n->c_str()`, where `llvm::FailureOr<std::string>`'s
+// inherited `std::optional::operator->` yields `std::string *` and the implicit
+// CK_NoOp to `const std::string *` emitted `.cast_const()`.  `&mut T` -> `&T` is not
+// a method call, and nothing on the rule side can suppress the cast.
+bool IsRuleArrowResult(const clang::Expr *expr);
+
 bool IsSameTypeComparison(const clang::FunctionDecl *fn,
                           const clang::CXXRecordDecl *record);
 

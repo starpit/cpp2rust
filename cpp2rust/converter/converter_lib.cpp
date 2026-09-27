@@ -1060,6 +1060,14 @@ bool IsUserOperatorCall(const clang::CXXOperatorCallExpr *expr) {
   return true;
 }
 
+bool IsRuleArrowResult(const clang::Expr *expr) {
+  const auto *arrow =
+      clang::dyn_cast<clang::CXXOperatorCallExpr>(expr->IgnoreImplicit());
+  return arrow != nullptr &&
+         arrow->getOperator() == clang::OverloadedOperatorKind::OO_Arrow &&
+         !IsUserOperatorCall(arrow);
+}
+
 std::string GetFunctionBaseName(const clang::FunctionDecl *decl) {
   if (auto *conversion = clang::dyn_cast<clang::CXXConversionDecl>(decl)) {
     auto name = "operator_" + conversion->getConversionType().getAsString();
