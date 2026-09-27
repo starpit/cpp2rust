@@ -51,3 +51,15 @@ fn f2(a0: Vec<u8>) -> Vec<u8> {
     __s.push(0);
     __s
 }
+
+// f3 -- see tgt_unsafe.rs.  THIS OVERRIDE IS REQUIRED, and not because of any
+// raw-pointer text: the PARAMETER type is model-dependent.  std::string is
+// Vec<u8> here and Vec<libc::c_char> in the unsafe model, so inheriting the
+// unsafe body would give E0308 "expected Vec<u8>, found Vec<i8>" -- the same
+// shape already measured for f2.  No refcount-specific body logic is involved.
+fn f3(a0: Vec<u8>, a1: libc::c_uint) -> Vec<u8> {
+    let _ = a1;
+    let __s = a0;
+    let __n = __s.len().saturating_sub(1);
+    __s[..__n].to_vec()
+}

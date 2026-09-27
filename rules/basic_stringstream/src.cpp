@@ -32,9 +32,31 @@
 // `Rc<RefCell<Vec<T>>>` at rc.rs:890) giving E0283 at every insertion site.
 // See tgt_refcount.rs for what a probe of THIS module actually measured.
 //
+// f3 -- THE CTOR OVERLOAD, LANDED 2026-09-27.  The recorded blocker for queue
+// rows g087 (18 TUs) / g091 (17 TUs) / g222 -- `system type has no rule:
+// std::basic_stringstream<char, std::char_traits<char>, std::allocator<char>>`
+// -- IS STALE.  Re-measured in a private clone of pin/ir.v9 with
+// /home/agent/work/probes/ss_remeasure.cpp (`const char* ptr; std::stringstream
+// ss(ptr); ss.str();`): the TYPE matches t1, `str()` matches f2, the TU
+// translates rc=0, and the only miss in the whole -verbose log is
+//     search expr void std::basic_stringstream<char>::basic_stringstream(
+//         const std::string &, unsigned int), result:            <-- None
+// which lowers to the unmapped-ctor fallback
+// `std_basic_stringstream_char__std_char_traits_char___std_allocator_char__::new_1(...)`
+// and then E0433.  So the live gate was never the type: it is the
+// rc=0-then-E0433 unkeyed-constructor trap, and the corpus writes the
+// one-argument form everywhere (`std::stringstream ss(ptr)` dtgetenv.hpp:127,
+// `ss(jsonstr)` senulator.cpp:765, `s_stream(myOption)` dip.h:297, 30+ more).
+// NOTE THE SECOND PARAMETER: `openmode` is a DEFAULTED argument and it is KEPT
+// in the key, canonicalised to `unsigned int`.  A one-parameter key would not
+// match.  A `const char *` argument needs NO separate key -- it converts through
+// std::basic_string(const char *) first, which is why one key covers both
+// spellings; that was measured on the pointer form above.
+//
 // NOT COVERED, deliberately, each because it needs its own harvested key and
-// none has one: `str(const std::string &)`, the
-// basic_stringstream(const std::string &) and (openmode) constructors, EXTRACTION
+// none has one: `str(const std::string &)` (a SETTER; it needs a `&mut`
+// receiver the rule ABI cannot express), the (openmode)-only constructor,
+// EXTRACTION
 // (`>>`) and the other istream API (getline/get/peek/eof/fail/clear/seekg) --
 // a Vec<u8> has no read cursor at all, so an extraction row would have to
 // change the model, not extend it -- and the std::ios_base formatting
@@ -49,3 +71,7 @@ using t1 = std::stringstream;
 std::stringstream f1() { return std::stringstream(); }
 
 std::string f2(const std::stringstream &o) { return o.str(); }
+
+std::stringstream f3(const std::string &o, std::ios_base::openmode m) {
+  return std::stringstream(o, m);
+}
