@@ -391,3 +391,19 @@ fn f119<T1>(a0: Ptr<T1>) -> Ptr<T1> {
 fn f120<T1>(a0: Ptr<T1>) -> Ptr<T1> {
     a0
 }
+
+// f121 -- `it += n` MUTATES the receiver and returns it; f34 (prefix ++) is the
+// same shape.  f122 -- `it - n` is pure and moves BACKWARD, so the offset is
+// negated; a body using `+n` would silently read from the wrong end.
+// The two mentions of a0 must be in SEPARATE statements: in refcount an iterator
+// lvalue is a Value<Ptr<T1>>, so a single expression using a0 twice inlines to a
+// borrow() inside a borrow_mut() and panics "RefCell already borrowed" (MEASURED).
+fn f121<T1>(a0: &mut Ptr<T1>, a1: i64) -> Ptr<T1> {
+    let __p: Ptr<T1> = a0.offset(a1 as isize);
+    *a0 = __p.clone();
+    __p
+}
+
+fn f122<T1>(a0: Ptr<T1>, a1: i64) -> Ptr<T1> {
+    a0.offset(-(a1 as isize))
+}

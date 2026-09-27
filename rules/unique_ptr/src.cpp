@@ -68,3 +68,39 @@ std::unique_ptr<T1[]> &f15(std::unique_ptr<T1[]> &dst,
                            std::unique_ptr<T1[]> &&src) {
   return dst.operator=(std::move(src));
 }
+
+// ---------------------------------------------------------------------------
+// NULL TESTS -- `p == nullptr` / `p != nullptr`, and the REVERSED spelling
+// `nullptr == p`.  Exactly the shape rules/shared_ptr landed as f17/f18
+// (commit 0934519); the target codebase writes all four.
+//
+// Called UNQUALIFIED: an infix `o == nullptr` records NOTHING (the preprocessor
+// needs call form) and a QUALIFIED `std::operator==` aborts the preprocessor at
+// cpp_rule_preprocessor.cpp:888.
+//
+// `std::nullptr_t` carries no information -- the converter emits the `nullptr`
+// literal as `Default::default()` -- so the target binds that operand to `()`
+// and leaves it deliberately unused.
+//
+// Unlike shared_ptr there is no pointer-identity variant here: two distinct
+// unique_ptrs can never hold the same pointer, so `p == q` is not a shape the
+// target codebase can write and no key is added for it.
+template <typename T1>
+bool f16(const std::unique_ptr<T1> &o, std::nullptr_t n) {
+  return operator==(o, n);
+}
+
+template <typename T1>
+bool f17(const std::unique_ptr<T1> &o, std::nullptr_t n) {
+  return operator!=(o, n);
+}
+
+template <typename T1>
+bool f18(std::nullptr_t n, const std::unique_ptr<T1> &o) {
+  return operator==(n, o);
+}
+
+template <typename T1>
+bool f19(std::nullptr_t n, const std::unique_ptr<T1> &o) {
+  return operator!=(n, o);
+}

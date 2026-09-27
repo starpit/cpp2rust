@@ -615,3 +615,21 @@ template <typename T1>
 std::reverse_iterator<std::__wrap_iter<T1 *>> f120(std::vector<T1> &o) {
   return o.rend();
 }
+
+// g448 / g450 -- ARITHMETIC on `std::__wrap_iter<X *>`, which IS
+// `std::vector<X>::iterator` in libc++ and is ALREADY mapped here as t2, so no new
+// type key is needed -- only these two member operators.  Written in MEMBER form
+// (`it.operator+=(n)`), the shape rules/smallvector f20 uses; an infix spelling
+// records nothing silently.  The recorded key's parameter type comes from the
+// CALLEE (difference_type == long), not from what is written here.
+template <typename T1>
+typename std::vector<T1>::iterator &
+f121(typename std::vector<T1>::iterator &it, std::ptrdiff_t n) {
+  return it.operator+=(n);
+}
+
+template <typename T1>
+typename std::vector<T1>::iterator
+f122(typename std::vector<T1>::iterator it, std::ptrdiff_t n) {
+  return it.operator-(n);
+}

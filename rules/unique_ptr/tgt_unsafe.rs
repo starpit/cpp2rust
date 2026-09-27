@@ -69,3 +69,25 @@ unsafe fn f14<T1>(a0: &mut Option<Box<T1>>, a1: &mut Option<Box<T1>>) {
 unsafe fn f15<T1>(a0: &mut Option<Box<[T1]>>, a1: &mut Option<Box<[T1]>>) {
     *a0 = a1.take()
 }
+
+// f16-f19 -- null tests.  The nullptr_t operand is `()` (the converter emits the
+// nullptr literal as Default::default()) and is deliberately unused.
+unsafe fn f16<T1>(a0: &Option<Box<T1>>, a1: ()) -> bool {
+    let _: () = a1;
+    a0.is_none()
+}
+
+unsafe fn f17<T1>(a0: &Option<Box<T1>>, a1: ()) -> bool {
+    let _: () = a1;
+    a0.is_some()
+}
+
+unsafe fn f18<T1>(a0: (), a1: &Option<Box<T1>>) -> bool {
+    let _: () = a0;
+    a1.is_none()
+}
+
+unsafe fn f19<T1>(a0: (), a1: &Option<Box<T1>>) -> bool {
+    let _: () = a0;
+    a1.is_some()
+}

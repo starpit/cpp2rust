@@ -60,3 +60,18 @@ template <typename T1, typename T2>
 std::pair<T1, T2> &f14(std::pair<T1, T2> &dst, std::pair<T1, T2> &&src) {
   return dst.operator=(std::move(src));
 }
+
+// g419 -- `bool std::__1::operator!=(const pair<A,B> &, const pair<A,B> &)` is
+// NOT KEYED HERE, deliberately.  MEASURED 2026-09-27: an unqualified call form
+// `operator!=(a, b)` with two `const std::pair<T1, T2> &` parameters records the
+// key as `bool std::operator!=(...)` -- WITHOUT the `__1` inline-namespace
+// component that rules/unique_ptr's f16-f19 get for the same shape -- so the
+// converter still aborts at the use site:
+//   unsupported CXXOperatorCallExpr: != on (std::pair<std::map<int, int>, ...>)
+//   rule key: bool std::__1::operator!=(const std::pair<...> &, ...)
+//   converter.cpp:3929
+// i.e. the recorded key and the required key DISAGREE, and a rule written that
+// way is a DEAD KEY.  A qualified `std::__1::operator!=(a, b)` is not an option:
+// it aborts the preprocessor at cpp_rule_preprocessor.cpp:888.  The BODY is not
+// in question (std::pair compares first-then-second, which is exactly Rust tuple
+// PartialEq); only the key spelling is, and it needs a preprocessor-side answer.

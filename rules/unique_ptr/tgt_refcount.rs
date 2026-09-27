@@ -75,3 +75,25 @@ fn f14<T1: ByteRepr>(a0: Ptr<Option<Value<T1>>>, a1: &mut Option<Value<T1>>) {
 fn f15<T1: ByteRepr>(a0: Ptr<Option<Value<Box<[T1]>>>>, a1: &mut Option<Value<Box<[T1]>>>) {
     a0.write(a1.take())
 }
+
+// f16-f19 -- null tests.  The nullptr_t operand is `()` (the converter emits the
+// nullptr literal as Default::default()) and is deliberately unused.
+fn f16<T1>(a0: &Option<Value<T1>>, a1: ()) -> bool {
+    let _: () = a1;
+    a0.is_none()
+}
+
+fn f17<T1>(a0: &Option<Value<T1>>, a1: ()) -> bool {
+    let _: () = a1;
+    a0.is_some()
+}
+
+fn f18<T1>(a0: (), a1: &Option<Value<T1>>) -> bool {
+    let _: () = a0;
+    a1.is_none()
+}
+
+fn f19<T1>(a0: (), a1: &Option<Value<T1>>) -> bool {
+    let _: () = a0;
+    a1.is_some()
+}

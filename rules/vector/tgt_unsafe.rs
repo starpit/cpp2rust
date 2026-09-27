@@ -529,3 +529,15 @@ unsafe fn f119<T1>(a0: &mut Vec<T1>) -> *mut T1 {
 unsafe fn f120<T1>(a0: &mut Vec<T1>) -> *mut T1 {
     a0.as_mut_ptr()
 }
+
+// f121 -- `it += n` MUTATES the receiver and returns it; f34 (prefix ++) is the
+// same shape.  f122 -- `it - n` is pure and moves BACKWARD, so the offset is
+// negated; a body using `+n` would silently read from the wrong end.
+unsafe fn f121<T1>(a0: &mut *mut T1, a1: i64) -> *mut T1 {
+    *a0 = (*a0).offset(a1 as isize);
+    *a0
+}
+
+unsafe fn f122<T1>(a0: *mut T1, a1: i64) -> *mut T1 {
+    a0.offset(-(a1 as isize))
+}
