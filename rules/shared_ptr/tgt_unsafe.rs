@@ -46,3 +46,25 @@ unsafe fn f11<T1>(a0: &mut Option<Rc<T1>>) {
 unsafe fn f16<T1>(a0: &mut Option<Rc<T1>>) -> Option<Rc<T1>> {
     a0.take()
 }
+
+// f17/f18 -- `p == nullptr` / `p != nullptr`.  a1 is the `nullptr` literal,
+// which carries no information and is deliberately unused.
+unsafe fn f17<T1>(a0: &Option<Rc<T1>>, a1: ()) -> bool {
+    let _ = a1;
+    a0.is_none()
+}
+
+unsafe fn f18<T1>(a0: &Option<Rc<T1>>, a1: ()) -> bool {
+    let _ = a1;
+    a0.is_some()
+}
+
+// f19 -- shared_ptr's operator== compares the STORED POINTERS, so this is
+// Rc::ptr_eq and not a comparison of the pointees.
+unsafe fn f19<T1>(a0: &Option<Rc<T1>>, a1: &Option<Rc<T1>>) -> bool {
+    match (a0, a1) {
+        (None, None) => true,
+        (Some(x), Some(y)) => Rc::ptr_eq(x, y),
+        _ => false,
+    }
+}
