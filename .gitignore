@@ -17,3 +17,9 @@ __pycache__
 
 tmp
 *.swp
+
+# Build artifacts that have been accidentally staged before (2026-09-27):
+# `git add libcc2rs` swept 51 files under target/ plus a Cargo.lock into a commit.
+target/
+libcc2rs/Cargo.lock
+rules/Cargo.lock
