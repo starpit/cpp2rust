@@ -622,3 +622,95 @@ fn t45() -> dataflowir_gen::ir::Value {
 fn t46<T1>() -> Vec<T1> {
     Vec::new()
 }
+
+// t47-t53: the seven further CONCRETE `mlir::detail::TypedValue<T>`
+// instantiations (208 occurrences) -> `ir::Value` (ir.rs:21).  IDENTICAL BODY to
+// t30-t34/t45, deliberately: `TypedValue<T> : public Value`, so this is
+// inheritance and the model is WELL-GROUNDED, not a widening.  The STATIC type
+// `T` is DISCARDED -- `ty` is `Ty::Opaque("")` (ir.rs:47) because the crate has
+// no handle for VectorType / ktdf_arch::MemoryType / ktdf_arch::ExecutionUnitType
+// / ktdp::RuntimeArgType / ktdp::AccessTileType / TensorType / IntegerType -- and
+// nothing that depends on `T` is mapped, so such a site still aborts loudly.
+fn t47() -> dataflowir_gen::ir::Value {
+    dataflowir_gen::ir::Value::new(
+        ::std::string::String::new(),
+        dataflowir_gen::ir::Ty::Opaque(::std::string::String::new()),
+    )
+}
+fn t48() -> dataflowir_gen::ir::Value {
+    dataflowir_gen::ir::Value::new(
+        ::std::string::String::new(),
+        dataflowir_gen::ir::Ty::Opaque(::std::string::String::new()),
+    )
+}
+fn t49() -> dataflowir_gen::ir::Value {
+    dataflowir_gen::ir::Value::new(
+        ::std::string::String::new(),
+        dataflowir_gen::ir::Ty::Opaque(::std::string::String::new()),
+    )
+}
+fn t50() -> dataflowir_gen::ir::Value {
+    dataflowir_gen::ir::Value::new(
+        ::std::string::String::new(),
+        dataflowir_gen::ir::Ty::Opaque(::std::string::String::new()),
+    )
+}
+fn t51() -> dataflowir_gen::ir::Value {
+    dataflowir_gen::ir::Value::new(
+        ::std::string::String::new(),
+        dataflowir_gen::ir::Ty::Opaque(::std::string::String::new()),
+    )
+}
+fn t52() -> dataflowir_gen::ir::Value {
+    dataflowir_gen::ir::Value::new(
+        ::std::string::String::new(),
+        dataflowir_gen::ir::Ty::Opaque(::std::string::String::new()),
+    )
+}
+fn t53() -> dataflowir_gen::ir::Value {
+    dataflowir_gen::ir::Value::new(
+        ::std::string::String::new(),
+        dataflowir_gen::ir::Ty::Opaque(::std::string::String::new()),
+    )
+}
+
+// t54 `mlir::TypeAttr` -> `ir::Attr` (ir.rs:466).  A WIDENING, the 8th in this
+//   module.  `Attr` has NO variant carrying an `ir::Ty`, so the wrapped type
+//   lands in `Attr::Raw` by spelling; `getValue()`/`TypeAttr::get()` are NOT
+//   mapped, so reading the wrapped type still aborts loudly.  The init is the
+//   same null-handle sentinel t6/t7/t44 use.
+fn t54() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(String::new())
+}
+
+// t55-t57 `mlir::ElementsAttr` and its two subclasses `SparseElementsAttr` /
+//   `DenseIntElementsAttr` -> `ir::Attr` (ir.rs:466).  WIDENINGS, 9th-11th.
+//   ⛔ `Attr` HAS NO DENSE OR SPARSE ELEMENT-ARRAY VARIANT, so the element
+//   payload lands in `Attr::Raw`/`Attr::Aliasable` BY SPELLING.  `Attr::I32Array`
+//   (ir.rs:491) is NOT the right target for DenseIntElementsAttr and is not used:
+//   its doc comment says it is `mlir::ArrayAttr` of `IntegerAttr`s (ODS
+//   `I32ArrayAttr`, printed `[1 : i32, 2 : i32]`), a different MLIR class with a
+//   different printed form, i32 rather than APInt elements, and no shaped type.
+//   NO element query is mapped (`getValues<T>()`, `getElementType()`,
+//   `getNumElements()`, `isSplat()`, `operator[]`, `getIndices()`), so every
+//   element access still aborts loudly instead of reading an empty array.
+fn t55() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(String::new())
+}
+fn t56() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(String::new())
+}
+fn t57() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(String::new())
+}
+
+// t58 `mlir::detail::InterfaceMap` -> AN OPAQUE UNIT, the representation t23
+//   (MLIRContext), t40 (Pass) and t43 (OpOperand) already use.  MLIR's runtime
+//   interface dispatch table; `grep -rn InterfaceMap dataflowir-gen/src` = 0
+//   hits, the crate models printed IR and has no interface dispatch to map onto.
+//   ⛔ NO MEMBER IS MAPPED (`lookup`, `contains`, `insert`, `get<...>`), so any
+//   real dispatch through one still aborts loudly.  The body is `()`, not empty:
+//   `fn t58() -> () {}` panics at syntactic.rs:591.
+fn t58() -> () {
+    ()
+}

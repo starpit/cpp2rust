@@ -557,6 +557,90 @@ class IntegerSetAttr {};
 // becomes COUNTABLE instead of fatal, which is the whole and only claim.
 class OpOperandOpaqueTag {};
 
+// ---------------------------------------------------------------------------
+// SPELLING-ONLY RESTATEMENTS for the SEVEN further concrete `TypedValue<T>`
+// instantiations (t47-t53).  Exactly like `IndexType`/`MemRefType`/
+// `ktdf::TokenType`/`ktdf::FifoSlotType` above: an EMPTY TAG in the right
+// namespace, declared ONLY so the concrete key can be SPELLED.  None of them
+// gets a `using tN =`, so NONE of them is mapped as a type in its own right --
+// see the note in the header for why a bare declaration registers nothing.
+// (`mlir::TensorType` is the one exception and it already has t42.)
+// ⛔ THE ARGUMENT TYPES MUST NOT BE MAPPED AND THE KEYS MUST NOT BE GENERIC:
+// a generic `TypedValue<T1>` forces the converter to map the template ARGUMENT
+// and regresses to `mapper.cpp:722 Assertion 0 && "Type is not present in
+// types_"`.  Six recorded regressions.  Concrete for MLIR types, always.
+class VectorType {};
+class IntegerType {};
+namespace ktdf_arch {
+class MemoryType {};
+class ExecutionUnitType {};
+} // namespace ktdf_arch
+namespace ktdp {
+class RuntimeArgType {};
+class AccessTileType {};
+} // namespace ktdp
+
+// mlir/include/mlir/IR/BuiltinAttributes.h -- `TypeAttr`, the attribute that
+// WRAPS A TYPE (`#tf.type<...>`, ODS `TypeAttr`).  39 occurrences in the sweep.
+// -> `dataflowir_gen::ir::Attr` (ir.rs:466).  ⛔ THIS IS A WIDENING, the EIGHTH
+// attribute subclass this module widens to the `Attr` enum (t7/t9/t10/t11/t12/
+// t20/t44 are the other seven), and what it costs is stated: `Attr` has NO
+// variant that carries an `ir::Ty` (ir.rs:466-499 is Str/Int/Bool/Unit/
+// AffineMapAlias/AffineMap/I32Array/Aliasable/Raw -- `Int(i64, Ty)` carries a Ty
+// only as an integer's suffix, which is not a TypeAttr), so a wrapped type lands
+// in `Attr::Raw(spelling)` and is recoverable only by REPARSING that spelling.
+// ⭐ Sound only because NO ACCESSOR IS MAPPED: `getValue()`, `TypeAttr::get()`
+// are absent, so every attempt to read the wrapped type still aborts LOUDLY in
+// the mapper rather than handing back a `Ty::Opaque("")` that is not the type.
+class TypeAttr {};
+
+// mlir/include/mlir/IR/BuiltinAttributeInterfaces.h -- `ElementsAttr`, the
+// ATTRIBUTE INTERFACE over the dense/sparse element-array attributes (the same
+// interface-over-subclasses shape t41 `ShapedType` and t42 `TensorType` have on
+// the TYPE side).  41 occurrences.  Its two subclasses below appear once each
+// and are keyed separately because `mapTypeStringRecursive` (mapper.cpp:709) is
+// purely STRING-based -- an interface key cannot satisfy a lookup of a
+// subclass's spelling, exactly as t1's key cannot satisfy `mlir::Operation *`
+// (t36).
+// -> `dataflowir_gen::ir::Attr` (ir.rs:466) for all three.  ⛔ WIDENINGS, and
+// the cost is the LARGEST in this family: `Attr` HAS NO DENSE OR SPARSE
+// ELEMENT-ARRAY VARIANT.  `Attr::I32Array(Vec<i32>)` (ir.rs:491) is NOT it and
+// must not be used -- its own doc comment says it is `mlir::ArrayAttr` of
+// `IntegerAttr`s, ODS `I32ArrayAttr`, printed `[1 : i32, 2 : i32]`, a DIFFERENT
+// MLIR class with a different printed form from a `DenseIntElementsAttr`'s
+// `dense<[1, 2]> : tensor<2xi32>`; it is also fixed at i32 where a dense int
+// attr's elements are APInts of arbitrary width, and it carries no SHAPED TYPE,
+// which is half of what a DenseElementsAttr IS.  So the payload lands in
+// `Attr::Raw`/`Attr::Aliasable` BY SPELLING for all three.
+// ⭐ Sound only because NO ELEMENT QUERY IS MAPPED: `getValues<T>()`,
+// `getElementType()`, `getNumElements()`, `isSplat()`, `operator[]`,
+// `SparseElementsAttr::getIndices()`/`getValues()` are ALL absent, so every
+// element access still ABORTS LOUDLY instead of reading an empty array.  These
+// rules buy the SIGNATURE and nothing else.
+class ElementsAttr {};
+class SparseElementsAttr {};
+class DenseIntElementsAttr {};
+
+namespace detail {
+// mlir/include/mlir/Support/InterfaceSupport.h -- `mlir::detail::InterfaceMap`,
+// MLIR's RUNTIME INTERFACE DISPATCH TABLE: a sorted array of
+// (TypeID, void *concept) pairs that `Op<...>`/`AbstractOperation` consults to
+// answer `isa<SomeInterface>` / `cast<SomeInterface>` on an opaque op.
+// `grep -rn InterfaceMap /home/agent/work/repos/dt_src/cpp2rust-port/dataflowir-gen/src`
+// = 0 HITS: the crate models PRINTED IR (ops as `fmt::OpInst` content), and has
+// no notion of runtime interface dispatch at all, so there is nothing to map it
+// ONTO.
+// -> AN OPAQUE UNIT `()`, exactly the representation t23 (`MLIRContext`), t40
+// (`Pass`), t43 (`OpOperand`) and t13 (`EmptyProperties`) already use.  An
+// opaque mapping CONFLATES NOTHING: it carries no value, so it cannot be
+// mistaken for one.  ⛔ NO MEMBER IS MAPPED -- `lookup<T>()`, `contains()`,
+// `insert()`, `InterfaceMap::get<Interfaces...>()` are all absent -- so any TU
+// that actually DISPATCHES through an interface map still ABORTS LOUDLY in the
+// mapper.  It appears only in ODS-generated op-definition machinery, where the
+// spelling must be nameable and nothing calls through it.
+class InterfaceMap {};
+} // namespace detail
+
 } // namespace mlir
 
 // ---- type rules, and nothing else ----------------------------------------
@@ -725,6 +809,50 @@ using t45 = mlir::detail::TypedValue<mlir::sdscbundle::InputArgType>;
 // name.  NO accessor is mapped here, so `data()`/`size()`/`operator[]` on one
 // still abort loudly rather than reading a detached copy.
 template <typename T1> using t46 = llvm::MutableArrayRef<T1>;
+
+// t47-t53: the SEVEN further CONCRETE `mlir::detail::TypedValue<T>`
+// instantiations, 208 occurrences in the 2026-09-27 sweep.  SAME MODEL as
+// t30-t34/t45: `dataflowir_gen::ir::Value` (ir.rs:21).  ⭐ WELL-GROUNDED, NOT A
+// WIDENING: `TypedValue<T> : public Value` (mlir/IR/Value.h:106), a TypedValue IS
+// an SSA value whose static type is known, and `ir::Value` carries exactly
+// `{ name: String, ty: Ty }`.  ⛔ What is lost, and it is the SAME already-accepted
+// loss t30-t34 take: the STATIC type `T` is discarded -- the init's `ty` is
+// `Ty::Opaque("")` (ir.rs:47) because the crate has no `VectorType`/`MemoryType`/
+// `ExecutionUnitType`/`RuntimeArgType`/`AccessTileType`/`IntegerType` handle -- so
+// nothing that depends on `T` (e.g. `.getType()` returning a `T`) is mapped, and
+// such a site still aborts loudly.
+// ⛔ CONCRETE, NEVER GENERIC -- the prohibition on the `TypedValue` class
+// declaration applies unchanged; a generic key over an MLIR type argument has
+// regressed to `mapper.cpp:722` six times.  Each ARGUMENT type is restated as an
+// empty tag above and gets NO `using tN =` of its own (except `mlir::TensorType`,
+// which already had t42 for independent reasons).
+using t47 = mlir::detail::TypedValue<mlir::VectorType>;
+using t48 = mlir::detail::TypedValue<mlir::ktdf_arch::MemoryType>;
+using t49 = mlir::detail::TypedValue<mlir::ktdf_arch::ExecutionUnitType>;
+using t50 = mlir::detail::TypedValue<mlir::ktdp::RuntimeArgType>;
+using t51 = mlir::detail::TypedValue<mlir::ktdp::AccessTileType>;
+using t52 = mlir::detail::TypedValue<mlir::TensorType>;
+using t53 = mlir::detail::TypedValue<mlir::IntegerType>;
+
+// t54-t57: FOUR attribute rows.  ALL FOUR ARE WIDENINGS to
+// `dataflowir_gen::ir::Attr` (ir.rs:466) -- the 8th through 11th time this module
+// widens an attribute subclass to that enum.  See the class declarations above
+// for exactly what each loses; in summary: `Attr` has no Type-wrapping variant
+// and NO dense/sparse element-array variant, so all four payloads land in
+// `Attr::Raw`/`Attr::Aliasable` BY SPELLING, and NO accessor is mapped for any of
+// them, so every read through one still aborts loudly.
+// ⛔ `Attr::I32Array` (ir.rs:491) is NOT the right target for
+// `DenseIntElementsAttr`: it is documented as `mlir::ArrayAttr` of `IntegerAttr`s
+// (ODS `I32ArrayAttr`), a different MLIR class with a different printed form, i32
+// elements rather than APInts, and no shaped type.  Checked, not assumed.
+using t54 = mlir::TypeAttr;
+using t55 = mlir::ElementsAttr;
+using t56 = mlir::SparseElementsAttr;
+using t57 = mlir::DenseIntElementsAttr;
+
+// t58: `mlir::detail::InterfaceMap` -> AN OPAQUE UNIT.  See the class
+// declaration for the full reasoning and the zero-hit grep of the crate.
+using t58 = mlir::detail::InterfaceMap;
 
 
 // ---- the two operator rules ----------------------------------------------
