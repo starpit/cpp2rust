@@ -936,8 +936,8 @@ fn t70() -> libcc2rs::InFlightDiagnostic {
 // `a1` IS A `*const c_char`, NOT A SLICE: rules/stringref f8 records why -- the
 // converter materialises a string literal in this position as a `c"..."` CStr and
 // adds `.as_ptr()` only when the declared parameter is a pointer.
-unsafe fn f21(a0: libcc2rs::InFlightDiagnostic, a1: *const libc::c_char) -> libcc2rs::InFlightDiagnostic {
-    unsafe { libcc2rs::InFlightDiagnostic::shl_c_str(a0, a1) }
+unsafe fn f21(a0: libcc2rs::InFlightDiagnostic, a1: &std::ffi::CStr) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_bytes(a0, a1.to_bytes())
 }
 
 // ---------------------------------------------------------------------------

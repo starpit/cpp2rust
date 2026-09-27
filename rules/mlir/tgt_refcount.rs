@@ -865,8 +865,8 @@ fn t70() -> libcc2rs::InFlightDiagnostic {
 // In the REFCOUNT model a `const char (&)[N]` argument arrives as `Ptr<u8>`
 // (rules/stringref f8's spelling), whose `to_c_bytes()` gives the bytes up to the
 // NUL; `shl_bytes` stops at a NUL anyway, so the two models append the same text.
-fn f21(a0: libcc2rs::InFlightDiagnostic, a1: libcc2rs::Ptr<u8>) -> libcc2rs::InFlightDiagnostic {
-    libcc2rs::InFlightDiagnostic::shl_bytes(a0, &a1.to_c_bytes())
+fn f21(a0: libcc2rs::InFlightDiagnostic, a1: &[u8]) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_bytes(a0, a1)
 }
 
 // ---------------------------------------------------------------------------

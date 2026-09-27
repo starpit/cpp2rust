@@ -132,6 +132,63 @@ impl InFlightDiagnostic {
         let bytes = unsafe { ::std::slice::from_raw_parts(p as *const u8, n) };
         self.shl_bytes(bytes)
     }
+
+    // ---- THE `&mut self -> &mut Self` FAMILY, queue row c020 defects (1)+(2) --
+    //
+    // WHY THESE EXIST ALONGSIDE THE BY-VALUE ONES.  The by-value `self` chain
+    // above is the faithful model of the C++ temporary, but the CONVERTER cannot
+    // emit it: `mlir::InFlightDiagnostic::operator<<` is `&&`-qualified and
+    // returns `InFlightDiagnostic&&`, so the mapper classifies the receiver as an
+    // lvalue/xvalue HANDLE and the result as a REFERENCE.  Against a by-value
+    // target it therefore emitted `(*d.borrow()).clone()` / `(d).clone()` for the
+    // receiver (E0599, and deriving Clone would print every diagnostic TWICE
+    // because both the clone and the original Drop) and `.upgrade().deref()` /
+    // `(*...)` on the result (E0614/E0599).  A target that takes and returns a
+    // HANDLE -- `Ptr<T>` in the refcount model, `*mut T` in the unsafe model,
+    // exactly the convention rules/raw_ostream's proven `<<` chain uses -- makes
+    // both of those emissions CORRECT rather than wrong.
+    //
+    // EXACTLY-ONCE REPORTING STILL HOLDS, by a different mechanism: the buffer is
+    // now owned by the CALLER's local (`let mut d = InFlightDiagnostic::new()`),
+    // the chain only borrows it, and `Drop` runs ONCE when that local goes out of
+    // scope.  Nothing is moved, so nothing needs abandoning.
+
+    /// `&mut` form of [`Self::shl_display`].
+    pub fn shl_display_mut<T: ::std::fmt::Display>(&mut self, v: T) -> &mut Self {
+        use ::std::fmt::Write;
+        let _ = write!(self.message, "{}", v);
+        self
+    }
+
+    /// `&mut` form of [`Self::shl_bytes`].
+    pub fn shl_bytes_mut(&mut self, b: &[u8]) -> &mut Self {
+        let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
+        self.message.push_str(&String::from_utf8_lossy(&b[..end]));
+        self
+    }
+
+    /// `&mut` form of [`Self::shl_c_chars`].
+    pub fn shl_c_chars_mut(&mut self, v: &[::std::os::raw::c_char]) -> &mut Self {
+        let b: &[u8] =
+            unsafe { ::std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len()) };
+        self.shl_bytes_mut(b)
+    }
+
+    /// `&mut` form of [`Self::shl_c_str`].
+    ///
+    /// # Safety
+    /// `p` must be null or point to a NUL-terminated byte string.
+    pub unsafe fn shl_c_str_mut(&mut self, p: *const ::std::os::raw::c_char) -> &mut Self {
+        if p.is_null() {
+            return self;
+        }
+        let mut n = 0usize;
+        while unsafe { *p.add(n) } != 0 {
+            n += 1;
+        }
+        let bytes = unsafe { ::std::slice::from_raw_parts(p as *const u8, n) };
+        self.shl_bytes_mut(bytes)
+    }
 }
 
 impl Default for InFlightDiagnostic {
