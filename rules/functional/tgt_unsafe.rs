@@ -16,3 +16,11 @@ unsafe fn f2<T1>(a0: *mut T1) -> *mut T1 {
 unsafe fn f3<T1>(a0: *mut T1) -> *mut T1 {
     a0
 }
+
+fn t2<T1>() -> Option<Box<dyn Fn() -> T1>> {
+    None
+}
+
+unsafe fn f4<T1>(a0: &Option<Box<dyn Fn() -> T1>>) -> T1 {
+    (a0.as_ref().unwrap())()
+}

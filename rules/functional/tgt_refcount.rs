@@ -18,3 +18,11 @@ fn f2<T1>(a0: Ptr<T1>) -> Ptr<T1> {
 fn f3<T1>(a0: Ptr<T1>) -> Ptr<T1> {
     a0
 }
+
+fn t2<T1>() -> Option<Box<dyn Fn() -> T1>> {
+    None
+}
+
+fn f4<T1>(a0: &Option<Box<dyn Fn() -> T1>>) -> T1 {
+    (a0.as_ref().unwrap())()
+}

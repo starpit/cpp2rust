@@ -585,3 +585,26 @@ fn t41() -> dataflowir_gen::ir::Ty {
 fn t28() -> ::std::result::Result<dataflowir_gen::ir::Attr, dataflowir_gen::ir::Value> {
     ::std::result::Result::Ok(dataflowir_gen::ir::Attr::Raw(::std::string::String::new()))
 }
+
+// t42 `mlir::TensorType` -> `ir::Ty` (ir.rs:37).  A WIDENING; see src.cpp.  The
+//   COST: `Ty` has no tensor variant, so a RankedTensorType is `Ty::Opaque`.
+//   Sound only because NO shape accessor is mapped, so every shape query still
+//   aborts loudly rather than reading a shape that is not represented.
+fn t42() -> dataflowir_gen::ir::Ty {
+    dataflowir_gen::ir::Ty::Opaque(String::new())
+}
+
+// t43 `mlir::OpOperand` -> AN OPAQUE UNIT.  The USE EDGE.  Mapping it to
+//   `ir::Value` is REFUSED (it would conflate a use with the value it uses);
+//   see src.cpp.  No member is mapped, so every use still aborts.  The body is
+//   `()`, not empty: `fn t43() -> () {}` panics at syntactic.rs:591.
+fn t43() -> () {
+    ()
+}
+
+// t44 `mlir::IntegerSetAttr` -> `ir::Attr` (ir.rs:466).  The seventh attribute
+//   widening in this module.  `Attr` has no IntegerSet variant, so the value
+//   lands in `Attr::Raw` by spelling; no member is mapped.
+fn t44() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(String::new())
+}

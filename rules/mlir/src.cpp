@@ -481,6 +481,74 @@ class Pass {};
 // is where KtdpTypes.cpp dies today) and nothing more.
 class ShapedType {};
 
+
+// mlir/include/mlir/IR/BuiltinTypeInterfaces.h -- `TensorType`, the TYPE
+// INTERFACE over `RankedTensorType` / `UnrankedTensorType`.  It is the DIRECT
+// follow-on from t41: with `mlir::ShapedType` mapped, `KtdpTypes.cpp` moved its
+// first abort onto this one.  MEASURED, this private tree, t41 present and t42
+// absent:
+//   KtdpTypes.cpp rc=134 | unsupported system type has no rule:
+//     `mlir::TensorType` ... rule key: searched as: mlir::TensorType
+//
+// -> `dataflowir_gen::ir::Ty` (ir.rs:37).  A WIDENING, the seventh in this
+// module and the same shape as t41's.
+//
+// ⛔ THE COST, STATED: `ir::Ty` has `Ty::Vector(Vec<i64>, Box<Ty>)` (ir.rs:30)
+// and `Ty::MemRef(Vec<i64>, Box<Ty>)` (ir.rs:32) but NO TENSOR VARIANT, so a
+// `RankedTensorType` lands in `Ty::Opaque(spelling)` (ir.rs:47) and its shape is
+// recoverable only by REPARSING the spelling.  The widening also forgets the
+// interface constraint "this type is a tensor".
+//
+// ⭐ WHY WIDENING THE TYPE IS STILL DEFENSIBLE HERE: no shape ACCESSOR is
+// mapped.  `getShape()`, `getElementType()`, `getRank()`, `hasRank()`,
+// `cloneWith()` are ALL absent, so every shape QUERY still aborts LOUDLY in the
+// mapper instead of reading a shape that is not there.  The rule buys the
+// SIGNATURE and nothing else -- exactly the bargain t41 struck.
+class TensorType {};
+
+// mlir/include/mlir/IR/BuiltinTypes.h -- `IntegerSetAttr`, an ATTRIBUTE
+// subclass wrapping an `mlir::IntegerSet`.  9 TUs in the v6 403-TU sweep and 8
+// in v7 abort on it, making it the largest mlir row not standing refused.
+//
+// -> `dataflowir_gen::ir::Attr` (ir.rs:466), the SEVENTH time this module widens
+// an attribute subclass to the `Attr` enum (t10-t12/t20/t26/t29 do the other
+// six).
+//
+// ⭐ THE WIDENING IS NOT A GUESS -- the crate already names this exact
+// attribute.  `Attr::Aliasable { base, text }` exists BECAUSE of it: the doc
+// comment at ir.rs:505-508 cites `Builtin_IntegerSetAttr`'s
+// `OpAsmAttrInterface::getAlias` (BuiltinAttributes.td:797-800), whose whole
+// body is `os << "set"`, and the crate models the set itself as
+// `pub struct IntegerSet` (ir.rs:425).
+//
+// ⛔ THE COST: `Attr` has no `IntegerSet(IntegerSet)` variant, so an
+// IntegerSetAttr lands in `Attr::Aliasable`/`Attr::Raw` by spelling and its
+// constraint rows are recoverable only by reparsing.  NO MEMBER IS MAPPED --
+// `getValue()`, `IntegerSetAttr::get()` are absent -- so every query through one
+// still aborts loudly.  This rule buys the TYPE.
+class IntegerSetAttr {};
+
+// mlir/include/mlir/IR/Value.h:239 -- `OpOperand`, the USE EDGE: an
+// `IROperand<OpOperand, OpaqueValue>`, an intrusive node in a Value's use-list.
+// 27 of 403 TUs in the v7 sweep abort here, the largest single mlir row.
+//
+// ⛔ MAPPING IT TO `ir::Value` REMAINS REFUSED, and that refusal is correct and
+// load-bearing: an OpOperand is NOT the value, it is one USE of a value, and the
+// two have different identity (a Value has many OpOperands; `getOwner()` and
+// `getOperandNumber()` are properties of the EDGE, not of the value).  A
+// `-> ir::Value` rule would let `op.getProducerMutable()` silently return
+// something that compares equal to the operand's value and lose the edge.
+// DO NOT "UPGRADE" THIS TO ir::Value.
+//
+// -> AN OPAQUE UNIT `()`, the representation t23 (`mlir::MLIRContext`), t40
+// (`mlir::Pass`) and t13 (`mlir::EmptyProperties`) already use.  An opaque
+// mapping CONFLATES NOTHING: it carries no value, so it cannot be mistaken for
+// one.  ⛔ NO MEMBER IS MAPPED -- `get()`, `set()`, `getOwner()`,
+// `getOperandNumber()`, `assign()`, use-list traversal are all absent -- so
+// every real use of an OpOperand still ABORTS LOUDLY in the mapper.  The row
+// becomes COUNTABLE instead of fatal, which is the whole and only claim.
+class OpOperandOpaqueTag {};
+
 } // namespace mlir
 
 // ---- type rules, and nothing else ----------------------------------------
@@ -607,6 +675,15 @@ using t39 = llvm::detail::indexed_accessor_range_base<
 // t41 is a WIDENING to `ir::Ty` (no shape accessor mapped).
 using t40 = mlir::Pass;
 using t41 = mlir::ShapedType;
+
+// t42/t43/t44: see the class declarations above for the full reasoning.
+// t42 is a WIDENING to `ir::Ty` (no shape accessor mapped); t44 is the seventh
+// WIDENING to `ir::Attr` (no member mapped); t43 is an OPAQUE UNIT and the
+// `ir::Value` mapping for it stays REFUSED.
+using t42 = mlir::TensorType;
+using t43 = mlir::OpOperand;
+using t44 = mlir::IntegerSetAttr;
+
 
 // ---- the two operator rules ----------------------------------------------
 // The member `==` on mlir::Attribute.  Spelled `.operator==(...)` rather than
