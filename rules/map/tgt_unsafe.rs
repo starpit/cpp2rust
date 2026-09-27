@@ -147,3 +147,14 @@ unsafe fn f32<T1: Ord + Clone, T2>(
 ) -> UnsafeMapIterator<T1, T2> {
     a0.postfix_inc()
 }
+
+unsafe fn f33<T1: Ord + Clone, T2>(
+    a0: &mut UnsafeMapIterator<T1, T2>,
+) -> UnsafeMapIterator<T1, T2> {
+    a0.prefix_inc()
+}
+unsafe fn f34<T1: Ord + Clone, T2>(
+    a0: &mut UnsafeMapIterator<T1, T2>,
+) -> UnsafeMapIterator<T1, T2> {
+    a0.postfix_inc()
+}

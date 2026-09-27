@@ -200,3 +200,14 @@ fn f32<T1: Ord + Clone + 'static, T2: 'static>(
 ) -> RefcountMapIter<T1, T2> {
     a0.postfix_inc()
 }
+
+fn f33<T1: Ord + Clone + 'static, T2: 'static>(
+    a0: &mut RefcountMapIter<T1, T2>,
+) -> RefcountMapIter<T1, T2> {
+    a0.prefix_inc()
+}
+fn f34<T1: Ord + Clone + 'static, T2: 'static>(
+    a0: &mut RefcountMapIter<T1, T2>,
+) -> RefcountMapIter<T1, T2> {
+    a0.postfix_inc()
+}

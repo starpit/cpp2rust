@@ -164,3 +164,15 @@ typename std::map<T1, T2>::const_iterator
 f32(typename std::map<T1, T2>::const_iterator a0, int a1) {
   return a0.operator++(a1);
 }
+
+template <typename T1, typename T2>
+typename std::map<T1, T2>::iterator &
+f33(typename std::map<T1, T2>::iterator &it) {
+  return it.operator++();
+}
+
+template <typename T1, typename T2>
+typename std::map<T1, T2>::iterator
+f34(typename std::map<T1, T2>::iterator a0, int a1) {
+  return a0.operator++(a1);
+}
