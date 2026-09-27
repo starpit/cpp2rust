@@ -898,3 +898,379 @@ impl<K: Ord + Clone> SetIterator for UnsafeSetIterator<K> {
         }
     }
 }
+
+// ─── mlir::OperandRange::iterator and friends ────────────────────────────────
+//
+// An iterator over a sequence that OWNS THE SEQUENCE, rather than borrowing it. Every other
+// iterator in this file carries a reference to its container (`*const BTreeMap<..>` in the
+// unsafe model, `Ptr<..>` in the refcount model) because its container is a caller-owned
+// lvalue: `m.begin()` in rules/map borrows `m`, which outlives the expression. This one
+// cannot do that. `mlir::OperandRange` maps to a BY-VALUE `Vec<ir::Value>`
+// (rules/mlir/tgt_unsafe.rs:265), so `getOperands()` produces a TEMPORARY; any pointer or
+// `Ptr` into it dangles at the end of the inlined rule expression. Owning a clone is the only
+// safe model, and it also keeps the type free of raw-pointer text, so the refcount overlay
+// needs no override for it (the `rules/atomic` E0605 class -- `struct as *mut T` -- cannot
+// arise here).
+//
+// An index-only iterator was considered and REJECTED: the load-bearing key is the two-iterator
+// constructor `OperandRange{first, last}`, whose only parameters ARE the two iterators, so the
+// pair must carry the elements. There is no third argument naming the sequence.
+//
+// DISCLOSURE, and it is the reason `range_from` names `first` as the authoritative owner: the
+// two real call sites (KTDFArch.h.inc:521 and :526) make TWO SEPARATE `getOperands()` calls,
+// so under owning-t14 the two iterators each own a DISTINCT CLONE of the sequence. That is
+// correct given t14's snapshot semantics -- `ir::Value` equality is structural -- but it means
+// a genuinely-mismatched iterator pair, which is UB in C++, would silently yield a plausible
+// WRONG answer here instead of trapping. `debug_assert_eq!` is the cheap detector. It is a
+// debug assert and not a hard panic because the equality scan is O(n) on every single range
+// construction on a hot printing path, and because under owning semantics the mismatch is not
+// itself memory-unsafe -- it is a wrong value -- so paying for it in release would buy
+// nothing that the debug build does not already catch.
+pub struct RangeIter<T> {
+    seq: Vec<T>,
+    idx: usize,
+}
+
+impl<T: Clone> Clone for RangeIter<T> {
+    fn clone(&self) -> Self {
+        Self {
+            seq: self.seq.clone(),
+            idx: self.idx,
+        }
+    }
+}
+
+// Hand-written rather than derived: `Vec::new()` needs no `T: Default`, and the type key's
+// default constructor must work for every element type.
+impl<T> Default for RangeIter<T> {
+    fn default() -> Self {
+        Self {
+            seq: Vec::new(),
+            idx: 0,
+        }
+    }
+}
+
+// Position only, following the MapIter/SetIter precedent above (which compares `key` and
+// ignores `map`). Here it is also REQUIRED, not merely conventional: the two iterators of a
+// real range come from separate `getOperands()` calls and so own separate clones, and an
+// `it != end` that compared the sequences would still be true but an `it == end` built from
+// the other clone would have to compare two Vecs on every loop test.
+impl<T> PartialEq for RangeIter<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.idx == other.idx
+    }
+}
+
+impl<T> Eq for RangeIter<T> {}
+
+impl<T> PartialOrd for RangeIter<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.idx.cmp(&other.idx))
+    }
+}
+
+impl<T> Ord for RangeIter<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.idx.cmp(&other.idx)
+    }
+}
+
+impl<T> RangeIter<T> {
+    pub fn begin(seq: Vec<T>) -> Self {
+        Self { seq, idx: 0 }
+    }
+
+    pub fn end(seq: Vec<T>) -> Self {
+        let idx = seq.len();
+        Self { seq, idx }
+    }
+
+    pub fn is_end(&self) -> bool {
+        self.idx >= self.seq.len()
+    }
+
+    pub fn index(&self) -> usize {
+        self.idx
+    }
+
+    /// `*it`, as a borrow of the element the iterator owns. Deref is also implemented, so a
+    /// rule body may spell either `at()` or `*it`.
+    pub fn at(&self) -> &T {
+        self.seq
+            .get(self.idx)
+            .expect("ub: dereference of end iterator")
+    }
+
+    pub fn inc(&mut self) {
+        if self.idx >= self.seq.len() {
+            panic!("ub: increment past end");
+        }
+        self.idx += 1;
+    }
+
+    pub fn dec(&mut self) {
+        if self.idx == 0 {
+            panic!("ub: decrement before begin");
+        }
+        self.idx -= 1;
+    }
+
+    /// `it + n` / `it - n` without going through the operator traits, for a rule body that
+    /// needs a call form. A negative `n` steps backwards, as `operator+` does in C++.
+    pub fn offset(&self, n: i64) -> Self
+    where
+        T: Clone,
+    {
+        let idx = if n >= 0 {
+            self.idx
+                .checked_add(n as usize)
+                .expect("ub: iterator advanced out of range")
+        } else {
+            self.idx
+                .checked_sub(n.unsigned_abs() as usize)
+                .expect("ub: iterator moved before begin")
+        };
+        if idx > self.seq.len() {
+            panic!("ub: iterator advanced past end");
+        }
+        Self {
+            seq: self.seq.clone(),
+            idx,
+        }
+    }
+
+    /// `last - first`, the random-access iterator difference.
+    pub fn distance(&self, other: &Self) -> i64 {
+        self.idx as i64 - other.idx as i64
+    }
+
+    /// `OperandRange{first, last}` -- the two-iterator constructor. `first` is the
+    /// authoritative owner of the sequence; see the disclosure at the type definition for
+    /// why that is safe and what it costs.
+    pub fn range_from(first: Self, last: Self) -> Vec<T>
+    where
+        T: Clone + PartialEq + std::fmt::Debug,
+    {
+        debug_assert_eq!(
+            first.seq, last.seq,
+            "ub: range built from iterators into different sequences"
+        );
+        assert!(
+            first.idx <= last.idx && last.idx <= first.seq.len(),
+            "ub: inverted or out-of-range iterator pair"
+        );
+        first.seq[first.idx..last.idx].to_vec()
+    }
+}
+
+impl<T> std::ops::Deref for RangeIter<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.at()
+    }
+}
+
+// `it[n]`. Both integer widths are provided because the converter's index expression carries
+// whatever the C++ subscript was typed as; the two impls do not overlap.
+impl<T> std::ops::Index<i64> for RangeIter<T> {
+    type Output = T;
+
+    fn index(&self, n: i64) -> &T {
+        let idx = if n >= 0 {
+            self.idx + n as usize
+        } else {
+            self.idx
+                .checked_sub(n.unsigned_abs() as usize)
+                .expect("ub: subscript before begin")
+        };
+        self.seq.get(idx).expect("ub: subscript out of range")
+    }
+}
+
+impl<T> std::ops::Index<usize> for RangeIter<T> {
+    type Output = T;
+
+    fn index(&self, n: usize) -> &T {
+        self.seq
+            .get(self.idx + n)
+            .expect("ub: subscript out of range")
+    }
+}
+
+impl<T: Clone> std::ops::Add<i64> for RangeIter<T> {
+    type Output = Self;
+
+    fn add(self, n: i64) -> Self {
+        self.offset(n)
+    }
+}
+
+impl<T: Clone> std::ops::Sub<i64> for RangeIter<T> {
+    type Output = Self;
+
+    fn sub(self, n: i64) -> Self {
+        self.offset(-n)
+    }
+}
+
+// `last - first`. A distinct impl from `Sub<i64>` and it does not overlap it.
+impl<T> std::ops::Sub<RangeIter<T>> for RangeIter<T> {
+    type Output = i64;
+
+    fn sub(self, other: Self) -> i64 {
+        self.distance(&other)
+    }
+}
+
+impl<T: Clone> std::ops::AddAssign<i64> for RangeIter<T> {
+    fn add_assign(&mut self, n: i64) {
+        *self = self.offset(n);
+    }
+}
+
+impl<T: Clone> std::ops::SubAssign<i64> for RangeIter<T> {
+    fn sub_assign(&mut self, n: i64) {
+        *self = self.offset(-n);
+    }
+}
+
+// The whole increment/decrement family, not just the one `g048` names: it is a
+// `std::random_access_iterator_tag` facade, so keying only the operator a single call site
+// happens to use would just move the abort to the next one.
+impl<T: Clone> PrefixInc for RangeIter<T> {
+    fn prefix_inc(&mut self) -> Self {
+        self.inc();
+        self.clone()
+    }
+}
+
+impl<T: Clone> PostfixInc for RangeIter<T> {
+    fn postfix_inc(&mut self) -> Self {
+        let ret = self.clone();
+        self.inc();
+        ret
+    }
+}
+
+impl<T: Clone> PrefixDec for RangeIter<T> {
+    fn prefix_dec(&mut self) -> Self {
+        self.dec();
+        self.clone()
+    }
+}
+
+impl<T: Clone> PostfixDec for RangeIter<T> {
+    fn postfix_dec(&mut self) -> Self {
+        let ret = self.clone();
+        self.dec();
+        ret
+    }
+}
+
+// Yields a SNAPSHOT of the iterator at each position, matching MapIter/SetIter's
+// `Iterator for` impls above rather than yielding elements, so a range-for lowering behaves
+// the same way for every iterator in this file.
+impl<T: Clone> Iterator for RangeIter<T> {
+    type Item = Self;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.is_end() {
+            return None;
+        }
+        let snapshot = self.clone();
+        self.inc();
+        Some(snapshot)
+    }
+}
+
+#[cfg(test)]
+mod range_iter_tests {
+    use super::RangeIter;
+    use crate::{PostfixDec, PostfixInc, PrefixDec, PrefixInc};
+
+    fn seq() -> Vec<i32> {
+        vec![10, 20, 30, 40, 50]
+    }
+
+    // The two real call sites are `begin()..begin()+1` and `begin()+1..end()`, i.e. an
+    // interior PREFIX and an interior SUFFIX. A test that only checks `0..len` cannot fail.
+    #[test]
+    fn range_from_interior_prefix() {
+        let first = RangeIter::begin(seq());
+        let last = RangeIter::begin(seq()) + 1;
+        assert_eq!(RangeIter::range_from(first, last), vec![10]);
+    }
+
+    #[test]
+    fn range_from_interior_suffix() {
+        let first = RangeIter::begin(seq()) + 1;
+        let last = RangeIter::end(seq());
+        assert_eq!(RangeIter::range_from(first, last), vec![20, 30, 40, 50]);
+    }
+
+    #[test]
+    fn range_from_interior_middle() {
+        let first = RangeIter::begin(seq()) + 1;
+        let last = RangeIter::end(seq()) - 2;
+        assert_eq!(RangeIter::range_from(first, last), vec![20, 30]);
+    }
+
+    #[test]
+    fn range_from_empty_is_not_the_whole_range() {
+        let first = RangeIter::begin(seq()) + 2;
+        let last = RangeIter::begin(seq()) + 2;
+        assert_eq!(RangeIter::range_from(first, last), Vec::<i32>::new());
+    }
+
+    #[test]
+    fn arithmetic_and_comparison() {
+        let b = RangeIter::begin(seq());
+        let e = RangeIter::end(seq());
+        assert!(b < e);
+        assert!(b.clone() + 5 == e);
+        assert!(e.clone() - 5 == b);
+        assert_eq!(e.clone() - b.clone(), 5);
+        assert_eq!(*(b.clone() + 3), 40);
+        // The index type must be spelled: with both `Index<i64>` and `Index<usize>` in scope
+        // an unsuffixed literal defaults to `i32` and does not resolve. Not a problem for the
+        // converter, which always emits an index of a concrete type, but a rule body that
+        // writes a bare literal subscript will need a suffix.
+        assert_eq!(b[2i64], 30);
+        assert_eq!(b[2usize], 30);
+        assert_eq!((b.clone() + 1)[1i64], 30);
+        let mut it = b.clone() + 1;
+        it += 2;
+        assert_eq!(*it, 40);
+        it -= 1;
+        assert_eq!(*it, 30);
+    }
+
+    #[test]
+    fn inc_dec_family() {
+        let mut it = RangeIter::begin(seq());
+        assert_eq!(*it.prefix_inc(), 20);
+        assert_eq!(*it.postfix_inc(), 20);
+        assert_eq!(*it, 30);
+        assert_eq!(*it.prefix_dec(), 20);
+        assert_eq!(*it.postfix_dec(), 20);
+        assert_eq!(*it, 10);
+        assert_eq!(RangeIter::begin(seq()).count(), 5);
+    }
+
+    #[test]
+    fn default_is_an_empty_end_iterator() {
+        let d: RangeIter<i32> = Default::default();
+        assert!(d.is_end());
+        assert_eq!(RangeIter::range_from(d.clone(), d), Vec::<i32>::new());
+    }
+
+    #[test]
+    #[should_panic(expected = "different sequences")]
+    fn mismatched_pair_is_caught_in_debug() {
+        let first = RangeIter::begin(seq());
+        let last = RangeIter::end(vec![1, 2, 3, 4, 5]);
+        let _ = RangeIter::range_from(first, last);
+    }
+}
