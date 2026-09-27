@@ -1763,7 +1763,15 @@ std::string ToString(const clang::NamedDecl *decl) {
 
 std::string ToString(const clang::Expr *expr) {
   if (!expr) {
-    assert(0 && "!expr");
+    // NDEBUG: `assert(0 && "!expr")` compiles to NOTHING in the release build,
+    // so this used to fall straight into `expr->IgnoreParenImpCasts()` -- a
+    // NULL DEREFERENCE, i.e. the rc=139 segfault the assert existed to prevent.
+    // Deliberately NOT a survey::Record: a null Expr is an internal invariant
+    // violation, not a translation gap -- there is no C++ construct that "is" a
+    // null expression, and there is no spelling or location to record.
+    llvm::report_fatal_error(
+        "internal: Mapper::ToString(const clang::Expr *) called with a null "
+        "expression");
   }
 
   expr = expr->IgnoreParenImpCasts();

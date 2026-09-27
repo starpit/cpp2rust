@@ -1206,8 +1206,16 @@ bool ConverterRefCount::VisitCallExpr(clang::CallExpr *expr) {
 bool ConverterRefCount::VisitStringLiteral(clang::StringLiteral *expr) {
   if (IsCodeUnitStringLiteral(expr)) {
     auto arr = GetCodeUnitArrayLiteral(expr);
-    StrCat(IsArrayInitContext() ? std::format("Box::from({})", arr)
-                                : '&' + arr);
+    if (IsArrayInitContext()) {
+      StrCat(std::format("Box::from({})", arr));
+    } else {
+      // Same bit, same mechanism as the `b"..."` arm below: `&[...]` is ALREADY
+      // a reference, so without this the ParamIsSharedRef path prefixes a
+      // second borrow and a `&[u8]` rule parameter gets `&&[...]`. Only this
+      // arm -- the `Box::from(...)` arm above is a value.
+      StrCat('&' + arr);
+      emitted_a_reference_ = true;
+    }
     computed_expr_type_ = ComputedExprType::FreshValue;
     return false;
   }

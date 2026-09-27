@@ -88,3 +88,34 @@ std::string f5(const std::filesystem::path &a0) { return a0.string(); }
 std::filesystem::path f6(std::string &&a0) {
   return std::filesystem::path(std::move(a0));
 }
+
+// path(const char (&)[N], format) -- the key a STRING LITERAL selects, e.g.
+// `dir / "bundle.mlir"` at dbo/src/Pipeline/Driver.cpp:67.  A literal deduces
+// libc++'s template ctor with `_Source = char[N]`, so the parameter type after
+// substitution is `const char (&)[N]` -- NOT the `const char *const &` of f3,
+// which is a real key but not the one a literal binds.
+//
+// THERE IS EXACTLY ONE KEY FOR EVERY LENGTH, not one per N.  Measured, not
+// assumed: this body is written with extent 19 and `regen-rule.sh filesystem`
+// records
+//     void std::filesystem::path::path(const char (&)[_], std::filesystem::path::format)
+// because `normalizeTranslationRule` (mapper.cpp:1251-1260) rewrites every
+// `\d+` in a rule string to `_`, and it is applied on BOTH sides -- to the
+// recorded rule and to the signature the converter searches with.  So the
+// literal's extent is erased before matching and "one key per literal length"
+// does not apply here.  The chosen extent is therefore arbitrary and carries no
+// meaning; rules/stringref f8 relies on the same mechanism for
+// `llvm::StringLiteral(const char (&)[_])`, where the extent is a genuine
+// template parameter rather than a deduced one -- this row establishes that the
+// DEDUCED case normalises identically.
+//
+// The Rust parameter is spelled as a POINTER (`Ptr<u8>` / `*const
+// libc::c_char`), not a slice, for rules/stringref f8's reason: the converter
+// materialises a literal in this position as a `c"..."` CStr and appends
+// `.as_ptr()` only when the declared parameter is a pointer.  Declared as a
+// slice it emits the bare CStr and rustc rejects it.  The body is therefore
+// f3's -- walk to the NUL -- which gives the same bytes `N - 1` does for every
+// literal without an interior NUL.
+std::filesystem::path f7(const char (&a0)[19]) {
+  return std::filesystem::path(a0);
+}

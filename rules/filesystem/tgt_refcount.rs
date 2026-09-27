@@ -82,3 +82,12 @@ fn f6(a0: Vec<u8>) -> Vec<u8> {
     }
     __p
 }
+
+// path(const char (&)[N], format) -- the key a string literal selects.  ONE key
+// covers every length: mapper.cpp:1251 normalises the extent to `_`.  Same body
+// as f3, and the parameter must be a POINTER, not a slice -- see src.cpp.
+fn f7(a0: Ptr<u8>) -> Vec<u8> {
+    let mut __p: Vec<u8> = Vec::new();
+    a0.with_c_str(|__s| __p.extend_from_slice(__s));
+    __p
+}
