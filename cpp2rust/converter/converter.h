@@ -723,6 +723,9 @@ protected:
   // Loud, actionable report for a SYSTEM record type with no types_ rule, which
   // would otherwise be mangled into an identifier nothing ever defines.
   void ReportUnmappedSystemType(const clang::RecordDecl *decl);
+  // C++17 structured bindings are not lowered yet; name the construct loudly
+  // instead of emitting an undefined Rust name for each binding.
+  void ReportUnsupportedStructuredBinding(const clang::DecompositionDecl *decl);
 
   std::string GetMappedAsString(clang::Expr *expr, clang::Expr **args = nullptr,
                                 unsigned num_args = 0,

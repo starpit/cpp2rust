@@ -675,6 +675,10 @@ bool Converter::VisitVarDecl(clang::VarDecl *decl) {
   if (clang::isa<clang::VarTemplatePartialSpecializationDecl>(decl)) {
     return false;
   }
+  if (auto *decomp = llvm::dyn_cast<clang::DecompositionDecl>(decl)) {
+    ReportUnsupportedStructuredBinding(decomp);
+    return false;
+  }
   if (ConvertLambdaVarDecl(decl)) {
     return false;
   }
@@ -1564,6 +1568,11 @@ void Converter::ConvertForRangeBody(clang::CXXForRangeStmt *stmt,
 }
 
 bool Converter::VisitCXXForRangeStmt(clang::CXXForRangeStmt *stmt) {
+  if (auto *decomp =
+          llvm::dyn_cast<clang::DecompositionDecl>(stmt->getLoopVariable())) {
+    ReportUnsupportedStructuredBinding(decomp);
+    return false;
+  }
   auto range_init_type = stmt->getRangeInit()->getType();
 
   if (!Mapper::Contains(range_init_type.getUnqualifiedType())) {
@@ -3422,6 +3431,36 @@ bool Converter::VisitParenExpr(clang::ParenExpr *expr) {
 // non-survey path asserts. The mangled spelling is still emitted under survey
 // because survey output is never compiled, and emitting nothing would trip the
 // `computed_expr_type_` sentinel (converter.cpp:1649) and hide the real gap.
+void Converter::ReportUnsupportedStructuredBinding(
+    const clang::DecompositionDecl *decl) {
+  const std::string loc =
+      decl->getLocation().printToString(ctx_.getSourceManager());
+
+  std::string names;
+  for (const auto *binding : decl->bindings()) {
+    if (!names.empty()) {
+      names += ", ";
+    }
+    names += binding->getNameAsString();
+  }
+
+  std::string detail =
+      "structured binding / DecompositionDecl with " +
+      std::to_string(decl->bindings().size()) + " bindings [" + names +
+      "] of type `" + Mapper::ToString(decl->getType()) + "` is not implemented";
+  if (curr_function_ != nullptr) {
+    detail += ", reached while converting `" +
+              curr_function_->getQualifiedNameAsString() + "`";
+  }
+
+  if (survey::Enabled()) {
+    survey::Record(survey::GapKind::kUnsupportedConstruct, detail, loc);
+    return;
+  }
+  llvm::errs() << "unsupported " << detail << " at " << loc << '\n';
+  assert(0 && "unsupported structured binding (DecompositionDecl)");
+}
+
 void Converter::ReportUnmappedSystemType(const clang::RecordDecl *decl) {
   const std::string key = Mapper::ToString(Mapper::GetTypeForDecl(decl));
   const std::string loc =
