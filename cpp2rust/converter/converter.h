@@ -257,6 +257,20 @@ public:
     bool maps_to_rust_ptr;
     bool declared_in_rule_as_rust_ptr;
     bool is_index_base;
+    // The rule declared this parameter as `&mut T`, and the placeholder is NOT
+    // the receiver of a method call in the rule body (where Rust's autoref
+    // supplies the `&mut` for us). Such a placeholder sits in argument
+    // position of an inlined call, so the emitted text must be an explicit
+    // `&mut <place>` reborrow.
+    bool needs_explicit_mut_borrow = false;
+    // Same, for a `&T` (shared) declaration. Distinct from the `&mut` case
+    // because it is NOT sufficient on its own: unlike `&mut`, whose emission is
+    // always a place (ConvertLValue), the emission for a shared-`&` parameter is
+    // SOMETIMES ALREADY A RUST REFERENCE -- a C string literal comes out as
+    // `c"x"`, which is `&CStr` -- and blind prefixing would give `&&CStr`. So
+    // this flag only says "the declaration wants a borrow"; whether one is
+    // actually added is decided by `emitted_a_reference_` after the emission.
+    bool needs_explicit_shared_borrow = false;
 
     bool needs_materialization() const {
       return materialize_ctx && materialize_idx >= 0 &&
@@ -278,6 +292,11 @@ public:
 
     bool needs_lvalue() const {
       return access == TranslationRule::Access::kBorrowMut;
+    }
+
+    bool needs_mut_borrow() const {
+      return needs_explicit_mut_borrow &&
+             access == TranslationRule::Access::kBorrowMut;
     }
 
     void dump() const;
@@ -771,10 +790,13 @@ protected:
   std::string
   ConvertIRFragment(const std::vector<TranslationRule::BodyFragment> &fragments,
                     clang::Expr *expr, clang::Expr **args, unsigned num_args,
-                    TempMaterializationCtx *ctx);
+                    TempMaterializationCtx *ctx,
+                    bool is_method_call_receiver = false);
 
   std::string ConvertPlaceholder(clang::Expr *expr, clang::Expr *arg,
                                  const PlaceholderCtx &ph_ctx);
+  std::string ConvertPlaceholderImpl(clang::Expr *expr, clang::Expr *arg,
+                                     const PlaceholderCtx &ph_ctx);
 
   std::string ConvertVariadicTail(clang::Expr *expr,
                                   const std::vector<clang::Expr *> &all_args);
@@ -1152,6 +1174,24 @@ protected:
     Pending,
   };
   ComputedExprType computed_expr_type_ = ComputedExprType::Unknown;
+
+  // THE REFERENCE-NESS BIT, and why it is a separate bool rather than a new
+  // `ComputedExprType::Reference`.
+  //
+  // `computed_expr_type_` answers "is this a value or a pointer, and is it
+  // fresh". Reference-ness is ORTHOGONAL to all three: `c"x"` is a FreshValue
+  // AND already a Rust reference. Folding it into the enum would force an
+  // either-or, and -- worse -- the enum is assigned unconditionally at ~70
+  // sites, every one of which stores FreshValue/FreshPointer, so a new
+  // enumerator would be silently overwritten by whichever Visit ran last and
+  // `isFresh()`'s two asserts would have to grow a third case. A separate bool
+  // defaults to false (the safe answer: "assume it is a place") and is set by
+  // only the handful of emissions that really do produce a `&`.
+  //
+  // Scope: valid only immediately after one placeholder conversion inside
+  // ConvertPlaceholder, which clears it before converting. Nothing else reads
+  // it, so no other code path has to maintain it.
+  bool emitted_a_reference_ = false;
 
   bool isFresh() const {
     assert(computed_expr_type_ != ComputedExprType::Unknown);
