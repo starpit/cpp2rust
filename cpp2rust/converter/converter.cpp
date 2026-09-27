@@ -4631,6 +4631,34 @@ bool Converter::VisitCXXStdInitializerListExpr(
   return false;
 }
 
+// True only when `qual_type` IS a `std::array<T, N>` specialisation -- not merely
+// a type that MENTIONS one.
+//
+// GetArrayDefaultAsString used to test this with
+// `Mapper::ToString(qual_type).contains("std::array")`, a SUBSTRING match on the
+// printed type. Any type carrying a std::array in a template argument therefore
+// entered the std::array branch and then asserted on the OUTER type's
+// template-argument count. Measured: the field
+//   std::map<uint64_t, std::array<uint32_t, 32>> progAddrAndFlitToCorrect;
+// at dt_src/dbo/src/Utils/sdsc_bundle/ProgramCorrection.h:309 aborted four dbo
+// TUs (InitBin.cpp, Pipeline/Pipeline.cpp, Pipeline/Driver.cpp,
+// Transforms/CreateTrackers.cpp) at `template_args.size() == 2` with std::map's
+// four arguments.
+static bool IsStdArraySpecialization(clang::QualType qual_type) {
+  const auto *record = qual_type->getAsRecordDecl();
+  if (!record || record->getName() != "array") {
+    return false;
+  }
+  const auto *ns =
+      clang::dyn_cast<clang::NamespaceDecl>(record->getDeclContext());
+  // libc++ declares std::array inside the inline namespace std::__1.
+  while (ns && ns->isInline()) {
+    ns = clang::dyn_cast<clang::NamespaceDecl>(ns->getDeclContext());
+  }
+  return ns && ns->getName() == "std" && ns->getDeclContext() &&
+         ns->getDeclContext()->isTranslationUnit();
+}
+
 std::string Converter::GetArrayDefaultAsString(clang::QualType qual_type) {
   if (auto *array_type = clang::dyn_cast<clang::ConstantArrayType>(qual_type)) {
     auto size_as_string = GetNumAsString(array_type->getSize());
@@ -4649,10 +4677,26 @@ std::string Converter::GetArrayDefaultAsString(clang::QualType qual_type) {
           clang::dyn_cast<clang::IncompleteArrayType>(qual_type)) {
     return GetDefaultAsString(array_type->getElementType());
   }
-  if (Mapper::ToString(qual_type).contains("std::array")) {
-    assert(GetTemplateArgs(qual_type).has_value());
-    auto template_args = *GetTemplateArgs(qual_type);
-    assert(template_args.size() == 2);
+  if (IsStdArraySpecialization(qual_type)) {
+    auto maybe_template_args = GetTemplateArgs(qual_type);
+    // A named refusal, not a bare assert: the old `template_args.size() == 2`
+    // told a rule author nothing about which type or which arity it saw.
+    if (!maybe_template_args || maybe_template_args->size() != 2) {
+      llvm::errs() << "unsupported std::array default: `"
+                   << Mapper::ToString(qual_type) << "` has "
+                   << (maybe_template_args
+                           ? std::to_string(maybe_template_args->size())
+                           : std::string("no"))
+                   << " template arguments, expected 2 (element type, extent)\n";
+      if (survey::Enabled()) {
+        survey::Record(survey::GapKind::kUnsupportedConstruct,
+                       "std::array default arity", {});
+        return {};
+      }
+      assert(0 && "unsupported std::array template-argument arity");
+      return {};
+    }
+    auto template_args = *maybe_template_args;
     auto array_size = template_args[1];
     unsigned size = 0;
     switch (array_size.getKind()) {
