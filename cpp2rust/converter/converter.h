@@ -419,6 +419,24 @@ public:
 
   virtual bool VisitStmtExpr(clang::StmtExpr *expr);
 
+  // C++ exceptions have NO lowering. These three exist only so the failure is
+  // LOUD. Before they were added, RecursiveASTVisitor's default Visit for each
+  // returned true, so `Convert(stmt)` (converter.cpp:1384) traversed straight
+  // INTO the children: a `throw MyExc("boom");` emitted only the CONSTRUCTION
+  // of the exception object as a discarded statement expression and control
+  // fell through, so a TU with a `throw` translated rc=0, with a zero-byte log
+  // and zero placeholders, while being semantically wrong -- C++ terminates
+  // (rc=134), the Rust printed the statement after the call and exited 0. A
+  // silently-not-thrown throw and a silently-not-catching catch are the worst
+  // failure mode this project has: every metric scores them as success.
+  virtual bool VisitCXXThrowExpr(clang::CXXThrowExpr *expr);
+  virtual bool VisitCXXTryStmt(clang::CXXTryStmt *stmt);
+  virtual bool VisitCXXCatchStmt(clang::CXXCatchStmt *stmt);
+  // Shared reporter for the three: names the construct, the type and the
+  // location; records-and-continues under --survey, aborts otherwise.
+  void ReportUnsupportedException(const clang::Stmt *stmt,
+                                  const std::string &detail);
+
   virtual void EmitStmtExprTail(clang::Expr *tail);
 
   virtual bool VisitConditionalOperator(clang::ConditionalOperator *expr);
@@ -726,6 +744,15 @@ protected:
   // C++17 structured bindings are not lowered yet; name the construct loudly
   // instead of emitting an undefined Rust name for each binding.
   void ReportUnsupportedStructuredBinding(const clang::DecompositionDecl *decl);
+  // Name of the synthetic iterator variable a decomposing map for-range binds.
+  // Carries line and column so two loops nested in one another -- e.g.
+  // RegDefTracker.cpp:127 and :128 -- get DISTINCT names.
+  std::string GetDecompositionIterName(const clang::DecompositionDecl *decl);
+  // Emits `let <b0> = <iter>.first(); let <b1> = <iter>.second();`.
+  // Returns false (emitting nothing) if the shape is not a 2-binding
+  // decomposition, so the caller keeps the loud diagnostic.
+  bool EmitMapDecompositionBindings(const clang::DecompositionDecl *decl,
+                                    const std::string &iter_name);
 
   std::string GetMappedAsString(clang::Expr *expr, clang::Expr **args = nullptr,
                                 unsigned num_args = 0,
@@ -900,6 +927,16 @@ protected:
 
   std::unordered_set<const clang::VarDecl *> map_iter_decls_;
 
+  // BindingDecls of a structured binding that we lowered to a RAW POINTER
+  // `let` (see EmitMapDecompositionBindings). A C++ binding over a map element
+  // is an lvalue reference, and this converter models a reference as a raw
+  // pointer dereferenced at every use -- exactly what it already does for
+  // reference-typed VarDecls. But a BindingDecl's own type is NOT a reference
+  // type in the AST (clang strips it; the reference lives on the hidden holding
+  // VarDecl), so the generic reference test in VisitDeclRefExpr cannot see it
+  // and we must remember which bindings are pointers ourselves.
+  std::unordered_set<const clang::BindingDecl *> ptr_bindings_;
+
   // Local variables hoisted outside a goto_block so that all labels can see and
   // use the variables.
   std::unordered_set<const clang::VarDecl *> hoisted_decls_;
@@ -958,6 +995,24 @@ protected:
       c.map_iter_decls_.insert(decl);
     }
     ~ScopedMapIterDecl() { c.map_iter_decls_.erase(decl); }
+  };
+
+  struct ScopedPtrBindings {
+    Converter &c;
+    const clang::DecompositionDecl *decl;
+    ScopedPtrBindings(Converter &c, const clang::DecompositionDecl *decl)
+        : c(c), decl(decl) {
+      for (const auto *b : decl->bindings()) {
+        c.ptr_bindings_.insert(b);
+      }
+    }
+    ~ScopedPtrBindings() {
+      for (const auto *b : decl->bindings()) {
+        c.ptr_bindings_.erase(b);
+      }
+    }
+    ScopedPtrBindings(const ScopedPtrBindings &) = delete;
+    ScopedPtrBindings &operator=(const ScopedPtrBindings &) = delete;
   };
   static std::unordered_set<std::string> decl_ids_;
   static std::unordered_set<std::string> abstract_structs_;

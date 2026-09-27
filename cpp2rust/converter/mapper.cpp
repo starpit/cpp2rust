@@ -443,6 +443,95 @@ search(clang::QualType qual_type) {
   return res;
 }
 
+// PRECEDENCE SAFETY for an INLINED rule body.
+//
+// A rule body is substituted TEXTUALLY into the surrounding emission
+// (Converter::GetMappedAsString -> ConvertIRFragment), and the caller then
+// freely appends/prepends operators -- most visibly a cast: `<body> as u8`.
+// Rust's `as` binds TIGHTER than `==`, so rules/set's free `operator==` body
+// `a0 == a1` came out as
+//     (a == b as u8)                 // parses as a == (b as u8)
+// instead of
+//     ((a == b) as u8)
+// and rustc reported `error[E0605]: non-primitive cast: BTreeSet<i32> as u8`
+// plus an E0308. Any rule whose body's TOP LEVEL is a binary operator is one
+// cast away from the same mis-parse, in BOTH models -- and a mis-parse that
+// still COMPILES is silently wrong rather than loudly broken.
+//
+// We wrap at LOAD time, once per rule, rather than at every substitution, and
+// only when the body's top level really is a binary operator. That keeps the
+// emission byte-identical for every other rule (the substitution path is shared
+// by all of them) and, crucially, leaves PLACE expressions alone: `operator[]`
+// and `operator*` bodies are used as ASSIGNMENT TARGETS, and a body like `*a0`
+// must stay `*a0` -- wrapping it to `(*a0)` changes what a following `.field`
+// binds to.
+//
+// Depth is computed from the TEXT fragments only. Every other fragment kind
+// (placeholder, generic, va-args, init, nested method call) expands to a
+// balanced expression, so treating it as an opaque atom is sound. `<`/`>` are
+// deliberately NOT treated as brackets: a generic spelling is written without
+// spaces (`Vec<T1>`), so it cannot match a spaced binary operator.
+bool bodyTopLevelIsBinaryOperator(
+    const std::vector<TranslationRule::BodyFragment> &body) {
+  // Spaced spellings only. The rule preprocessor emits Rust from rustc's own
+  // pretty printer, which always puts a space on both sides of a binary
+  // operator -- so requiring the spaces is what separates a binary `*` from a
+  // prefix deref and a binary `&` from a borrow.
+  static const std::array<const char *, 18> kBinOps{
+      " == ", " != ", " <= ", " >= ", " && ", " || ", " << ", " >> ",
+      " + ",  " - ",  " * ",  " / ",  " % ",  " & ",  " | ",  " ^ ",
+      " < ",  " > "};
+  int depth = 0;
+  for (const auto &frag : body) {
+    const auto *t = std::get_if<TranslationRule::TextFragment>(&frag);
+    if (t == nullptr) {
+      continue;
+    }
+    const std::string &s = t->text;
+    for (std::string::size_type i = 0; i < s.size(); ++i) {
+      const char c = s[i];
+      if (c == '(' || c == '[' || c == '{') {
+        ++depth;
+        continue;
+      }
+      if (c == ')' || c == ']' || c == '}') {
+        --depth;
+        continue;
+      }
+      if (depth != 0) {
+        continue;
+      }
+      for (const char *op : kBinOps) {
+        const std::string_view sv(op);
+        if (s.compare(i, sv.size(), sv) == 0) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+void parenthesizeBodyIfNeeded(TranslationRule::ExprRule &rule) {
+  // A multi-statement body is emitted as `{ ... }` by GetMappedAsString, which
+  // is already a single primary expression -- and `{(a; b)}` would not even
+  // parse. Leave it alone.
+  if (rule.multi_statement || rule.body.empty()) {
+    return;
+  }
+  if (!bodyTopLevelIsBinaryOperator(rule.body)) {
+    return;
+  }
+  // Insert-at-front/back rather than rebuilding: BodyFragment holds a
+  // unique_ptr alternative, so the vector is move-only.
+  rule.body.insert(rule.body.begin(),
+                   TranslationRule::BodyFragment(
+                       std::in_place_type<TranslationRule::TextFragment>,
+                       TranslationRule::TextFragment{"("}));
+  rule.body.emplace_back(std::in_place_type<TranslationRule::TextFragment>,
+                         TranslationRule::TextFragment{")"});
+}
+
 void addRulesFromDirectory(const std::filesystem::path &dir, Model model) {
   namespace fs = std::filesystem;
   for (const auto &entry : fs::directory_iterator(dir)) {
@@ -456,6 +545,7 @@ void addRulesFromDirectory(const std::filesystem::path &dir, Model model) {
       continue;
     }
     for (auto &[_, rule] : expr_rules) {
+      parenthesizeBodyIfNeeded(rule);
       exprs_.emplace(GetExprMapKey(rule.src), std::move(rule));
     }
     for (auto &[_, rule] : type_rules) {

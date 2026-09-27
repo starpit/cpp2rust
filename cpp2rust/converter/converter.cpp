@@ -1443,6 +1443,70 @@ bool Converter::VisitReturnStmt(clang::ReturnStmt *stmt) {
   return false;
 }
 
+// --- C++ exceptions: LOUD, never silent ---------------------------------------
+//
+// There is no lowering for `throw`, `try` or `catch`. What existed before was
+// WORSE than no lowering: RecursiveASTVisitor's default Visit returns true, so
+// `Convert(stmt)` traversed INTO the CXXThrowExpr's subexpression and emitted
+// only that -- `throw MyExc("boom");` became `MyExc::new(c"boom");`, an object
+// constructed and dropped -- then appended a `;` and carried on. The TU
+// translated rc=0 with a ZERO-BYTE log and ZERO placeholders while printing the
+// statement after the throwing call; the C++ terminates with rc=134. A `catch`
+// that silently does not catch is the same class of bug, so all three report.
+//
+// Under --survey these RECORD and CONTINUE: the complete survey is the fleet's
+// work list and a survey run must enumerate every gap in one pass.
+void Converter::ReportUnsupportedException(const clang::Stmt *stmt,
+                                           const std::string &detail) {
+  const std::string loc =
+      stmt->getBeginLoc().printToString(ctx_.getSourceManager());
+  std::string full = detail;
+  if (curr_function_ != nullptr) {
+    full += ", reached while converting `" +
+            curr_function_->getQualifiedNameAsString() + "`";
+  }
+  if (survey::Enabled()) {
+    survey::Record(survey::GapKind::kUnsupportedConstruct, full, loc);
+    return;
+  }
+  llvm::errs() << "unsupported " << full << " at " << loc << '\n';
+  assert(0 && "unsupported C++ exception construct (throw/try/catch)");
+}
+
+bool Converter::VisitCXXThrowExpr(clang::CXXThrowExpr *expr) {
+  std::string detail;
+  if (expr->getSubExpr() == nullptr) {
+    detail = "`throw;` (rethrow of the active exception) has no Rust lowering";
+  } else {
+    detail = "`throw` of type `" +
+             Mapper::ToString(expr->getSubExpr()->getType()) +
+             "` has no Rust lowering (the exception object was being "
+             "constructed and DISCARDED)";
+  }
+  ReportUnsupportedException(expr, detail);
+  // Do not traverse into the operand: under --survey that would emit the
+  // construction of the thrown object as a discarded statement expression,
+  // which is exactly the silent wrongness being reported.
+  return false;
+}
+
+bool Converter::VisitCXXTryStmt(clang::CXXTryStmt *stmt) {
+  ReportUnsupportedException(
+      stmt, "`try` block with " + std::to_string(stmt->getNumHandlers()) +
+                " handler(s) has no Rust lowering");
+  return false;
+}
+
+bool Converter::VisitCXXCatchStmt(clang::CXXCatchStmt *stmt) {
+  std::string caught = stmt->getCaughtType().isNull()
+                           ? std::string("...")
+                           : Mapper::ToString(stmt->getCaughtType());
+  ReportUnsupportedException(
+      stmt, "`catch (" + caught +
+                ")` has no Rust lowering (it would silently never catch)");
+  return false;
+}
+
 bool Converter::VisitGotoStmt(clang::GotoStmt *stmt) {
   StrCat(std::format("goto!('{})", stmt->getLabel()->getName().str()));
   return false;
@@ -1568,12 +1632,16 @@ void Converter::ConvertForRangeBody(clang::CXXForRangeStmt *stmt,
 }
 
 bool Converter::VisitCXXForRangeStmt(clang::CXXForRangeStmt *stmt) {
+  auto range_init_type = stmt->getRangeInit()->getType();
+  // A decomposing loop variable is only lowered on the MAP path (see
+  // VisitCXXForRangeStmtMap). Every other range shape still fails loudly.
   if (auto *decomp =
           llvm::dyn_cast<clang::DecompositionDecl>(stmt->getLoopVariable())) {
-    ReportUnsupportedStructuredBinding(decomp);
-    return false;
+    if (GetClassName(range_init_type) != "std::map") {
+      ReportUnsupportedStructuredBinding(decomp);
+      return false;
+    }
   }
-  auto range_init_type = stmt->getRangeInit()->getType();
 
   if (!Mapper::Contains(range_init_type.getUnqualifiedType())) {
     // FIXME: improve error handling
@@ -1591,9 +1659,58 @@ bool Converter::VisitCXXForRangeStmt(clang::CXXForRangeStmt *stmt) {
   return VisitCXXForRangeStmtVector(stmt);
 }
 
+std::string
+Converter::GetDecompositionIterName(const clang::DecompositionDecl *decl) {
+  auto loc = ctx_.getSourceManager().getPresumedLoc(decl->getLocation());
+  if (loc.isInvalid()) {
+    return std::format("__decomp_{}", static_cast<const void *>(decl));
+  }
+  return std::format("__decomp_{}_{}", loc.getLine(), loc.getColumn());
+}
+
+// A structured binding over a std::map element is the ONE shape this converter
+// can lower without any new rule support, because the two expressions it needs
+// are the two it already emits for `it->first` / `it->second` on a map
+// iterator: `<it>.first()` (*const K) and `<it>.second()` (*mut V). The map
+// for-range binds its loop variable to an ITERATOR, never to a pair or a tuple
+// (Iterator::Item = Self), so a Rust destructuring pattern could not type-check
+// here, and the tuple-like initialiser clang builds for `auto& [k, v]` -- a
+// hidden holding VarDecl per binding initialised to `std::get<I>(__d)` -- has
+// no rule support either. Synthesising the iterator and re-deriving the two
+// accessors is the only path that needs nothing new.
+bool Converter::EmitMapDecompositionBindings(
+    const clang::DecompositionDecl *decl, const std::string &iter_name) {
+  auto bindings = decl->bindings();
+  if (bindings.size() != 2) {
+    return false;
+  }
+  static const char *const kAccessors[] = {"first", "second"};
+  unsigned index = 0;
+  for (const auto *binding : bindings) {
+    StrCat(keyword::kLet);
+    StrCat(GetNamedDeclAsString(binding));
+    StrCat(token::kAssign);
+    StrCat(std::format("{}.{}()", iter_name, kAccessors[index]));
+    StrCat(token::kSemiColon);
+    ++index;
+  }
+  return true;
+}
+
 bool Converter::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
   auto *loop_var = stmt->getLoopVariable();
-  auto loop_var_name = GetNamedDeclAsString(loop_var);
+  auto *decomp = llvm::dyn_cast<clang::DecompositionDecl>(loop_var);
+  // A DecompositionDecl has no name of its own, so the iterator the loop binds
+  // needs a synthetic one.
+  auto loop_var_name =
+      decomp ? GetDecompositionIterName(decomp) : GetNamedDeclAsString(loop_var);
+
+  if (decomp && decomp->bindings().size() != 2) {
+    // Not a key/value decomposition -- keep it loud rather than emit bindings
+    // nothing defines.
+    ReportUnsupportedStructuredBinding(decomp);
+    return false;
+  }
 
   StrCat("'loop_:");
   auto map_type = Mapper::Map(stmt->getRangeInit()->getType());
@@ -1603,6 +1720,14 @@ bool Converter::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
   StrCat(std::format(" as *const {})", map_type));
   {
     PushBrace brace(*this);
+    std::optional<ScopedPtrBindings> ptr_bindings;
+    if (decomp) {
+      if (!EmitMapDecompositionBindings(decomp, loop_var_name)) {
+        ReportUnsupportedStructuredBinding(decomp);
+        return false;
+      }
+      ptr_bindings.emplace(*this, decomp);
+    }
     ConvertForRangeBody(stmt, loop_var);
   }
 
@@ -3304,6 +3429,18 @@ std::string Converter::ConvertDeclRefExpr(clang::DeclRefExpr *expr) {
 bool Converter::VisitDeclRefExpr(clang::DeclRefExpr *expr) {
   auto str = ConvertDeclRefExpr(expr);
   auto decl = expr->getDecl();
+
+  // A binding we lowered to a raw pointer (`let k = it.first();`) is a
+  // REFERENCE in C++, so every use derefs -- the same treatment a
+  // reference-typed VarDecl gets below. The BindingDecl's own type is not a
+  // reference type in the AST, so the test below cannot catch it.
+  if (auto *binding = clang::dyn_cast<clang::BindingDecl>(decl)) {
+    if (ptr_bindings_.contains(binding) && !isAddrOf()) {
+      EmitDeref(std::move(str), binding->getType().getNonReferenceType());
+      SetValueFreshness(expr->getType());
+      return false;
+    }
+  }
 
   if (decl->getType()->getAs<clang::ReferenceType>() && !isAddrOf() &&
       !map_iter_decls_.contains(clang::dyn_cast<clang::VarDecl>(decl))) {
