@@ -40,20 +40,30 @@ template <typename T1> T1 &f8(std::shared_ptr<T1> &o) {
   return o.operator*();
 }
 
-// `operator->` IS DELIBERATELY NOT MAPPED. Removed rather than shipped.
+// `operator->` IS MAPPED (f9).  An earlier comment here refused it, and the
+// refusal was WRONG.  Its observation -- that the converter uses an operator->
+// rule's result as a PLACE of type T1 -- is correct, and that is exactly what is
+// WANTED: `a->x` must lower to a place so the member access can be taken on it.
+// MEASURED 2026-09-27 (rules/optional f30/f31, same shape): the E0609 came from a
+// BODY that returned a POINTER where a place was expected -- a BODY bug, not a
+// converter asymmetry and not a limit of the rule language.  The fix is that f9's
+// body is the SAME TEXT as f8 (`operator*`): unsafe yields `&mut T1`, refcount
+// yields the same `Ptr<T1>` f8 yields, and the converter adds the read/deref step
+// itself.  `(*a).x` remains an equivalent spelling, not the only one.
 //
-// The converter treats an `operator->` rule's result as a PLACE of type T1: for
-// `a->x` in the refcount model it emits `<rule result>.x.borrow_mut()` with no
-// `upgrade().deref()` step, so a rule returning a Ptr<T1> gives
-// `error[E0609]: no field \`x\` on type \`libcc2rs::Ptr<S>\``. A rule body cannot
-// produce a place for a shared pointee without returning a borrow guard, which
-// the rule language cannot express.
-//
-// So the key is LEFT OUT, and `a->x` now fails loudly at translate time instead
-// of translating rc=0 and then failing to compile. `(*a).x` works in both models
-// and is the translatable spelling. Do not "fix" this by adding a refcount body
-// that type-checks in isolation -- the defect is the converter's asymmetry
-// between its `operator*` and `operator->` lowering, which wants its own row.
+// RESIDUAL, measured and NOT this rule's defect: in the REFCOUNT model an arrow
+// followed by a FIELD access still gives `error[E0609]: no field \`v\` on type
+// \`libcc2rs::Ptr<S>\``, because the converter emits `<Ptr result>.v.borrow_mut()`
+// without the `upgrade().deref()` step it DOES emit for the same field access
+// behind `operator*`.  rules/optional's f30/f31 reproduce this identically
+// (`/home/agent/work/scratch-optarrow/c.cpp`, 1 x E0609 in refcount, unsafe clean),
+// so it is a CONVERTER asymmetry between the two lowerings, shared by both
+// modules, and it wants its own row.  Arrow-to-METHOD-CALL is correct in both
+// models today, and that is the case the corpus is dominated by.
+
+template <typename T1> T1 *f9(std::shared_ptr<T1> &o) {
+  return o.operator->();
+}
 
 template <typename T1> T1 *f10(std::shared_ptr<T1> &o) { return o.get(); }
 

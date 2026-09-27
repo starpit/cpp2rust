@@ -6,7 +6,8 @@
 // same Rust type.  std::nullopt_t -> () : it is a tag, and every rule that takes
 // one ignores it.
 //
-// There is deliberately NO operator-> rule; see src.cpp.
+// `operator->` IS mapped, by f30/f31; see src.cpp.  Its body is the SAME text as
+// f11/f12 (`operator*`) because the converter uses the rule's result as a PLACE.
 
 fn t1<T1>() -> Option<T1> {
     None
@@ -127,4 +128,14 @@ unsafe fn f24<T1: PartialEq>(a0: &Option<T1>, a1: &T1) -> bool {
 
 unsafe fn f25<T1>(a0: &mut Option<T1>, a1: &mut Option<T1>) {
     *a0 = a1.take()
+}
+
+// operator-> : the converter treats the result as a PLACE of type T1, so this is
+// the SAME text as f11/f12 (operator*), not a pointer.
+unsafe fn f30<T1>(a0: &mut Option<T1>) -> &mut T1 {
+    a0.as_mut().expect("bad optional access")
+}
+
+unsafe fn f31<T1>(a0: &Option<T1>) -> &T1 {
+    a0.as_ref().expect("bad optional access")
 }

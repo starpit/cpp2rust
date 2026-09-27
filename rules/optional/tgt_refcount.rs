@@ -6,7 +6,8 @@
 // rules/shared_ptr does.  Unlike shared_ptr, a COPY of an optional must DEEP-COPY
 // the payload: std::optional owns its T by value.
 //
-// There is deliberately NO operator-> rule; see src.cpp.
+// `operator->` IS mapped, by f30/f31; see src.cpp.  Its body is the SAME text as
+// f11/f12 (`operator*`) because the converter uses the rule's result as a PLACE.
 
 use libcc2rs::*;
 use std::cell::RefCell;
@@ -145,4 +146,13 @@ fn f24<T1: PartialEq>(a0: &Option<Value<T1>>, a1: &T1) -> bool {
 
 fn f25<T1: ByteRepr>(a0: Ptr<Option<Value<T1>>>, a1: &mut Option<Value<T1>>) {
     a0.write(a1.take())
+}
+
+// operator-> : same text as f11/f12 (operator*).
+fn f30<T1>(a0: &Option<Value<T1>>) -> Ptr<T1> {
+    Value::as_pointer(a0.as_ref().expect("bad optional access"))
+}
+
+fn f31<T1>(a0: &Option<Value<T1>>) -> Ptr<T1> {
+    Value::as_pointer(a0.as_ref().expect("bad optional access"))
 }

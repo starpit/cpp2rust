@@ -35,6 +35,12 @@ unsafe fn f8<T1>(a0: &Option<Rc<T1>>) -> &mut T1 {
     &mut *(a0.as_ref().map_or(::std::ptr::null_mut(), |r| Rc::as_ptr(r) as *mut T1))
 }
 
+// operator-> : the converter uses the result as a PLACE, so this is the SAME text
+// as f8 (operator*), not a pointer.
+unsafe fn f9<T1>(a0: &Option<Rc<T1>>) -> &mut T1 {
+    &mut *(a0.as_ref().map_or(::std::ptr::null_mut(), |r| Rc::as_ptr(r) as *mut T1))
+}
+
 unsafe fn f10<T1>(a0: &Option<Rc<T1>>) -> *mut T1 {
     a0.as_ref().map_or(::std::ptr::null_mut(), |r| Rc::as_ptr(r) as *mut T1)
 }

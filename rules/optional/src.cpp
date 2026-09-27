@@ -13,10 +13,28 @@
 // nullopt_t` lvalue `std::nullopt` finds no viable copy constructor in the
 // preprocessor's synthetic context.
 //
-// `operator->` IS DELIBERATELY NOT MAPPED, for the same reason as
-// rules/shared_ptr: the converter treats an operator-> rule's result as a PLACE
-// of type T1, so a rule returning Ptr<T1> gives error[E0609].  `(*o).f` routes
-// through operator* and works in both models.
+// `operator->` IS MAPPED (f30/f31).  An earlier comment here refused it, citing
+// that the converter treats an operator-> rule's result as a PLACE of type T1.
+// That observation is TRUE and it is also exactly what is WANTED: `o->m` must
+// lower to a place so the member access can be taken on it.  MEASURED 2026-09-27:
+// the E0609 that produced the refusal came from a BODY RETURNING A POINTER
+// (`Ptr<T1>`) being used as a place -- a BODY bug, not a converter limit.  The
+// fix is that the body must yield the PLACE, i.e. the SAME TEXT as f11/f12
+// (`operator*`), never a pointer.  Verified with `-verbose`: both keys report
+// `Matching:` in both models and both models emit f30/f31's body with the correct
+// receiver.  `(*o).f` remains an equivalent spelling, but it is no longer the only
+// translatable one.
+//
+// RESIDUAL, measured and NOT this rule's defect: in the REFCOUNT model an arrow
+// followed by a FIELD access gives `error[E0609]: no field \`v\` on type
+// \`libcc2rs::Ptr<S>\``, because the converter emits `<Ptr result>.v.borrow_mut()`
+// without the `upgrade().deref()` step it DOES emit for the same field access
+// behind `operator*`.  rules/shared_ptr's f9 reproduces it identically, so it is a
+// CONVERTER asymmetry between the two lowerings, not a rule bug and not fixable in
+// a body.  Arrow-to-METHOD-CALL is correct in both models today.  Two further
+// converter sites are already filed against this wave: unsafe emits a spurious
+// `.cast_const()` (converter.cpp:3175-3184, the CK_NoOp arm of
+// VisitImplicitCastExpr) and refcount a spurious `.decay()`.
 
 #include <optional>
 #include <utility>
@@ -127,4 +145,22 @@ template <typename T1> bool f24(const std::optional<T1> &o, const T1 &v) {
 template <typename T1>
 std::optional<T1> &f25(std::optional<T1> &d, std::optional<T1> &&s) {
   return d.operator=(std::move(s));
+}
+
+// `operator->` IS NOW MAPPED (f30/f31), and the earlier refusal above was wrong.
+// MEASURED SYMPTOM without these: `x->member` on any optional-like receiver
+// (llvm::FailureOr<T> inherits every reader from std::optional, so it keys HERE)
+// fell through to the converter's raw arrow fallback, which emits the RECEIVER
+// ITSELF as if it were a pointer -- scratch-fo measured unsafe
+// `(*(n).cast_const()).as_ptr()`, E0599 `no method named cast_const found for
+// enum Option<T>`, and refcount `(n.as_pointer().decay() as Ptr<u8>)`, E0599 `no
+// method named decay`.  The converter treating the result as a PLACE of type T1
+// is exactly what is wanted here, so the BODY must yield the place (identical
+// text to f11/f12's `operator*`), never a pointer.  rules/shared_ptr's E0609 came
+// from a body returning `Ptr<T1>` used as a place -- a body bug, not a converter
+// limit.
+template <typename T1> T1 *f30(std::optional<T1> &o) { return o.operator->(); }
+
+template <typename T1> const T1 *f31(const std::optional<T1> &o) {
+  return o.operator->();
 }

@@ -37,6 +37,12 @@ fn f8<T1>(a0: &Option<Value<T1>>) -> Ptr<T1> {
     a0.as_ref().map_or(Ptr::null(), |v| Value::as_pointer(v))
 }
 
+// operator-> : the converter uses the result as a PLACE, so this is the SAME text
+// as f8 (operator*).
+fn f9<T1>(a0: &Option<Value<T1>>) -> Ptr<T1> {
+    a0.as_ref().map_or(Ptr::null(), |v| Value::as_pointer(v))
+}
+
 fn f10<T1>(a0: &Option<Value<T1>>) -> Ptr<T1> {
     a0.as_ref().map_or(Ptr::null(), |v| Value::as_pointer(v))
 }
