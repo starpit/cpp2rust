@@ -70,3 +70,53 @@ unsafe fn f4<T1: PartialEq, T2>(
 ) -> bool {
     a0 != a1
 }
+
+// t6 -- the opaque unit for `llvm::DenseMapInfo<T1>`.  See src.cpp: the TYPE is
+// modelled so that t3's argument mapping can proceed; NO member is mapped, so
+// every traits method still aborts loudly.  T1 is deliberately unused.
+fn t6<T1>() -> () {
+    ()
+}
+
+unsafe fn f5<T1>() -> () {
+    ()
+}
+
+
+// t7 -- `llvm::detail::DenseMapPair<T1, T2>` is `std::pair<KeyT, ValueT>`
+// (DenseMap.h:45), so this is rules/pair's committed t1 body verbatim.
+fn t7<T1: Default, T2: Default>() -> (T1, T2) {
+    <(T1, T2)>::default()
+}
+
+unsafe fn f6<T1: Default, T2: Default>() -> (T1, T2) {
+    <(T1, T2)>::default()
+}
+
+// f7-f10 -- begin()/end().  Shape copied from rules/unordered_map's committed
+// f22/f23 (mutable, `&mut` receiver) and f25/f26 (const, by-value receiver);
+// only the MapRef differs, because this module's t1 is a BARE HashMap<T1, T2>
+// while unordered_map's is HashMap<K, Box<V>>.
+unsafe fn f7<T1: std::hash::Hash + Eq + Clone, T2>(
+    a0: &mut std::collections::HashMap<T1, T2>,
+) -> libcc2rs::HashMapIter<T1, *const std::collections::HashMap<T1, T2>> {
+    libcc2rs::HashMapIter::begin(&*a0 as *const std::collections::HashMap<T1, T2>)
+}
+
+unsafe fn f8<T1: std::hash::Hash + Eq + Clone, T2>(
+    a0: &mut std::collections::HashMap<T1, T2>,
+) -> libcc2rs::HashMapIter<T1, *const std::collections::HashMap<T1, T2>> {
+    libcc2rs::HashMapIter::end(&*a0 as *const std::collections::HashMap<T1, T2>)
+}
+
+unsafe fn f9<T1: std::hash::Hash + Eq + Clone, T2>(
+    a0: std::collections::HashMap<T1, T2>,
+) -> libcc2rs::HashMapIter<T1, *const std::collections::HashMap<T1, T2>> {
+    libcc2rs::HashMapIter::begin(&a0 as *const std::collections::HashMap<T1, T2>)
+}
+
+unsafe fn f10<T1: std::hash::Hash + Eq + Clone, T2>(
+    a0: std::collections::HashMap<T1, T2>,
+) -> libcc2rs::HashMapIter<T1, *const std::collections::HashMap<T1, T2>> {
+    libcc2rs::HashMapIter::end(&a0 as *const std::collections::HashMap<T1, T2>)
+}

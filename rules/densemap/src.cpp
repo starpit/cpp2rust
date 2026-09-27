@@ -54,13 +54,51 @@
 // first-abort rows are TYPE failures ("unsupported system type has no rule"),
 // so the type rules are what those rows need; the operations are the next
 // blocker.
+//
+// UPDATE 2026-09-27, MEASURED -- the comment above is out of date about WHY the
+// operation surface is blocked, and the correction matters.  It is NOT the
+// missing f-rules: all four begin()/end() return spellings already have type
+// rules (t4/t5) and the receiver has t3, so the f-rules are directly writable.
+// The real gate is t3's ARGUMENT MAPPING.  t3 matches the concrete
+// instantiation and then the mapper maps each of its five arguments in turn, and
+// arguments 4 and 5 had no model at all, so the run ABORTED rc=134 BEFORE ANY
+// SEARCH COULD MATCH -- every `search expr` line read `result: None`:
+//   unsupported unmapped type `llvm::DenseMapInfo<unsigned int>` has no model in
+//   types_, while mapping `llvm::DenseMapBase<llvm::DenseMap<unsigned int,
+//   unsigned int>, unsigned int, unsigned int, llvm::DenseMapInfo<unsigned int>,
+//   llvm::detail::DenseMapPair<unsigned int, unsigned int>>`
+// t6/f5 below close argument 4.  With them in place the SAME probe advances to
+// argument 5 and names it a `LEAF record`:
+//   unsupported unmapped type `llvm::detail::DenseMapPair<unsigned int, unsigned
+//   int>` has no model in types_, while mapping `llvm::DenseMapBase<...>`
+// So the sequence is measured, not inferred, and `llvm::detail::DenseMapPair<K,
+// V>` is the LAST remaining gate on the whole operation surface.  Unlike
+// DenseMapInfo it is not a refusal case -- it derives from `std::pair<KeyT,
+// ValueT>` (DenseMap.h:45) and is the map's value_type, so rules/pair's
+// `(T1, T2)` / `<(T1, T2)>::default()` shape models it faithfully.  ADDED as
+// t7/f6 below.
 
 namespace llvm {
 
-template <typename KeyT, typename ValueT = void> struct DenseMapInfo;
+// DEFINED (not merely forward-declared) so that an EXPLICIT default constructor
+// can be declared for it -- the t72/t79/t80 precedent in rules/mlir: an opaque
+// TYPE key is useless without its constructor.  The template PARAMETER LIST is
+// byte-identical to the forward declaration it replaces, so SuppressDefaultTemplate-
+// Args behaves exactly as before and t1/t2/t3's keys are unchanged (verified
+// character by character against the frozen BEFORE tree).
+template <typename KeyT, typename ValueT = void> struct DenseMapInfo {
+  DenseMapInfo();
+};
 
 namespace detail {
-template <typename KeyT, typename ValueT> struct DenseMapPair;
+// DEFINED, not merely forward-declared, for the same reason DenseMapInfo above
+// is: the type needs an explicit default constructor to be usable (t7/f6 below).
+// The template PARAMETER LIST is byte-identical to the forward declaration it
+// replaces, so the DEFAULT-ARGUMENT spellings in DenseMap/DenseMapIterator that
+// mention it are unchanged and t1/t3/t4/t5's keys are unaffected.
+template <typename KeyT, typename ValueT> struct DenseMapPair {
+  DenseMapPair();
+};
 } // namespace detail
 
 template <typename KeyT, typename ValueT,
@@ -78,6 +116,15 @@ public:
 };
 
 
+// Forward-declared HERE, with its default arguments, because DenseMapBase's
+// begin()/end() return it.  The definition below therefore must NOT repeat the
+// defaults (a default template argument may be given only once).
+template <typename KeyT, typename ValueT,
+          typename KeyInfoT = DenseMapInfo<KeyT>,
+          typename BucketT = detail::DenseMapPair<KeyT, ValueT>,
+          bool IsConst = false>
+class DenseMapIterator;
+
 // The CRTP base that carries the OPERATION surface (find/lookup/count/
 // try_emplace/erase/begin/end).  Its key has FIVE arguments -- the derived
 // DenseMap FIRST -- and, unlike DenseMap's, NONE of them are defaulted here, so
@@ -93,6 +140,18 @@ template <typename DerivedT, typename KeyT, typename ValueT, typename KeyInfoT,
 class DenseMapBase {
 public:
   DenseMapBase();
+  // MUTABLE begin/end: return the TWO-argument sugared iterator spelling (t4).
+  DenseMapIterator<KeyT, ValueT> begin();
+  DenseMapIterator<KeyT, ValueT> end();
+  // CONST begin/end: IsConst differs from its default so nothing is elided and
+  // the FIVE-argument spelling survives (t5).  The arity split is real -- the two
+  // key strings differ, so one rule cannot cover both.
+  DenseMapIterator<KeyT, ValueT, DenseMapInfo<KeyT>,
+                   detail::DenseMapPair<KeyT, ValueT>, true>
+  begin() const;
+  DenseMapIterator<KeyT, ValueT, DenseMapInfo<KeyT>,
+                   detail::DenseMapPair<KeyT, ValueT>, true>
+  end() const;
 };
 
 
@@ -122,10 +181,8 @@ public:
 //
 // Both forms are keyed.  A single generic key does NOT collapse them, because the
 // key is a STRING and the two strings differ.
-template <typename KeyT, typename ValueT,
-          typename KeyInfoT = DenseMapInfo<KeyT>,
-          typename BucketT = detail::DenseMapPair<KeyT, ValueT>,
-          bool IsConst = false>
+template <typename KeyT, typename ValueT, typename KeyInfoT,
+          typename BucketT, bool IsConst>
 class DenseMapIterator {
 public:
   DenseMapIterator();
@@ -192,4 +249,109 @@ bool f4(const llvm::DenseMapIterator<T1, T2, llvm::DenseMapInfo<T1>,
         const llvm::DenseMapIterator<T1, T2, llvm::DenseMapInfo<T1>,
                                      llvm::detail::DenseMapPair<T1, T2>, true> &a1) {
   return operator!=(a0, a1);
+}
+
+// ---------------------------------------------------------------------------
+// t6 -- `llvm::DenseMapInfo<T1>`, AN OPAQUE TYPE KEY WITH NO MEMBERS MAPPED.
+//
+// WHY THIS IS NOT A REVERSAL OF THE STANDING REFUSAL.  The refusal is about
+// synthesising DenseMapInfo's BEHAVIOUR -- getEmptyKey / getTombstoneKey /
+// getHashValue / isEqual -- and it stands: NONE of them is mapped here, so any
+// call to one still aborts LOUDLY rather than silently inventing a sentinel.
+// What is added is only the TYPE, which the mapper needs for a different reason:
+// t3 (`llvm::DenseMapBase<T1..T5>`) matches the concrete instantiation and then
+// MAPS EACH OF ITS FIVE ARGUMENTS, and argument 4 is `llvm::DenseMapInfo<K>`.
+// Without a model for it, mapping t3 aborts rc=134 with
+//   unsupported unmapped type `llvm::DenseMapInfo<unsigned int>` has no model in
+//   types_, while mapping `llvm::DenseMapBase<...>`
+// BEFORE ANY SEARCH CAN MATCH, which blocks the module's ENTIRE operation
+// surface (begin/end/find/lookup/count/try_emplace/erase and the iterator's
+// ++/deref) behind a type nobody ever names in the source.
+//
+// Precedent, three times over in rules/mlir: t72 `mlir::TypeID` -> `()` with
+// ==/!= DELIBERATELY ABSENT; t79 `llvm::BitVector` -> `Vec<bool>` with every
+// member unmapped; t80 `mlir::detail::PreservedAnalyses` -> `()`.
+//
+// DESTRUCTOR TEST: `grep -n '~DenseMapInfo' llvm/ADT/DenseMapInfo.h` -> ZERO
+// hits.  It is a stateless traits class with no members at all, so a unit loses
+// nothing that could be observed.
+template <typename T1> using t6 = llvm::DenseMapInfo<T1>;
+
+// f5 -- t6's default constructor.  A type key without one gives rc=0 and then
+// E0433 on `<mangled-type>::new()`; measured seven times.  Nothing in the corpus
+// constructs a DenseMapInfo (it appears only as a template argument), but the
+// key costs nothing and its absence is invisible until it is not.
+template <typename T1> llvm::DenseMapInfo<T1> f5() {
+  return llvm::DenseMapInfo<T1>();
+}
+
+
+// ---------------------------------------------------------------------------
+// t7 -- `llvm::detail::DenseMapPair<T1, T2>`, the map's `value_type`.
+//
+// NOT a refusal case and not opaque: in real LLVM it is
+// `struct DenseMapPair : public std::pair<KeyT, ValueT>` (llvm/ADT/DenseMap.h:45),
+// i.e. literally a std::pair, so rules/pair's committed `t1` shape models it
+// faithfully -- a Rust 2-tuple.  The REFCOUNT arm differs from pair's by one
+// wrapper and the difference is load-bearing: this module's t1 maps DenseMap to
+// `HashMap<T1, Value<T2>>`, so the bucket's second component must be `Value<T2>`
+// for the two to agree.
+//
+// WHY IT IS NEEDED: t3 (`llvm::DenseMapBase<T1..T5>`) maps each of its five
+// arguments and argument 5 is `llvm::detail::DenseMapPair<K, V>`.  With t6
+// (DenseMapInfo) in place the abort moved forward to exactly this argument:
+//   unsupported unmapped type `llvm::detail::DenseMapPair<unsigned int, unsigned int>`
+//   has no model in types_, while mapping `llvm::DenseMapBase<...>`
+// It is the LAST gate before any search against the DenseMapBase receiver can run.
+template <typename T1, typename T2>
+using t7 = llvm::detail::DenseMapPair<T1, T2>;
+
+// f6 -- t7's default constructor.  Same reason as f5: a type key without one
+// gives rc=0 and then E0433 on `<mangled-type>::new()`.
+template <typename T1, typename T2>
+llvm::detail::DenseMapPair<T1, T2> f6() {
+  return llvm::detail::DenseMapPair<T1, T2>();
+}
+
+// ---------------------------------------------------------------------------
+// f7-f10 -- begin()/end() on the CRTP base.  Written ONLY because t7 above
+// opened the gate: MEASURED, the same dmgate.cpp probe that previously died in
+// t3's argument mapping now reaches
+//   search expr llvm::DenseMapIterator<unsigned int, unsigned int>
+//     llvm::DenseMapBase<llvm::DenseMap<unsigned int, unsigned int>, unsigned int,
+//     unsigned int, llvm::DenseMapInfo<unsigned int>,
+//     llvm::detail::DenseMapPair<unsigned int, unsigned int>>::begin(), result:
+// i.e. the search RUNS.  Four keys, not two: the MUTABLE overload returns t4's
+// two-argument spelling and the CONST overload returns t5's five-argument
+// `, true>` spelling, and the receiver is const-qualified in the const pair.
+template <typename T1, typename T2>
+llvm::DenseMapIterator<T1, T2>
+f7(llvm::DenseMapBase<llvm::DenseMap<T1, T2>, T1, T2, llvm::DenseMapInfo<T1>,
+                      llvm::detail::DenseMapPair<T1, T2>> &o) {
+  return o.begin();
+}
+
+template <typename T1, typename T2>
+llvm::DenseMapIterator<T1, T2>
+f8(llvm::DenseMapBase<llvm::DenseMap<T1, T2>, T1, T2, llvm::DenseMapInfo<T1>,
+                      llvm::detail::DenseMapPair<T1, T2>> &o) {
+  return o.end();
+}
+
+template <typename T1, typename T2>
+llvm::DenseMapIterator<T1, T2, llvm::DenseMapInfo<T1>,
+                       llvm::detail::DenseMapPair<T1, T2>, true>
+f9(const llvm::DenseMapBase<llvm::DenseMap<T1, T2>, T1, T2,
+                            llvm::DenseMapInfo<T1>,
+                            llvm::detail::DenseMapPair<T1, T2>> &o) {
+  return o.begin();
+}
+
+template <typename T1, typename T2>
+llvm::DenseMapIterator<T1, T2, llvm::DenseMapInfo<T1>,
+                       llvm::detail::DenseMapPair<T1, T2>, true>
+f10(const llvm::DenseMapBase<llvm::DenseMap<T1, T2>, T1, T2,
+                             llvm::DenseMapInfo<T1>,
+                             llvm::detail::DenseMapPair<T1, T2>> &o) {
+  return o.end();
 }
