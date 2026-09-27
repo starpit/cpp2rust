@@ -671,7 +671,9 @@ void ConverterRefCount::EmitFunctionPreamble(clang::FunctionDecl *decl) {
       auto init = name;
 
       if (HasUsableDefaultArg(param)) {
-        init = std::format("{}.unwrap_or({})", name,
+        // Lazy: see the note at Converter::EmitFunctionPreamble.  `unwrap_or`
+        // evaluates the default expression even when the caller supplied one.
+        init = std::format("{}.unwrap_or_else(|| {})", name,
                            ToString(param->getDefaultArg()));
       }
 

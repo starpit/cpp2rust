@@ -1318,7 +1318,12 @@ void Converter::EmitFunctionPreamble(clang::FunctionDecl *decl) {
     if (HasUsableDefaultArg(param)) {
       auto name = GetNamedDeclAsString(param);
       auto type = ToString(param->getType());
-      auto init = std::format("{}.unwrap_or({})", name,
+      // `unwrap_or(e)` evaluates `e` EAGERLY, so a defaulted argument that is
+      // itself a call runs on EVERY call, including the ones that supplied the
+      // argument.  Measured: a `int n = MakeDefault()` default made MakeDefault
+      // run 4 times for 4 calls, 2 of which passed n explicitly (C++: 2).  The
+      // default expression must be lazy.
+      auto init = std::format("{}.unwrap_or_else(|| {})", name,
                               ToString(param->getDefaultArg()));
       StrCat(std::format("let mut {} : {} = {}", name, type, init),
              token::kSemiColon);
@@ -4607,7 +4612,24 @@ bool Converter::VisitCXXDefaultArgExpr(clang::CXXDefaultArgExpr *expr) {
   if (expr->getType()->isPointerType()) {
     StrCat(token::kDefault);
     computed_expr_type_ = ComputedExprType::FreshPointer;
+    return false;
   }
+  // A CXXDefaultArgExpr is a thin wrapper the parser inserts at a call site for
+  // a parameter the caller omitted; getExpr() is the defaulted argument's own
+  // expression, evaluated in the callee's context.  Lower it and adopt whatever
+  // type that conversion computed -- without this, every non-pointer defaulted
+  // argument emitted NOTHING and tripped the `computed_expr_type_ not set`
+  // sentinel at the tail of Convert().  getExpr() is converted exactly once, so
+  // a defaulted argument that is itself a call is not double-evaluated.
+  clang::Expr *sub = expr->getExpr();
+  if (!sub) {
+    llvm::errs() << "CXXDefaultArgExpr with no default expression at "
+                 << expr->getUsedLocation().printToString(ctx_.getSourceManager())
+                 << "\n";
+    assert(false && "CXXDefaultArgExpr has no sub-expression");
+    return false;
+  }
+  Convert(sub);
   return false;
 }
 
