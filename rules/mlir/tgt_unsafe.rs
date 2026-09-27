@@ -494,6 +494,32 @@ fn t35() -> dataflowir_gen::ir::Value {
     )
 }
 
+// t36 `mlir::Operation *` -> `*mut fmt::OpInst`.  SAME MODEL AS t1, POINTER
+// SPELLING.  src.cpp says why an explicit pointer key is needed (mapper.cpp:709
+// does no pointer stripping) and names the four precedents.  The `init` is the
+// NULL POINTER, which is the faithful default: an `Operation *` with no operation
+// is exactly `nullptr` in C++, and a null here traps on use rather than
+// pretending to be an operation.
+fn t36() -> *mut dataflowir_gen::fmt::OpInst {
+    ::std::ptr::null_mut()
+}
+
+// t37-t39: the range CRTP base at its three concrete instantiations.  Each body
+// is IDENTICAL to the derived range's (t14/t15 -> Vec<ir::Value>, t17 ->
+// Vec<fmt::Region>) because the base IS the range -- no new representation is
+// introduced here.  See src.cpp for why these are concrete and not generic.
+fn t37() -> Vec<dataflowir_gen::ir::Value> {
+    Default::default()
+}
+
+fn t38() -> Vec<dataflowir_gen::ir::Value> {
+    Default::default()
+}
+
+fn t39() -> Vec<dataflowir_gen::fmt::Region> {
+    Default::default()
+}
+
 // --- WHAT THIS PASS DELIBERATELY LEFT OUT, with the reason ------------------
 // * `mlir::OpOperand` (23 rustc errors).  NOT GROUNDED.  It is not a Value: it is
 //   the USE EDGE (`IROperand`, an intrusive node in a value's use-list holding

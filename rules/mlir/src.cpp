@@ -38,6 +38,9 @@
 // ---------------------------------------------------------------------------
 
 #include <cstddef>
+// For `std::unique_ptr` / `std::default_delete`, which appear inside the
+// fully-spelled `RegionRange` range-base key below.
+#include <memory>
 
 namespace mlir {
 
@@ -341,6 +344,18 @@ class OpState {};
 // NOT mapped and still abort loudly rather than returning 0.
 class BlockArgument {};
 
+// DECLARED ONLY SO THE CONCRETE RANGE-BASE KEYS BELOW CAN BE SPELLED.  Neither
+// of these gets a `using tN =`, so NEITHER IS MAPPED -- see the note on the
+// IndexType/MemRefType group above for why a bare declaration registers nothing.
+//
+// ⛔ `mlir::OpOperand` IS AN HONEST REFUSAL AND MUST STAY ONE.  It is MLIR's USE
+// EDGE (`IROperand`), not a value: it records that operand slot N of some op uses
+// some Value.  `grep -rn OpOperand dataflowir-gen/src` = 0 hits, and mapping it to
+// `ir::Value` would CONFLATE a use with the value it uses -- silently wrong at
+// every `getOwner()`/`getOperandNumber()`.  It appears below only as a template
+// ARGUMENT of a CONCRETE key, which needs no model for the argument.
+class OpOperand;
+
 // The five concrete MLIR type handles that appear as `TypedValue` arguments in
 // the reference TU.  They are declared ONLY so the five concrete `TypedValue`
 // instantiations below can be spelled; NO type rule is registered for any of
@@ -356,6 +371,11 @@ class FifoSlotType {};
 } // namespace ktdf
 
 namespace detail {
+// mlir/include/mlir/IR/Value.h -- the storage behind an `OpResult`.  Declared
+// ONLY to spell the ResultRange base key; NOT mapped, for the same reason
+// `OpOperand` is not: it is implementation storage, absent from the crate.
+class OpResultImpl;
+
 // mlir/include/mlir/IR/Value.h:106 -- `TypedValue<T>`, a `Value` whose static
 // type is known to be `T`.  It derives from `mlir::Value`, so it maps where t4
 // maps: `dataflowir_gen::ir::Value` (ir.rs:21).
@@ -413,6 +433,19 @@ class ForOp {};
 namespace llvm {
 template <typename T>
 class ArrayRef {};
+
+// llvm/ADT/PointerUnion.h -- declared ONLY so the RegionRange base key can be
+// spelled.  NOT mapped (no `using tN =`).
+template <typename... PTs>
+class PointerUnion {};
+
+namespace detail {
+// llvm/ADT/STLExtras.h -- `indexed_accessor_range_base<DerivedT, BaseT, T,
+// PointerT, ReferenceT>`, the CRTP base of MLIR's range families.
+template <typename DerivedT, typename BaseT, typename T, typename PointerT,
+          typename ReferenceT>
+class indexed_accessor_range_base {};
+} // namespace detail
 } // namespace llvm
 
 using t1 = mlir::Operation;
@@ -479,6 +512,41 @@ using t33 = mlir::detail::TypedValue<mlir::ktdf::TokenType>;
 using t34 = mlir::detail::TypedValue<mlir::ktdf::FifoSlotType>;
 
 using t35 = mlir::BlockArgument;
+
+// t36: THE POINTER SPELLING OF `mlir::Operation`.  `mapTypeStringRecursive`
+// (mapper.cpp:709) is purely STRING-based and does NO pointer stripping, so t1's
+// key (`mlir::Operation`) cannot satisfy a lookup of the spelling
+// `mlir::Operation *`.  An EXPLICIT pointer-spelled key is the established
+// precedent in this tree -- `llvm::raw_ostream *` (rules/raw_ostream t3),
+// `std::ostream *` (rules/iostream t3), `FILE *`, `DIR *` -- and this is the same
+// shape: SAME model as t1, pointer representation per target model.
+using t36 = mlir::Operation *;
+
+// t37-t39: the CRTP base of MLIR's range families, keyed at the THREE CONCRETE
+// INSTANTIATIONS the diagnostics print verbatim.
+// ⛔ ONE GENERIC RULE WOULD BE WRONG.  OperandRange/ResultRange/ValueRange and
+// RegionRange all derive from this base at DIFFERENT element types, and RegionRange's
+// element is a `Region`, not a `Value` -- a generic rule would have to pick one
+// representation and would silently give three of the four the wrong element type.
+// It would ALSO be the generic-MLIR-type regression recorded on t26/t29: a generic
+// key forces the converter to map the template ARGUMENTS, and `mlir::OpOperand` /
+// `mlir::detail::OpResultImpl` deliberately have no model, so it would turn a
+// countable mangled name into a hard mapper.cpp:722 abort.
+// Each maps WHERE ITS DERIVED RANGE ALREADY MAPS: t14/t15 -> Vec<ir::Value>,
+// t17 -> Vec<fmt::Region>.  Nothing new is claimed; these are the same
+// representations, reached through the base-class spelling.
+using t37 = llvm::detail::indexed_accessor_range_base<
+    mlir::OperandRange, mlir::OpOperand *, mlir::Value, mlir::Value, mlir::Value>;
+using t38 = llvm::detail::indexed_accessor_range_base<
+    mlir::ResultRange, mlir::detail::OpResultImpl *, mlir::OpResult,
+    mlir::OpResult, mlir::OpResult>;
+using t39 = llvm::detail::indexed_accessor_range_base<
+    mlir::RegionRange,
+    llvm::PointerUnion<mlir::Region *,
+                       const std::unique_ptr<mlir::Region,
+                                             std::default_delete<mlir::Region>> *,
+                       mlir::Region **>,
+    mlir::Region *, mlir::Region *, mlir::Region *>;
 
 // ---- the two operator rules ----------------------------------------------
 // The member `==` on mlir::Attribute.  Spelled `.operator==(...)` rather than
