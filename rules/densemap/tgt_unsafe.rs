@@ -10,3 +10,11 @@ fn t1<T1, T2>() -> HashMap<T1, T2> {
 fn t2<T1>() -> HashSet<T1> {
     HashSet::new()
 }
+
+// The CRTP base is the SAME container as the derived DenseMap, so it maps to the
+// same HashMap.  T1 (the derived type), T4 (DenseMapInfo traits) and T5
+// (DenseMapPair bucket) are representation details with no Rust analogue and are
+// deliberately unused -- see the DenseMapInfo note in src.cpp.
+fn t3<T1, T2, T3, T4, T5>() -> HashMap<T2, T3> {
+    HashMap::new()
+}

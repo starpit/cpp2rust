@@ -77,8 +77,29 @@ public:
   DenseSet();
 };
 
+
+// The CRTP base that carries the OPERATION surface (find/lookup/count/
+// try_emplace/erase/begin/end).  Its key has FIVE arguments -- the derived
+// DenseMap FIRST -- and, unlike DenseMap's, NONE of them are defaulted here, so
+// SuppressDefaultTemplateArgs elides nothing and all five survive into the key.
+// Measured spelling (survey-v3, 236 occurrences for the largest instantiation):
+//   llvm::DenseMapBase<llvm::DenseMap<mlir::StringAttr, mlir::ktdf_arch::Device>,
+//                      mlir::StringAttr, mlir::ktdf_arch::Device,
+//                      llvm::DenseMapInfo<mlir::StringAttr>,
+//                      llvm::detail::DenseMapPair<mlir::StringAttr, mlir::ktdf_arch::Device>>
+// Note the FIRST argument is printed in DenseMap's SUGARED two-argument form.
+template <typename DerivedT, typename KeyT, typename ValueT, typename KeyInfoT,
+          typename BucketT>
+class DenseMapBase {
+public:
+  DenseMapBase();
+};
+
 } // namespace llvm
 
 template <typename T1, typename T2> using t1 = llvm::DenseMap<T1, T2>;
 
 template <typename T1> using t2 = llvm::DenseSet<T1>;
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5>
+using t3 = llvm::DenseMapBase<T1, T2, T3, T4, T5>;
