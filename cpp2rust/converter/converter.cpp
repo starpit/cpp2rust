@@ -1474,8 +1474,25 @@ void Converter::ReportUnsupportedException(const clang::Stmt *stmt,
     survey::Record(survey::GapKind::kUnsupportedConstruct, full, loc);
     return;
   }
-  llvm::errs() << "unsupported " << full << " at " << loc << '\n';
-  assert(0 && "unsupported C++ exception construct (throw/try/catch)");
+  // NOT survey mode, so this is a NAMED REFUSAL and must be fatal.
+  //
+  // This used to be `llvm::errs() << ...; assert(0 && ...)`. Under the release
+  // build's -DNDEBUG the assert is a no-op, so this function RETURNED, every
+  // caller then did `return false`, and the try/throw/catch emitted NO RUST AT
+  // ALL while the converter exited 0. The divert silently vanished from the
+  // output -- silent wrongness, which the playbook ranks above a loud abort --
+  // and the one stderr line was the only trace, invisible to any sweep reading
+  // exit codes.
+  //
+  // Reachability, established rather than assumed: throw/try/catch ARE lowered
+  // now (4976134, 138ec80), and all seven callers of this function are the
+  // deliberately-gated shapes that lowering does not model -- bare `throw;`, a
+  // `catch (...)`/non-downcastable caught type, a control transfer out of a
+  // `try` body or handler (return/break/continue/goto/nested try), and `try`
+  // with no handler. So this is dead for every covered shape and fires only for
+  // a refusal that already has a written-out reason, which is exactly the thing
+  // that should stop the run by name.
+  llvm::report_fatal_error(llvm::Twine("unsupported ") + full + " at " + loc);
 }
 
 // `throw <expr>` lowers to `std::panic::panic_any(<expr>)`.

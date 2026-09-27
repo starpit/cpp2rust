@@ -1186,3 +1186,42 @@ unsafe fn f48() -> Vec<bool> {
 unsafe fn f49() -> () {
     ()
 }
+
+// t81 -- `mlir::CopyOnWriteArrayRef<T1>` -> `Vec<T1>`, the SAME representation
+// t19 gives `llvm::ArrayRef<T1>`.  Unusually for this module the honest model is
+// a real OWNING container rather than a unit: the C++ holds an ArrayRef view and
+// a SmallVector copy and switches between them on write, which is an allocation
+// strategy, not something any operation can observe.  No member is keyed, so the
+// difference cannot leak.  See the src.cpp note for the destructor test.
+fn t81<T1>() -> Vec<T1> {
+    Vec::new()
+}
+
+// t82 -- `mlir::DominanceInfo` -> `()`.  Its payload is a per-Region CACHE of
+// dominator trees, and every query that would read it is deliberately UNMAPPED,
+// so no code can ask this model a dominance question -- it aborts instead of
+// answering `true`/`false` from nothing.  t72/t79/t80 precedent.
+fn t82() -> () {
+    ()
+}
+
+// f50 -- `CopyOnWriteArrayRef(ArrayRef<T> array)`, the class's ONLY constructor,
+// taking its ArrayRef BY VALUE (ADTExtras.h:27).  Identity on the elements: the
+// C++ parks the view in `nonOwning` and copies into `owningStorage` only on the
+// first write, and `Vec<T1>` collapses both storages into one.
+unsafe fn f50<T1>(a0: Vec<T1>) -> Vec<T1> {
+    a0
+}
+
+// f51 -- `DominanceInfo di;`, the 0-ary form.  The unit, per t82.
+unsafe fn f51() -> () {
+    ()
+}
+
+// f52 -- `DominanceInfo di(op);`.  The unit per t82, but the body CONSUMES `a0`
+// rather than ignoring it: a rule body is inlined as one expression, so dropping
+// `a0` would drop the caller's expression (`unit_op`, `func`, `module_op`) and
+// change C++ evaluation.  `drop` evaluates it and yields `()`.
+unsafe fn f52(a0: *mut dataflowir_gen::fmt::OpInst) -> () {
+    drop(a0)
+}

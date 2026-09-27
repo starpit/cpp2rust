@@ -15,6 +15,7 @@
 #include "converter/converter_lib.h"
 #include "converter/lex.h"
 #include "converter/mapper.h"
+#include "converter/survey.h"
 
 namespace cpp2rust {
 std::map<std::string, ConverterRefCount::MethodsOnPtr>
@@ -944,7 +945,34 @@ bool ConverterRefCount::VisitDeclRefExpr(clang::DeclRefExpr *expr) {
   return false;
 }
 
-static std::vector<const char *> printf2fmt(std::string &format) {
+// Translates a C printf format string in place into a Rust format string,
+// returning one entry per conversion -- null for "pass the argument through",
+// otherwise the `as` cast the Rust side needs.
+//
+// UNKNOWN CONVERSION SPECIFIERS. The set understood here is a subset of C's
+// (`%f` alone, for instance, is not in it -- only the `%.0Nf` shape is), so an
+// unknown specifier is a GENUINE, RECOVERABLE PORTING GAP: the corpus is
+// allowed to contain one and the fleet needs to be told which.
+//
+// This used to end in `llvm::errs() << ...; assert(0);` as the LAST statement of
+// the loop body WITHOUT ADVANCING `pos`. Under the release build's -DNDEBUG the
+// assert is a no-op, so control fell back to the `while` with `pos` unchanged,
+// `find('%', pos)` returned the same offset, and the converter re-printed
+// `Unknown printf format:` forever: a HANG plus unbounded log growth, which in a
+// 403-TU sweep burns the timeout slot and yields no diagnosis at all. Measured
+// before this change: 114,997 identical lines / 3.7 MB in 25 s on a `printf("val
+// %f\n", d)`, killed by `timeout`.
+//
+// So both paths now make real forward progress past the offending specifier:
+//   * under --survey, RECORD the gap and continue -- survey mode is the fleet's
+//     403-TU work list and must never abort or spin on a recoverable gap;
+//   * otherwise `report_fatal_error`, NAMING the specifier and the call site,
+//     because silently emitting a Rust format string with a leftover C
+//     conversion in it would be silent wrongness.
+// Converting the assert alone would have turned the hang into an abort on a path
+// survey mode has to survive, which is why the survey arm is not optional.
+static std::vector<const char *> printf2fmt(std::string &format,
+                                            const std::string &loc) {
   std::vector<const char *> types;
   size_t pos = 0;
   while ((pos = format.find('%', pos)) != std::string::npos) {
@@ -1045,8 +1073,25 @@ static std::vector<const char *> printf2fmt(std::string &format) {
         }
       }
     }
-    llvm::errs() << "Unknown printf format: " << format << '\n';
-    assert(0);
+    // `pos + 1 < format.size()` is guaranteed by the loop head above, so the
+    // specifier character always exists.
+    const std::string detail =
+        std::string("unknown printf conversion `%") + format[pos + 1] +
+        "` in format " + format;
+    if (survey::Enabled()) {
+      survey::Record(survey::GapKind::kUnsupportedConstruct, detail, loc);
+      // FORWARD PROGRESS, the whole point: step past `%` and the specifier so
+      // the next `find('%', pos)` cannot return this offset again. Survey mode
+      // writes no Rust (see survey.h), so leaving the C conversion in `format`
+      // and leaving the Rust format string malformed costs nothing here. The
+      // null `types` entry keeps the vector in step with the argument this
+      // specifier consumes, because the caller indexes `types` by argument.
+      types.emplace_back();
+      pos += 2;
+      continue;
+    }
+    llvm::report_fatal_error(
+        llvm::Twine(detail) + (loc.empty() ? "" : " at " + loc));
   }
   return types;
 }
@@ -1078,7 +1123,8 @@ void ConverterRefCount::ConvertPrintf(clang::CallExpr *expr) {
   if (ends_newline) {
     format.replace(format.size() - 3, 2, "");
   }
-  auto types = printf2fmt(format);
+  auto types = printf2fmt(
+      format, expr->getBeginLoc().printToString(ctx_.getSourceManager()));
   StrCat(format);
 
   unsigned j = 0;

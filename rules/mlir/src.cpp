@@ -940,6 +940,111 @@ class indexed_accessor_range_base {};
 } // namespace detail
 } // namespace llvm
 
+// ---- t81/t82 declarations -------------------------------------------------
+// Reopened AFTER `namespace llvm` closes, because `CopyOnWriteArrayRef`'s only
+// constructor takes `llvm::ArrayRef<T>` and that class is declared at line 874
+// above -- inside namespace mlir at the top of this file it is not yet visible.
+namespace mlir {
+
+// `mlir::CopyOnWriteArrayRef<T>` -- t81, queue row g110 (13 TUs).  A wrapper
+// around `ArrayRef<T>` that copies into a `SmallVector<T>` on modification
+// (ADTExtras.h:25-79).  In the corpus it appears exactly once, as a MEMBER:
+// `CopyOnWriteArrayRef<int64_t> shape;` in
+// `dataflow-scheduler/external/ktir-mlir-frontend/include/Ktdp/KtdpTypes.hpp:63`,
+// i.e. the leaf-in-a-member-shape case that aborts before any call site.
+//
+// THE CONSTRUCTOR PARAMETER IS `llvm::ArrayRef<T>` BY VALUE -- no `const`, no
+// `&`.  `ADTExtras.h:27` reads `CopyOnWriteArrayRef(ArrayRef<T> array) :
+// nonOwning(array){};`, and that unqualified `ArrayRef` is LLVM's, pulled into
+// namespace mlir by `using llvm::ArrayRef;` at `mlir/Support/LLVM.h:119`.
+// Spelling it `const ArrayRef<T> &` here would record a DIFFERENT key that no
+// call site ever searches -- the f18/f19 dead-key failure mode.
+//
+// DESTRUCTOR TEST: `~CopyOnWriteArrayRef` appears NOWHERE in the include tree.
+// The members are `ArrayRef<T> nonOwning; SmallVector<T> owningStorage;`
+// (ADTExtras.h:77-78) and destruction is only the implicit SmallVector teardown.
+// So an ordinary mapped value is permitted, and unusually for this module the
+// honest model is a real OWNING one: `Vec<T>`, exactly as t19 models
+// `llvm::ArrayRef<T>`.  The copy-on-write split between the two storages is an
+// allocation strategy, not observable through any operation.
+//
+// There is NO default constructor and no copy/move constructor declared, so the
+// by-value ArrayRef constructor (f50) is the ONLY key ported code can reach.
+template <typename T>
+class CopyOnWriteArrayRef {
+public:
+  CopyOnWriteArrayRef(llvm::ArrayRef<T> array);
+};
+
+// `mlir::DominanceInfo` -- t82, queue rows g094 (16 TUs) and g1372 (1 TU, the
+// same type reached while converting `dynamicSizesDominate`); ONE key closes
+// BOTH.  `searched as: mlir::DominanceInfo`, a plain non-template class reached
+// in member/parameter position (Dominance.h:140).
+//
+// DESTRUCTOR VERDICT: cache teardown only, so an opaque unit is PERMITTED.
+// `Dominance.cpp` is not on this filesystem (headers+libs only), so the upstream
+// release/22.x body was used: `~DominanceInfoBase() { for (auto entry :
+// dominanceInfos) delete entry.second.getPointer(); }`.  The header corroborates
+// it more strongly than the body does: `DominanceInfoBase` has EXACTLY ONE data
+// member, `mutable DenseMap<Region *, llvm::PointerIntPair<DomTree *, 1, bool>>
+// dominanceInfos;` (Dominance.h:129-130), and `invalidate()` (:47) is that same
+// loop plus `.clear()` -- which is only sound if the map is a pure cache.  No
+// I/O, no IR mutation, no diagnostic.
+//
+// BUT NO MEMBER IS MAPPED, DELIBERATELY.  The whole purpose of the class is its
+// queries -- `properlyDominates(Operation *, Operation *, bool)`,
+// `dominates(Operation *, Operation *)`, `properlyDominates(Value, Operation *)`,
+// `dominates(Block *, Block *)` and the `Block::iterator` overloads
+// (Dominance.h:153-200) -- and each returns a real boolean DERIVED FROM THE IR.
+// A `()` model with nothing mapped is correct and safe: a dominance query aborts
+// LOUDLY.  Mapping any of them with a hardcoded true/false would be silent
+// wrongness that changes which transformations fire.  Same rule as t72 (TypeID),
+// t79 (BitVector) and t80 (PreservedAnalyses).
+//
+// TWO CONSTRUCTORS ARE DECLARED because the corpus writes BOTH forms.  The real
+// one is `DominanceInfoBase(Operation *op = nullptr)` (Dominance.h:39), inherited
+// into `DominanceInfo` via `using super::super;`, so a defaulted argument could
+// have made one of the two arities unreachable -- that is exactly the trap that
+// left rules/atomic's t5 a dead key.  Measured, not assumed: see the
+// `search expr` evidence in the report.  Corpus sites for the 0-ary form:
+// `dcc/src/Transform/Sentient/Utils.cpp:85` (`DominanceInfo dom_info;`) and the
+// member declarations at `dcc/src/Analysis/ConditionalTree.hpp:183`,
+// `.../OperandReuse.hpp:53`, `.../RedundantDefinitionEliminationTree.hpp:286`.
+// For the 1-ary form: `dr5/src/Passes/Scheduler/NestedLoops.cpp:355`,
+// `.../LiveRangeReduction.cpp:888`, `.../SpecializedCanonicalization.cpp:172`,
+// `dataflow-scheduler/lib/Transforms/DoubleBuffering.cpp:531` and the three
+// `new DominanceInfo(unit_op)` sites.  The COPY constructor is `= delete`d
+// (Dominance.h:44), so there is no clone key to write.
+// THE 1-ARY KEY IS NAMED AFTER THE *BASE*, and this was MEASURED, not inferred.
+// With `DominanceInfo` declared as a flat class carrying `DominanceInfo(Operation
+// *)`, the recorded key was `void mlir::DominanceInfo::DominanceInfo(mlir::
+// Operation *)` while `-verbose` on `DominanceInfo d(op);` showed
+//   search expr void mlir::DominanceInfo::DominanceInfoBase(mlir::Operation *),
+//   result: None
+// followed by the `mlir_DominanceInfo::new_1` fallback -- a textbook DEAD KEY
+// (rc=0 then E0433).  The ctor is INHERITED via `using super::super;`
+// (Dominance.h:146), so it keeps the BASE's name `DominanceInfoBase` while being
+// qualified by the DERIVED class, and with NO template argument list even though
+// the real base is `detail::DominanceInfoBase</*IsPostDom=*/false>`.  The
+// declaration below reproduces that shape exactly so the key matches.  The 0-ary
+// form is a different key, `void mlir::DominanceInfo::DominanceInfo()` -- the
+// derived class's own implicit default constructor -- and it MATCHED as a flat
+// declaration, so both are declared.
+namespace detail {
+class DominanceInfoBase {
+public:
+  DominanceInfoBase(Operation *op);
+};
+} // namespace detail
+
+class DominanceInfo : public detail::DominanceInfoBase {
+public:
+  using detail::DominanceInfoBase::DominanceInfoBase;
+  DominanceInfo();
+};
+
+} // namespace mlir
+
 using t1 = mlir::Operation;
 using t2 = mlir::Block;
 using t3 = mlir::Region;
@@ -1539,6 +1644,32 @@ using t79 = llvm::BitVector;
 // from an empty model.  This is the t72 rule applied one level up.
 using t80 = mlir::detail::PreservedAnalyses;
 
+// t81: `mlir::CopyOnWriteArrayRef<T1>` -> `Vec<T1>`.  Queue row g110, 13 TUs.
+// Generic in the element type; the corpus instantiates it only at `long`
+// (`CopyOnWriteArrayRef<int64_t>`), but the key is written generic exactly as t19
+// is, because the class is a template and one key covers every instantiation.
+// See the declaration note above for the destructor test and for why an OWNING
+// `Vec` is faithful here rather than the unit this module usually reaches for.
+//
+// WHAT IS LOST: every member.  `insert(size_t, T)`, `erase(size_t)`,
+// `set(size_t, T)`, `size()`, `empty()`, `operator=(ArrayRef<T>)` and the
+// conversion `operator ArrayRef<T>() const` are NOT declared above and NOT
+// mapped, so each call ABORTS LOUDLY.  All of them WOULD be faithfully
+// representable over `Vec<T1>` -- unusual for this module -- and the corpus does
+// call `insert`, `erase`, `size`, `operator=` and the conversion operator inside
+// `Ktdp::AccessTileType::Builder` (KtdpTypes.hpp:33-59).  They are left out of
+// THIS pass only because the type key plus its constructor is what was measured;
+// an abort is the correct state for an unmapped member, and adding them is the
+// obvious next increment.
+template <typename T1> using t81 = mlir::CopyOnWriteArrayRef<T1>;
+
+// t82: `mlir::DominanceInfo` -> `()`.  Queue rows g094 (16 TUs) + g1372 (1 TU).
+// Non-template, so the key is the bare name.  See the declaration note above:
+// the payload is a pure per-Region cache of dominator trees, and every query
+// that would read it is deliberately UNMAPPED so it aborts rather than answering
+// a dominance question from an empty model.
+using t82 = mlir::DominanceInfo;
+
 // ---- WHAT THIS PASS DELIBERATELY LEFT OUT, and why -------------------------
 // * `mlir::IndexType::get(mlir::MLIRContext *)`, the ONE factory the verbose logs
 //   show in expression position (see t60).  NOT ADDED, because its only honest
@@ -1901,3 +2032,29 @@ llvm::BitVector f48() { return llvm::BitVector(); }
 // f49 -- `mlir::detail::PreservedAnalyses pa;`, the implicit default constructor
 // (AnalysisManager.h declares none).  Body is the unit, per t80.
 mlir::detail::PreservedAnalyses f49() { return mlir::detail::PreservedAnalyses(); }
+
+// ---- f50/f51/f52: THE CONSTRUCTORS FOR t81/t82 -----------------------------
+// Same argument as f48/f49: a `using tN =` maps the TYPE ONLY, and a type key
+// without a constructor gives rc=0 and then `error[E0433]`.  Appended AFTER f49,
+// which renumbers nothing.
+//
+// f50 -- `CopyOnWriteArrayRef(ArrayRef<T> array)` (ADTExtras.h:27), the class's
+// ONLY constructor, taking its ArrayRef BY VALUE.  The body is the identity on
+// the elements: the C++ stores the view in `nonOwning` and copies into
+// `owningStorage` lazily, and `Vec<T1>` collapses both storages into one.
+template <typename T1>
+mlir::CopyOnWriteArrayRef<T1> f50(llvm::ArrayRef<T1> a) {
+  return mlir::CopyOnWriteArrayRef<T1>(a);
+}
+
+// f51 -- `DominanceInfo di;`, the 0-ary form (the inherited
+// `DominanceInfoBase(Operation *op = nullptr)` with its default argument taken).
+// Body is the unit, per t82.
+mlir::DominanceInfo f51() { return mlir::DominanceInfo(); }
+
+// f52 -- `DominanceInfo di(op);` / `new DominanceInfo(op)`, the 1-ary form.  The
+// body MUST still evaluate `a0`: dropping it would drop the caller's expression
+// (commonly `unit_op`, `func`, `module_op`), and dropping an evaluation is the
+// mistake the IndexType::get note at the bottom of the type section refuses.  So
+// the target takes `a0` and yields a unit built from it, rather than ignoring it.
+mlir::DominanceInfo f52(mlir::Operation *op) { return mlir::DominanceInfo(op); }
