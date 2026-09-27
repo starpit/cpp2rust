@@ -224,6 +224,10 @@ public:
 
   void ConvertCallToOstream(clang::CallExpr *expr);
   virtual std::string ConvertStream(clang::Expr *expr);
+  // `std::flush` on an already-converted stream expression. Model-specific:
+  // the refcount model's stream is a `libcc2rs::Ptr<File>`, which is not
+  // itself a `Write` and does not autoderef to one.
+  virtual std::string FlushStream(const std::string &stream);
 
   struct TempMaterializationCtx {
     std::vector<std::optional<clang::QualType>> materialized_args;

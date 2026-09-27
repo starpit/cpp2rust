@@ -1960,6 +1960,15 @@ std::string ConverterRefCount::ConvertStream(clang::Expr *expr) {
   return ConvertPointer(expr);
 }
 
+// `Ptr<T: Write>` carries INHERENT `write_fmt`/`write_all` (libcc2rs rc.rs:571)
+// rather than implementing `Write`, and it has no `Deref`, so neither
+// `Write::flush(&mut p)` nor `p.flush()` resolves. Reach the inner stream with
+// the pub `with_mut` instead.
+std::string ConverterRefCount::FlushStream(const std::string &stream) {
+  return "let _ = (" + stream +
+         ").with_mut(|__s| ::std::io::Write::flush(__s));";
+}
+
 bool ConverterRefCount::VisitCXXConstructExpr(clang::CXXConstructExpr *expr) {
   PushConversionKind push(*this, ConversionKind::Unboxed);
   PushSuppressIteratorClone push_suppress(*this, expr);

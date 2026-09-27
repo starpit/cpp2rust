@@ -2005,6 +2005,21 @@ const clang::Expr *Converter::GetParentExpr(const clang::Expr *expr) {
   return nullptr;
 }
 
+// `std::flush` cannot be handled like the other manipulators. `std::endl`,
+// `std::hex` and `Setw` all fold into the *text* of the batched `write!` that
+// ConvertCallToOstream emits, but a flush is an ACTION on the stream that must
+// happen at its exact position in the `<<` chain -- so it is dispatched in
+// ConvertCallToOstream's loop, which can force the buffered text out first,
+// rather than in GetFmtArg/GetRawArg, which only append to buffers.
+//
+// It also cannot be a rule key: `std::flush` and `std::endl` have the IDENTICAL
+// type `std::ostream &(*)(std::ostream &)`, so a single rule keyed on that
+// overload would make `os << std::endl` flush without emitting a newline.
+static bool IsStreamFlush(clang::Expr *arg) {
+  std::string arg_str = Mapper::ToString(arg);
+  return arg_str.contains("std::flush") || arg_str.contains("std::__1::flush");
+}
+
 bool Converter::GetFmtArg(clang::Expr *arg, std::string &fmt,
                           std::string &fmt_args, const char *&fmt_trait,
                           std::string &fmt_width) {
@@ -2070,6 +2085,10 @@ std::string Converter::ConvertStream(clang::Expr *expr) {
   return ToString(expr);
 }
 
+std::string Converter::FlushStream(const std::string &stream) {
+  return "let _ = ::std::io::Write::flush(&mut " + stream + ");";
+}
+
 void Converter::ConvertCallToOstream(clang::CallExpr *expr) {
   clang::Expr *stream = nullptr;
   auto collect_args = [expr, &stream]() -> std::vector<clang::Expr *> {
@@ -2128,13 +2147,34 @@ void Converter::ConvertCallToOstream(clang::CallExpr *expr) {
 
   size_t i = 0;
   while (i < arg_count) {
-    while (i < arg_count &&
+    size_t start = i;
+    if (IsStreamFlush(args[i])) {
+      // ORDERING: the pending text is part of the chain that PRECEDES this
+      // manipulator, so it must be emitted before the flush, or the flush
+      // would be emitted before the text it is supposed to flush.
+      write_fmt_args();
+      write_raw_args();
+      // Rust's stdout is line-buffered and write!/print! do not flush, so an
+      // explicit flush is required. The error is dropped because C++
+      // `os.flush()` sets badbit rather than throwing.
+      StrCat(FlushStream(stream_str));
+      ++i;
+      continue;
+    }
+    while (i < arg_count && !IsStreamFlush(args[i]) &&
            GetFmtArg(args[i], fmt, fmt_args, fmt_trait, fmt_width))
       ++i;
     write_fmt_args();
-    while (i < arg_count && GetRawArg(args[i], raw_args))
+    while (i < arg_count && !IsStreamFlush(args[i]) &&
+           GetRawArg(args[i], raw_args))
       ++i;
     write_raw_args();
+    // Defensive: previously a chain element that neither GetFmtArg nor
+    // GetRawArg could consume spun this loop forever. Be loud instead.
+    assert(i != start && "no progress converting an ostream `<<` chain");
+    if (i == start) {
+      break;
+    }
   }
 
   assert(*fmt_trait == '\0' && "Stream state was not restored after call");
