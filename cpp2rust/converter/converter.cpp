@@ -4164,6 +4164,28 @@ replaceNonUniformLibcField(clang::MemberExpr *expr) {
   return {nullptr, ""};
 }
 
+void Converter::ReportThisWithoutEnclosingFunction(const clang::Expr *expr,
+                                                   const std::string &what) {
+  const std::string loc =
+      expr->getExprLoc().printToString(ctx_.getSourceManager());
+  const std::string detail =
+      what +
+      " reached with NO enclosing function being converted (curr_function_ is "
+      "null), i.e. a `this`-bearing expression outside any function body -- a "
+      "non-static data member initializer (NSDMI) / in-class field "
+      "initializer, or a default argument. Lowering `this` here requires "
+      "knowing whether it becomes the constructor form (`this`) or the method "
+      "form (`self`); the converter refuses to guess, because a wrong choice "
+      "is silently-wrong output, not a compile error";
+  if (survey::Enabled()) {
+    survey::Record(survey::GapKind::kUnsupportedConstruct, detail, loc);
+    return;
+  }
+  llvm::errs() << "unsupported " << detail << " at " << loc << '\n';
+  expr->dump();
+  assert(0 && "`this` expression converted with no enclosing function (NSDMI?)");
+}
+
 void Converter::ConvertMemberExpr(clang::MemberExpr *expr) {
   if (auto mapped = GetMappedAsString(expr); !mapped.empty()) {
     if (Mapper::ReturnsPointer(expr)) {
@@ -4185,6 +4207,12 @@ void Converter::ConvertMemberExpr(clang::MemberExpr *expr) {
       clang::isa<clang::CXXThisExpr>(base->IgnoreCasts()) && !ThisIsRustPtr();
   PushExprKind push(*this, isLValue() ? ExprKind::LValue : ExprKind::RValue);
   if (base_is_this) {
+    if (curr_function_ == nullptr) {
+      ReportThisWithoutEnclosingFunction(
+          expr, std::string("member `") + GetNamedDeclAsString(member) +
+                    "` accessed on `this`");
+      return;
+    }
     StrCat(clang::isa<clang::CXXConstructorDecl>(curr_function_)
                ? "this"
                : keyword::kSelfValue);
@@ -4207,6 +4235,11 @@ void Converter::ConvertMemberExpr(clang::MemberExpr *expr) {
 }
 
 bool Converter::VisitCXXThisExpr(clang::CXXThisExpr *expr) {
+  if (curr_function_ == nullptr) {
+    ReportThisWithoutEnclosingFunction(expr, "`this` expression");
+    computed_expr_type_ = ComputedExprType::FreshPointer;
+    return false;
+  }
   if (clang::isa<clang::CXXConstructorDecl>(curr_function_)) {
     StrCat("&raw mut this");
   } else {

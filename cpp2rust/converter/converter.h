@@ -457,6 +457,12 @@ public:
 
   void ConvertMemberExpr(clang::MemberExpr *expr);
 
+  // A `this`-bearing expression reached with `curr_function_ == nullptr`.
+  // Loud, named refusal: the `this` -> `this`/`self` choice is not derivable
+  // here, and guessing it is the NSDMI-reads-0-instead-of-7 failure class.
+  void ReportThisWithoutEnclosingFunction(const clang::Expr *expr,
+                                         const std::string &what);
+
   virtual bool VisitMemberExpr(clang::MemberExpr *expr);
 
   virtual bool VisitCXXThisExpr(clang::CXXThisExpr *expr);
