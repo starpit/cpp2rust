@@ -19,6 +19,23 @@ fn t4<T1>() -> Vec<T1> {
     Default::default()
 }
 
+// One-argument `llvm::SmallVector<T1>` -- same model as t1, a DISTINCT key.
+fn t5<T1>() -> Vec<T1> {
+    Default::default()
+}
+
+// `llvm::SmallVectorBase<SizeT>`: the family's storage base.  T1 here is the
+// SIZE type, not the element type, so this model is only ever correct in
+// receiver position of an inlined member rule (f17..f19).
+fn t6<T1>() -> Vec<T1> {
+    Default::default()
+}
+
+// `llvm::SmallVectorTemplateCommon<T1, void>` -- the explicit-`void` spelling.
+fn t9<T1>() -> Vec<T1> {
+    Default::default()
+}
+
 unsafe fn f1<T1>(a0: &mut Vec<T1>, a1: T1) {
     a0.push(a1)
 }
@@ -84,4 +101,16 @@ unsafe fn f15<T1>(a0: &mut Vec<T1>, a1: usize) {
 
 unsafe fn f16<T1>(a0: &mut Vec<T1>) {
     a0.pop();
+}
+
+unsafe fn f17<T1>(a0: &Vec<T1>) -> usize {
+    Vec::len(a0)
+}
+
+unsafe fn f18<T1>(a0: &Vec<T1>) -> usize {
+    Vec::capacity(a0)
+}
+
+unsafe fn f19<T1>(a0: &Vec<T1>) -> bool {
+    Vec::is_empty(a0)
 }

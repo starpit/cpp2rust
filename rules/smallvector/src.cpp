@@ -40,8 +40,35 @@
 // deliberately NOT added here -- unmeasured.
 
 #include <cstddef>
+#include <cstdint>
 
 namespace llvm {
+
+// The SIZE/CAPACITY base of the whole hierarchy, templated on the SIZE TYPE
+// (uint32_t normally, uint64_t for vectors whose inline capacity cannot be
+// described in 32 bits) -- NOT on the element type.  `size()`, `capacity()`
+// and `empty()` really live here, which is why a real translation searches
+//   search expr unsigned long llvm::SmallVectorBase<unsigned int>::size() const
+// and NOT the SmallVectorTemplateCommon form f5 provides.  Harvested from
+// LoopTiling.cpp / TileSCFForLoops.cpp / StripMineSCFForLoops.cpp.
+//
+// NOTE THE TWO PRINTERS DISAGREE, a fifth instance of a trap measured on four
+// other axes today: the TYPE search spells the argument SUGARED
+// (`llvm::SmallVectorBase<uint32_t>`) while the EXPR search and the
+// mangled-name fallback spell it CANONICALISED (`<unsigned int>`).  A key
+// written as the diagnostic's fallback name asks would be DEAD; a GENERIC
+// `llvm::SmallVectorBase<T1>` covers both spellings and both size types.
+//
+// It is declared as a STANDALONE class, not as a base of
+// SmallVectorTemplateCommon, deliberately: LLVM's real base is
+// `SmallVectorBase<SmallVectorSizeType<T>>`, a computed type, and restating
+// that machinery here would only risk recording the wrong receiver for f5/f6.
+template <typename Size_T> class SmallVectorBase {
+public:
+  std::size_t size() const;
+  std::size_t capacity() const;
+  bool empty() const;
+};
 
 template <typename T, typename = void> class SmallVectorTemplateCommon {
 public:
@@ -90,6 +117,43 @@ template <typename T1, bool T2>
 using t3 = llvm::SmallVectorTemplateBase<T1, T2>;
 template <typename T1, typename T2>
 using t4 = llvm::SmallVectorTemplateCommon<T1, T2>;
+
+// ONE-ARGUMENT spelling.  SmallVector's second template argument has a COMPUTED
+// default (`CalculateSmallVectorDefaultInlinedElements<T>::value`), so a use site
+// written `SmallVector<long>` is printed by the mapper with the defaulted argument
+// ELIDED ENTIRELY -- `search type llvm::SmallVector<long>, result: None` --
+// which the two-argument key `llvm::SmallVector<T1, _>` above cannot match even
+// though the DIAGNOSTIC's fallback name prints `<long, _>`.  Harvested verbatim
+// from AffineMinCanonicalization.cpp and StageCoarsening/Materializer.cpp.
+// std::array does not need this because its extent has NO default.
+template <typename T1> using t5 = llvm::SmallVector<T1>;
+
+// The size/capacity base.  Its argument is the SIZE type, so there is no element
+// type available in this key; the family's model is `Vec<T1>` and the target is
+// written to match, which is sound only because every rule whose receiver is this
+// base is INLINED and therefore never emits the type in a declaration position.
+template <typename T1> using t6 = llvm::SmallVectorBase<T1>;
+
+// MEASURED, AND THE REMAINING BLOCKER ON THIS ROW: the generic t6 above MATCHES,
+// but mapping it then requires a model for its ARGUMENT, and the argument arrives
+// SUGARED:
+//   unsupported unmapped type `uint32_t` has no model in types_,
+//     while mapping `llvm::SmallVectorBase<uint32_t>`
+// A concrete key cannot rescue this: `using t7 = llvm::SmallVectorBase<uint32_t>;`
+// was written, generated, and read back out of ir_src.json as
+// `llvm::SmallVectorBase<unsigned int>` -- the rule preprocessor CANONICALISES a
+// concrete template argument, while the converter's type search spells it SUGARED,
+// so the two can never meet and the key is DEAD.  It was therefore REMOVED rather
+// than left in place looking like coverage.  The fix belongs in the converter's
+// types_ (a builtin typedef such as uint32_t should resolve to its canonical
+// builtin model), NOT here; no smallvector key can express it.
+
+// MEASURED: the DEFAULTED `void` second argument of SmallVectorTemplateCommon is
+// spelled EXPLICITLY at the search, `llvm::SmallVectorTemplateCommon<
+// scheduler::StageNode *, void>`, which the generic `<T1, T2>` key of t4 does not
+// satisfy (T2 would have to bind to `void`).  Same disagreement as DenseMapInfo,
+// in the opposite direction, so the `void` is spelled concretely here.
+template <typename T1> using t9 = llvm::SmallVectorTemplateCommon<T1, void>;
 
 // ------------------------------------------------------------ function rules
 
@@ -160,4 +224,21 @@ template <typename T1> void f15(llvm::SmallVectorImpl<T1> &o, std::size_t n) {
 
 template <typename T1> void f16(llvm::SmallVectorTemplateBase<T1> &o) {
   return o.pop_back();
+}
+
+// size()/capacity()/empty() on the SIZE base.  These do NOT duplicate f5/f6:
+// those key on `llvm::SmallVectorTemplateCommon<T1>` and a real translation was
+// measured searching the `llvm::SmallVectorBase<...>` form and getting None.
+// f5/f6 are kept because the mapper may reach either receiver depending on how
+// the call is spelled; the keys are distinct so neither shadows the other.
+template <typename T1> std::size_t f17(const llvm::SmallVectorBase<T1> &o) {
+  return o.size();
+}
+
+template <typename T1> std::size_t f18(const llvm::SmallVectorBase<T1> &o) {
+  return o.capacity();
+}
+
+template <typename T1> bool f19(const llvm::SmallVectorBase<T1> &o) {
+  return o.empty();
 }
