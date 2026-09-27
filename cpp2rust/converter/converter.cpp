@@ -2025,6 +2025,29 @@ static bool IsStreamFlush(clang::Expr *arg) {
   return arg_str.contains("std::flush") || arg_str.contains("std::__1::flush");
 }
 
+// `os << (const char *)p` prints the bytes at p up to, but not including, the
+// terminating NUL. The generic `{:}` arm of GetFmtArg sent it through `write!`,
+// which needs `Display` -- and in the UNSAFE model a `const char *` maps to a
+// Rust RAW pointer, which implements neither Display nor Debug:
+//     error[E0277]: `*const i8` doesn't implement `std::fmt::Display`
+// In the REFCOUNT model the same C++ type maps to `Ptr<u8>`, which DOES
+// implement Display and already prints the C string correctly. So this is keyed
+// off the MAPPED RUST TYPE rather than off the model: a raw pointer can never
+// be formatted, a library pointer type can.
+//
+// Such an argument is routed to GetRawArg instead, i.e. to `write_all` of the
+// raw bytes, so no UTF-8 validity is assumed anywhere. `to_str().unwrap()`
+// would PANIC where C++ happily writes non-UTF-8 bytes -- a behaviour change,
+// not a shortcut.
+static bool IsRawCharPointer(clang::Expr *arg) {
+  clang::QualType type = arg->getType();
+  if (!type->isPointerType() || !type->getPointeeType()->isCharType()) {
+    return false;
+  }
+  std::string mapped = Mapper::Map(type);
+  return mapped.starts_with("*const ") || mapped.starts_with("*mut ");
+}
+
 bool Converter::GetFmtArg(clang::Expr *arg, std::string &fmt,
                           std::string &fmt_args, const char *&fmt_trait,
                           std::string &fmt_width) {
@@ -2050,7 +2073,7 @@ bool Converter::GetFmtArg(clang::Expr *arg, std::string &fmt,
     fmt_trait = "";
   } else if (arg_str.contains("Setw")) {
     fmt_width = Trim(ToString(arg));
-  } else if (!arg->getType()->isCharType() &&
+  } else if (!arg->getType()->isCharType() && !IsRawCharPointer(arg) &&
              Mapper::Map(arg->getType()) !=
                  std::format("Vec<{}>", CharRustType())) {
     fmt += ("{:" + fmt_width + fmt_trait + "}");
@@ -2079,6 +2102,22 @@ bool Converter::GetRawArg(clang::Expr *arg, std::string &raw_args) {
     raw_args += "(&[b'\\n']";
   } else if (clang::isa<clang::StringLiteral>(arg->IgnoreImplicit())) {
     raw_args += "(b" + GetEscapedStringLiteral(arg);
+  } else if (IsRawCharPointer(arg)) {
+    // LAST, deliberately: a STRING LITERAL also has type `const char *` after
+    // its array-to-pointer decay, and the arm above turns it into a byte string
+    // directly, with no pointer round trip.
+    //
+    // Bytes until NUL, exactly as C++. A NULL pointer is not printed: it is UB
+    // in C++, and libstdc++'s `operator<<(ostream &, const char *)` responds by
+    // setting badbit and writing nothing (it is printf, not ostream, that
+    // prints `(null)`), so writing nothing is the closest honest match. The
+    // deref needs its own `unsafe` block: an `unsafe fn` body is not an unsafe
+    // context under Rust 2024's `unsafe_op_in_unsafe_fn`.
+    PushExprKind push(*this, ExprKind::RValue);
+    raw_args += "(unsafe { let __cstr = " + ToString(arg) +
+                "; if __cstr.is_null() { &[][..] } else { "
+                "::std::ffi::CStr::from_ptr(__cstr as *const ::libc::c_char)"
+                ".to_bytes() } }";
   } else {
     return false;
   }
