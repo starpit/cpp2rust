@@ -333,7 +333,46 @@ class OpResult {};
 // site aborts loudly instead.
 class OpState {};
 
+// mlir/include/mlir/IR/Value.h:490 -- `mlir::BlockArgument`, a `Value` subclass
+// whose defining "op" is a block.  It IS an `mlir::Value` by inheritance, so it
+// gets t4's representation, `ir::Value` (ir.rs:21 -- `{ name: String, ty: Ty }`).
+// The widening it costs is stated: `ir::Value` does not record that the value is
+// a block argument nor its argument NUMBER, so `getArgNumber()`/`getOwner()` are
+// NOT mapped and still abort loudly rather than returning 0.
+class BlockArgument {};
+
+// The five concrete MLIR type handles that appear as `TypedValue` arguments in
+// the reference TU.  They are declared ONLY so the five concrete `TypedValue`
+// instantiations below can be spelled; NO type rule is registered for any of
+// them, because none of them appears as a type in its own right at any use site
+// measured (they are absent from the triage list).  Declaring without a `using
+// tN =` registers nothing -- see the note in the header.
+class IndexType {};
+class MemRefType {};
+class RankedTensorType {};
+namespace ktdf {
+class TokenType {};
+class FifoSlotType {};
+} // namespace ktdf
+
 namespace detail {
+// mlir/include/mlir/IR/Value.h:106 -- `TypedValue<T>`, a `Value` whose static
+// type is known to be `T`.  It derives from `mlir::Value`, so it maps where t4
+// maps: `dataflowir_gen::ir::Value` (ir.rs:21).
+// ⛔ MAPPED AT THE FIVE CONCRETE INSTANTIATIONS, NEVER AS A TEMPLATE, and that
+// is a MEASURED constraint for exactly the reason recorded on t26 below: a
+// generic `template<typename T1> using tN = mlir::detail::TypedValue<T1>` makes
+// the converter map the template ARGUMENT too, and the first argument without a
+// rule turns a countable mangled name into a hard abort
+//   mapper.cpp:722 Assertion `0 && "Type is not present in types_"'
+// This rule was dropped TWICE for that reason before being keyed concretely.
+// What the widening costs, stated: `ir::Value` carries its type DYNAMICALLY in
+// `ty: Ty`, so the STATIC guarantee `T` encodes is not represented; nothing that
+// depends on the static type (e.g. `.getType()` returning a `T` rather than a
+// `Type`) is mapped, and such a site aborts loudly.
+template <typename T>
+class TypedValue {};
+
 // mlir/include/mlir/IR/BuiltinAttributes.h:760 -- `DenseArrayAttrImpl<T>`, the
 // implementation base that `DenseI64ArrayAttr` (T = long) is a typedef of.
 // ⛔ MAPPED AT THE CONCRETE `<long>` INSTANTIATION, NOT AS A TEMPLATE, AND THAT
@@ -404,6 +443,42 @@ using t25 = mlir::OpState;
 using t26 = mlir::detail::DenseArrayAttrImpl<long>;
 using t27 = mlir::scf::ForOp;
 using t28 = mlir::OpFoldResult;
+
+// ⛔ t29 IS t26 SPELLED THE WAY THE MAPPER ACTUALLY ASKS, AND t26 ALONE NEVER
+// MATCHED ANYTHING.  Measured 2026-09-27 with `-verbose` on the reference TU:
+// the only two lookups the mapper performs for this type are
+//     search type mlir::detail::DenseArrayAttrImpl<int64_t>, result: None
+//     search type const mlir::detail::DenseArrayAttrImpl<int64_t> &, result: None
+// i.e. the key is spelled with the TYPEDEF `int64_t`, never with `long`.  The
+// triage/mangling message disagrees: `Converter::ReportUnmappedSystemType`
+// (converter.cpp:3426) builds its printed "rule key" from
+// `Mapper::ToString(Mapper::GetTypeForDecl(decl))`, which goes through the
+// RecordDecl and therefore CANONICALISES the template argument to `long`.  So
+// the converter told us to write `<long>`, t26 was committed as `<long>` at
+// 950ff94, and it could never match: 24 sites stayed mangled.  Same shape as the
+// `llvm::SmallVector<long>` / `<T1, _>` mismatch -- TWO PRINTERS DISAGREE, and
+// only the `search type` line is the one that decides a lookup.
+// t26 is KEPT (a canonical `<long>` spelling costs nothing and would match a TU
+// that writes `long` directly); t29 is the one that does the work.
+// A `typedef long int64_t;` DOES NOT WORK: cpp-rule-preprocessor records the
+// CANONICAL spelling, so `using t29 = ...<int64_t>` came back from ir_src.json as
+// `...<long>` -- an exact duplicate of t26, measured.  The key therefore has to be
+// GENERIC so `matchTemplate` (mapper.cpp:382) can bind T1 to whatever the use
+// site's printer produced.  That is SAFE HERE and ONLY here: the abort a generic
+// MLIR type rule causes is the converter having to map the template ARGUMENT, and
+// this argument is always a BUILTIN INTEGER, which already has a model.  Contrast
+// t30-t34, whose arguments are MLIR type handles -- those must stay concrete.
+template <typename T1> using t29 = mlir::detail::DenseArrayAttrImpl<T1>;
+
+// t30-t34: the five concrete `TypedValue` instantiations.  Concrete, never
+// generic -- see the prohibition on the class declaration above.
+using t30 = mlir::detail::TypedValue<mlir::IndexType>;
+using t31 = mlir::detail::TypedValue<mlir::MemRefType>;
+using t32 = mlir::detail::TypedValue<mlir::RankedTensorType>;
+using t33 = mlir::detail::TypedValue<mlir::ktdf::TokenType>;
+using t34 = mlir::detail::TypedValue<mlir::ktdf::FifoSlotType>;
+
+using t35 = mlir::BlockArgument;
 
 // ---- the two operator rules ----------------------------------------------
 // The member `==` on mlir::Attribute.  Spelled `.operator==(...)` rather than

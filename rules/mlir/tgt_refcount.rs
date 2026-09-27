@@ -429,6 +429,61 @@ fn t27() -> dataflowir_gen::fmt::OpInst {
     )
 }
 
+// t29 -- t26's key spelled `<int64_t>`, the ONLY spelling the mapper ever looks
+// up (see the long note on t29 in src.cpp).  Same representation as t26 and for
+// t26's reason: a dense i64 array is a member of the one uniqued Attribute
+// hierarchy and `ir::Attr` is that hierarchy's closed union; no dense-array
+// variant exists (ir.rs:466-499) so no element accessor is mapped.
+fn t29<T1>() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(String::new())
+}
+
+// t30-t34 `mlir::detail::TypedValue<T>` at its five concrete instantiations ->
+// `ir::Value` (ir.rs:21).  `TypedValue<T> : public Value` (mlir/IR/Value.h), so
+// this is inheritance, not a widening of kind -- but the STATIC type `T` is not
+// represented: `ir::Value` holds its type dynamically in `ty: Ty`, so nothing
+// that depends on `T` is mapped.  The init is t4's null handle.
+fn t30() -> dataflowir_gen::ir::Value {
+    dataflowir_gen::ir::Value::new(
+        ::std::string::String::new(),
+        dataflowir_gen::ir::Ty::Opaque(::std::string::String::new()),
+    )
+}
+fn t31() -> dataflowir_gen::ir::Value {
+    dataflowir_gen::ir::Value::new(
+        ::std::string::String::new(),
+        dataflowir_gen::ir::Ty::Opaque(::std::string::String::new()),
+    )
+}
+fn t32() -> dataflowir_gen::ir::Value {
+    dataflowir_gen::ir::Value::new(
+        ::std::string::String::new(),
+        dataflowir_gen::ir::Ty::Opaque(::std::string::String::new()),
+    )
+}
+fn t33() -> dataflowir_gen::ir::Value {
+    dataflowir_gen::ir::Value::new(
+        ::std::string::String::new(),
+        dataflowir_gen::ir::Ty::Opaque(::std::string::String::new()),
+    )
+}
+fn t34() -> dataflowir_gen::ir::Value {
+    dataflowir_gen::ir::Value::new(
+        ::std::string::String::new(),
+        dataflowir_gen::ir::Ty::Opaque(::std::string::String::new()),
+    )
+}
+
+// t35 `mlir::BlockArgument` -> `ir::Value` (ir.rs:21).  `BlockArgument : public
+// Value`.  Neither the owning block nor the argument NUMBER is represented, so
+// `getArgNumber()`/`getOwner()` are deliberately unmapped and abort loudly.
+fn t35() -> dataflowir_gen::ir::Value {
+    dataflowir_gen::ir::Value::new(
+        ::std::string::String::new(),
+        dataflowir_gen::ir::Ty::Opaque(::std::string::String::new()),
+    )
+}
+
 // --- WHAT THIS PASS DELIBERATELY LEFT OUT, with the reason ------------------
 // * `mlir::OpOperand` (23 rustc errors).  NOT GROUNDED.  It is not a Value: it is
 //   the USE EDGE (`IROperand`, an intrusive node in a value's use-list holding
