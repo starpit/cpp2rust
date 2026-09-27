@@ -1509,10 +1509,169 @@ bool Converter::VisitCXXThrowExpr(clang::CXXThrowExpr *expr) {
   return false;
 }
 
+// True if `s` (or anything it contains, EXCEPT the body of a nested lambda,
+// which is already its own function) transfers control OUT of the statement.
+// A `try` body becomes a closure, so a `return`/`break`/`continue`/`goto`
+// crossing that boundary would silently mean something else: a `return` would
+// return from the closure and fall through to the code after the `try`. Those
+// sites stay LOUD.
+static bool EscapesEnclosingFunction(const clang::Stmt *s) {
+  if (s == nullptr) {
+    return false;
+  }
+  if (clang::isa<clang::ReturnStmt, clang::BreakStmt, clang::ContinueStmt,
+                 clang::GotoStmt, clang::IndirectGotoStmt, clang::LabelStmt>(
+          s)) {
+    return true;
+  }
+  // A bare `throw;` needs the in-flight payload, which this lowering does not
+  // thread through; and a nested `try` is not modelled.
+  if (const auto *thr = clang::dyn_cast<clang::CXXThrowExpr>(s)) {
+    if (thr->getSubExpr() == nullptr) {
+      return true;
+    }
+  }
+  if (clang::isa<clang::CXXTryStmt>(s)) {
+    return true;
+  }
+  for (const auto *child : s->children()) {
+    if (child == nullptr) {
+      continue;
+    }
+    if (clang::isa<clang::LambdaExpr>(child)) {
+      continue;
+    }
+    if (EscapesEnclosingFunction(child)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The single monomorphic downcast this lowering can express: the caught type
+// must be a concrete, complete, non-`std::` class, so that
+// `downcast::<T>()` on the `panic_any` payload is an EXACT type match against
+// what `throw T(...)` boxed. A `std::exception` (or any other base-class) catch
+// needs a base match, which one `downcast` CANNOT express, so it stays LOUD --
+// a catch that never catches is the bug fb0bf9d fixed.
+static const clang::CXXRecordDecl *DowncastableCaughtRecord(
+    clang::QualType caught) {
+  if (caught.isNull()) {  // `catch (...)`
+    return nullptr;
+  }
+  clang::QualType t = caught.getNonReferenceType().getUnqualifiedType();
+  if (t->isPointerType()) {
+    return nullptr;
+  }
+  const clang::CXXRecordDecl *record = t->getAsCXXRecordDecl();
+  if (record == nullptr || !record->hasDefinition()) {
+    return nullptr;
+  }
+  if (record->isInStdNamespace() || record->getDescribedClassTemplate() ||
+      clang::isa<clang::ClassTemplateSpecializationDecl>(record)) {
+    return nullptr;
+  }
+  return record;
+}
+
+// `try { B } catch (const T &e) { H }` lowers to the shape proven byte-exact
+// against $TC/shim4/clang++ at probe/excmech:
+//
+//   { let __cc2_hook = std::panic::take_hook();
+//     std::panic::set_hook(Box::new(|_| {}));
+//     let __cc2_r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| { B }));
+//     std::panic::set_hook(__cc2_hook);
+//     if let Err(__cc2_p) = __cc2_r {
+//       match __cc2_p.downcast::<T>() {
+//         Ok(mut __cc2_e) => { let mut e = *__cc2_e; H }
+//         Err(__cc2_p) => std::panic::resume_unwind(__cc2_p),
+//       } } }
+//
+// The hook is silenced across the guarded region because a CAUGHT C++ exception
+// prints nothing, while Rust's default hook would write a `thread 'main'
+// panicked at` line to stderr. It is restored before `resume_unwind`, so an
+// exception this handler does not match still unwinds -- it is never swallowed,
+// which is the whole point: a failed `downcast` must abort, not resume normally.
 bool Converter::VisitCXXTryStmt(clang::CXXTryStmt *stmt) {
-  ReportUnsupportedException(
-      stmt, "`try` block with " + std::to_string(stmt->getNumHandlers()) +
-                " handler(s) has no Rust lowering");
+  std::vector<const clang::CXXRecordDecl *> caught_records;
+  for (unsigned i = 0; i < stmt->getNumHandlers(); ++i) {
+    const clang::CXXCatchStmt *handler = stmt->getHandler(i);
+    const clang::CXXRecordDecl *record =
+        DowncastableCaughtRecord(handler->getCaughtType());
+    if (record == nullptr) {
+      std::string caught = handler->getCaughtType().isNull()
+                               ? std::string("...")
+                               : Mapper::ToString(handler->getCaughtType());
+      ReportUnsupportedException(
+          stmt, "`catch (" + caught +
+                    ")` needs a base-class or catch-all match, which a single "
+                    "monomorphic `downcast` cannot express (it would silently "
+                    "never catch)");
+      return false;
+    }
+    if (EscapesEnclosingFunction(handler->getHandlerBlock())) {
+      ReportUnsupportedException(
+          stmt, "`catch` handler contains a bare `throw;`, a nested `try`, or a "
+                "label, none of which this lowering models");
+      return false;
+    }
+    caught_records.push_back(record);
+  }
+  if (stmt->getNumHandlers() == 0) {
+    ReportUnsupportedException(stmt, "`try` block with no handler");
+    return false;
+  }
+  if (EscapesEnclosingFunction(stmt->getTryBlock())) {
+    ReportUnsupportedException(
+        stmt,
+        "`try` body transfers control out of the block (return/break/continue/"
+        "goto/bare throw/nested try); the body becomes a closure, so that would "
+        "silently mean something else");
+    return false;
+  }
+
+  StrCat(token::kOpenCurlyBracket);
+  StrCat("let __cc2_hook = std::panic::take_hook()", token::kSemiColon);
+  StrCat("std::panic::set_hook(Box::new(|_| {}))", token::kSemiColon);
+  StrCat("let __cc2_r = std::panic::catch_unwind(std::panic::AssertUnwindSafe("
+         "|| ");
+  StrCat(token::kOpenCurlyBracket);
+  ConvertBody(stmt->getTryBlock());
+  StrCat(token::kCloseCurlyBracket);
+  StrCat("))", token::kSemiColon);
+  StrCat("std::panic::set_hook(__cc2_hook)", token::kSemiColon);
+  StrCat("if let Err(__cc2_p) = __cc2_r ", token::kOpenCurlyBracket);
+  for (unsigned i = 0; i < stmt->getNumHandlers(); ++i) {
+    const clang::CXXCatchStmt *handler = stmt->getHandler(i);
+    StrCat("match __cc2_p.downcast::<",
+           GetRecordName(caught_records[i]), ">() ", token::kOpenCurlyBracket);
+    StrCat("Ok(mut __cc2_e) => ", token::kOpenCurlyBracket);
+    if (const clang::VarDecl *decl = handler->getExceptionDecl();
+        decl != nullptr && !decl->getName().empty()) {
+      // A `catch (const T &e)` parameter is a REFERENCE, and the converter
+      // models a reference-typed local as a pointer-ish thing whose uses emit
+      // `*e`. Binding the value would then be `*<value>`, which rustc rejects
+      // (E0614). Bind a reference; bind by value only for `catch (T e)`.
+      if (decl->getType()->isReferenceType()) {
+        StrCat("let mut ", GetNamedDeclAsString(decl), " = &mut *__cc2_e",
+               token::kSemiColon);
+      } else {
+        StrCat("let mut ", GetNamedDeclAsString(decl), " = *__cc2_e",
+               token::kSemiColon);
+      }
+    } else {
+      StrCat("let _ = &*__cc2_e", token::kSemiColon);
+    }
+    ConvertBody(handler->getHandlerBlock());
+    StrCat(token::kCloseCurlyBracket, token::kComma);
+    StrCat("Err(__cc2_p) => ");
+  }
+  StrCat("std::panic::resume_unwind(__cc2_p)", token::kComma);
+  for (unsigned i = 0; i < stmt->getNumHandlers(); ++i) {
+    StrCat(token::kCloseCurlyBracket);
+  }
+  StrCat(token::kCloseCurlyBracket);
+  StrCat(token::kCloseCurlyBracket);
   return false;
 }
 
