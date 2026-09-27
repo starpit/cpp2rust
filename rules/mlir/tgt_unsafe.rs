@@ -1225,3 +1225,43 @@ unsafe fn f51() -> () {
 unsafe fn f52(a0: *mut dataflowir_gen::fmt::OpInst) -> () {
     drop(a0)
 }
+
+// f53/f54 -- the free ArrayRef comparisons.  Shape copied verbatim from
+// rules/vector f115-f118, including the `&Vec<T1>` parameters and the
+// `T1: PartialEq` bound.
+unsafe fn f53<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
+    a0 == a1
+}
+
+unsafe fn f54<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
+    a0 != a1
+}
+
+// f55 -- ArrayRef(std::initializer_list<T1>).  rules/initializer_list maps
+// `std::initializer_list<T1>` to `Vec<T1>`, so this is the identity, exactly as
+// rules/vector f36 is for `std::vector`'s initializer-list constructor.
+unsafe fn f55<T1>(a0: Vec<T1>) -> Vec<T1> {
+    a0
+}
+
+unsafe fn f56<T1>(a0: &Vec<T1>) -> usize {
+    a0.len()
+}
+
+// f57 -- `erase(index)` is void in C++ and `Vec::remove` yields the element, so
+// the result is discarded.  `drop(..)` keeps the body ONE expression yielding ().
+unsafe fn f57<T1>(a0: &mut Vec<T1>, a1: usize) {
+    drop(a0.remove(a1))
+}
+
+unsafe fn f58<T1>(a0: &mut Vec<T1>, a1: usize, a2: T1) {
+    a0.insert(a1, a2)
+}
+
+unsafe fn f59<T1>(a0: &mut Vec<T1>, a1: Vec<T1>) {
+    *a0 = a1
+}
+
+unsafe fn f60<T1: Clone>(a0: &Vec<T1>) -> Vec<T1> {
+    a0.clone()
+}

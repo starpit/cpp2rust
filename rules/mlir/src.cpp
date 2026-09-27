@@ -38,6 +38,10 @@
 // ---------------------------------------------------------------------------
 
 #include <cstddef>
+// For `std::initializer_list`, which appears in the ArrayRef initializer-list
+// constructor key (f55) that row g325's `ArrayRef({num_ports, num_ports})`
+// call site reaches.
+#include <initializer_list>
 // For `std::unique_ptr` / `std::default_delete`, which appear inside the
 // fully-spelled `RegionRange` range-base key below.
 #include <memory>
@@ -871,7 +875,25 @@ public:
 // ---- type rules, and nothing else ----------------------------------------
 namespace llvm {
 template <typename T>
-class ArrayRef {};
+class ArrayRef {
+public:
+  // The initializer-list constructor, ArrayRef.h:110-111.  Declared BY VALUE --
+  // `constexpr /*implicit*/ ArrayRef(std::initializer_list<T> Vec
+  // LLVM_LIFETIME_BOUND)` -- because the f18/f19 lesson is that a `const &`
+  // spelling would record a key no call site searches.  Needed by row g325,
+  // whose site literally constructs one: `ArrayRef({num_ports, num_ports})`.
+  ArrayRef(std::initializer_list<T> array);
+};
+
+// The FREE comparison operators on two ArrayRefs, ArrayRef.h (`template<typename
+// T> inline bool operator==(ArrayRef<T> LHS, ArrayRef<T> RHS)` and its `!=`
+// twin), BY VALUE on both sides.  Queue rows g325/g667/g668/g669.  They belong
+// to rules/mlir and not rules/smallvector because THE RECEIVER DECIDES THE
+// MODULE (rules/smallvector/src.cpp:134-136) and these are free functions with
+// no SmallVector-family operand at all; the ArrayRef model is claimed here
+// (t19, and the comment above f20).
+template <typename T> bool operator==(ArrayRef<T> LHS, ArrayRef<T> RHS);
+template <typename T> bool operator!=(ArrayRef<T> LHS, ArrayRef<T> RHS);
 
 // `llvm::MutableArrayRef<T>` -- t46, the biggest LIVE mlir-owned row in the
 // 2026-09-27 403-TU sweep (12 TUs).  It is `ArrayRef`'s mutable twin: the same
@@ -974,6 +996,20 @@ template <typename T>
 class CopyOnWriteArrayRef {
 public:
   CopyOnWriteArrayRef(llvm::ArrayRef<T> array);
+
+  // The FIVE members `Ktdp::AccessTileType::Builder` actually calls
+  // (KtdpTypes.hpp:31-59).  Spellings taken CHARACTER-FOR-CHARACTER off
+  // ADTExtras.h:29-59, not from a sibling: `insert`/`erase`/`set` take
+  // `size_t index`, `size()` is `const`, `operator=` takes its ArrayRef BY VALUE
+  // and returns `CopyOnWriteArrayRef &`, and the conversion operator is `const`.
+  CopyOnWriteArrayRef &operator=(llvm::ArrayRef<T> array);
+  void insert(std::size_t index, T value);
+  void erase(std::size_t index);
+  std::size_t size() const;
+  operator llvm::ArrayRef<T>() const;
+  // `set(size_t, T)` and `empty()` are declared in ADTExtras.h:52-56 but are NOT
+  // called anywhere in the corpus -- LEFT OUT on purpose, so they abort loudly
+  // if that ever changes, rather than becoming coverage nobody measured.
 };
 
 // `mlir::DominanceInfo` -- t82, queue rows g094 (16 TUs) and g1372 (1 TU, the
@@ -2058,3 +2094,109 @@ mlir::DominanceInfo f51() { return mlir::DominanceInfo(); }
 // mistake the IndexType::get note at the bottom of the type section refuses.  So
 // the target takes `a0` and yields a unit built from it, rather than ignoring it.
 mlir::DominanceInfo f52(mlir::Operation *op) { return mlir::DominanceInfo(op); }
+
+// ---- f53/f54: the FREE `llvm::operator==` / `operator!=` on two ArrayRefs ----
+// Queue rows g325 (`!=`, 2 TUs), g667/g668/g669 (`==`, 1 TU each).  The four rows
+// are FOUR INSTANTIATIONS of TWO keys: the converter searched
+//   bool llvm::operator==(llvm::ArrayRef<long>, llvm::ArrayRef<long>)
+//   bool llvm::operator==(llvm::ArrayRef<mlir::NamedAttribute>, ...)
+//   bool llvm::operator==(llvm::ArrayRef<std::pair<mlir::Attribute, ...>>, ...)
+//   bool llvm::operator!=(llvm::ArrayRef<long>, llvm::ArrayRef<long>)
+// and a generic T1 key covers all of them the way t19 already covers every
+// ArrayRef element type.
+//
+// CALL FORM: these are FREE functions, so the body is the UNQUALIFIED
+// `operator==(a, b)`.  Writing `llvm::operator==(a, b)` aborts at
+// cpp_rule_preprocessor.cpp:888; writing `a == b` records NOTHING, silently.
+// The shape is copied verbatim from rules/vector f115-f118, the four committed
+// probe-verified `std::vector` comparison bodies -- including the `T1: PartialEq`
+// bound the Rust side needs.
+template <typename T1>
+bool f53(llvm::ArrayRef<T1> a, llvm::ArrayRef<T1> b) {
+  return operator==(a, b);
+}
+
+template <typename T1>
+bool f54(llvm::ArrayRef<T1> a, llvm::ArrayRef<T1> b) {
+  return operator!=(a, b);
+}
+
+// ---- f55: the ArrayRef initializer-list constructor -------------------------
+// Row g325's site is `if (connectivity_shape != ArrayRef({num_ports,
+// num_ports}))`, i.e. it CONSTRUCTS an ArrayRef.  t19 had NO constructor of any
+// shape before this (checked: no `ArrayRef::ArrayRef` key anywhere in the
+// published IR tree), so f53/f54 alone would have given rc=0 and then E0433 on
+// `llvm_ArrayRef::new()` -- the type-key-without-its-ctor failure, seven times
+// paid for.  `std::initializer_list<T>` is already modelled
+// (rules/initializer_list t1), so the body is the identity on the elements: the
+// C++ ArrayRef borrows the list's storage and `Vec<T1>` owns it, the same
+// owning/borrowing collapse t19 itself makes.
+template <typename T1>
+llvm::ArrayRef<T1> f55(std::initializer_list<T1> a) {
+  return llvm::ArrayRef<T1>(a);
+}
+
+// ---- f56-f60: CopyOnWriteArrayRef's five called members ---------------------
+// t81 mapped the TYPE and f50 its ctor; these are the five members the corpus
+// reaches, all inside `Ktdp::AccessTileType::Builder` (KtdpTypes.hpp:31-59).
+// Over `Vec<T1>` all five are faithful, and the reason is that the C++ class's
+// two storages are an ALLOCATION STRATEGY: every one of these operations is
+// defined in ADTExtras.h in terms of the logical element sequence, never in
+// terms of which storage currently holds it.
+//
+// f56 -- `size_t size() const` (ADTExtras.h:54), `ArrayRef<T>(*this).size()`,
+// i.e. the length of the logical sequence -> `Vec::len`.
+template <typename T1> std::size_t f56(const mlir::CopyOnWriteArrayRef<T1> &o) {
+  return o.size();
+}
+
+// f57 -- `void erase(size_t index)` (ADTExtras.h:41-50).  The three branches
+// (drop_front, drop_back, copy-then-vector::erase) are the SAME logical result:
+// remove the element at `index`.  `Vec::remove(index)` is exactly that.  It
+// RETURNS the removed element where C++ returns void, so the body discards it
+// with `drop(..)` -- one expression, yielding `()`.  Corpus site: `dropDim`,
+// `shape.erase(pos)` with `unsigned pos`.
+template <typename T1> void f57(mlir::CopyOnWriteArrayRef<T1> &o, std::size_t index) {
+  return o.erase(index);
+}
+
+// f58 -- `void insert(size_t index, T value)` (ADTExtras.h:36-39), whose body is
+// `vector.insert(vector.begin() + index, value)`.  VERIFIED, not assumed, against
+// the argument shapes the corpus passes (`insertDim`: `shape.insert(pos, val)`,
+// `unsigned pos`, `int64_t val`): C++ `vector::insert(begin()+index, value)`
+// places `value` so that it becomes the element AT `index`, shifting the rest
+// right, and `Vec::insert(index, element)` is documented as exactly that,
+// "Inserts an element at position index within the vector, shifting all elements
+// after it to the right".  So the unmapped fallback's accidental
+// `(*c.borrow_mut()).insert(0_usize, 1_i64)` was right for the right reason, and
+// this key makes it a DESIGN rather than a coincidence: argument ORDER matches
+// (index first), index BASE matches (0-based, offset from begin()), and the
+// out-of-range behaviour matches (C++ asserts `pos <= shape.size()` at the call
+// site in KtdpTypes.hpp:55, Rust panics on `index > len`).
+template <typename T1>
+void f58(mlir::CopyOnWriteArrayRef<T1> &o, std::size_t index, T1 value) {
+  return o.insert(index, value);
+}
+
+// f59 -- `CopyOnWriteArrayRef &operator=(ArrayRef<T> array)` (ADTExtras.h:29-33):
+// it overwrites `nonOwning` and CLEARS `owningStorage`, so afterwards the logical
+// sequence is exactly `array`.  Over `Vec` that is a whole-value assignment.
+// Corpus site: `setShape`, `shape = newShape`.  The target returns nothing even
+// though C++ returns `*this`, exactly as rules/vector f55/f58 do for
+// `std::vector::operator=` -- every corpus site discards the result.
+template <typename T1>
+mlir::CopyOnWriteArrayRef<T1> &f59(mlir::CopyOnWriteArrayRef<T1> &dst,
+                                   llvm::ArrayRef<T1> src) {
+  return dst.operator=(src);
+}
+
+// f60 -- `operator ArrayRef<T>() const` (ADTExtras.h:58-60), the conversion the
+// `operator AccessTileType()` site reaches when it passes `shape` to
+// `AccessTileType::get`.  It selects whichever storage is live and hands out a
+// view; both sides of that choice are `Vec<T1>` in the model, so the body is the
+// value itself.  MEMBER CONVERSION OPERATORS are written in member form with the
+// destination type named.
+template <typename T1>
+llvm::ArrayRef<T1> f60(const mlir::CopyOnWriteArrayRef<T1> &o) {
+  return o.operator llvm::ArrayRef<T1>();
+}
