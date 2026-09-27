@@ -883,3 +883,15 @@ fn t68() -> () {
 fn t69() -> () {
     ()
 }
+
+// f20 -- `bool mlir::Type::operator!() const` (Types.h:97, `return impl ==
+// nullptr;`), MLIR's null-handle test on the Type handle.  The model of a null
+// `mlir::Type` in this module is t5's EMPTY SPELLING of the catch-all variant,
+// `Ty::Opaque("")` -- see the t4/t5/t6 note at the top of this file -- so the
+// null test is a value comparison against exactly that sentinel.  COMPARED BY
+// VALUE, NOT BY DISPLAY, for the same reason as f11: `Ty::Int(0)` etc. are
+// distinct variants that must not be mistaken for a null handle, and no real
+// MLIR type prints as the empty string.  a0 is the receiver.
+unsafe fn f20(a0: dataflowir_gen::ir::Ty) -> bool {
+    a0 == dataflowir_gen::ir::Ty::Opaque(::std::string::String::new())
+}

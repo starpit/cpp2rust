@@ -97,11 +97,15 @@ public:
   // and each must be read off the header/diagnostic, never inferred.
   bool operator==(Type rhs) const;
   bool operator!=(Type rhs) const;
-  // NOT ADDED HERE YET: `Types.h:97  bool operator!() const` (work-queue row
-  // g375, 6 TUs, the same shape as Attribute's f11).  Left out only because an
-  // inserted declaration renumbers the auto-assigned fN keys and this slot had
-  // no budget left to re-verify all of tgt_unsafe/tgt_refcount against a
-  // renumbering.  It is the cheapest remaining operator row in this module.
+  // `Types.h:97  bool operator!() const { return impl == nullptr; }` -- the
+  // NULL-HANDLE TEST, work-queue row g375 (6 TUs), the same shape as
+  // Attribute's f11.  NOTE ON THE RENUMBERING RISK the previous slot flagged:
+  // the fN keys are numbered by the ORDER OF THE FREE FUNCTIONS at the bottom of
+  // this file, NOT by the order of declarations inside these restated classes.
+  // Adding this member declaration here therefore renumbers nothing, and its
+  // rule function is APPENDED AS f20 after f19 so f1..f19 keep their numbers and
+  // both target files need no re-verification beyond the new tail entry.
+  bool operator!() const;
 };
 
 class Attribute {
@@ -1330,3 +1334,14 @@ bool f19(mlir::Type a, mlir::Type b) { return a.operator!=(b); }
 // translation project-wide.  `llvm::ArrayRef<llvm::StringRef>` (49 errors) and
 // `llvm::ArrayRef<mlir::Attribute>` (35) are both instances of this one rule.
 // ---------------------------------------------------------------------------
+
+// ---- mlir::Type::operator! (row g375) -------------------------------------
+// `llvm/.../include/mlir/IR/Types.h:97  bool operator!() const { return impl ==
+// nullptr; }`.  Spelled `.operator!()` rather than `!a` so the recorded callee is
+// unambiguously THIS member and not a negation of some conversion operator --
+// `!type` in C++ resolves to the member directly, and that is the callee the
+// converter keys on.  No parameter: the receiver is the implicit object argument
+// and arrives in the target body as a0 (exactly as for f11 on mlir::Attribute,
+// whose key `bool mlir::Attribute::operator!() const` likewise has an empty
+// parameter list while its target takes a0).
+bool f20(mlir::Type a) { return a.operator!(); }
