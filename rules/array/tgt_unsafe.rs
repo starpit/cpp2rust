@@ -38,3 +38,7 @@ unsafe fn f7<T1: Clone>(a0: &mut Vec<T1>, a1: Vec<T1>) {
 unsafe fn f8<T1: PartialEq>(a0: Vec<T1>, a1: Vec<T1>) -> bool {
     a0 == a1
 }
+
+unsafe fn f9<T1: PartialEq>(a0: Vec<T1>, a1: Vec<T1>) -> bool {
+    a0 != a1
+}

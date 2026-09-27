@@ -44,3 +44,8 @@ template <typename T1, std::size_t T2>
 bool f8(const std::array<T1, T2> &a, const std::array<T1, T2> &b) {
   return operator==(a, b);
 }
+
+template <typename T1, std::size_t T2>
+bool f9(const std::array<T1, T2> &a, const std::array<T1, T2> &b) {
+  return operator!=(a, b);
+}
