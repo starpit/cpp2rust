@@ -2141,10 +2141,87 @@ bool Converter::Convert(clang::Expr *expr,
                               *implicit_convert_to);
   PushParen paren(*this, needs_conversion);
   computed_expr_type_ = ComputedExprType::Unknown;
+  // Exactly the type-side defect fixed at Convert(QualType) above, on the
+  // EXPRESSION side, and it was silent for the same reason: an Expr that
+  // reaches TraverseStmt and matches no Visit* emits ZERO TOKENS, the only
+  // guard below was an assert that -DNDEBUG compiles away, and the caller then
+  // splices that nothing into a position that syntactically requires an
+  // expression. MEASURED after the type fix landed, so these are not a cascade
+  // of it: 10 `missing condition for if expression` across 2 files -- 8 of them
+  // in dialect_utils/Agen/Utils.cpp, e.g. `if { sum.postfix_inc();`, and
+  // dialect_utils/VectorChain/Utils.cpp:98 `if (index != var_idx) return
+  // false;` coming out as `if { return false ;` -- plus 14 `expected
+  // expression, found keyword as` across 4 files, e.g. Planner.cpp
+  // `let __o = ( as *mut std::fs::File);`, which is this same hole seen through
+  // a cast: PushParen and the ConvertCast below wrap an operand that was never
+  // emitted, so the cast's TYPE survives and its OPERAND vanishes. Every one of
+  // those is a PARSE error, which makes the whole file unparseable and destroys
+  // the only convergence metric there is.
+  //
+  // The placeholder must therefore be a syntactically valid Rust EXPRESSION
+  // that cannot resolve. A path expression that nothing defines gives a clean
+  // `E0425 cannot find value` at the exact site, on a file that parses. The
+  // prefix is deliberately distinct from the type side's `Cpp2RustUnmapped_`
+  // (it names a VALUE, not a type) and is emitted by nothing else in the
+  // converter, so -- unlike the `--mangle-unmapped` spelling, which is what a
+  // PORTED entity would be called and can therefore collide with a real `fn`
+  // or `static` in the same TU and compile -- it can only ever fail. It carries
+  // the AST statement class so the dropped construct is nameable from the rustc
+  // error alone, with no converter rerun.
+  const size_t before = rs_code_->size();
   bool result = TraverseStmt(expr);
+  if (expr && rs_code_->size() == before) {
+    const std::string loc =
+        expr->getBeginLoc().printToString(ctx_.getSourceManager());
+    std::string detail = std::string("no Rust expression text for ") +
+                         expr->getStmtClassName() + " of type `" +
+                         Mapper::ToString(expr->getType()) + "`";
+    if (curr_function_ != nullptr) {
+      detail += ", reached while converting `" +
+                curr_function_->getQualifiedNameAsString() + "`";
+    }
+    if (survey::Enabled()) {
+      survey::Record(survey::GapKind::kUnsupportedExpr, detail, loc);
+    }
+    StrCat(std::string("Cpp2RustUnmappedExpr_") + expr->getStmtClassName());
+    // Forward progress on BOTH paths: something was emitted, so the value-ness
+    // question below has an answer and the run continues to find the next gap.
+    computed_expr_type_ = ComputedExprType::FreshValue;
+    static std::set<std::string> reported;
+    if (reported.insert(expr->getStmtClassName()).second) {
+      llvm::errs() << "note: " << detail << " at " << loc
+                   << "; emitting the undefined placeholder "
+                      "`Cpp2RustUnmappedExpr_"
+                   << expr->getStmtClassName() << "` so the file parses\n";
+    }
+  }
   if (expr && computed_expr_type_ == ComputedExprType::Unknown) {
-    expr->dump();
-    assert(false && "computed_expr_type_ not set");
+    // Was `expr->dump(); assert(false && "computed_expr_type_ not set")`, i.e.
+    // NOTHING in the shipped -DNDEBUG build: the dump went to stderr, the
+    // assert evaporated, and Unknown then flowed into the value-vs-pointer
+    // decisions that every caller makes off computed_expr_type_. Same class as
+    // ReportUnsupportedException and the DecompositionDecl site above -- a
+    // broken internal invariant presenting as plausible-looking output -- so
+    // refuse by name instead. Distinct from the empty-emission case just
+    // handled: tokens WERE emitted here, only their value-ness is unknown, so
+    // the survey path records and keeps walking rather than substituting text.
+    const std::string loc =
+        expr->getBeginLoc().printToString(ctx_.getSourceManager());
+    std::string detail = std::string("computed_expr_type_ not set by ") +
+                         expr->getStmtClassName() + " of type `" +
+                         Mapper::ToString(expr->getType()) + "`";
+    if (curr_function_ != nullptr) {
+      detail += ", reached while converting `" +
+                curr_function_->getQualifiedNameAsString() + "`";
+    }
+    if (survey::Enabled()) {
+      survey::Record(survey::GapKind::kUnsupportedExpr, detail, loc);
+      computed_expr_type_ = ComputedExprType::Value;
+    } else {
+      llvm::report_fatal_error(llvm::Twine("unsupported ") + detail + " at " +
+                                   loc,
+                               /*gen_crash_diag=*/false);
+    }
   }
   if (needs_conversion) {
     ConvertCast(*implicit_convert_to);
@@ -3492,6 +3569,39 @@ bool Converter::VisitCXXRewrittenBinaryOperator(
 }
 
 bool Converter::VisitBinaryOperator(clang::BinaryOperator *expr) {
+  // Pointer-to-member dereference. There is NO pointer-to-member support
+  // anywhere in the converter (`PtrMemD`/`PtrMemI`/`MemberPointer` appear in no
+  // other file), so these two opcodes fell through to the generic
+  // binary-operator path, where `getOpcodeStr()` printed the C++ spelling
+  // VERBATIM: KTDFArchOpInterfaces.cpp.rs:114 contains a literal `->*`, which
+  // is not Rust and cannot be. That is silent invalid output on a TU that
+  // otherwise measured as a clean translate, so it is worth the trade of
+  // turning that TU into a NAMED ABORT instead -- a refusal that says what is
+  // missing beats a `.rs` that looks converted and cannot parse.
+  if (expr->getOpcode() == clang::BO_PtrMemD ||
+      expr->getOpcode() == clang::BO_PtrMemI) {
+    const std::string loc =
+        expr->getBeginLoc().printToString(ctx_.getSourceManager());
+    std::string detail =
+        std::string("pointer-to-member dereference `") +
+        std::string(expr->getOpcodeStr()) + "` with member pointer of type `" +
+        Mapper::ToString(expr->getRHS()->getType()) +
+        "` has no Rust model (a C++ member pointer is an offset/vtable index, "
+        "not a Rust value)";
+    if (curr_function_ != nullptr) {
+      detail += ", reached while converting `" +
+                curr_function_->getQualifiedNameAsString() + "`";
+    }
+    if (survey::Enabled()) {
+      survey::Record(survey::GapKind::kUnsupportedExpr, detail, loc);
+      StrCat("Cpp2RustUnmappedExpr_PointerToMember");
+      computed_expr_type_ = ComputedExprType::FreshValue;
+      return false;
+    }
+    llvm::report_fatal_error(llvm::Twine("unsupported ") + detail + " at " +
+                                 loc,
+                             /*gen_crash_diag=*/false);
+  }
   if (expr->getOpcode() == clang::BO_Cmp) {
     StrCat(std::format("std::cmp::Ord::cmp(&({}), &({}))",
                        ConvertRValue(expr->getLHS()),
