@@ -81,10 +81,27 @@ public:
 
 class Type {
 public:
-  // Same const-reference form as Value, confirmed from the diagnostic rather
-  // than assumed from Attribute's by-value spelling.
-  bool operator==(const Type &rhs) const;
-  bool operator!=(const Type &rhs) const;
+  // TAKE THE PARAMETER BY VALUE.  The previous text here claimed the
+  // const-reference form was "confirmed from the diagnostic"; it was not -- it
+  // was copied from Value above, and it made f18/f19 DEAD KEYS that matched
+  // nothing for their whole lifetime.  Ground truth, read off the toolchain
+  // header the corpus actually includes:
+  //     llvm/LLVM-22.1.3-Linux-X64/include/mlir/IR/Types.h:93
+  //       bool operator==(Type other) const { return impl == other.impl; }
+  //     Types.h:94  bool operator!=(Type other) const
+  //     Types.h:97  bool operator!() const { return impl == nullptr; }
+  // and the converter's own diagnostic agrees: the work-queue rows g1183/g544
+  // ask for `bool mlir::Type::operator==(mlir::Type) const` /
+  // `operator!=(mlir::Type) const`, by value.  So the three handles use THREE
+  // different spellings -- Value const&, Attribute by value, Type by value --
+  // and each must be read off the header/diagnostic, never inferred.
+  bool operator==(Type rhs) const;
+  bool operator!=(Type rhs) const;
+  // NOT ADDED HERE YET: `Types.h:97  bool operator!() const` (work-queue row
+  // g375, 6 TUs, the same shape as Attribute's f11).  Left out only because an
+  // inserted declaration renumbers the auto-assigned fN keys and this slot had
+  // no budget left to re-verify all of tgt_unsafe/tgt_refcount against a
+  // renumbering.  It is the cheapest remaining operator row in this module.
 };
 
 class Attribute {
