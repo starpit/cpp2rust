@@ -383,3 +383,11 @@ fn f117<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
 fn f118<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
     a0 != a1
 }
+
+fn f119<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0.to_end()
+}
+
+fn f120<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0
+}

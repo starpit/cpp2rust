@@ -589,3 +589,29 @@ template <typename T1, typename T2 = std::allocator<T1>>
 bool f118(const std::vector<T1, T2> &a, const std::vector<T1, T2> &b) {
   return operator!=(a, b);
 }
+
+// `v.rbegin()` / `v.rend()`.  Measured UNMAPPED before this (E0599 `no method named
+// rbegin found for Vec<i32>` in BOTH models), which made rules/reverse_iterator
+// (b23a1fa + df5012e) unreachable from idiomatic vector code.
+//
+// The return type is spelled EXACTLY as rules/reverse_iterator's `t2`
+// (`std::reverse_iterator<std::__wrap_iter<T1 *>>`) so the two modules agree; writing
+// `typename std::vector<T1>::reverse_iterator` would risk a different spelling and a
+// dead key.  rules/vector itself does NOT map `__wrap_iter<T1 *>`, which is why the
+// inner spelling is written out here rather than reused from a `tN`.
+//
+// THE OFF-BY-ONE IS DELIBERATE AND MUST BE PRESERVED: a C++ reverse_iterator holds
+// `current`, the pointer ONE PAST the element `*rit` designates (proved by
+// `rbegin().base() == end()`, base_delta 3 on a 3-element vector).  So rbegin() must
+// yield end(), NOT end()-1, and rend() must yield begin().  Both representations are
+// the same raw pointer / Ptr that rules/reverse_iterator's t2 target uses, so no
+// conversion is needed.
+template <typename T1>
+std::reverse_iterator<std::__wrap_iter<T1 *>> f119(std::vector<T1> &o) {
+  return o.rbegin();
+}
+
+template <typename T1>
+std::reverse_iterator<std::__wrap_iter<T1 *>> f120(std::vector<T1> &o) {
+  return o.rend();
+}

@@ -521,3 +521,11 @@ unsafe fn f117<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
 unsafe fn f118<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
     a0 != a1
 }
+
+unsafe fn f119<T1>(a0: &mut Vec<T1>) -> *mut T1 {
+    a0.as_mut_ptr().add(a0.len())
+}
+
+unsafe fn f120<T1>(a0: &mut Vec<T1>) -> *mut T1 {
+    a0.as_mut_ptr()
+}
