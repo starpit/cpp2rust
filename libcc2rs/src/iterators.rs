@@ -1274,3 +1274,517 @@ mod range_iter_tests {
         let _ = RangeIter::range_from(first, last);
     }
 }
+
+// ---------------------------------------------------------------------------
+// llvm::EquivalenceClasses<ElemTy> -- LLVM 22.1.3, llvm/ADT/EquivalenceClasses.h:62.
+//
+// Modelled as a real disjoint-set partition rather than an opaque unit because the corpus
+// READS THE PARTITION BACK OUT: dcc/src/Transform/Sentient/Analyses/GraphColoring.cpp walks
+// every class (`begin`/`end` + `isLeader`), walks each class's members
+// (`member_begin`/`member_end`), and uses `*MI` as a graph node index, so register colouring
+// depends on the actual contents and on the traversal order.
+//
+// BOUND: `Ord + Clone`, NOT `Hash`. `Ord` keeps the mapping a `BTreeMap`, so every internal
+// lookup is deterministic for the pointer instantiations (`mlir::Operation *`, `void *`) as
+// well as the integral ones; a `HashMap` would make class CONTENTS depend on address hashing.
+// The bound is `Clone` rather than the `Copy` the row was specified with because the FIFTH
+// instantiation does not satisfy `Copy`: `mlir::Value` maps to `dataflowir_gen::ir::Value`
+// (rules/mlir/src.cpp:19), which is `#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord,
+// Hash)]` over a `String` field (dataflowir-gen/src/ir.rs:20-23) -- `Ord` yes, `Copy`
+// impossible. `Copy` would have compiled and then refused to instantiate at g955. `Clone` is a
+// strict superset, so it costs the four `Copy` instantiations nothing.
+//
+// ITERATION ORDER, and this CORRECTS the row brief: LLVM 22.1.3 no longer backs this with a
+// `std::set<ECValue>`. It keeps a `DenseMap<ElemTy, ECValue *> TheMapping` plus an explicit
+// `SmallVector<const ECValue *> Members` whose comment reads "List of all members, used to
+// provide a deterministic iteration order" (header:130), and `begin()`/`end()` iterate
+// `Members` (header:158-159). So leader iteration is FIRST-INSERTION order, not `Ord` order,
+// and `members` below reproduces that. Sorting instead would silently reorder GraphColoring's
+// hypergraph node creation. Determinism -- the property the brief was protecting -- still
+// holds; it just comes from the insertion vector rather than from a comparator.
+//
+// MEMBER ORDER inside a class also follows the header rather than `Ord`: `unionSets(L1, L2)`
+// splices L2's list onto the END of L1's and returns L1, keeping L1's leader (header:295-312),
+// so a class reads as L1's chain followed by L2's chain.
+
+/// One entry of an `EquivalenceClasses` partition: `llvm::EquivalenceClasses<T>::ECValue`.
+///
+/// A snapshot VALUE, not a node: `is_leader` is resolved at the moment the entry is handed
+/// out, because C++'s `ECValue` steals a bit of its `Next` pointer to answer `isLeader()` and
+/// nothing in the corpus holds one across a mutation.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct ECValue<T> {
+    data: T,
+    is_leader: bool,
+}
+
+impl<T: Clone> ECValue<T> {
+    /// `ECV.getData()`.
+    pub fn get_data(&self) -> T {
+        self.data.clone()
+    }
+
+    /// `ECV.isLeader()`. The corpus spells this `(*I)->isLeader()` and `continue`s when false,
+    /// so it is the filter that turns all-entries iteration into leader iteration.
+    pub fn is_leader(&self) -> bool {
+        self.is_leader
+    }
+}
+
+/// `llvm::EquivalenceClasses<T>::member_iterator`.
+///
+/// A distinct public type because the corpus names it in FUNCTION SIGNATURES
+/// (`GraphColoring.cpp:344-346`, `doesEdgeExist(member_iterator, member_iterator,
+/// member_iterator)`), so it cannot be an anonymous `impl Iterator`.
+///
+/// `member_end()` is `member_iterator(nullptr)` in C++ -- constructed with NO receiver -- so
+/// the sentinel here is an EMPTY chain, and `PartialEq` compares the CURRENT ELEMENT
+/// (`Option<T>`) rather than the chain: an exhausted iterator and the sentinel both read
+/// `None` and so compare equal, exactly as two null `Node`s do, while any live iterator reads
+/// `Some(x)` and compares unequal to it. Elements are unique within the forest, so comparing
+/// the element is equivalent to comparing C++'s node address -- including `updated_leader ==
+/// it_A` at `GraphColoring.cpp:679`, which is how the caller learns which class won the union.
+#[derive(Clone, Debug)]
+pub struct MemberIter<T> {
+    /// The class's members from this position on, leader-first. Empty == `member_end()`.
+    chain: Vec<T>,
+    idx: usize,
+}
+
+impl<T> Default for MemberIter<T> {
+    /// C++'s `explicit member_iterator() = default` leaves `Node` uninitialised; the only
+    /// value a rule can usefully default-construct is the end sentinel, so that is what this
+    /// gives.
+    fn default() -> Self {
+        Self {
+            chain: Vec::new(),
+            idx: 0,
+        }
+    }
+}
+
+impl<T: Clone + PartialEq> PartialEq for MemberIter<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.value_opt() == other.value_opt()
+    }
+}
+
+impl<T: Clone + PartialEq> Eq for MemberIter<T> {}
+
+impl<T: Clone> MemberIter<T> {
+    fn over(chain: Vec<T>) -> Self {
+        Self { chain, idx: 0 }
+    }
+
+    /// `MI == EC.member_end()`, without spelling the container. Same predicate as comparing
+    /// against the sentinel; offered because a rule body that only needs the loop test does
+    /// not then have to thread the receiver through.
+    pub fn is_end(&self) -> bool {
+        self.idx >= self.chain.len()
+    }
+
+    /// The element, or `None` at the end. Internal to `PartialEq`; `at()` is the `*MI` form.
+    fn value_opt(&self) -> Option<T> {
+        self.chain.get(self.idx).cloned()
+    }
+
+    /// `*MI`. Panics on the end iterator, matching C++'s
+    /// `assert(Node != nullptr && "Dereferencing end()!")` and the `"ub: ..."` precedent that
+    /// `MapIter`/`SetIter` already set in this file.
+    pub fn at(&self) -> T {
+        self.value_opt().expect("ub: dereference of member_end()")
+    }
+
+    /// `++MI`, as a METHOD. An infix `++` in a rule body records nothing at all, so the rules
+    /// side must call this (or `prefix_inc`, which is implemented below and delegates here).
+    /// Returns the iterator's new state so it can be used in an expression position.
+    pub fn next_member(&mut self) -> Self {
+        assert!(!self.is_end(), "ub: ++'d off the end of the member list");
+        self.idx += 1;
+        self.clone()
+    }
+}
+
+impl<T: Clone> PrefixInc for MemberIter<T> {
+    fn prefix_inc(&mut self) -> Self {
+        self.next_member()
+    }
+}
+
+impl<T: Clone> PostfixInc for MemberIter<T> {
+    fn postfix_inc(&mut self) -> Self {
+        let old = self.clone();
+        self.next_member();
+        old
+    }
+}
+
+impl<T: Clone> Iterator for MemberIter<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
+        let v = self.value_opt()?;
+        self.idx += 1;
+        Some(v)
+    }
+}
+
+/// `llvm::EquivalenceClasses<T>` -- Tarjan union-find, `llvm/ADT/EquivalenceClasses.h:62`.
+///
+/// Arity 1, with no defaulted second parameter, so ONE rule key covers `<int>`,
+/// `<unsigned int>`, `<mlir::Operation *>`, `<mlir::Value>` and `<void *>`.
+#[derive(Clone, Debug)]
+pub struct EquivalenceClasses<T: Ord + Clone> {
+    /// Element -> its class leader. `BTreeMap`, so no hashing decides anything.
+    leader_of: BTreeMap<T, T>,
+    /// Leader -> that class's members in C++'s `Next`-chain order, leader first.
+    chains: BTreeMap<T, Vec<T>>,
+    /// Every element in first-insertion order: LLVM's `Members` vector, which is what
+    /// `begin()`/`end()` walk.
+    members: Vec<T>,
+}
+
+impl<T: Ord + Clone> Default for EquivalenceClasses<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Ord + Clone> EquivalenceClasses<T> {
+    /// `EquivalenceClasses()`. Spelled out rather than derived because a `#[derive(Default)]`
+    /// would demand `T: Default`, which no instantiation guarantees.
+    pub fn new() -> Self {
+        Self {
+            leader_of: BTreeMap::new(),
+            chains: BTreeMap::new(),
+            members: Vec::new(),
+        }
+    }
+
+    /// `EC.insert(V)` -- idempotent; returns the entry, as C++ returns `const ECValue &`.
+    pub fn insert(&mut self, v: T) -> ECValue<T> {
+        if !self.leader_of.contains_key(&v) {
+            self.leader_of.insert(v.clone(), v.clone());
+            self.chains.insert(v.clone(), vec![v.clone()]);
+            self.members.push(v.clone());
+        }
+        self.ec_value(v)
+    }
+
+    /// `EC.contains(V)`.
+    pub fn contains(&self, v: T) -> bool {
+        self.leader_of.contains_key(&v)
+    }
+
+    /// `EC.empty()`.
+    pub fn is_empty(&self) -> bool {
+        self.leader_of.is_empty()
+    }
+
+    /// `EC.getNumClasses()`.
+    pub fn get_num_classes(&self) -> usize {
+        self.chains.len()
+    }
+
+    fn ec_value(&self, v: T) -> ECValue<T> {
+        let is_leader = self.leader_of.get(&v) == Some(&v);
+        ECValue { data: v, is_leader }
+    }
+
+    /// Every entry in `Members` order, as `ECValue`s. Backs `begin()`/`end()`/`iter()`.
+    fn ec_values(&self) -> Vec<ECValue<T>> {
+        self.members.iter().map(|v| self.ec_value(v.clone())).collect()
+    }
+
+    /// `EC.begin()`. Reuses `RangeIter`, which already carries the `!=`/`++`/`*` shapes the
+    /// `for (I = EC.begin(), E = EC.end(); I != E; ++I)` loop at `GraphColoring.cpp:559` needs.
+    /// Order is first-insertion order, per `Members`.
+    pub fn begin(&self) -> RangeIter<ECValue<T>> {
+        RangeIter::begin(self.ec_values())
+    }
+
+    /// `EC.end()`.
+    pub fn end(&self) -> RangeIter<ECValue<T>> {
+        RangeIter::end(self.ec_values())
+    }
+
+    /// Rust-side convenience for the same walk; yields non-leaders too, exactly as C++ does,
+    /// so a caller must still filter on `is_leader()`.
+    pub fn iter(&self) -> RangeIter<ECValue<T>> {
+        self.begin()
+    }
+
+    /// `EC.member_begin(ECV)`. Only a leader has anything to iterate: C++ passes `nullptr`
+    /// for a non-leader, which is the end sentinel.
+    pub fn member_begin(&self, ecv: &ECValue<T>) -> MemberIter<T> {
+        if ecv.is_leader() {
+            self.class_members(ecv.get_data())
+        } else {
+            self.member_end()
+        }
+    }
+
+    /// `EC.member_end()` -- `member_iterator(nullptr)`, a value built with no receiver.
+    pub fn member_end(&self) -> MemberIter<T> {
+        MemberIter::default()
+    }
+
+    fn class_members(&self, leader: T) -> MemberIter<T> {
+        match self.chains.get(&leader) {
+            Some(chain) => MemberIter::over(chain.clone()),
+            None => MemberIter::default(),
+        }
+    }
+
+    /// `EC.findLeader(V)` -- a member iterator over V's class, positioned at the LEADER.
+    /// Returns the end sentinel when V is not in the set, as C++ does; it does NOT insert.
+    pub fn find_leader(&self, v: T) -> MemberIter<T> {
+        match self.leader_of.get(&v) {
+            Some(leader) => self.class_members(leader.clone()),
+            None => MemberIter::default(),
+        }
+    }
+
+    /// `EC.findLeader(ECV)` -- the `const ECValue &` overload (`GraphColoring.cpp:562`).
+    /// A separate name because Rust has no overloading; the rules side keys the two C++
+    /// signatures to these two methods.
+    pub fn find_leader_of(&self, ecv: &ECValue<T>) -> MemberIter<T> {
+        self.find_leader(ecv.get_data())
+    }
+
+    /// `EC.getLeaderValue(V)`. C++ asserts the value is in the set; this panics in the
+    /// `"ub: ..."` form the file already uses. `getOrInsertLeaderValue` is the inserting one.
+    pub fn get_leader_value(&self, v: T) -> T {
+        self.leader_of
+            .get(&v)
+            .expect("ub: getLeaderValue of a value not in the set")
+            .clone()
+    }
+
+    /// `EC.getOrInsertLeaderValue(V)`.
+    pub fn get_or_insert_leader_value(&mut self, v: T) -> T {
+        self.insert(v.clone());
+        self.get_leader_value(v)
+    }
+
+    /// `EC.isEquivalent(V1, V2)`. Note C++'s fast path: a value is equivalent to itself even
+    /// when neither value is in the set.
+    pub fn is_equivalent(&self, v1: T, v2: T) -> bool {
+        if v1 == v2 {
+            return true;
+        }
+        match (self.leader_of.get(&v1), self.leader_of.get(&v2)) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        }
+    }
+
+    /// `EC.unionSets(V1, V2)` -- inserts both if absent, then merges. Returns a member
+    /// iterator at the surviving leader.
+    pub fn union_sets(&mut self, v1: T, v2: T) -> MemberIter<T> {
+        self.insert(v1.clone());
+        self.insert(v2.clone());
+        let l1 = self.get_leader_value(v1);
+        let l2 = self.get_leader_value(v2);
+        self.union_leaders(l1, l2)
+    }
+
+    /// `EC.unionSets(L1, L2)` -- the member_iterator overload, which is the one
+    /// `GraphColoring.cpp:676` calls. Distinct name because Rust has no overloading.
+    /// C++ asserts neither input is `member_end()`.
+    pub fn union_sets_iters(&mut self, l1: MemberIter<T>, l2: MemberIter<T>) -> MemberIter<T> {
+        let a = l1.at();
+        let b = l2.at();
+        self.union_leaders(a, b)
+    }
+
+    /// The merge itself. L1 stays the leader and L2's chain is appended, matching
+    /// `L1LV.getEndOfList()->setNext(&L2LV)` plus `L2LV.Leader = &L1LV` (header:302-311), so
+    /// the returned iterator is L1's -- which is what the `updated_leader == it_A` test at
+    /// `GraphColoring.cpp:679` reads.
+    fn union_leaders(&mut self, l1: T, l2: T) -> MemberIter<T> {
+        if l1 == l2 {
+            return self.class_members(l1);
+        }
+        let moved = self.chains.remove(&l2).unwrap_or_default();
+        for m in &moved {
+            self.leader_of.insert(m.clone(), l1.clone());
+        }
+        if let Some(chain) = self.chains.get_mut(&l1) {
+            chain.extend(moved);
+        }
+        self.class_members(l1)
+    }
+}
+
+#[cfg(test)]
+mod equivalence_classes_tests {
+    use super::EquivalenceClasses;
+    use crate::PrefixInc;
+
+    /// Two unioned values share a leader and two un-unioned ones do not. A `find_leader` that
+    /// just returned its own argument would pass the second half and FAIL the first.
+    #[test]
+    fn union_joins_and_leaves_others_alone() {
+        let mut ec: EquivalenceClasses<i32> = EquivalenceClasses::new();
+        ec.union_sets(1, 2);
+        ec.insert(4);
+        ec.insert(5);
+        assert_eq!(ec.get_leader_value(1), ec.get_leader_value(2));
+        assert_ne!(ec.get_leader_value(1), ec.get_leader_value(4));
+        assert!(ec.is_equivalent(1, 2));
+        assert!(!ec.is_equivalent(1, 4));
+        // Transitivity through a second union, which a non-compressing parent map would miss.
+        ec.union_sets(5, 1);
+        assert_eq!(ec.get_leader_value(5), ec.get_leader_value(2));
+        assert!(ec.is_equivalent(5, 2));
+        assert!(!ec.is_equivalent(5, 4));
+        assert_eq!(ec.get_num_classes(), 2);
+    }
+
+    /// Leader iteration is FIRST-INSERTION order, per LLVM 22.1.3's `Members` vector -- not
+    /// `Ord` order and not leader-set order. Inserting in DECREASING order makes the two
+    /// hypotheses disagree: a sorted (`BTreeMap`-keyed) walk would report 10,20,30 here.
+    /// A `HashMap`-backed walk would fail this intermittently, which is the real hazard.
+    #[test]
+    fn leader_iteration_is_insertion_order() {
+        let mut ec: EquivalenceClasses<i32> = EquivalenceClasses::new();
+        for v in [30, 10, 20] {
+            ec.insert(v);
+        }
+        let seen: Vec<i32> = ec.iter().map(|e| e.get_data()).collect();
+        assert_eq!(seen, vec![30, 10, 20]);
+        // Unioning must not reorder or drop entries: all three still appear, and only the
+        // surviving leader answers `is_leader`.
+        ec.union_sets(10, 30);
+        let all: Vec<(i32, bool)> = ec.iter().map(|e| (e.get_data(), e.is_leader())).collect();
+        assert_eq!(all, vec![(30, false), (10, true), (20, true)]);
+    }
+
+    /// Every member of a class is visited exactly once -- count AND set, so a chain that
+    /// looped back on itself (infinite, caught by the count) or one that visited only the
+    /// leader (caught by the set) both fail. Members of the OTHER class must not leak in.
+    #[test]
+    fn member_iteration_visits_each_member_once() {
+        let mut ec: EquivalenceClasses<i32> = EquivalenceClasses::new();
+        ec.union_sets(1, 2);
+        ec.union_sets(2, 3);
+        ec.union_sets(7, 8);
+        let leader = ec.find_leader(2);
+        let members: Vec<i32> = leader.clone().collect();
+        assert_eq!(members.len(), 3);
+        assert_eq!(
+            members.iter().copied().collect::<std::collections::BTreeSet<i32>>(),
+            [1, 2, 3].into_iter().collect::<std::collections::BTreeSet<i32>>()
+        );
+        // The leader is the first member, as in C++ (`member_begin` starts at the leader).
+        assert_eq!(members[0], ec.get_leader_value(2));
+        assert_eq!(ec.find_leader(7).count(), 2);
+        // `member_begin` off a non-leader entry yields NOTHING, matching C++'s nullptr.
+        let non_leader = ec
+            .iter()
+            .find(|e| !e.is_leader())
+            .expect("a union must demote one leader");
+        assert!(ec.member_begin(&non_leader) == ec.member_end());
+    }
+
+    /// The sentinel equals an EXHAUSTED iterator but not a live one -- the property the
+    /// `MI != EC.member_end()` loop test depends on. An implementation that compared the whole
+    /// chain, or that made `member_end()` equal to everything, fails here.
+    #[test]
+    fn member_end_sentinel_compares_correctly() {
+        let mut ec: EquivalenceClasses<i32> = EquivalenceClasses::new();
+        ec.union_sets(1, 2);
+        let end = ec.member_end();
+        let mut mi = ec.find_leader(1);
+        assert!(mi != end, "a live iterator must not equal member_end()");
+        let mut n = 0;
+        while mi != end {
+            n += 1;
+            if mi.clone().next_member().is_end() {
+                mi.next_member();
+            } else {
+                mi.prefix_inc();
+            }
+        }
+        assert_eq!(n, 2);
+        assert!(mi == end, "an exhausted iterator must equal member_end()");
+        // Two live iterators at DIFFERENT positions are unequal; at the same position, equal.
+        let a = ec.find_leader(1);
+        let b = ec.find_leader(1);
+        assert!(a == b);
+        let mut c = ec.find_leader(1);
+        c.next_member();
+        assert!(a != c);
+        // A value that is not in the set gives the sentinel, not a bogus one-element class.
+        assert!(ec.find_leader(99) == end);
+        assert!(!ec.contains(99));
+    }
+
+    /// `unionSets(member_iterator, member_iterator)` returns the SURVIVING leader's iterator,
+    /// which is how `GraphColoring.cpp:679` decides which of its two inputs was demoted.
+    #[test]
+    fn union_sets_iters_returns_the_surviving_leader() {
+        let mut ec: EquivalenceClasses<i32> = EquivalenceClasses::new();
+        ec.insert(200);
+        ec.insert(5);
+        let it_a = ec.find_leader(200);
+        let it_b = ec.find_leader(5);
+        let updated = ec.union_sets_iters(it_a.clone(), it_b.clone());
+        assert!(updated == it_a);
+        assert!(updated != it_b);
+        assert_eq!(updated.at(), 200);
+        assert_eq!(ec.get_leader_value(5), 200);
+        assert_eq!(ec.get_num_classes(), 1);
+        // Unioning a class with itself is a no-op that still returns the leader.
+        let again = ec.union_sets(200, 5);
+        assert_eq!(again.at(), 200);
+        assert_eq!(ec.get_num_classes(), 1);
+    }
+
+    /// Pointer instantiations (`<void *>`, `<mlir::Operation *>`) are `Ord + Copy`, and the
+    /// `Ord` keying must not make the partition depend on address VALUES.
+    #[test]
+    fn pointer_element_type_works() {
+        let (x, y, z) = (1u8, 2u8, 3u8);
+        let mut ec: EquivalenceClasses<*const u8> = EquivalenceClasses::new();
+        ec.union_sets(&x as *const u8, &z as *const u8);
+        ec.insert(&y as *const u8);
+        assert!(ec.is_equivalent(&x as *const u8, &z as *const u8));
+        assert!(!ec.is_equivalent(&x as *const u8, &y as *const u8));
+        assert_eq!(ec.find_leader(&x as *const u8).count(), 2);
+    }
+
+    /// g955's instantiation is `<mlir::Value>`, whose model `dataflowir_gen::ir::Value` is
+    /// `Ord` but NOT `Copy` (it owns a `String`). This test stands in for it with a String-
+    /// backed `Ord` type: under the `Ord + Copy` bound the row was specified with, this file
+    /// would not COMPILE, so the test is what keeps the bound honest.
+    #[test]
+    fn non_copy_ord_element_type_works() {
+        #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+        struct V(String);
+        let v = |s: &str| V(s.to_string());
+        let mut ec: EquivalenceClasses<V> = EquivalenceClasses::new();
+        ec.union_sets(v("%0"), v("%arg0"));
+        ec.insert(v("%c256"));
+        assert!(ec.is_equivalent(v("%0"), v("%arg0")));
+        assert!(!ec.is_equivalent(v("%0"), v("%c256")));
+        assert_eq!(ec.get_leader_value(v("%arg0")), v("%0"));
+        assert_eq!(ec.find_leader(v("%arg0")).count(), 2);
+        assert!(ec.find_leader(v("%nope")) == ec.member_end());
+    }
+
+    #[test]
+    #[should_panic(expected = "ub: dereference of member_end()")]
+    fn dereferencing_member_end_is_ub() {
+        let ec: EquivalenceClasses<i32> = EquivalenceClasses::new();
+        let _ = ec.member_end().at();
+    }
+
+    #[test]
+    #[should_panic(expected = "ub: getLeaderValue of a value not in the set")]
+    fn get_leader_value_of_absent_value_is_ub() {
+        let ec: EquivalenceClasses<i32> = EquivalenceClasses::new();
+        let _ = ec.get_leader_value(7);
+    }
+}
