@@ -57,7 +57,7 @@
 
 namespace llvm {
 
-template <typename KeyT, typename ValueT> struct DenseMapInfo;
+template <typename KeyT, typename ValueT = void> struct DenseMapInfo;
 
 namespace detail {
 template <typename KeyT, typename ValueT> struct DenseMapPair;
@@ -95,6 +95,56 @@ public:
   DenseMapBase();
 };
 
+
+// ---------------------------------------------------------------------------
+// THE ITERATOR.  ARITY MEASURED, NOT GUESSED -- and there are TWO spellings.
+//
+// `llvm::DenseMapIterator<KeyT, ValueT, KeyInfoT, BucketT, bool IsConst = false>`.
+// SuppressDefaultTemplateArgs elides a TRAILING run of default-valued arguments,
+// so:
+//   * a MUTABLE iterator (IsConst = false, the default) has all three trailing
+//     arguments at their defaults and prints as the TWO-argument sugared form
+//         llvm::DenseMapIterator<SentientRegType, GraphColoring>
+//   * a CONST iterator (IsConst = true) differs from its default in the LAST
+//     position, so nothing can be elided and all FIVE arguments survive
+//         llvm::DenseMapIterator<mlir::Operation *, scheduler::PipelineTreeNode *,
+//                                llvm::DenseMapInfo<mlir::Operation *>,
+//                                llvm::detail::DenseMapPair<mlir::Operation *,
+//                                                           scheduler::PipelineTreeNode *>,
+//                                true>
+//     -- note KeyInfoT prints with ONE argument (its own `Enable = void` is
+//     elided) while DenseMap's diagnostic spelling shows `<K, void>`; the two
+//     printers disagree and the ONE-argument form is the one the key uses.
+// Measured over the 49 queue rows: 31 rows are the short form, 18 the long one,
+// and ALL 18 long rows carry `true` -- there is no fourth-argument-only variant.
+// So the long key can be written with the non-type argument FIXED to `true` and
+// only T1/T2 generic: the bucket and traits arguments are functions of T1/T2.
+//
+// Both forms are keyed.  A single generic key does NOT collapse them, because the
+// key is a STRING and the two strings differ.
+template <typename KeyT, typename ValueT,
+          typename KeyInfoT = DenseMapInfo<KeyT>,
+          typename BucketT = detail::DenseMapPair<KeyT, ValueT>,
+          bool IsConst = false>
+class DenseMapIterator {
+public:
+  DenseMapIterator();
+};
+
+// Free comparison operators, found by ADL in namespace llvm -- which is why the
+// measured key is spelled `bool llvm::operator==(...)` and not a member.
+template <typename KeyT, typename ValueT, typename KeyInfoT, typename BucketT,
+          bool IsConst>
+bool operator==(
+    const DenseMapIterator<KeyT, ValueT, KeyInfoT, BucketT, IsConst> &lhs,
+    const DenseMapIterator<KeyT, ValueT, KeyInfoT, BucketT, IsConst> &rhs);
+
+template <typename KeyT, typename ValueT, typename KeyInfoT, typename BucketT,
+          bool IsConst>
+bool operator!=(
+    const DenseMapIterator<KeyT, ValueT, KeyInfoT, BucketT, IsConst> &lhs,
+    const DenseMapIterator<KeyT, ValueT, KeyInfoT, BucketT, IsConst> &rhs);
+
 } // namespace llvm
 
 template <typename T1, typename T2> using t1 = llvm::DenseMap<T1, T2>;
@@ -103,3 +153,43 @@ template <typename T1> using t2 = llvm::DenseSet<T1>;
 
 template <typename T1, typename T2, typename T3, typename T4, typename T5>
 using t3 = llvm::DenseMapBase<T1, T2, T3, T4, T5>;
+
+// The MUTABLE iterator: two arguments.
+template <typename T1, typename T2>
+using t4 = llvm::DenseMapIterator<T1, T2>;
+
+// The CONST iterator: five arguments, the last fixed to `true`.
+template <typename T1, typename T2>
+using t5 = llvm::DenseMapIterator<T1, T2, llvm::DenseMapInfo<T1>,
+                                  llvm::detail::DenseMapPair<T1, T2>, true>;
+
+// ==/!= on the MUTABLE iterator.  Written in CALL form: an INFIX operator in a
+// rule body records nothing at all, silently.
+template <typename T1, typename T2>
+bool f1(const llvm::DenseMapIterator<T1, T2> &a0,
+        const llvm::DenseMapIterator<T1, T2> &a1) {
+  return operator==(a0, a1);
+}
+
+template <typename T1, typename T2>
+bool f2(const llvm::DenseMapIterator<T1, T2> &a0,
+        const llvm::DenseMapIterator<T1, T2> &a1) {
+  return operator!=(a0, a1);
+}
+
+// ==/!= on the CONST iterator.
+template <typename T1, typename T2>
+bool f3(const llvm::DenseMapIterator<T1, T2, llvm::DenseMapInfo<T1>,
+                                     llvm::detail::DenseMapPair<T1, T2>, true> &a0,
+        const llvm::DenseMapIterator<T1, T2, llvm::DenseMapInfo<T1>,
+                                     llvm::detail::DenseMapPair<T1, T2>, true> &a1) {
+  return operator==(a0, a1);
+}
+
+template <typename T1, typename T2>
+bool f4(const llvm::DenseMapIterator<T1, T2, llvm::DenseMapInfo<T1>,
+                                     llvm::detail::DenseMapPair<T1, T2>, true> &a0,
+        const llvm::DenseMapIterator<T1, T2, llvm::DenseMapInfo<T1>,
+                                     llvm::detail::DenseMapPair<T1, T2>, true> &a1) {
+  return operator!=(a0, a1);
+}

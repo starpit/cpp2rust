@@ -22,3 +22,45 @@ fn t2<T1>() -> HashSet<T1> {
 fn t3<T1, T2, T3, T4, T5>() -> HashMap<T2, Value<T3>> {
     HashMap::new()
 }
+
+// THE ITERATOR -- see the note in tgt_unsafe.rs.  Here the MapRef is
+// `Ptr<HashMap<T1, Value<T2>>>`, which is precisely what t1 maps DenseMap to, so
+// this is the already-provided `libcc2rs::RefcountHashMapIter<T1, T2>` alias.
+// Identity is the KEY, so positions -- not values -- are compared.
+fn t4<T1: std::hash::Hash + Eq + Clone + 'static, T2: 'static>(
+) -> RefcountHashMapIter<T1, T2> {
+    RefcountHashMapIter::null()
+}
+
+fn t5<T1: std::hash::Hash + Eq + Clone + 'static, T2: 'static>(
+) -> RefcountHashMapIter<T1, T2> {
+    RefcountHashMapIter::null()
+}
+
+fn f1<T1: PartialEq, T2>(
+    a0: RefcountHashMapIter<T1, T2>,
+    a1: RefcountHashMapIter<T1, T2>,
+) -> bool {
+    a0 == a1
+}
+
+fn f2<T1: PartialEq, T2>(
+    a0: RefcountHashMapIter<T1, T2>,
+    a1: RefcountHashMapIter<T1, T2>,
+) -> bool {
+    a0 != a1
+}
+
+fn f3<T1: PartialEq, T2>(
+    a0: RefcountHashMapIter<T1, T2>,
+    a1: RefcountHashMapIter<T1, T2>,
+) -> bool {
+    a0 == a1
+}
+
+fn f4<T1: PartialEq, T2>(
+    a0: RefcountHashMapIter<T1, T2>,
+    a1: RefcountHashMapIter<T1, T2>,
+) -> bool {
+    a0 != a1
+}
