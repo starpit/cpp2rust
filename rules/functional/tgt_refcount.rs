@@ -30,3 +30,63 @@ fn f4<T1>(a0: &Option<Box<dyn Fn() -> T1>>) -> T1 {
 fn f5<T1, T2: Fn() -> T1 + 'static>(a0: T2) -> Option<Box<dyn Fn() -> T1>> {
     Some(Box::new(a0))
 }
+
+fn t3<T1, T2>() -> Option<Box<dyn Fn(T2) -> T1>> {
+    None
+}
+
+fn f6<T1, T2>(a0: &Option<Box<dyn Fn(T2) -> T1>>, a1: T2) -> T1 {
+    (a0.as_ref().unwrap())(a1)
+}
+
+fn f7<T1, T2, T3: Fn(T2) -> T1 + 'static>(a0: T3) -> Option<Box<dyn Fn(T2) -> T1>> {
+    Some(Box::new(a0))
+}
+
+fn t4<T1, T2, T3>() -> Option<Box<dyn Fn(T2, T3) -> T1>> {
+    None
+}
+
+fn f8<T1, T2, T3>(a0: &Option<Box<dyn Fn(T2, T3) -> T1>>, a1: T2, a2: T3) -> T1 {
+    (a0.as_ref().unwrap())(a1, a2)
+}
+
+fn f9<T1, T2, T3, T4: Fn(T2, T3) -> T1 + 'static>(a0: T4) -> Option<Box<dyn Fn(T2, T3) -> T1>> {
+    Some(Box::new(a0))
+}
+
+fn t5<T1, T2, T3, T4>() -> Option<Box<dyn Fn(T2, T3, T4) -> T1>> {
+    None
+}
+
+fn f10<T1, T2, T3, T4>(a0: &Option<Box<dyn Fn(T2, T3, T4) -> T1>>, a1: T2, a2: T3, a3: T4) -> T1 {
+    (a0.as_ref().unwrap())(a1, a2, a3)
+}
+
+fn f11<T1, T2, T3, T4, T5: Fn(T2, T3, T4) -> T1 + 'static>(a0: T5) -> Option<Box<dyn Fn(T2, T3, T4) -> T1>> {
+    Some(Box::new(a0))
+}
+
+fn t6<T1, T2, T3, T4, T5>() -> Option<Box<dyn Fn(T2, T3, T4, T5) -> T1>> {
+    None
+}
+
+fn f12<T1, T2, T3, T4, T5>(a0: &Option<Box<dyn Fn(T2, T3, T4, T5) -> T1>>, a1: T2, a2: T3, a3: T4, a4: T5) -> T1 {
+    (a0.as_ref().unwrap())(a1, a2, a3, a4)
+}
+
+fn f13<T1, T2, T3, T4, T5, T6: Fn(T2, T3, T4, T5) -> T1 + 'static>(a0: T6) -> Option<Box<dyn Fn(T2, T3, T4, T5) -> T1>> {
+    Some(Box::new(a0))
+}
+
+fn t7<T1, T2, T3, T4, T5, T6>() -> Option<Box<dyn Fn(T2, T3, T4, T5, T6) -> T1>> {
+    None
+}
+
+fn f14<T1, T2, T3, T4, T5, T6>(a0: &Option<Box<dyn Fn(T2, T3, T4, T5, T6) -> T1>>, a1: T2, a2: T3, a3: T4, a4: T5, a5: T6) -> T1 {
+    (a0.as_ref().unwrap())(a1, a2, a3, a4, a5)
+}
+
+fn f15<T1, T2, T3, T4, T5, T6, T7: Fn(T2, T3, T4, T5, T6) -> T1 + 'static>(a0: T7) -> Option<Box<dyn Fn(T2, T3, T4, T5, T6) -> T1>> {
+    Some(Box::new(a0))
+}

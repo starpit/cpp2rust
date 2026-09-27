@@ -63,3 +63,67 @@ template <typename T1> T1 f4(const std::function<T1()> &a0) {
 template <typename T1, typename T2> std::function<T1()> f5(T2 a0) {
   return std::function<T1()>(a0);
 }
+
+// ---------------------------------------------------------------------------
+// PER-ARITY `std::function` KEYS.  Arities 1..5, because that is what the corpus
+// uses: counted by extracting every `std::function<...>` spelling from dt_src with a
+// depth-aware scanner and splitting the arrow-parens on depth-0 commas --
+// 0:9  1:31  2:16  3:17  4:2  5:7 occurrences, max arity 5, none above.
+// Unblocked by 37b35e6 (mapper.cpp returns nullopt on an empty capture), which is what
+// made a per-arity key able to coexist with the nullary `t2`.
+// Lower-arity keys DO also match a higher-arity instantiation (the last placeholder
+// scans to the closing paren and swallows the remaining depth-0 commas), but
+// `search()` (mapper.cpp:429-437) breaks the tie by PREFERRING THE LONGER src, and
+// src length is monotone in arity, so the exact-arity key always wins.  That is why
+// every arity in use must be present: a gap would be silently swallowed by the next
+// one down.
+
+template <typename T1, typename T2> using t3 = std::function<T1(T2)>;
+
+template <typename T1, typename T2> T1 f6(const std::function<T1(T2)> &a0, T2 a1) {
+  return a0.operator()(a1);
+}
+
+template <typename T1, typename T2, typename T3> std::function<T1(T2)> f7(T3 a0) {
+  return std::function<T1(T2)>(a0);
+}
+
+template <typename T1, typename T2, typename T3> using t4 = std::function<T1(T2, T3)>;
+
+template <typename T1, typename T2, typename T3> T1 f8(const std::function<T1(T2, T3)> &a0, T2 a1, T3 a2) {
+  return a0.operator()(a1, a2);
+}
+
+template <typename T1, typename T2, typename T3, typename T4> std::function<T1(T2, T3)> f9(T4 a0) {
+  return std::function<T1(T2, T3)>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4> using t5 = std::function<T1(T2, T3, T4)>;
+
+template <typename T1, typename T2, typename T3, typename T4> T1 f10(const std::function<T1(T2, T3, T4)> &a0, T2 a1, T3 a2, T4 a3) {
+  return a0.operator()(a1, a2, a3);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5> std::function<T1(T2, T3, T4)> f11(T5 a0) {
+  return std::function<T1(T2, T3, T4)>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5> using t6 = std::function<T1(T2, T3, T4, T5)>;
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5> T1 f12(const std::function<T1(T2, T3, T4, T5)> &a0, T2 a1, T3 a2, T4 a3, T5 a4) {
+  return a0.operator()(a1, a2, a3, a4);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5, typename T6> std::function<T1(T2, T3, T4, T5)> f13(T6 a0) {
+  return std::function<T1(T2, T3, T4, T5)>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5, typename T6> using t7 = std::function<T1(T2, T3, T4, T5, T6)>;
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5, typename T6> T1 f14(const std::function<T1(T2, T3, T4, T5, T6)> &a0, T2 a1, T3 a2, T4 a3, T5 a4, T6 a5) {
+  return a0.operator()(a1, a2, a3, a4, a5);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5, typename T6, typename T7> std::function<T1(T2, T3, T4, T5, T6)> f15(T7 a0) {
+  return std::function<T1(T2, T3, T4, T5, T6)>(a0);
+}
