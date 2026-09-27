@@ -44,3 +44,11 @@ fn f11<T1>(a0: Ptr<T1>) -> Ptr<T1> {
 fn f12<T1>(a0: Ptr<T1>) -> Ptr<T1> {
     a0.to_last()
 }
+
+// `llvm::SmallVectorImpl<T1>::operator==`.  Written EXPLICITLY: omitting it does
+// not drop the key, it silently falls back to the unsafe body.  Same shape as
+// rules/vector's refcount f115, where a std::vector comparison also takes
+// `&Vec<T1>` directly rather than a `Ptr`.
+fn f20<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
+    a0 == a1
+}

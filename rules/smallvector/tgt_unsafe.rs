@@ -114,3 +114,9 @@ unsafe fn f18<T1>(a0: &Vec<T1>) -> usize {
 unsafe fn f19<T1>(a0: &Vec<T1>) -> bool {
     Vec::is_empty(a0)
 }
+
+// `llvm::SmallVectorImpl<T1>::operator==` -- element-wise, like std::equal.
+// Mirrors rules/vector's f115 shape (`&Vec<T1>`, `T1: PartialEq`).
+unsafe fn f20<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
+    a0 == a1
+}

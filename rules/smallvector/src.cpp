@@ -97,6 +97,7 @@ public:
   void clear();
   void resize(std::size_t n);
   void reserve(std::size_t n);
+  bool operator==(const SmallVectorImpl &RHS) const;
 };
 
 template <typename T, unsigned N = 4>
@@ -241,4 +242,17 @@ template <typename T1> std::size_t f18(const llvm::SmallVectorBase<T1> &o) {
 
 template <typename T1> bool f19(const llvm::SmallVectorBase<T1> &o) {
   return o.empty();
+}
+
+// MEMBER operator== on the Impl base.  Queue row g027-family sibling g223 (2 TUs)
+// recorded the key as
+//   bool llvm::SmallVectorImpl<mlir::Value>::operator==(
+//       const llvm::SmallVectorImpl<mlir::Value> &) const
+// i.e. a MEMBER, so it is written in member call form (an infix spelling records
+// nothing, and a qualified free spelling aborts the preprocessor).  Element-wise
+// equality, which is what LLVM's operator== does (size then std::equal).
+template <typename T1>
+bool f20(const llvm::SmallVectorImpl<T1> &a0,
+         const llvm::SmallVectorImpl<T1> &a1) {
+  return a0.operator==(a1);
 }
