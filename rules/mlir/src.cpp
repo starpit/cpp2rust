@@ -2308,3 +2308,85 @@ mlir::AffineExpr f61() { return mlir::AffineExpr(); }
 mlir::OpAsmParser::UnresolvedOperand f62() {
   return mlir::OpAsmParser::UnresolvedOperand();
 }
+
+// ---- t85: `mlir::IntegerSet`, the MEASURED terminating gate of
+// dcc/src/Conversion/AgenToSentient/Helper.cpp at c9b6ffc --------------------
+// Re-measured in this slot with the live binary (NOT pin/cpp2rust), last
+// `LLVM ERROR` line of /home/agent/work/fa-out/dcc__src__Conversion__AgenToSentient__Helper.cpp.falog:
+//   LLVM ERROR: unsupported unmapped type `mlir::IntegerSet` has no model in
+//               types_, while mapping `llvm::SmallVector<mlir::IntegerSet, _>`
+// So this is the t83/t84 shape again: rules/smallvector already maps the
+// CONTAINER and dies on the ELEMENT, and the `, _` is mapper.cpp:1208's
+// `\b\d+\b -> _` erasure of the C++ `2` in `SmallVector<IntegerSet, 2>`
+// (Helper.cpp:61).  The missing key is the BARE ELEMENT TYPE; no SmallVector
+// arity key is authored here.
+namespace mlir {
+
+// t85 -- `mlir::IntegerSet`, mlir/IR/IntegerSet.h.  Like `mlir::AffineExpr`
+// (t83) it is an INTERNED IMMUTABLE HANDLE into the MLIRContext uniquer
+// (`ImplType *set`, null-initialised by `IntegerSet() : set(nullptr) {}`) whose
+// value is a list of affine constraints.
+// ⭐ THIS IS NOT A NEW MODELLING DECISION.  `dataflowir-gen` ALREADY has the real
+// model at `ir.rs:425`:
+//     pub struct IntegerSet { n_dims: u32, n_symbols: u32, constraints: Vec<Constraint> }
+//     pub struct Constraint { expr: AffineExpr, is_eq: bool }        // ir.rs:418
+// with `IntegerSet::get(n_dims, n_symbols, exprs, eq_flags)` (ir.rs:431) and a
+// `Display` that prints `affine_set<(d0)[s0] : (... >= 0, ... == 0)>`.  That
+// model is built out of t83's `ir::AffineExpr`, so t85 -> `ir::IntegerSet` is
+// FORCED by t83 exactly as t83 was forced by t8's `AffineMap { results:
+// Vec<AffineExpr> }`.  A UNIT would have been available here and is REFUSED: the
+// `.td` parser's own comment at ir.rs:119 names `IntegerSet::get` as one of the
+// two constructors the bridge actually writes, so the content is live data.
+// ⭐ THE MLIR BOUNDARY IS NOT CROSSED.  `ir.rs` is GENERATED from the `.td`
+// parser and must never be hand-ported; this slot ADDS NOTHING to it and only
+// names the model that is already there.  Had `ir.rs` lacked an `IntegerSet`,
+// this would have been a dataflowir-gen row, not a rules row.
+// ⭐ WHAT THE GATING TU DOES WITH THEM, which is what makes a handle model
+// acceptable (Helper.cpp:59-135, 154):
+//     IntegerSet time_set;                                   // :59   default ctor -> f119
+//     SmallVector<IntegerSet, 2> data_sets;                  // :61   the container
+//     data_sets.push_back(load_op.getLoadSet().getValue());  // :64+  stored by value
+//     time_set = comp_ind_load_op.getTimeSet().getValue();   // :94+  assigned
+//     for (auto& data_set : data_sets)                       // :154  ITERATED
+//       affine::FlatAffineValueConstraints constraints(data_set);
+// -- so it STORES, COPIES, ASSIGNS and ITERATES them and reads NO member.  The
+// one consumer, `affine::FlatAffineValueConstraints`, has NO model, so
+// `isHyperRectangular`/`getNumCols` stay unmapped and still fail LOUDLY: the t40
+// `mlir::Pass` / t43 `mlir::OpOperand` / t84 precedent -- map the type so the
+// CONTAINER becomes expressible, map no member.  NO member of IntegerSet is
+// claimed here: not `getNumDims`, `getNumSymbols`, `getNumConstraints`,
+// `getConstraint`, `isEq`, `getConstraints`, `getEqFlags`, `getContext`,
+// `replaceDimsAndSymbols`, and NOT `IntegerSet::get` itself.
+// ⭐ ON `==`/`!=`: LEFT OUT.  C++ `operator==` compares the uniquer POINTER
+// (IntegerSet.h, `set == other.set`), and for an interned type that IS structural
+// equality, which `ir::IntegerSet` would give faithfully (it derives
+// `PartialEq`/`Eq`, ir.rs:424) -- so unlike t72 `mlir::TypeID` it would not be a
+// lie.  It is still left out because NO site in the gating TU compares two
+// IntegerSets, and the NULL sentinel below would make `IntegerSet() ==
+// IntegerSet()` true in both languages but `IntegerSet() == get(0,0,{},{})`
+// differ.  That is a separate row with its own evidence.
+// ⭐ DESTRUCTOR: NONE.  `grep -rn '~IntegerSet'` over the whole of
+// $LLVM_ROOT/include/mlir is ZERO hits, so this passes the
+// OwningOpRef/InFlightDiagnostic test that forbids an opaque model for a type
+// whose destructor does something.
+// ⛔ WHAT IS LOST, and it is the same limit t83 records: MLIR CANONICALISES ON
+// CONSTRUCTION and this model does not, so no simplifier is mapped.  Also, a
+// default-constructed C++ IntegerSet is NULL, not the EMPTY set; f119 encodes
+// that with an `u32::MAX` dim/symbol count (t83's `Symbol(u32::MAX)` sentinel
+// idiom) rather than `0/0/vec![]`, so a null handle stays distinguishable from a
+// genuinely empty constraint system.  Nothing reads it back today.
+class IntegerSet {
+public:
+  IntegerSet();
+};
+
+} // namespace mlir
+
+using t85 = mlir::IntegerSet;
+
+// f119 -- THE CONSTRUCTOR FOR t85.  A type key without one is rc=0 and then
+// `E0433: cannot find module or crate mlir_IntegerSet`, measured eight times in
+// this tree; the `-verbose` tell is `search expr void T::T(), result: None`.
+// 0-ary is the only form a translated program can write here, and it is the form
+// Helper.cpp:59 writes.
+mlir::IntegerSet f119() { return mlir::IntegerSet(); }

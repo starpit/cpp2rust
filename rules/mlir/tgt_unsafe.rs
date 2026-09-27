@@ -1301,3 +1301,30 @@ unsafe fn t84() -> () {
 unsafe fn f62() -> () {
     ()
 }
+
+// t85 -- `mlir::IntegerSet` -> `dataflowir_gen::ir::IntegerSet` (ir.rs:425), the
+// model the .td parser ALREADY generates: `{ n_dims, n_symbols, constraints:
+// Vec<Constraint> }` over t83's `ir::AffineExpr`.  Forced by t83 the way t83 was
+// forced by t8.  No member is mapped, `==`/`!=` are LEFT OUT, and the type has no
+// destructor anywhere in mlir/include -- see src.cpp for all of it.
+// The `u32::MAX` dim/symbol counts are the NULL-HANDLE sentinel: C++
+// `IntegerSet()` leaves `set == nullptr`, which is NOT the empty constraint
+// system, and `0/0/vec![]` would conflate the two.
+unsafe fn t85() -> dataflowir_gen::ir::IntegerSet {
+    dataflowir_gen::ir::IntegerSet {
+        n_dims: u32::MAX,
+        n_symbols: u32::MAX,
+        constraints: Vec::new(),
+    }
+}
+
+// f119 -- the default constructor for t85.  Byte-identical to t85's `init` on
+// purpose (t85 supplies the type's zero value, f119 is the expression a written
+// `IntegerSet s;` becomes), the same way f61 mirrors t83 and f12 mirrors t8.
+unsafe fn f119() -> dataflowir_gen::ir::IntegerSet {
+    dataflowir_gen::ir::IntegerSet {
+        n_dims: u32::MAX,
+        n_symbols: u32::MAX,
+        constraints: Vec::new(),
+    }
+}
