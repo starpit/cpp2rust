@@ -1095,7 +1095,10 @@ static std::vector<const char *> printf2fmt(std::string &format,
       continue;
     }
     llvm::report_fatal_error(
-        llvm::Twine(detail) + (loc.empty() ? "" : " at " + loc));
+        llvm::Twine(detail) + (loc.empty() ? "" : " at " + loc),
+        // Third named refusal, same measured reason: the default abort()s, and
+        // the sweep buckets by exit code, so all three now exit 1 alike.
+        /*gen_crash_diag=*/false);
   }
   return types;
 }

@@ -1492,7 +1492,13 @@ void Converter::ReportUnsupportedException(const clang::Stmt *stmt,
   // with no handler. So this is dead for every covered shape and fires only for
   // a refusal that already has a written-out reason, which is exactly the thing
   // that should stop the run by name.
-  llvm::report_fatal_error(llvm::Twine("unsupported ") + full + " at " + loc);
+  // MEASURED: without `gen_crash_diag=false` this refusal exits 134 (abort) and
+  // the SIGABRT handler installed at cpp2rust.cpp:152 prints a ~36-frame
+  // backtrace, so a named diagnosis presents as a converter crash. Two harms,
+  // both real here: the 403-TU sweep buckets by exit code and would file this
+  // with the segfaults, and the backtrace scrolls the one line that says why.
+  llvm::report_fatal_error(llvm::Twine("unsupported ") + full + " at " + loc,
+                           /*gen_crash_diag=*/false);
 }
 
 // `throw <expr>` lowers to `std::panic::panic_any(<expr>)`.
@@ -3887,7 +3893,11 @@ void Converter::ReportUnsupportedStructuredBinding(
   // its bindings referred to a name that was never declared. Same class as
   // ReportUnsupportedException (73cfd28); refuse loudly instead, naming the
   // construct, its bindings and the source location.
-  llvm::report_fatal_error(llvm::Twine("unsupported ") + detail + " at " + loc);
+  // Same measured reason as ReportUnsupportedException above: the default
+  // `gen_crash_diag=true` abort()s, which the SIGABRT handler turns into a
+  // ~36-frame backtrace and rc=134, i.e. a refusal that reads as a crash.
+  llvm::report_fatal_error(llvm::Twine("unsupported ") + detail + " at " + loc,
+                           /*gen_crash_diag=*/false);
 }
 
 void Converter::ReportUnmappedSystemType(const clang::RecordDecl *decl) {
