@@ -482,6 +482,7 @@ public:
   virtual bool VisitCXXDefaultArgExpr(clang::CXXDefaultArgExpr *expr);
   virtual bool VisitConstantExpr(clang::ConstantExpr *expr);
 
+  clang::CXXMethodDecl *SelectLambdaCallOperator(clang::LambdaExpr *expr);
   virtual bool VisitLambdaExpr(clang::LambdaExpr *expr);
 
   virtual bool VisitImplicitValueInitExpr(clang::ImplicitValueInitExpr *expr);

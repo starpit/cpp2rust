@@ -4210,20 +4210,81 @@ bool Converter::VisitConstantExpr(clang::ConstantExpr *expr) {
   return false;
 }
 
+// For a GENERIC lambda (`[](auto x) {...}`), getLambdaCallOperator() returns the
+// UNINSTANTIATED template pattern: every parameter type is `<dependent type>`
+// and every call in the body is unresolved, so converting it can only produce
+// garbage or an abort. The instantiated specialisations carry real types, so
+// pick one of those instead.
+clang::CXXMethodDecl *
+Converter::SelectLambdaCallOperator(clang::LambdaExpr *expr) {
+  auto *pattern = expr->getLambdaClass()->getLambdaCallOperator();
+  if (!pattern->isTemplated()) {
+    return pattern;
+  }
+
+  llvm::SmallVector<clang::CXXMethodDecl *, 4> instantiations;
+  if (auto *tmpl = pattern->getDescribedFunctionTemplate()) {
+    for (auto *spec : tmpl->specializations()) {
+      if (auto *method = llvm::dyn_cast<clang::CXXMethodDecl>(spec)) {
+        if (method->hasBody()) {
+          instantiations.push_back(method);
+        }
+      }
+    }
+  }
+
+  if (instantiations.size() == 1) {
+    return instantiations.front();
+  }
+
+  auto loc = expr->getBeginLoc().printToString(ctx_.getSourceManager());
+  std::string detail;
+  if (instantiations.empty()) {
+    detail = "generic lambda with no instantiated specialisation: its call"
+             " operator is an uninstantiated template pattern, so parameter"
+             " types are <dependent type> and calls in the body cannot be"
+             " resolved";
+  } else {
+    detail = "generic lambda instantiated " +
+             std::to_string(instantiations.size()) +
+             " times: a Rust closure holds exactly one monomorphisation, so the"
+             " remaining instantiations would be lost";
+    for (auto *method : instantiations) {
+      detail += "\n  candidate instantiation: ";
+      for (auto p : method->parameters()) {
+        detail += Mapper::ToString(p->getType()) + " ";
+      }
+    }
+  }
+
+  if (survey::Enabled()) {
+    survey::Record(survey::GapKind::kUnsupportedConstruct, detail, loc);
+    // Survey mode RECORDS and CONTINUES: fall back to the pattern (and, when
+    // there is more than one instantiation, to the first one) so the rest of
+    // the TU is still surveyed.
+    return instantiations.empty() ? pattern : instantiations.front();
+  }
+
+  llvm::errs() << "unsupported " << detail << " at " << loc << '\n';
+  assert(0 && "generic lambda whose call operator has no single instantiated"
+              " specialisation\n");
+  return instantiations.empty() ? pattern : instantiations.front();
+}
+
 bool Converter::VisitLambdaExpr(clang::LambdaExpr *expr) {
   if (isAddrOf() && expr->capture_size() == 0) {
     StrCat("Some");
   }
+  auto *call_op = SelectLambdaCallOperator(expr);
   PushParen paren(*this);
   StrCat('|');
-  for (auto p : expr->getLambdaClass()->getLambdaCallOperator()->parameters()) {
+  for (auto p : call_op->parameters()) {
     StrCat(GetNamedDeclAsString(p), token::kColon, ToString(p->getType()),
            token::kComma);
   }
   StrCat("| {");
-  EmitFunctionPreamble(expr->getLambdaClass()->getLambdaCallOperator());
-  PushCurrFunction push_fn(*this,
-                           expr->getLambdaClass()->getLambdaCallOperator());
+  EmitFunctionPreamble(call_op);
+  PushCurrFunction push_fn(*this, call_op);
   ConvertFunctionBody(curr_function_);
   StrCat('}');
   return false;
