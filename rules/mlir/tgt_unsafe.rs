@@ -656,3 +656,17 @@ fn t43() -> () {
 fn t44() -> dataflowir_gen::ir::Attr {
     dataflowir_gen::ir::Attr::Raw(String::new())
 }
+
+// t45: the sixth concrete TypedValue -- same body as t30-t34.  The element type
+// is not representable in the crate, so the value's static type is Ty::Opaque.
+fn t45() -> dataflowir_gen::ir::Value {
+    dataflowir_gen::ir::Value::new(
+        ::std::string::String::new(),
+        dataflowir_gen::ir::Ty::Opaque(::std::string::String::new()),
+    )
+}
+
+// t46: llvm::MutableArrayRef<T1> -- same representation as t19 (ArrayRef).
+fn t46<T1>() -> Vec<T1> {
+    Vec::new()
+}

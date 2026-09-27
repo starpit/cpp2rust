@@ -370,6 +370,14 @@ class TokenType {};
 class FifoSlotType {};
 } // namespace ktdf
 
+// `mlir::sdscbundle::InputArgType` -- the SIXTH concrete `TypedValue` element type
+// (t45).  Restated as an EMPTY TAG for exactly the reason t30-t34's elements are:
+// only the SPELLING matters for the key, the element type itself is never mapped
+// on its own, and TypedValue's model discards it (see t45).
+namespace sdscbundle {
+class InputArgType {};
+} // namespace sdscbundle
+
 namespace detail {
 // mlir/include/mlir/IR/Value.h -- the storage behind an `OpResult`.  Declared
 // ONLY to spell the ResultRange base key; NOT mapped, for the same reason
@@ -556,6 +564,19 @@ namespace llvm {
 template <typename T>
 class ArrayRef {};
 
+// `llvm::MutableArrayRef<T>` -- t46, the biggest LIVE mlir-owned row in the
+// 2026-09-27 403-TU sweep (12 TUs).  It is `ArrayRef`'s mutable twin: the same
+// {pointer, length} view, non-const element access.  The diagnostic prints it
+// instantiated at `llvm::MutableArrayRef<mlir::Region>` -- by VALUE, because
+// `Operation::getRegions()` hands out the operation's inline region storage.
+// GENERIC IS SAFE HERE, unlike for an MLIR handle type (t26/t29/t37-t39): the
+// abort a generic rule risks is the converter having to map the template
+// ARGUMENT, and the only argument this row is instantiated at, `mlir::Region`,
+// already has a model (t3 -> fmt::Region).  t19 is the identical shape and has
+// been generic project-wide without incident.
+template <typename T>
+class MutableArrayRef {};
+
 // llvm/ADT/PointerUnion.h -- declared ONLY so the RegionRange base key can be
 // spelled.  NOT mapped (no `using tN =`).
 template <typename... PTs>
@@ -683,6 +704,27 @@ using t41 = mlir::ShapedType;
 using t42 = mlir::TensorType;
 using t43 = mlir::OpOperand;
 using t44 = mlir::IntegerSetAttr;
+
+// t45: the SIXTH concrete `TypedValue` instantiation, beyond t30-t34.  CONCRETE,
+// never generic -- the prohibition on the TypedValue class declaration above
+// applies unchanged.  Same model as t30-t34: an `ir::Value` (ir.rs:21), which is
+// WELL-GROUNDED, not a widening -- a TypedValue<T> IS an SSA value whose static
+// type is known, and the crate's Value carries exactly {name, Ty}.  The element
+// type is DISCARDED into `Ty::Opaque` (ir.rs:47) because the crate has no
+// `InputArgType`; that is the same honest loss t30-t34 already take, and no
+// accessor is mapped, so any query through one still aborts loudly.
+using t45 = mlir::detail::TypedValue<mlir::sdscbundle::InputArgType>;
+
+// t46: `llvm::MutableArrayRef<T1>` -- see the class declaration above for why
+// this one may be generic where the MLIR-handle rows may not.  SAME model as
+// t19: `Vec<T1>`.  This is a WIDENING of ownership, not of type: a C++
+// MutableArrayRef is a non-owning mutable view and a `Vec` owns its buffer, so
+// writes through a translated MutableArrayRef do NOT propagate to the viewed
+// container.  That is the identical, already-accepted tradeoff t19 makes for the
+// const view, and the crate has no borrowed-slice spelling a rule target can
+// name.  NO accessor is mapped here, so `data()`/`size()`/`operator[]` on one
+// still abort loudly rather than reading a detached copy.
+template <typename T1> using t46 = llvm::MutableArrayRef<T1>;
 
 
 // ---- the two operator rules ----------------------------------------------
