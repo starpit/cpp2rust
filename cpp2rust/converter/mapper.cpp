@@ -901,6 +901,112 @@ std::optional<std::string> tryDeriveFunctionPointerType(
   return out;
 }
 
+// A REFERENCE SPELLING has no `types_` entry either, and per-type entries are
+// the wrong fix: the reference is STRUCTURAL, so `const T &` would need a second
+// key beside every `T` in every module. Measured: across all of
+// /home/agent/work/pin/ir only the BARE `"mlir::NamedAttribute"` exists, no
+// `const mlir::NamedAttribute &` form in any module.
+//
+// This is the follow-on to tryDeriveFunctionPointerType above: with the
+// signature derived, the walk reaches its SECOND parameter and stopped there on
+//   unsupported unmapped type `const mlir::NamedAttribute &` ... while mapping
+//   `llvm::LogicalResult (*)(mlir::Operation *, const mlir::NamedAttribute &)`
+// (26 dxp TUs, all on that one spelling).
+//
+// The model deliberately MATCHES the QualType path, Converter::VisitReferenceType
+// (converter.cpp:352-356), which is exactly:
+//     StrCat(pointee.isConstQualified() ? "*const" : "*mut"); Convert(pointee);
+// so `const T &` -> `*const <T>` and `T &` -> `*mut <T>`. Three consequences of
+// matching it, none of them assumptions:
+//   * It is MODEL-BLIND -- there is no `switch (model_)` in it, unlike
+//     VisitPointerType's callers and addBuiltinTypes' `T *` rules (which give
+//     refcount `Ptr<T>`). A C++ REFERENCE is a borrow the refcount model does
+//     not own, so both models get the same raw pointer here. Doing otherwise
+//     would make the two paths disagree for one C++ type.
+//   * An RVALUE reference gets the same treatment: VisitReferenceType is on the
+//     ReferenceType base and never distinguishes, so `T &&` -> `*mut <T>`.
+//   * NO `dyn`: the abstract-struct `dyn` insertion lives in VisitPointerType
+//     only (converter.cpp:388-391), not in VisitReferenceType.
+//
+// The `&` must be the LAST character after trimming, and anything that cannot be
+// parsed with certainty returns nullopt and falls through to the existing loud
+// path rather than guessing -- a wrong strip would silently produce a wrong type.
+// In particular `T *const &` (reference to a const pointer) BAILS: its pointee
+// spelling `T *const` is not a key any rule carries, and deciding what to do
+// with the trailing `const` by guessing is exactly the silent wrongness this
+// project exists to stop.
+std::optional<std::string>
+tryDeriveReferenceType(const std::string &cpp_type) {
+  auto trim = [](std::string s) {
+    while (!s.empty() && isspace(static_cast<unsigned char>(s.front()))) {
+      s.erase(s.begin());
+    }
+    while (!s.empty() && isspace(static_cast<unsigned char>(s.back()))) {
+      s.pop_back();
+    }
+    return s;
+  };
+
+  std::string s = trim(cpp_type);
+  if (s.empty() || s.back() != '&') {
+    return std::nullopt;
+  }
+  s.pop_back();
+  if (!s.empty() && s.back() == '&') { // `T &&`
+    s.pop_back();
+  }
+  s = trim(s);
+  // A third `&`, or nothing left, is a shape we do not understand.
+  if (s.empty() || s.back() == '&') {
+    return std::nullopt;
+  }
+
+  // Is there a `*` (or `[`) at the TOP level? If so a leading `const ` binds to
+  // the POINTEE of that pointer, not to the reference's own referent:
+  // `const X *&` is a reference to a MUTABLE pointer-to-const, so it is `*mut`
+  // and the whole `const X *` is what must be mapped. A `*` inside template
+  // arguments -- `const X<Y *> &` -- is NOT top level and must not fool us.
+  bool top_level_ptr = false;
+  {
+    int depth = 0;
+    for (char c : s) {
+      if (c == '<' || c == '(' || c == '[') {
+        ++depth;
+      } else if (c == '>' || c == ')' || c == ']') {
+        --depth;
+      } else if ((c == '*' || c == '[') && depth == 0) {
+        top_level_ptr = true;
+      }
+    }
+  }
+
+  // `T *const` / `T const`: a TRAILING const. Bail loudly rather than guess.
+  {
+    const std::string kConst = "const";
+    if (s.size() >= kConst.size() &&
+        s.compare(s.size() - kConst.size(), kConst.size(), kConst) == 0 &&
+        (s.size() == kConst.size() ||
+         !(isalnum(static_cast<unsigned char>(s[s.size() - kConst.size() - 1])) ||
+           s[s.size() - kConst.size() - 1] == '_'))) {
+      return std::nullopt;
+    }
+  }
+
+  const std::string kConstPrefix = "const ";
+  bool is_const = false;
+  std::string pointee = s;
+  if (!top_level_ptr && s.compare(0, kConstPrefix.size(), kConstPrefix) == 0) {
+    is_const = true;
+    pointee = trim(s.substr(kConstPrefix.size()));
+  }
+  if (pointee.empty()) {
+    return std::nullopt;
+  }
+
+  PushMapContext ctx(cpp_type, map_ctx_.outer_type);
+  return (is_const ? "*const " : "*mut ") + mapTypeStringRecursive(pointee);
+}
+
 std::string mapTypeStringRecursive(const std::string &cpp_type) {
   auto [rule, subs] = search(types_, cpp_type, GetTypeMapKey(cpp_type));
   if (!rule) {
@@ -909,6 +1015,10 @@ std::string mapTypeStringRecursive(const std::string &cpp_type) {
     // derivable type is not a gap and recording it as one would keep a
     // now-solved row on the work queue.
     if (auto derived = tryDeriveFunctionPointerType(cpp_type)) {
+      return *derived;
+    }
+    // Same reasoning, one shape up: a trailing `&`/`&&` is structural.
+    if (auto derived = tryDeriveReferenceType(cpp_type)) {
       return *derived;
     }
     if (survey::Enabled()) {
