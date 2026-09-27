@@ -1155,8 +1155,18 @@ bool ConverterRefCount::VisitCallExpr(clang::CallExpr *expr) {
       pending_deref_.set(str, /*fresh=*/true);
       return false;
     }
-    // Apply deref before block wrapping so temporaries are still alive.
-    str = DerefPtrExpr(str, ref->getPointeeType());
+    // A RULE THAT RETURNS A RUST `&mut T` IS NOT A `Ptr<T>` -- the same
+    // invariant as the `pending_deref_` gate above, at the OTHER exit of this
+    // branch. `DerefPtrExpr` speaks the Ptr protocol: for a non-POD pointee it
+    // appends `.upgrade().deref()`, which exists on `Ptr<T>` and on nothing
+    // else. Applying it to a `&mut T` return -- e.g. the receiver of the second
+    // link of an `operator<<` chain, `&mut InFlightDiagnostic` -- emits
+    // `&mut (*shl_bytes_mut(..).upgrade().deref())` and gives
+    // `E0599: no method named `upgrade` found for mutable reference`.
+    // A Rust reference dereferences with a plain `*` for every pointee type.
+    str = Mapper::ReturnsMutRef(expr)
+              ? std::format("({}{})", token::kStar, str)
+              : DerefPtrExpr(str, ref->getPointeeType());
     if (ctx && !ctx->temporary_bindings.empty()) {
       str = std::format("{{ {} {} }}", ctx->temporary_bindings, str);
     }
