@@ -1061,3 +1061,30 @@ fn f44() -> dataflowir_gen::ir::Ty {
 fn f45() -> dataflowir_gen::ir::Attr {
     dataflowir_gen::ir::Attr::Raw(String::new())
 }
+
+// t77 -- `llvm::sys::SmartMutex<true>`, the same model rules/mutex gives
+// std::mutex.  lock/unlock/try_lock are NOT keyed, so the recursive-vs-plain
+// difference is unobservable; see the src.cpp note.  The refcount limitation
+// rules/mutex/tgt_refcount.rs records applies identically: a BY-REFERENCE member
+// on this type could not be read through a `Ptr<T>` (Mutex is not ByteRepr) --
+// which costs nothing here, because no member is keyed.
+fn t77() -> ::std::sync::Mutex<()> {
+    ::std::sync::Mutex::new(())
+}
+
+// t78 -- `llvm::cl::desc`, a one-field StringRef modifier; the StringRef model
+// from rules/stringref t1.
+fn t78() -> Vec<u8> {
+    vec![0]
+}
+
+// f46 -- the default constructor for t77, a fresh unlocked mutex.
+fn f46() -> ::std::sync::Mutex<()> {
+    ::std::sync::Mutex::new(())
+}
+
+// f47 -- `cl::desc(StringRef)`: the modifier IS its payload, so the constructor
+// is the identity on the StringRef bytes.
+fn f47(a0: Vec<u8>) -> Vec<u8> {
+    a0
+}

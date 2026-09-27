@@ -1137,3 +1137,27 @@ unsafe fn f44() -> dataflowir_gen::ir::Ty {
 unsafe fn f45() -> dataflowir_gen::ir::Attr {
     dataflowir_gen::ir::Attr::Raw(::std::string::String::new())
 }
+
+// t77 -- `llvm::sys::SmartMutex<true>`, the same model rules/mutex gives
+// std::mutex.  lock/unlock/try_lock are NOT keyed, so the recursive-vs-plain
+// difference is unobservable; see the src.cpp note.
+fn t77() -> ::std::sync::Mutex<()> {
+    ::std::sync::Mutex::new(())
+}
+
+// t78 -- `llvm::cl::desc`, a one-field StringRef modifier; the StringRef model
+// from rules/stringref t1.
+fn t78() -> Vec<libc::c_char> {
+    vec![0]
+}
+
+// f46 -- the default constructor for t77, a fresh unlocked mutex.
+unsafe fn f46() -> ::std::sync::Mutex<()> {
+    ::std::sync::Mutex::new(())
+}
+
+// f47 -- `cl::desc(StringRef)`: the modifier IS its payload, so the constructor
+// is the identity on the StringRef bytes.
+unsafe fn f47(a0: Vec<libc::c_char>) -> Vec<libc::c_char> {
+    a0
+}

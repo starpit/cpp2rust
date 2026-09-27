@@ -892,6 +892,25 @@ class StringLiteral {};
 template <typename... PTs>
 class PointerUnion {};
 
+namespace sys {
+// llvm/Support/Mutex.h:27-28 -- `template<bool mt_only> class SmartMutex`.
+// Declared ONLY so `SmartMutex<true>` is nameable; the real body is
+// `std::recursive_mutex impl; unsigned acquired = 0;` plus lock/unlock/try_lock,
+// and NONE of those members is declared here because none is mapped (see t77).
+template <bool mt_only> class SmartMutex {};
+} // namespace sys
+
+namespace cl {
+// llvm/Support/CommandLine.h:410-415 -- `struct desc { StringRef Desc;
+// desc(StringRef Str); void apply(Option &O) const; }`.  The CONSTRUCTOR
+// parameter is `llvm::StringRef` BY VALUE (CommandLine.h:413
+// `desc(StringRef Str) : Desc(Str) {}`) -- read off that line, not copied from a
+// sibling.  `apply` is deliberately NOT declared and NOT mapped.
+struct desc {
+  desc(StringRef Str);
+};
+} // namespace cl
+
 namespace detail {
 // llvm/ADT/STLExtras.h -- `indexed_accessor_range_base<DerivedT, BaseT, T,
 // PointerT, ReferenceT>`, the CRTP base of MLIR's range families.
@@ -1413,6 +1432,45 @@ using t75 = mlir::VectorType;
 // capability the crate does not have for any attribute.
 using t76 = mlir::FlatSymbolRefAttr;
 
+// t77: `llvm::sys::SmartMutex<true>` -> `::std::sync::Mutex<()>`, the SAME model
+// rules/mutex gives `std::mutex` (t1).  Queue row g038, 28 TUs, and its
+// `searched as:` line is `llvm::sys::SmartMutex<true>` -- CONCRETE, because the
+// template parameter is a bool NON-TYPE argument that is fixed at every use site
+// (`SmartMutex<false>` is the `sys::Mutex` alias; only `<true>` appears in the
+// corpus rows).  A concrete key keeps this off mapper.cpp:722/:835.
+//
+// ⭐ DESTRUCTOR TEST: `grep -rn '~SmartMutex' llvm/Support/` finds ZERO hits, so
+// the only destruction effect is the implicit one of the contained
+// `std::recursive_mutex` -- no observable program effect, which is what permits
+// an ordinary mapped local here.
+//
+// ⛔ WHAT IS LOST: the contained mutex is `std::recursive_mutex`, and
+// `::std::sync::Mutex` is NOT re-entrant.  That difference is UNOBSERVABLE here
+// because `lock()`, `unlock()` and `try_lock()` are DELIBERATELY NOT KEYED --
+// the same decision, for the same reason, that rules/mutex's header records for
+// bare `std::mutex::lock()`: a one-expression rule body has no place to keep a
+// guard alive, so a rule for bare lock() could only produce a lock that never
+// locks.  Those three stay a LOUD abort.  Also lost: `acquired`, the
+// single-threaded-mode assertion counter, which no ported code reads.
+using t77 = llvm::sys::SmartMutex<true>;
+
+// t78: `llvm::cl::desc` -> the StringRef model, `Vec<libc::c_char>` /  `Vec<u8>`
+// (rules/stringref t1/t2 give StringRef and StringLiteral exactly that).  Queue
+// row g041, 26 TUs, `searched as: llvm::cl::desc` -- a plain non-template
+// struct, so nothing generic is involved at all.
+//
+// ⭐ DESTRUCTOR TEST: `grep -rn '~desc' CommandLine.h` finds ZERO hits; the
+// struct is a one-field `StringRef Desc` modifier with no destructor, so it is
+// pure data and an ordinary mapped value is faithful.
+//
+// ⛔ WHAT IS LOST: `apply(Option &O) const` (CommandLine.h:415), which calls
+// `O.setDescription(Desc)`.  It is NOT declared above and NOT mapped, so a call
+// to it ABORTS LOUDLY rather than silently failing to register a description --
+// the t72 TypeID precedent: map the type, omit the member that would lie.  The
+// PAYLOAD (the description text) is preserved exactly, which is the part a
+// `-help` renderer would read.
+using t78 = llvm::cl::desc;
+
 // ---- WHAT THIS PASS DELIBERATELY LEFT OUT, and why -------------------------
 // * `mlir::IndexType::get(mlir::MLIRContext *)`, the ONE factory the verbose logs
 //   show in expression position (see t60).  NOT ADDED, because its only honest
@@ -1743,3 +1801,19 @@ mlir::MemRefType f42() { return mlir::MemRefType(); }
 mlir::TypedAttr f43() { return mlir::TypedAttr(); }
 mlir::VectorType f44() { return mlir::VectorType(); }
 mlir::FlatSymbolRefAttr f45() { return mlir::FlatSymbolRefAttr(); }
+
+// ---- f46/f47: THE CONSTRUCTORS FOR t77/t78 --------------------------------
+// ⭐ f39's note above is the whole argument and applies verbatim: a `using tN =`
+// maps the TYPE ONLY, and the converter looks the constructor up as an ORDINARY
+// EXPR RULE.  On a miss it emits `<mangled type>::new()`, so the TU gets rc=0 and
+// then `error[E0433]`.  Appended AFTER f45, which renumbers nothing.
+//
+// f46 -- `llvm::sys::SmartMutex<true> m;`, the DEFAULT constructor (implicit;
+// Mutex.h declares none, the class has only the two members).  Body is a fresh
+// unlocked mutex, the same body as rules/mutex f1.
+llvm::sys::SmartMutex<true> f46() { return llvm::sys::SmartMutex<true>(); }
+
+// f47 -- `llvm::cl::desc("...")`, the ONLY constructor the struct has
+// (CommandLine.h:413, `desc(StringRef Str)`, BY VALUE).  There is no default
+// constructor, so this is the one key ported code can reach.
+llvm::cl::desc f47(llvm::StringRef s) { return llvm::cl::desc(s); }
