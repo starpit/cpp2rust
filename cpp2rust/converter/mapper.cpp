@@ -314,6 +314,20 @@ matchTemplate(const std::string &template_str,
         }
       }
 
+      // A placeholder that captured NO TEXT is not a match. Without this the
+      // substitution above happily binds a placeholder to the empty string, so
+      // a key spelled `T1 (T2)` unified with a ZERO-argument instantiation
+      // (T2 = ""), and since GetTypeMapKey strips at `<` the arity is not in
+      // the bucket key either -- the two together made arrow arities
+      // indistinguishable. Measured on dataflow-scheduler/lib/Pipeline.cpp: a
+      // unary `std::function<T1 (T2)>` key stole the nullary instantiation and
+      // aborted with `unmapped type `` has no model in types_, while mapping
+      // std::function<std::unique_ptr<mlir::Pass> ()>` -- the empty backticks
+      // are this empty binding showing through.
+      if (repl->empty()) {
+        return std::nullopt;
+      }
+
       if (!nextLit.empty()) {
         size_t end_pos = 0;
         if (!matchLiteralAt(instantiated, si, nextLit, end_pos)) {
