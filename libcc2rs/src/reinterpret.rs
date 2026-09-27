@@ -86,6 +86,66 @@ impl ByteRepr for bool {
     }
 }
 
+// std::atomic<T> is modelled (rules/atomic) as the corresponding Rust atomic, and its
+// C++ operations all have REFERENCE receivers, which the refcount model lowers to
+// `Ptr<AtomicX>`.  `Ptr::with` / `Ptr::with_mut` (rc.rs:470 / rc.rs:437) require
+// `T: ByteRepr`, so without these impls every `&`-receiver atomic op is unreachable in
+// the refcount model.  These are REAL impls, not marker impls: each Rust atomic is
+// `repr(C)`/`repr(transparent)` over its integer, so a byte representation is total and
+// well defined -- it is exactly the integer's native-endian bytes.  `Relaxed` is used
+// because this is a raw byte VIEW of the storage, not a synchronising operation; the
+// orderings the C++ wrote are carried by the rule bodies, not by this trait.
+macro_rules! impl_byte_repr_atomic {
+    ($ty:ty, $int:ty) => {
+        impl ByteRepr for $ty {
+            #[inline]
+            fn byte_size() -> usize {
+                std::mem::size_of::<$int>()
+            }
+            #[inline]
+            fn to_bytes(&self, buf: &mut [u8]) {
+                buf.copy_from_slice(
+                    &self.load(std::sync::atomic::Ordering::Relaxed).to_ne_bytes(),
+                );
+            }
+            #[inline]
+            fn from_bytes(buf: &[u8]) -> Self {
+                let mut a = [0u8; std::mem::size_of::<$int>()];
+                a.copy_from_slice(buf);
+                <$ty>::new(<$int>::from_ne_bytes(a))
+            }
+        }
+    };
+}
+
+impl_byte_repr_atomic!(std::sync::atomic::AtomicI8, i8);
+impl_byte_repr_atomic!(std::sync::atomic::AtomicU8, u8);
+impl_byte_repr_atomic!(std::sync::atomic::AtomicI16, i16);
+impl_byte_repr_atomic!(std::sync::atomic::AtomicU16, u16);
+impl_byte_repr_atomic!(std::sync::atomic::AtomicI32, i32);
+impl_byte_repr_atomic!(std::sync::atomic::AtomicU32, u32);
+impl_byte_repr_atomic!(std::sync::atomic::AtomicI64, i64);
+impl_byte_repr_atomic!(std::sync::atomic::AtomicU64, u64);
+impl_byte_repr_atomic!(std::sync::atomic::AtomicIsize, isize);
+impl_byte_repr_atomic!(std::sync::atomic::AtomicUsize, usize);
+
+// AtomicBool has no `to_ne_bytes` on its payload, so it does not fit the macro. One
+// byte, 0 / 1, mirroring the `impl ByteRepr for bool` above.
+impl ByteRepr for std::sync::atomic::AtomicBool {
+    #[inline]
+    fn byte_size() -> usize {
+        1
+    }
+    #[inline]
+    fn to_bytes(&self, buf: &mut [u8]) {
+        buf[0] = self.load(std::sync::atomic::Ordering::Relaxed) as u8;
+    }
+    #[inline]
+    fn from_bytes(buf: &[u8]) -> Self {
+        std::sync::atomic::AtomicBool::new(buf[0] != 0)
+    }
+}
+
 impl ByteRepr for () {}
 impl ByteRepr for std::fs::File {}
 impl<T: ByteRepr> ByteRepr for Vec<T> {}
