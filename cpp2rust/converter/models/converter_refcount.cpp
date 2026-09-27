@@ -999,7 +999,11 @@ static std::vector<const char *> printf2fmt(std::string &format,
       pos += 2;
       continue;
     case '%':
-      types.emplace_back();
+      // `%%` is a LITERAL percent: it consumes NO argument, so it must NOT push
+      // a `types` entry. `types` is indexed by ARGUMENT (see ConvertPrintf), and
+      // an entry here shifted every later argument's cast by one -- measured on
+      // `printf("100%% %c\n", ch)`, where the `%c` cast landed on the `%%` slot
+      // and the char printed as its numeric value.
       format.replace(pos, 2, "%");
       pos += 2;
       continue;
@@ -1127,12 +1131,30 @@ void ConverterRefCount::ConvertPrintf(clang::CallExpr *expr) {
       format, expr->getBeginLoc().printToString(ctx_.getSourceManager()));
   StrCat(format);
 
-  unsigned j = 0;
-  for (unsigned i = is_fprintf + 1, e = expr->getNumArgs(); i < e; ++i) {
+  // INVARIANT: `types` is parallel to the VARIADIC ARGUMENTS -- printf2fmt
+  // pushes exactly one entry per conversion that consumes an argument, and a
+  // NULL entry means "pass this argument through with no cast". So the cast for
+  // argument `i` is `types[i - first]`, nothing else.
+  //
+  // This used to read `if (types[j]) StrCat(kAs, types[j++]);`, which advanced
+  // `j` ONLY on a non-null entry: every pass-through conversion PINNED `j`, and
+  // the next cast-needing conversion then took its cast from the WRONG SLOT and
+  // applied it to an argument it does not belong to. Measured on
+  // `printf("%d %c\n", 65, 'B')`: the `%d` entry is null, so `j` stayed 0 and
+  // the `u8 as char` cast from the `%c` slot was applied to the FIRST argument,
+  // emitting `println!("{} {}", 65 as u8 as char, 'B' as u8)` -- prints "A 66"
+  // where C prints "65 B". It compiled and printed the wrong values, i.e. silent
+  // wrongness. 73cfd28 made it more reachable: the survey arm of printf2fmt now
+  // pushes a null entry for an unknown specifier, so `%f` followed by `%c`
+  // under --survey hits it too.
+  const unsigned first = is_fprintf + 1;
+  for (unsigned i = first, e = expr->getNumArgs(); i < e; ++i) {
     StrCat(token::kComma);
     Convert(expr->getArg(i));
-    if (types[j])
-      StrCat(keyword::kAs, types[j++]);
+    // A variadic argument with no conversion left to describe it (more args than
+    // conversions) gets no cast rather than an out-of-bounds read.
+    if (unsigned j = i - first; j < types.size() && types[j])
+      StrCat(keyword::kAs, types[j]);
   }
   StrCat(')');
 }

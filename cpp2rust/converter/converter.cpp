@@ -3880,8 +3880,14 @@ void Converter::ReportUnsupportedStructuredBinding(
     survey::Record(survey::GapKind::kUnsupportedConstruct, detail, loc);
     return;
   }
-  llvm::errs() << "unsupported " << detail << " at " << loc << '\n';
-  assert(0 && "unsupported structured binding (DecompositionDecl)");
+  // SILENT OMISSION under NDEBUG, which is the build everyone ships: the assert
+  // compiled to nothing, this returned, VisitVarDecl (converter.cpp:678)
+  // returned false having emitted NO TEXT for the declaration, and the process
+  // exited 0 -- so the `.rs` simply lacked the variable while every later use of
+  // its bindings referred to a name that was never declared. Same class as
+  // ReportUnsupportedException (73cfd28); refuse loudly instead, naming the
+  // construct, its bindings and the source location.
+  llvm::report_fatal_error(llvm::Twine("unsupported ") + detail + " at " + loc);
 }
 
 void Converter::ReportUnmappedSystemType(const clang::RecordDecl *decl) {
