@@ -212,3 +212,83 @@ unsafe fn f20<T1: std::hash::Hash + Eq, T2: Default>(
 unsafe fn f21<T1, T2>(a0: u32) -> std::collections::HashMap<T1, T2> {
     std::collections::HashMap::with_capacity(a0 as usize)
 }
+
+// ---------------------------------------------------------------------------
+// f22-f30 -- the rest of the operation surface.  Shapes copied from
+// rules/unordered_map's committed f2 (size), f6 (count), f8 (erase-by-key),
+// f24/f27 (find) and f40 (erase-by-iterator); the ONE place they do not transfer
+// verbatim is the MapRef, because this module's t1 is a BARE
+// `std::collections::HashMap<T1, T2>` while unordered_map's is
+// `std::collections::HashMap<K, Box<V>>` -- so there is no `Box` to unwrap here
+// and no `UnsafeHashMapIterator` alias to name.
+//
+// RETURN WIDTHS FOLLOW THE C++ DECLARATIONS, which differ from unordered_map's:
+// `unsigned size()`/`unsigned count()` are u32 (not usize) and `erase(key)`
+// returns bool (not a count).
+
+unsafe fn f22<T1, T2>(a0: std::collections::HashMap<T1, T2>) -> bool {
+    a0.is_empty()
+}
+
+unsafe fn f23<T1, T2>(a0: std::collections::HashMap<T1, T2>) -> u32 {
+    a0.len() as u32
+}
+
+unsafe fn f24<T1: std::hash::Hash + Eq, T2>(
+    a0: std::collections::HashMap<T1, T2>,
+    a1: T1,
+) -> u32 {
+    (if a0.contains_key(&a1) { 1 } else { 0 })
+}
+
+// f25 -- `lookup`.  LLVM returns a DEFAULT-CONSTRUCTED ValueT when the key is
+// absent (DenseMap.h:203-205), so `unwrap_or_default()` is the faithful tail and
+// an `Option` or a panic would not be.  `cloned()` is needed because C++ returns
+// BY VALUE out of a const receiver.
+unsafe fn f25<T1: std::hash::Hash + Eq, T2: Clone + Default>(
+    a0: std::collections::HashMap<T1, T2>,
+    a1: T1,
+) -> T2 {
+    a0.get(&a1).cloned().unwrap_or_default()
+}
+
+unsafe fn f26<T1: std::hash::Hash + Eq + Clone, T2>(
+    a0: &mut std::collections::HashMap<T1, T2>,
+    a1: T1,
+) -> libcc2rs::HashMapIter<T1, *const std::collections::HashMap<T1, T2>> {
+    libcc2rs::HashMapIter::find_key(&*a0 as *const std::collections::HashMap<T1, T2>, &a1)
+}
+
+unsafe fn f27<T1: std::hash::Hash + Eq + Clone, T2>(
+    a0: std::collections::HashMap<T1, T2>,
+    a1: T1,
+) -> libcc2rs::HashMapIter<T1, *const std::collections::HashMap<T1, T2>> {
+    libcc2rs::HashMapIter::find_key(&a0 as *const std::collections::HashMap<T1, T2>, &a1)
+}
+
+unsafe fn f28<T1: std::hash::Hash + Eq, T2>(
+    a0: &mut std::collections::HashMap<T1, T2>,
+    a1: T1,
+) -> bool {
+    a0.remove(&a1).is_some()
+}
+
+// f29 -- `erase(iterator)`, which is VOID in LLVM.  `HashMapIter::erase` returns
+// the FOLLOWING iterator, so the result is discarded with `drop(..)` -- one
+// expression, yielding `()`, and `a0` is mentioned exactly once.
+unsafe fn f29<T1: std::hash::Hash + Eq + Clone, T2>(
+    a0: &mut std::collections::HashMap<T1, T2>,
+    a1: libcc2rs::HashMapIter<T1, *const std::collections::HashMap<T1, T2>>,
+) {
+    drop(libcc2rs::HashMapIter::erase(
+        &*a0 as *const std::collections::HashMap<T1, T2>,
+        &a1,
+    ))
+}
+
+// f30 -- `DenseSet(unsigned InitialReserve)`.  Same reasoning as f21: the reserve
+// is a capacity HINT with no observable semantics, and keeping the argument USED
+// preserves any side effect in it.
+unsafe fn f30<T1>(a0: u32) -> std::collections::HashSet<T1> {
+    std::collections::HashSet::with_capacity(a0 as usize)
+}

@@ -131,7 +131,16 @@ public:
 template <typename ValueT, typename ValueInfoT = DenseMapInfo<ValueT, void>>
 class DenseSet {
 public:
-  DenseSet();
+  // `unsigned InitialReserve = 0`, NOT a nullary ctor -- for exactly the reason
+  // DenseMap's is spelled that way, and HARVESTED from the real header rather
+  // than guessed: real `llvm::DenseSet` (DenseSet.h:279-283) derives from
+  // `detail::DenseSet<ValueT, ValueInfoT>` and INHERITS its constructors with
+  // `using BaseT::BaseT;`, and the only one that can default-construct is
+  //   explicit DenseSetImpl(unsigned InitialReserve = 0)   // DenseSet.h:69
+  // so `llvm::DenseSet<T> s;` resolves to an INHERITED one-argument constructor,
+  // not a nullary one.  t2 has had NO constructor since it landed, which is the
+  // latent rc=0-then-E0433 trap measured eight times on this project.
+  explicit DenseSet(unsigned InitialReserve = 0);
 };
 
 
@@ -181,6 +190,41 @@ public:
   DenseMapIterator<KeyT, ValueT, DenseMapInfo<KeyT>,
                    detail::DenseMapPair<KeyT, ValueT>, true>
   end() const;
+
+  // ---- THE REST OF THE OPERATION SURFACE, all on the CRTP base. ----
+  //
+  // PARAMETER TYPE, and it is the one thing here that is NOT fully general.
+  // Real LLVM spells these `const_arg_type_t<KeyT>` (DenseMap.h:66), which is
+  // `const KeyT &` for a non-pointer KeyT and `const KeyT` (BY VALUE) for a
+  // pointer KeyT.  `const KeyT &` is therefore the correct and MEASURED spelling
+  // for the non-pointer instantiations; a pointer-keyed `DenseSet<Operation *>` /
+  // `DenseMap<Operation *, X>` would print a different parameter and needs its
+  // own key.  That key is NOT written here because it has not been measured --
+  // guessing it would record a dead rule, and its absence aborts LOUDLY.
+  //
+  // RETURN TYPES ARE HARVESTED FROM THE REAL HEADER, NOT ASSUMED, and three of
+  // them differ from the std:: containers rules/unordered_map models:
+  //   * `unsigned size()`  (DenseMap.h:110)  -- NOT size_t
+  //   * `size_type count()` (DenseMap.h:174) with size_type = unsigned -- 0 or 1,
+  //     NOT a bool
+  //   * `bool erase(const KeyT &)` (DenseMap.h:330) -- NOT the size_type that
+  //     std::unordered_map::erase returns
+  //   * `void erase(iterator)` (DenseMap.h:341) -- a DIFFERENT return type from
+  //     the by-key overload, hence a genuinely separate key
+  // `lookup` returns ValueT BY VALUE and is documented to return "a default
+  // constructed ValueT" when the key is absent (DenseMap.h:203-205); that
+  // default-on-miss is precisely why the corpus uses it, so an Option-returning
+  // or panicking model would be WRONG, not merely different.
+  bool empty() const;
+  unsigned size() const;
+  unsigned count(const KeyT &Val) const;
+  ValueT lookup(const KeyT &Val) const;
+  DenseMapIterator<KeyT, ValueT> find(const KeyT &Val);
+  DenseMapIterator<KeyT, ValueT, DenseMapInfo<KeyT>,
+                   detail::DenseMapPair<KeyT, ValueT>, true>
+  find(const KeyT &Val) const;
+  bool erase(const KeyT &Val);
+  void erase(DenseMapIterator<KeyT, ValueT> I);
 };
 
 
@@ -494,4 +538,111 @@ T2 &f20(llvm::DenseMapBase<llvm::DenseMap<T1, T2>, T1, T2, llvm::DenseMapInfo<T1
 template <typename T1, typename T2>
 llvm::DenseMap<T1, T2> f21(unsigned a0) {
   return llvm::DenseMap<T1, T2>(a0);
+}
+
+
+// ---------------------------------------------------------------------------
+// f22-f30 -- THE REST OF THE OPERATION SURFACE.  Receiver is the FIVE-argument
+// CRTP base (t3) in the same sugared spelling f7-f10/f19/f20 already use and
+// which is MEASURED to match; const members take the receiver const-qualified,
+// which is a DIFFERENT key from the non-const one.
+//
+// WHAT IS DELIBERATELY ABSENT, AND WHY -- `try_emplace`.
+//   Real signature (DenseMap.h, DenseMapBase):
+//     template <typename... Ts>
+//     std::pair<iterator, bool> try_emplace(KeyT &&Key, Ts &&...Args);
+//     template <typename... Ts>
+//     std::pair<iterator, bool> try_emplace(const KeyT &Key, Ts &&...Args);
+//   It is left out for the SAME measured reason rules/unordered_map leaves out
+//   insert/emplace (see its header comment): the return type is
+//   `std::pair<iterator, bool>`, whose lowering needs a pair whose FIRST element
+//   is a mapped iterator type, and that is not modelled -- rules/pair's t1 is a
+//   plain Rust 2-tuple, so the iterator component would have to be a
+//   `HashMapIter` inside a tuple the converter builds itself.  It is ALSO
+//   variadic, so its key is not a fixed arity.
+//   The tempting wrong mapping is `insert`: `HashMap::insert` OVERWRITES an
+//   existing key and returns the OLD value, whereas `try_emplace` does NOT
+//   overwrite.  A key-for-key mapping onto `insert` would therefore be SILENTLY
+//   wrong for any re-inserted key; the faithful shape is
+//   `entry(k).or_insert_with(..)`, but that still cannot produce the
+//   `pair<iterator, bool>`.  So it is left UNMAPPED, which aborts loudly at the
+//   call site, rather than approximated.
+
+template <typename T1, typename T2>
+bool f22(const llvm::DenseMapBase<llvm::DenseMap<T1, T2>, T1, T2,
+                                  llvm::DenseMapInfo<T1>,
+                                  llvm::detail::DenseMapPair<T1, T2>> &a0) {
+  return a0.empty();
+}
+
+template <typename T1, typename T2>
+unsigned f23(const llvm::DenseMapBase<llvm::DenseMap<T1, T2>, T1, T2,
+                                      llvm::DenseMapInfo<T1>,
+                                      llvm::detail::DenseMapPair<T1, T2>> &a0) {
+  return a0.size();
+}
+
+template <typename T1, typename T2>
+unsigned f24(const llvm::DenseMapBase<llvm::DenseMap<T1, T2>, T1, T2,
+                                      llvm::DenseMapInfo<T1>,
+                                      llvm::detail::DenseMapPair<T1, T2>> &a0,
+             const T1 &a1) {
+  return a0.count(a1);
+}
+
+template <typename T1, typename T2>
+T2 f25(const llvm::DenseMapBase<llvm::DenseMap<T1, T2>, T1, T2,
+                                llvm::DenseMapInfo<T1>,
+                                llvm::detail::DenseMapPair<T1, T2>> &a0,
+       const T1 &a1) {
+  return a0.lookup(a1);
+}
+
+// find on a MUTABLE receiver returns t4's TWO-argument iterator spelling -- the
+// same shape f7/f8 return, so `it != m.end()` is a comparison of two identical
+// types and f1/f2 apply to it unchanged.
+template <typename T1, typename T2>
+llvm::DenseMapIterator<T1, T2>
+f26(llvm::DenseMapBase<llvm::DenseMap<T1, T2>, T1, T2, llvm::DenseMapInfo<T1>,
+                       llvm::detail::DenseMapPair<T1, T2>> &a0,
+    const T1 &a1) {
+  return a0.find(a1);
+}
+
+// find on a CONST receiver returns t5's FIVE-argument `, true>` spelling, the
+// shape f9/f10 return.  The arity split is real: a single key cannot cover both.
+template <typename T1, typename T2>
+llvm::DenseMapIterator<T1, T2, llvm::DenseMapInfo<T1>,
+                       llvm::detail::DenseMapPair<T1, T2>, true>
+f27(const llvm::DenseMapBase<llvm::DenseMap<T1, T2>, T1, T2,
+                             llvm::DenseMapInfo<T1>,
+                             llvm::detail::DenseMapPair<T1, T2>> &a0,
+    const T1 &a1) {
+  return a0.find(a1);
+}
+
+// erase BY KEY -> bool.
+template <typename T1, typename T2>
+bool f28(llvm::DenseMapBase<llvm::DenseMap<T1, T2>, T1, T2,
+                            llvm::DenseMapInfo<T1>,
+                            llvm::detail::DenseMapPair<T1, T2>> &a0,
+         const T1 &a1) {
+  return a0.erase(a1);
+}
+
+// erase BY ITERATOR -> void.  A VOID body must still be spelled `return f(...);`
+// (the older rule, which sits alongside the ban on `return` as a STATEMENT).
+template <typename T1, typename T2>
+void f29(llvm::DenseMapBase<llvm::DenseMap<T1, T2>, T1, T2,
+                            llvm::DenseMapInfo<T1>,
+                            llvm::detail::DenseMapPair<T1, T2>> &a0,
+         llvm::DenseMapIterator<T1, T2> a1) {
+  return a0.erase(a1);
+}
+
+// f30 -- t2's CONSTRUCTOR.  See the note on the DenseSet declaration: the
+// spelling is `DenseSet(unsigned)`, harvested from DenseSet.h:69 + 283, not
+// guessed nullary.
+template <typename T1> llvm::DenseSet<T1> f30(unsigned a0) {
+  return llvm::DenseSet<T1>(a0);
 }

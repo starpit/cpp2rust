@@ -215,3 +215,80 @@ fn f20<T1: Eq + std::hash::Hash + Clone + 'static, T2: Default + 'static>(
 fn f21<T1, T2>(a0: u32) -> std::collections::HashMap<T1, Value<T2>> {
     std::collections::HashMap::with_capacity(a0 as usize)
 }
+
+// ---------------------------------------------------------------------------
+// f22-f30 -- the rest of the operation surface, refcount arm.
+// EVERY ONE OF THESE NEEDS THE OVERRIDE, and for the same two reasons the keys
+// above do: (a) the unsafe signatures name `*const std::collections::HashMap<T1,
+// T2>` -- LITERAL raw-pointer text, which is copied VERBATIM into the refcount
+// arm if not overridden (the rules/atomic E0605 failure mode); (b) the receiver
+// here is `Ptr<std::collections::HashMap<T1, Value<T2>>>`, so a mutation must go
+// through `with_mut` and the mapped value is a `Value<T2>` that has to be
+// borrowed rather than read directly.
+// EACH BODY MENTIONS `a0` EXACTLY ONCE: the body is inlined as one expression,
+// and two mentions of a `Ptr` receiver borrow it twice -- the measured
+// `RefCell already mutably borrowed` panic in rules/mlir.
+
+fn f22<T1, T2>(a0: std::collections::HashMap<T1, Value<T2>>) -> bool {
+    a0.is_empty()
+}
+
+fn f23<T1, T2>(a0: std::collections::HashMap<T1, Value<T2>>) -> u32 {
+    a0.len() as u32
+}
+
+fn f24<T1: std::hash::Hash + Eq, T2>(
+    a0: std::collections::HashMap<T1, Value<T2>>,
+    a1: T1,
+) -> u32 {
+    (if a0.contains_key(&a1) { 1 } else { 0 })
+}
+
+// f25 -- `lookup`.  Default-on-miss exactly as in the unsafe arm; the extra step
+// is that a present value is a `Value<T2>` and must be BORROWED and cloned out,
+// because C++ returns ValueT by value.
+fn f25<T1: std::hash::Hash + Eq, T2: Clone + Default>(
+    a0: std::collections::HashMap<T1, Value<T2>>,
+    a1: T1,
+) -> T2 {
+    a0.get(&a1)
+        .map(|__v: &Value<T2>| __v.borrow().clone())
+        .unwrap_or_default()
+}
+
+fn f26<T1: std::hash::Hash + Eq + Clone + 'static, T2: 'static>(
+    a0: Ptr<std::collections::HashMap<T1, Value<T2>>>,
+    a1: T1,
+) -> RefcountHashMapIter<T1, T2> {
+    RefcountHashMapIter::find_key(a0, &a1)
+}
+
+fn f27<T1: std::hash::Hash + Eq + Clone + 'static, T2: 'static>(
+    a0: Ptr<std::collections::HashMap<T1, Value<T2>>>,
+    a1: T1,
+) -> RefcountHashMapIter<T1, T2> {
+    RefcountHashMapIter::find_key(a0, &a1)
+}
+
+fn f28<T1: std::hash::Hash + Eq + 'static, T2: 'static>(
+    a0: Ptr<std::collections::HashMap<T1, Value<T2>>>,
+    a1: T1,
+) -> bool {
+    a0.with_mut(|__v: &mut std::collections::HashMap<T1, Value<T2>>| {
+        __v.remove(&a1).is_some()
+    })
+}
+
+fn f29<T1: std::hash::Hash + Eq + Clone + 'static, T2: 'static>(
+    a0: Ptr<std::collections::HashMap<T1, Value<T2>>>,
+    a1: RefcountHashMapIter<T1, T2>,
+) {
+    drop(RefcountHashMapIter::erase(a0, &a1))
+}
+
+// f30 -- `DenseSet(unsigned)`.  Overridden only so the two arms stay in step;
+// t2 is a plain `std::collections::HashSet<T1>` in both models (a set holds no
+// mapped value for C++ to hand out a reference to, so there is nothing to share).
+fn f30<T1>(a0: u32) -> std::collections::HashSet<T1> {
+    std::collections::HashSet::with_capacity(a0 as usize)
+}
