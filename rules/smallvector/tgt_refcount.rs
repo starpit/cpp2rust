@@ -10,9 +10,8 @@
 // member becomes an `unimplemented!()`; that is STALE. The sole emitter of that
 // was replaced by a loud refusal in converter.cpp, and `grep -rn 'unimplemented!'`
 // over the converter, the rule preprocessor and libcc2rs now finds only comments.
-// An unmapped member FAILS AT TRANSLATE TIME, which is the point.)
-// default trait body in this model, which is loud where a wrong body would be
-// silent.
+// An unmapped member FAILS AT TRANSLATE TIME, which is loud where a wrong body
+// would be silent -- and that is the point.)
 
 use libcc2rs::*;
 use std::cell::RefCell;
