@@ -98,6 +98,12 @@ impl<T: 'static> ByteRepr for *const T {}
 impl<T: 'static> ByteRepr for *mut T {}
 impl<A: ByteRepr, B: ByteRepr> ByteRepr for (A, B) {}
 impl<K: 'static, V: 'static> ByteRepr for std::collections::BTreeMap<K, V> {}
+// std::set's refcount container is `Ptr<BTreeSet<K>>`, mirroring map's
+// `Ptr<BTreeMap<K, Value<V>>>`, and `Ptr::with_mut` requires `T: ByteRepr`. Same shape as
+// BTreeMap above: every ByteRepr method has a panicking default, so this impl claims only
+// "a Ptr may point at one of these" and models no byte-level representation for a
+// red-black/B-tree, exactly as for BTreeMap.
+impl<K: 'static> ByteRepr for std::collections::BTreeSet<K> {}
 // Same shape as BTreeMap above: every ByteRepr method has a panicking default, so this
 // impl claims only "a Ptr may point at one of these", which is what Ptr::with_mut /
 // Ptr::write require. No byte-level representation is (or could be) modelled for a hash

@@ -4,6 +4,7 @@
 use crate::{PostfixDec, PostfixInc, PrefixDec, PrefixInc, Ptr, Value};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::ops::Bound;
 use std::rc::Rc;
 
@@ -657,6 +658,198 @@ impl<T> Iterator for StringIterator<T> {
             Some(value)
         } else {
             None
+        }
+    }
+}
+
+// std::set / std::multiset -- an ORDERED set, so the element order this iterator walks is
+// the sorted order of the container, exactly as libc++'s red-black tree iterator does. A set
+// element IS the key, so `first()`/`second()` do not apply and the MapIterator trait is
+// deliberately not implemented; the element is read with `value()`. Unlike HashSetIter there
+// is NO order caveat: BTreeSet and std::set agree on the traversal order, and `inc()` is a
+// range query from the current key rather than a linear rescan.
+pub trait SetAccess: Clone + Default {
+    type Key: Ord + Clone;
+    fn with<R>(&self, f: impl FnOnce(&BTreeSet<Self::Key>) -> R) -> R;
+    fn with_mut<R>(&self, f: impl FnOnce(&mut BTreeSet<Self::Key>) -> R) -> R;
+}
+
+impl<K: Ord + Clone + 'static> SetAccess for Ptr<BTreeSet<K>> {
+    type Key = K;
+
+    fn with<R>(&self, f: impl FnOnce(&BTreeSet<K>) -> R) -> R {
+        Ptr::with(self, f)
+    }
+
+    fn with_mut<R>(&self, f: impl FnOnce(&mut BTreeSet<K>) -> R) -> R {
+        Ptr::with_mut(self, f)
+    }
+}
+
+impl<K: Ord + Clone> SetAccess for *const BTreeSet<K> {
+    type Key = K;
+
+    fn with<R>(&self, f: impl FnOnce(&BTreeSet<K>) -> R) -> R {
+        unsafe { f(&**self) }
+    }
+
+    fn with_mut<R>(&self, f: impl FnOnce(&mut BTreeSet<K>) -> R) -> R {
+        unsafe { f(&mut *(*self as *mut BTreeSet<K>)) }
+    }
+}
+
+pub struct SetIter<K, SetRef> {
+    set: SetRef,
+    key: Option<K>,
+}
+
+pub type RefcountSetIter<K> = SetIter<K, Ptr<BTreeSet<K>>>;
+pub type UnsafeSetIterator<K> = SetIter<K, *const BTreeSet<K>>;
+
+impl<K: Clone, SetRef: Clone> Clone for SetIter<K, SetRef> {
+    fn clone(&self) -> Self {
+        Self {
+            set: self.set.clone(),
+            key: self.key.clone(),
+        }
+    }
+}
+
+impl<K: PartialEq, SetRef> PartialEq for SetIter<K, SetRef> {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl<K: Ord + Clone, SetRef: SetAccess<Key = K>> SetIter<K, SetRef> {
+    pub fn null() -> Self {
+        Self {
+            set: Default::default(),
+            key: None,
+        }
+    }
+
+    pub fn begin(set: SetRef) -> Self {
+        let first = set.with(|s| s.iter().next().cloned());
+        Self { set, key: first }
+    }
+
+    pub fn end(set: SetRef) -> Self {
+        Self { set, key: None }
+    }
+
+    pub fn find_key(set: SetRef, key: &K) -> Self {
+        if set.with(|s| s.contains(key)) {
+            Self {
+                set,
+                key: Some(key.clone()),
+            }
+        } else {
+            Self::end(set)
+        }
+    }
+
+    pub fn is_end(&self) -> bool {
+        self.key.is_none()
+    }
+
+    pub fn value(&self) -> K {
+        self.key
+            .as_ref()
+            .expect("ub: dereference of end iterator")
+            .clone()
+    }
+
+    pub fn inc(&mut self) {
+        let cur = match &self.key {
+            Some(k) => k.clone(),
+            None => panic!("ub: increment past end"),
+        };
+        self.key = self.set.with(|s| {
+            if !s.contains(&cur) {
+                panic!("ub: increment of an invalidated set iterator");
+            }
+            s.range((
+                std::ops::Bound::Excluded(cur.clone()),
+                std::ops::Bound::Unbounded,
+            ))
+            .next()
+            .cloned()
+        });
+    }
+
+    pub fn erase(set: SetRef, iter: &Self) -> Self {
+        let key = iter
+            .key
+            .as_ref()
+            .expect("ub: erase of end iterator")
+            .clone();
+        let mut next = Self {
+            set: set.clone(),
+            key: Some(key.clone()),
+        };
+        next.inc();
+        let next_key = next.key;
+        set.with_mut(|s| s.remove(&key));
+        Self { set, key: next_key }
+    }
+}
+
+impl<K: Ord + Clone, SetRef: SetAccess<Key = K>> Iterator for SetIter<K, SetRef> {
+    type Item = Self;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.is_end() {
+            return None;
+        }
+        let snapshot = self.clone();
+        self.inc();
+        Some(snapshot)
+    }
+}
+
+impl<K: Ord + Clone, SetRef: SetAccess<Key = K>> PrefixInc for SetIter<K, SetRef> {
+    fn prefix_inc(&mut self) -> Self {
+        self.inc();
+        self.clone()
+    }
+}
+
+impl<K: Ord + Clone, SetRef: SetAccess<Key = K>> PostfixInc for SetIter<K, SetRef> {
+    fn postfix_inc(&mut self) -> Self {
+        let ret = self.clone();
+        self.inc();
+        ret
+    }
+}
+
+// `*it` on a set iterator yields `const T1 &`. It lowers by the MapIterator::first()
+// precedent above: a raw `*const K` in the unsafe model, a `Value<K>` in the refcount model.
+// The unsafe arm points at the element STORED IN THE CONTAINER, not at the copy the iterator
+// carries, so the pointer stays valid for as long as the element does.
+pub trait SetIterator {
+    type Element;
+    fn element(&self) -> Self::Element;
+}
+
+impl<K: Ord + Clone + 'static> SetIterator for RefcountSetIter<K> {
+    type Element = Value<K>;
+
+    fn element(&self) -> Value<K> {
+        let key = self.key.as_ref().expect("ub: dereference of end iterator");
+        Rc::new(RefCell::new(key.clone()))
+    }
+}
+
+impl<K: Ord + Clone> SetIterator for UnsafeSetIterator<K> {
+    type Element = *const K;
+
+    fn element(&self) -> *const K {
+        let key = self.key.as_ref().expect("ub: dereference of end iterator");
+        unsafe {
+            (*self.set)
+                .get(key)
+                .expect("ub: element not found in set") as *const K
         }
     }
 }

@@ -52,3 +52,65 @@ template <typename T1>
 std::set<T1> &f12(std::set<T1> &dst, std::set<T1> &&src) {
   return dst.operator=(std::move(src));
 }
+
+template <typename T1> using t2 = typename std::set<T1>::const_iterator;
+
+template <typename T1>
+std::pair<typename std::set<T1>::iterator, bool> f13(std::set<T1> &o,
+                                                     const T1 &k) {
+  return o.insert(k);
+}
+
+template <typename T1>
+typename std::set<T1>::const_iterator f14(const std::set<T1> &o) {
+  return o.begin();
+}
+
+template <typename T1>
+typename std::set<T1>::const_iterator f15(const std::set<T1> &o) {
+  return o.end();
+}
+
+template <typename T1>
+typename std::set<T1>::iterator f16(std::set<T1> &o) {
+  return o.begin();
+}
+
+template <typename T1>
+typename std::set<T1>::iterator f17(std::set<T1> &o) {
+  return o.end();
+}
+
+template <typename T1>
+bool f18(typename std::set<T1>::const_iterator a,
+         typename std::set<T1>::const_iterator b) {
+  return operator==(a, b);
+}
+
+template <typename T1>
+bool f19(typename std::set<T1>::const_iterator a,
+         typename std::set<T1>::const_iterator b) {
+  return operator!=(a, b);
+}
+
+template <typename T1>
+typename std::set<T1>::const_iterator &
+f20(typename std::set<T1>::const_iterator &it) {
+  return it.operator++();
+}
+
+template <typename T1>
+typename std::set<T1>::const_iterator
+f21(typename std::set<T1>::const_iterator a0, int a1) {
+  return a0.operator++(a1);
+}
+
+template <typename T1>
+const T1 &f22(typename std::set<T1>::const_iterator it) {
+  return it.operator*();
+}
+
+template <typename T1>
+std::pair<typename std::set<T1>::iterator, bool> f23(std::set<T1> &o, T1 &&k) {
+  return o.insert(std::move(k));
+}
