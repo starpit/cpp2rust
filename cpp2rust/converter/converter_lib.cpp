@@ -1480,8 +1480,31 @@ GetStrongestIteratorCategory(clang::QualType type) {
   if (mapped.empty()) {
     return std::nullopt;
   }
-  if (mapped.starts_with("RefcountMapIter<") ||
-      mapped.starts_with("UnsafeMapIterator<")) {
+  // A map iterator maps to a libcc2rs iterator VALUE, not to a pointer, so every
+  // `it->first` / `it->second` site must substitute the fused rule WITHOUT the
+  // arrow-receiver pointer deref.  This used to compare the mapped text against
+  // exactly two spellings, `RefcountMapIter<` and `UnsafeMapIterator<`, which are
+  // rules/map's two aliases.  The hash-map families are the same struct under
+  // different aliases -- rules/densemap's refcount target names
+  // `RefcountHashMapIter<..>` and its unsafe target names the underlying struct
+  // qualified, `libcc2rs::HashMapIter<T1, *const std::collections::HashMap<..>>` --
+  // so both fell through to nullopt and the arrow was lowered as a pointer:
+  // measured on probe/dmgate.cpp as refcount
+  // `(*((*it.borrow()).read()) as *mut (Value<u32>, Value<u32>)).first()`, i.e.
+  // E0599 `no method named read found for struct HashMapIter`, and unsafe E0614
+  // `type HashMapIter<u32, *const HashMap<u32,u32>> cannot be dereferenced`.
+  // rules/unordered_map's committed f36-f39 have the identical shape, so this was
+  // every map-iterator arrow in the corpus, not a densemap detail.
+  // Match on the BASE NAME with any leading path stripped, because whether the
+  // target text is qualified is a rule-authoring choice and must not change the
+  // lowering.
+  auto base = mapped.substr(0, mapped.find('<'));
+  if (auto sep = base.rfind("::"); sep != std::string::npos) {
+    base = base.substr(sep + 2);
+  }
+  if (base == "MapIter" || base == "RefcountMapIter" ||
+      base == "UnsafeMapIterator" || base == "HashMapIter" ||
+      base == "RefcountHashMapIter" || base == "UnsafeHashMapIterator") {
     return IteratorCategory::Bidirectional;
   }
   return std::nullopt;

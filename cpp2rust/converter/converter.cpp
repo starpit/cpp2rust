@@ -3242,6 +3242,28 @@ bool Converter::VisitImplicitCastExpr(clang::ImplicitCastExpr *expr) {
       Convert(sub_expr);
       break;
     }
+    // A POINTER cast whose operand is a MAP ITERATOR's `operator->` has no Rust
+    // counterpart and must not be emitted.  `it->first` on a DenseMap/unordered_map
+    // iterator carries an implicit pointer base cast, because `first` is declared in
+    // the `std::pair` base of `DenseMapPair`, so the operand's static C++ type is
+    // `DenseMapPair<K,V> *` and the target `std::pair<K,V> *`.  The iterator maps to a
+    // libcc2rs iterator VALUE (`HashMapIter`/`MapIter`), not to a pointer, and the
+    // fused `->first`/`->second` rule consumes that value, so emitting the cast gave
+    // `((*it.borrow()) as *mut (Value<u32>, Value<u32>)).first()` -- measured on
+    // probe/dmgate.cpp as E0605 `non-primitive cast: HashMapIter<..> as *mut (..)`
+    // plus E0599 `no method named first found for raw pointer`.  Nothing on the rule
+    // side can suppress it; the same shape covers rules/unordered_map's f36-f39.
+    if (type->isPointerType()) {
+      auto *arrow =
+          clang::dyn_cast<clang::CXXOperatorCallExpr>(sub_expr->IgnoreImplicit());
+      if (arrow &&
+          arrow->getOperator() == clang::OverloadedOperatorKind::OO_Arrow &&
+          GetStrongestIteratorCategory(arrow->getArg(0)->getType()) ==
+              IteratorCategory::Bidirectional) {
+        Convert(sub_expr);
+        break;
+      }
+    }
     if (type->isEnumeralType() && !sub_expr->getType()->isEnumeralType()) {
       ConvertIntegerToEnumeralCast(expr, sub_expr);
       break;
