@@ -2,8 +2,14 @@
 // Distributed under the MIT license that can be found in the LICENSE file.
 
 // See src.cpp for the model: an ostringstream is a Vec<u8>, which already
-// implements std::io::Write by appending, and that is the only operation the
-// converter's built-in ostream lowering performs on it.
+// implements std::io::Write by appending, and appending is the only operation the
+// converter's built-in ostream lowering asks of it.
+//
+// THE UNSAFE MODEL IS PARTIAL TOO -- corrected 2026-09-27.  A non-string
+// insertion emits `write!((os as std::fs::File), "{:}", 42,)`, i.e.
+// error[E0605] non-primitive cast `Vec<u8>` as `File`, exactly as in the refcount
+// model; see tgt_refcount.rs for the measurement.  Only the string-literal path
+// compiles here.
 
 fn t1() -> Vec<u8> {
     Vec::new()

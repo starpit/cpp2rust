@@ -17,6 +17,7 @@
 #endif
 
 #include <llvm/Support/CommandLine.h>
+#include <llvm/Support/Signals.h>
 
 #include "converter/survey.h"
 #include "cpp2rust_lib.h"
@@ -137,6 +138,19 @@ static bool ResolveRulesDir() {
 }
 
 int main(int argc, char *argv[]) {
+  // Install LLVM's symbolizing crash handler. WITHOUT THIS A SEGFAULT PRINTS
+  // NOTHING: measured 2026-09-27, 45 of the first 204 TUs in a 403-TU survey
+  // exited rc=139 and their logs contained exactly one line, "dumped core" --
+  // no frames, no AST dump -- because survey mode suppresses output and nothing
+  // installed a handler. That made the single largest remaining failure class
+  // undiagnosable, and this pod has NO gdb (`command -v gdb` is empty) and
+  // cannot link ASAN, so there was no other way to get a frame.
+  //
+  // PrintStackTraceOnErrorSignal rather than llvm::InitLLVM: it installs exactly
+  // the handler and nothing else, so argv handling and cl:: parsing below are
+  // untouched.
+  llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
+
   llvm::cl::HideUnrelatedOptions(cpp2rust_cmdargs);
   llvm::cl::ParseCommandLineOptions(argc, argv);
 

@@ -12,19 +12,32 @@
 // file; the fallback aliases it to the wrong model.  The bodies below are the
 // model-correct ones.
 //
-// What is still blocked, and why it is not fixable from here: every insertion
-// site the built-in ostream lowering generates is `os.as_pointer()` on a
-// `Value<Vec<u8>>` = `Rc<RefCell<Vec<u8>>>`, and TWO libcc2rs impls satisfy that
-// receiver -- the blanket `impl<T> AsPointer<T> for Rc<RefCell<T>>`
-// (libcc2rs/src/rc.rs:850, T = Vec<u8>) and
-// `impl<T> AsPointer<T> for Rc<RefCell<Vec<T>>>` (rc.rs:890, T = u8) -- giving
-// error[E0283] "type annotations needed" at each one.  That ambiguity is in
-// converter-generated code at the USE site, so no annotation in a target body can
-// resolve it, and no other model type avoids it: Ptr<T>::write_all/write_fmt
-// exist only for `T: std::io::Write + ByteRepr` (rc.rs:571), and the only such
-// types are Vec<u8> and std::fs::File (std::io::Cursor<Vec<u8>> is not ByteRepr).
-// The fix is to narrow or remove the overlapping rc.rs:890 impl in libcc2rs,
-// which this module is not permitted to touch.
+// c008 IS REFUTED FOR THIS MODULE -- CORRECTED 2026-09-27 BY MEASUREMENT.  The
+// text that used to stand here blamed overlapping AsPointer impls in libcc2rs
+// (blanket `impl<T> AsPointer<T> for Rc<RefCell<T>>`, rc.rs:850, vs
+// `Rc<RefCell<Vec<T>>>`, rc.rs:890) for an error[E0283] at every insertion site,
+// and THREE SLOTS DEFERRED THIS ROW ON THAT CLAIM.  It is wrong.  Probe
+// /home/agent/work/probes/oss-slot/oss.cpp (`std::ostringstream os; os << "abc";
+// os << 42; os.str();`) emits
+//     let os: Value<Vec<u8>> = Rc::new(RefCell::new(Vec::new()));
+//     write!(os.as_pointer(), "abc",);
+// and there is NO E0283 in either model; the `as_pointer()` call is unambiguous.
+//
+// THE REAL BLOCKER IS THE CONVERTER'S OSTREAM LOWERING, AND IT HITS BOTH MODELS.
+// A NON-STRING insertion casts the stream operand to the hardcoded ostream
+// target type `std::fs::File`:
+//     write!((os as std::fs::File), "{:}", 42,);              // unsafe
+//     write!((os.as_pointer() as std::fs::File), "{:}", 42,); // refcount
+//   error[E0605]: non-primitive cast: `std::vec::Vec<u8>` as `File`
+//   error[E0605]: non-primitive cast: `libcc2rs::Ptr<_>` as `File`
+// one error per model and nothing else.  The string-literal insertion on the
+// preceding line has NO cast and compiles, so the cast rides the DerivedToBase
+// conversion of the receiver on the formatted path only.  It is written at the
+// USE site, so no target body can annotate it away, and no other model type is
+// reachable: Ptr<T>::write_all/write_fmt exist only for `T: std::io::Write +
+// ByteRepr` (rc.rs:571), whose only inhabitants are Vec<u8> and std::fs::File
+// (std::io::Cursor<Vec<u8>> is not ByteRepr).  cpp2rust/converter/* is a
+// different owner, so this is left FAILING LOUDLY rather than guessed at.
 
 fn t1() -> Vec<u8> {
     Vec::new()
