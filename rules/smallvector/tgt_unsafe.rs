@@ -120,3 +120,31 @@ unsafe fn f19<T1>(a0: &Vec<T1>) -> bool {
 unsafe fn f20<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
     a0 == a1
 }
+
+// `llvm::SmallString<_>`: a SmallVector<char, N>, so `Vec<libc::c_char>` with
+// NO NUL TERMINATOR -- see src.cpp for why the terminator is forced out (f14
+// `resize` shares this receiver and would truncate one byte short).
+fn t10<T1>() -> Vec<libc::c_char> {
+    Default::default()
+}
+
+// t10's default constructor. Without it the type rule alone yields no
+// initializer and the converter falls back to a nonexistent `::new()` (E0433).
+unsafe fn f21() -> Vec<libc::c_char> {
+    Vec::new()
+}
+
+// `SmallString<_>::operator+=(char)` (g445). No terminator to step over, so
+// unlike rules/string's f39 this is a bare push.
+unsafe fn f22(a0: &mut Vec<libc::c_char>, a1: libc::c_char) {
+    a0.push(a1);
+}
+
+// `SmallString<_>::operator+=(llvm::StringRef)` (g446). The RECEIVER has no
+// terminator but the ARGUMENT does -- rules/stringref models StringRef as a
+// NUL-terminated `Vec<libc::c_char>` (its f5 spells empty as `len() <= 1`) --
+// so the last byte of a1 is dropped. An empty StringRef is `[0]`, len 1, and
+// `&a1[..0]` is the correct empty append.
+unsafe fn f23(a0: &mut Vec<libc::c_char>, a1: Vec<libc::c_char>) {
+    a0.extend_from_slice(&a1[..a1.len() - 1]);
+}

@@ -52,3 +52,24 @@ fn f12<T1>(a0: Ptr<T1>) -> Ptr<T1> {
 fn f20<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
     a0 == a1
 }
+
+// llvm::SmallString<_>. Written EXPLICITLY, not omitted: an omitted target does
+// not drop the key, it silently falls back to the unsafe body, and the unsafe
+// bodies spell the element type `libc::c_char` where the refcount model spells
+// it `u8` (compare rules/string's f38/f39, which differ from their unsafe twins
+// in exactly that way and in nothing else).
+fn t10<T1>() -> Vec<u8> {
+    Default::default()
+}
+
+fn f21() -> Vec<u8> {
+    Vec::new()
+}
+
+fn f22(a0: &mut Vec<u8>, a1: u8) {
+    a0.push(a1);
+}
+
+fn f23(a0: &mut Vec<u8>, a1: Vec<u8>) {
+    a0.extend_from_slice(&a1[..a1.len() - 1]);
+}

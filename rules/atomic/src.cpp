@@ -68,13 +68,15 @@ typedef std::__atomic_base<bool> t3;
 std::atomic<bool> f10() { return std::atomic<bool>(); }
 std::atomic<bool> f11(bool a0) { return std::atomic<bool>(a0); }
 
-// g1283/g1297: the SAME model for `unsigned long`.  `std::atomic<unsigned long>`
-// derives from `std::__atomic_base<unsigned long, true>`, whose key is searched
-// with the defaulted second argument ELIDED -- `std::__atomic_base<unsigned long>`
+// g1283/g1297: the SAME model for `unsigned long`.  MEASURED (probe, atomic.h:42:8):
+// the converter searches the base as `std::__atomic_base<unsigned long, false>`
+// -- WITH the second argument spelled -- unlike bool, which is searched as
+// `std::__atomic_base<bool>`.  The elided spelling gave rc=0 and then an
+// UnmappedSystemType abort, so the second argument is written out here.
 // -- exactly as t3 is for bool.  Both the derived type and the base need a rule or
 // the member calls resolve against an unmapped base.
 typedef std::atomic<unsigned long> t4;
-typedef std::__atomic_base<unsigned long> t5;
+typedef std::__atomic_base<unsigned long, false> t5;
 
 std::atomic<unsigned long> f12() { return std::atomic<unsigned long>(); }
 std::atomic<unsigned long> f13(unsigned long a0) {

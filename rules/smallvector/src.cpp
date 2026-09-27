@@ -108,6 +108,57 @@ public:
   SmallVector(const T *first, const T *last);
 };
 
+// llvm::StringRef, RESTATED LOCALLY AND DELIBERATELY WITHOUT A TYPE RULE.
+// `SmallString::operator+=(StringRef)` (g446) needs the argument type to be
+// SPELLED for the key to come out as the queue recorded it, but the TYPE is
+// owned by rules/stringref (`using t1 = llvm::StringRef;` there).  A second
+// `using tN = llvm::StringRef;` here would record a DUPLICATE key with a
+// different module's model; a BARE class declaration records nothing at all,
+// which is exactly what is wanted.  Only the two fields are restated: no member
+// of StringRef is called from this module.
+class StringRef {
+  const char *Data = nullptr;
+  unsigned long Length = 0;
+
+public:
+  StringRef() = default;
+  StringRef(const char *Str);
+  StringRef(const char *data, unsigned long length);
+};
+
+// llvm/ADT/SmallString.h:24 --
+//   template <unsigned InternalLen> class SmallString
+//       : public SmallVector<char, InternalLen>
+// so SmallString IS this hierarchy, and that is why g445/g446 are keyed HERE
+// and not in rules/stringref: THE RECEIVER DECIDES THE MODULE, and forking the
+// SmallVector model across two modules is the one outcome worth avoiding.
+//
+// CRITICALLY, THE MODEL IS A BARE `Vec<char>` WITH NO NUL TERMINATOR, unlike
+// rules/string's std::string and rules/stringref's StringRef.  This is forced,
+// not chosen: the same use site (dcc ResourceIds.cpp:82-92) calls
+// `id.resize(prefix_len)`, which keys on `SmallVectorImpl<char>::resize` -> f14,
+// a plain `Vec::resize_with`.  If SmallString carried a terminator, f14 would
+// truncate one byte short of the C++ length on every call.  The whole
+// hierarchy's model has to agree, and the hierarchy is SmallVector's.
+//
+// The consequence is paid in f22 instead: the StringRef ARGUMENT does carry a
+// terminator (rules/stringref's model), so the append must drop its last byte.
+//
+// Declared as deriving from SmallVectorImpl<char> rather than
+// SmallVector<char, InternalLen>: the intermediate SmallVector is irrelevant to
+// these two keys, and naming it would make the measured `resize`/`size`
+// receiver ambiguous for no gain.
+template <unsigned InternalLen>
+class SmallString : public SmallVectorImpl<char> {
+public:
+  // llvm/ADT/SmallString.h:27 -- SmallString() = default
+  SmallString() = default;
+  // llvm/ADT/SmallString.h:95 -- SmallString &operator+=(StringRef RHS)
+  SmallString &operator+=(StringRef RHS);
+  // llvm/ADT/SmallString.h:99 -- SmallString &operator+=(char C)
+  SmallString &operator+=(char C);
+};
+
 } // namespace llvm
 
 // ---------------------------------------------------------------- type rules
@@ -155,6 +206,13 @@ template <typename T1> using t6 = llvm::SmallVectorBase<T1>;
 // satisfy (T2 would have to bind to `void`).  Same disagreement as DenseMapInfo,
 // in the opposite direction, so the `void` is spelled concretely here.
 template <typename T1> using t9 = llvm::SmallVectorTemplateCommon<T1, void>;
+
+// `llvm::SmallString<_>`.  The inline capacity is a NON-TYPE argument with no
+// default, so the mapper elides it to `_` exactly as it does for t1's second
+// argument, and this one key covers `SmallString<64>`, `<128>`, ... .
+// A TYPE RULE WITHOUT A CONSTRUCTOR gives rc=0 and then E0433 at compile time
+// (measured four times on 2026-09-27), so f21 below supplies the default ctor.
+template <unsigned T1> using t10 = llvm::SmallString<T1>;
 
 // ------------------------------------------------------------ function rules
 
@@ -255,4 +313,31 @@ template <typename T1>
 bool f20(const llvm::SmallVectorImpl<T1> &a0,
          const llvm::SmallVectorImpl<T1> &a1) {
   return a0.operator==(a1);
+}
+
+// ---------------------------------------------------- llvm::SmallString<_>
+// f21 is t10's DEFAULT CONSTRUCTOR, without which t10 is a type rule with no
+// initializer and every use site gets rc=0 then E0433 on a nonexistent
+// `<mangled>::new()`.
+template <unsigned T1> llvm::SmallString<T1> f21() {
+  return llvm::SmallString<T1>();
+}
+
+// g445: `llvm::SmallString<_> & llvm::SmallString<_>::operator+=(char)`.
+// g446: `llvm::SmallString<_> & llvm::SmallString<_>::operator+=(llvm::StringRef)`.
+// Both are MEMBER operators, so both are written in MEMBER CALL form: an infix
+// spelling records NOTHING silently, a qualified free spelling aborts the
+// preprocessor at cpp_rule_preprocessor.cpp:888, and a bare `o(a,b)` aborts
+// at :83.  Both use sites (dcc ResourceIds.cpp:91 and :92) DISCARD the returned
+// reference, and a declared reference return is not enforceable anyway because
+// the body is inlined -- so the Rust bodies return nothing, the same shape
+// rules/string's f38/f39 use for std::string's operator+=.
+template <unsigned T1>
+llvm::SmallString<T1> &f22(llvm::SmallString<T1> &a0, char a1) {
+  return a0.operator+=(a1);
+}
+
+template <unsigned T1>
+llvm::SmallString<T1> &f23(llvm::SmallString<T1> &a0, llvm::StringRef a1) {
+  return a0.operator+=(a1);
 }
