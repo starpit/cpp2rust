@@ -1174,6 +1174,103 @@ tryDeriveReferenceType(const std::string &cpp_type) {
   return (is_const ? "*const " : "*mut ") + mapTypeStringRecursive(pointee);
 }
 
+// A TRAILING `*` IS DECORATION, AND THE ONLY MISSING MEMBER OF THIS FAMILY.
+// The QualType path already decomposes a pointer (VisitPointerType,
+// mapper.cpp:1618 `t->getAs<clang::PointerType>()`), and addBuiltinTypes
+// synthesises `T *`/`const T *` per SCALAR (:644-646) -- but a template
+// ARGUMENT arrives here as a bare STRING with no decl and no QualType, so
+// `const mlir::ktdf_arch::Device *` was searched in types_ as one opaque key,
+// missed, and then could not even reach the project-leaf branch below: that
+// branch keys on `user_tags_`, whose entries are BARE spellings
+// (`mlir::ktdf_arch::Device`), so the decorated spelling never matches and a
+// PORTED project type aborted the TU.
+//
+// MEASURED: this was the largest single wall in the corpus -- 9 of an 18-TU
+// first-abort sample died on exactly
+//   LLVM ERROR: unsupported unmapped type `const mlir::ktdf_arch::Device *`
+//   has no model in types_, while mapping
+//   `llvm::DenseMap<std::pair<const mlir::ktdf_arch::Device *, mlir::TypeID>,
+//   std::unique_ptr<...>>`
+// and four separately-filed queue rows (g724 `const std::pair<const long,
+// VariableDefinition::ExprType> *`, g807 `std::map<int, ProgramAndStateInfo>
+// *`, g809 `std::pair<long,long> *`, g811 `std::vector<InstrInfo> *`) are the
+// SAME defect with a system pointee instead of a project one.
+//
+// Same three caveats as tryDeriveReferenceType directly above, for the same
+// reasons: no `dyn` for an abstract pointee (that lives in VisitPointerType),
+// and a TRAILING const (`T *const`) BAILS rather than guess. Ordered AFTER the
+// types_ search, so every `T *` a rule already models (`mlir::Operation *` ->
+// `*mut fmt::OpInst`, every scalar) still wins and nothing existing moves.
+std::optional<std::string> tryDerivePointerType(const std::string &cpp_type) {
+  auto trim = [](std::string s) {
+    while (!s.empty() && isspace(static_cast<unsigned char>(s.front()))) {
+      s.erase(s.begin());
+    }
+    while (!s.empty() && isspace(static_cast<unsigned char>(s.back()))) {
+      s.pop_back();
+    }
+    return s;
+  };
+
+  std::string s = trim(cpp_type);
+  if (s.empty() || s.back() != '*') {
+    return std::nullopt;
+  }
+  s.pop_back(); // strip exactly ONE level; recursion handles `T **`.
+  s = trim(s);
+  if (s.empty()) {
+    return std::nullopt;
+  }
+
+  // Does a `*` remain at the TOP level? If so a leading `const ` binds to the
+  // pointee of THAT inner pointer, not to this one: `const X **` is a mutable
+  // pointer to a `const X *`, i.e. `*mut *const X`. A `*` inside template
+  // arguments (`std::vector<X *> *`) is NOT top level and must not fool us --
+  // that is the g811 shape and getting it wrong would silently drop a const.
+  bool inner_top_level_ptr = false;
+  {
+    int depth = 0;
+    for (char c : s) {
+      if (c == '<' || c == '(' || c == '[') {
+        ++depth;
+      } else if (c == '>' || c == ')' || c == ']') {
+        --depth;
+      } else if (c == '*' && depth == 0) {
+        inner_top_level_ptr = true;
+      }
+    }
+  }
+
+  // `T *const` / `T const`: a TRAILING const. Bail loudly rather than guess,
+  // exactly as tryDeriveReferenceType does -- `T *const` is not a key any rule
+  // carries and inventing a stripping order here is the silent wrongness this
+  // project exists to stop.
+  {
+    const std::string kConst = "const";
+    if (s.size() >= kConst.size() &&
+        s.compare(s.size() - kConst.size(), kConst.size(), kConst) == 0 &&
+        (s.size() == kConst.size() ||
+         !(isalnum(static_cast<unsigned char>(s[s.size() - kConst.size() - 1])) ||
+           s[s.size() - kConst.size() - 1] == '_'))) {
+      return std::nullopt;
+    }
+  }
+
+  const std::string kConstPrefix = "const ";
+  bool is_const = false;
+  std::string pointee = s;
+  if (!inner_top_level_ptr && s.compare(0, kConstPrefix.size(), kConstPrefix) == 0) {
+    is_const = true;
+    pointee = trim(s.substr(kConstPrefix.size()));
+  }
+  if (pointee.empty()) {
+    return std::nullopt;
+  }
+
+  PushMapContext ctx(cpp_type, map_ctx_.outer_type);
+  return (is_const ? "*const " : "*mut ") + mapTypeStringRecursive(pointee);
+}
+
 std::string mapTypeStringRecursive(const std::string &cpp_type) {
   auto [rule, subs] = search(types_, cpp_type, GetTypeMapKey(cpp_type));
   if (!rule) {
@@ -1186,6 +1283,10 @@ std::string mapTypeStringRecursive(const std::string &cpp_type) {
     }
     // Same reasoning, one shape up: a trailing `&`/`&&` is structural.
     if (auto derived = tryDeriveReferenceType(cpp_type)) {
+      return *derived;
+    }
+    // Same reasoning, and the last shape in the family: a trailing `*`.
+    if (auto derived = tryDerivePointerType(cpp_type)) {
       return *derived;
     }
     if (survey::Enabled()) {
