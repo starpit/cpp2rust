@@ -2774,6 +2774,23 @@ void ConverterRefCount::ConvertArrow(clang::Expr *expr) {
     return;
   }
 
+  // A rule-resolved `operator->` yields a `Ptr<T>`, so reaching a FIELD through it
+  // still needs the pointer deref that `AccessLValueObject` already applies for a
+  // METHOD call on the same base. Without it, `p->v` emitted
+  // `<Ptr<S> result>.v.borrow_mut()` -- measured as rustc E0609
+  // `no field 'v' on type libcc2rs::Ptr<S>` on both `std::shared_ptr<S>` and
+  // `std::optional<S>` receivers, in the read and the write direction alike. Bare
+  // `Convert(expr)` cannot supply it: it lands in the OO_Arrow arm with
+  // `expr->getType()` = `S *`, which is POD and not a record, so the deref helper
+  // answers `.read()`/`""`. The POINTEE is the type to hand it, exactly as
+  // `AccessLValueObject` does.
+  if (IsRuleArrowResult(expr)) {
+    auto pointee_type = expr->getType()->getPointeeType();
+    StrCat(DerefPtrExpr(ToString(expr), pointee_type));
+    SetValueFreshness(pointee_type);
+    return;
+  }
+
   Convert(expr);
 }
 
