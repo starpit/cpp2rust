@@ -56,3 +56,31 @@ unsafe fn f10() -> std::sync::atomic::AtomicBool {
 unsafe fn f11(a0: bool) -> std::sync::atomic::AtomicBool {
     std::sync::atomic::AtomicBool::new(a0)
 }
+
+fn t4() -> std::sync::atomic::AtomicU64 {
+    std::sync::atomic::AtomicU64::new(0)
+}
+
+fn t5() -> std::sync::atomic::AtomicU64 {
+    std::sync::atomic::AtomicU64::new(0)
+}
+
+unsafe fn f12() -> std::sync::atomic::AtomicU64 {
+    std::sync::atomic::AtomicU64::new(0)
+}
+
+unsafe fn f13(a0: u64) -> std::sync::atomic::AtomicU64 {
+    std::sync::atomic::AtomicU64::new(a0)
+}
+
+unsafe fn f14(a0: *const std::sync::atomic::AtomicU64, a1: std::sync::atomic::Ordering) -> u64 {
+    unsafe { std::sync::atomic::AtomicU64::load(&*a0, a1) }
+}
+
+unsafe fn f15(a0: *mut std::sync::atomic::AtomicU64, a1: u64, a2: std::sync::atomic::Ordering) {
+    unsafe { std::sync::atomic::AtomicU64::store(&*a0, a1, a2) }
+}
+
+unsafe fn f16(a0: *mut std::sync::atomic::AtomicU64, a1: u64, a2: std::sync::atomic::Ordering) -> u64 {
+    unsafe { std::sync::atomic::AtomicU64::swap(&*a0, a1, a2) }
+}

@@ -67,3 +67,30 @@ typedef std::__atomic_base<bool> t3;
 // under C++17's mandatory copy elision, which is how these are spelled.
 std::atomic<bool> f10() { return std::atomic<bool>(); }
 std::atomic<bool> f11(bool a0) { return std::atomic<bool>(a0); }
+
+// g1283/g1297: the SAME model for `unsigned long`.  `std::atomic<unsigned long>`
+// derives from `std::__atomic_base<unsigned long, true>`, whose key is searched
+// with the defaulted second argument ELIDED -- `std::__atomic_base<unsigned long>`
+// -- exactly as t3 is for bool.  Both the derived type and the base need a rule or
+// the member calls resolve against an unmapped base.
+typedef std::atomic<unsigned long> t4;
+typedef std::__atomic_base<unsigned long> t5;
+
+std::atomic<unsigned long> f12() { return std::atomic<unsigned long>(); }
+std::atomic<unsigned long> f13(unsigned long a0) {
+  return std::atomic<unsigned long>(a0);
+}
+
+unsigned long f14(const std::atomic<unsigned long> &a0, std::memory_order a1) {
+  return a0.load(a1);
+}
+
+void f15(std::atomic<unsigned long> &a0, unsigned long a1,
+         std::memory_order a2) {
+  return a0.store(a1, a2);
+}
+
+unsigned long f16(std::atomic<unsigned long> &a0, unsigned long a1,
+                 std::memory_order a2) {
+  return a0.exchange(a1, a2);
+}
