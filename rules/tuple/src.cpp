@@ -49,8 +49,17 @@ using t5 = std::tuple<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T1
 // rule key in queue/samples/g018.txt -- 21 `const double &` + 6 `const std::map<...> &`.
 // Unqualified `operator==` per rules/vector f115; a qualified `std::operator==` aborts
 // the rule preprocessor with "No viable function".
+// ELEMENTS ARE SPELLED `const TN &`, NOT `TN`, AND THAT IS LOAD-BEARING, NOT cosmetic.
+// With plain `TN` the placeholder binds the WHOLE element type `const double &`, which
+// the converter maps to `*const f64`; the target's element-wise `__x.0 == __y.0` then
+// compared POINTERS and silently answered `false` for two distinct objects with equal
+// values (probe/tup27b: C++ 101, Rust 100).  Deref cannot fix that shape: a target body
+// written `(*__x.0) == (*__y.0)` is REJECTED by the rule preprocessor with
+// `error[E0614]: type `T1` cannot be dereferenced` -- a generic `T1` is not a pointer at
+// rule-check time, whatever it instantiates to.  Binding `T1 = double` instead lets the
+// target declare its elements as `*const T1` and deref them legally.
 template <typename T1, typename T2, typename T3, typename T4, typename T5, typename T6, typename T7, typename T8, typename T9, typename T10, typename T11, typename T12, typename T13, typename T14, typename T15, typename T16, typename T17, typename T18, typename T19, typename T20, typename T21, typename T22, typename T23, typename T24, typename T25, typename T26, typename T27>
-bool f5(const std::tuple<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, T23, T24, T25, T26, T27> &a0, const std::tuple<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, T23, T24, T25, T26, T27> &a1) {
+bool f5(const std::tuple<const T1 &, const T2 &, const T3 &, const T4 &, const T5 &, const T6 &, const T7 &, const T8 &, const T9 &, const T10 &, const T11 &, const T12 &, const T13 &, const T14 &, const T15 &, const T16 &, const T17 &, const T18 &, const T19 &, const T20 &, const T21 &, const T22 &, const T23 &, const T24 &, const T25 &, const T26 &, const T27 &> &a0, const std::tuple<const T1 &, const T2 &, const T3 &, const T4 &, const T5 &, const T6 &, const T7 &, const T8 &, const T9 &, const T10 &, const T11 &, const T12 &, const T13 &, const T14 &, const T15 &, const T16 &, const T17 &, const T18 &, const T19 &, const T20 &, const T21 &, const T22 &, const T23 &, const T24 &, const T25 &, const T26 &, const T27 &> &a1) {
   return operator==(a0, a1);
 }
 
