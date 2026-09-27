@@ -14,6 +14,7 @@
 #include <format>
 #include <optional>
 #include <regex>
+#include <set>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -716,6 +717,37 @@ std::string mapTypeStringRecursive(const std::string &cpp_type) {
       // No Rust is emitted in survey mode, so the returned spelling is never
       // written anywhere; it only keeps the walk going.
       return cpp_type;
+    }
+    if (survey::MangleUnmapped()) {
+      // --mangle-unmapped (TRIAGE ONLY): the twin of the fallback in
+      // Converter::ReportUnmappedSystemType (converter.cpp:3408). That one
+      // covers an unmapped system record reached with a DECL in hand; this one
+      // covers the RECURSIVE LEAF of a mapped family, which arrives here as a
+      // bare STRING. Without it, mapping a CRTP family correctly made things
+      // measurably WORSE: `rules/smallvector` maps SmallVector<T1,_> and its
+      // three bases, mapping recurses into the element type, and
+      // `mlir::OpFoldResult` -- which has no model -- aborted the whole TU at
+      // rc=134 with NOTHING emitted, where before the rule the TU emitted and
+      // could be counted. A correct rule must never be punished by the
+      // instrument.
+      //
+      // We have NO decl and NO QualType here, so there is deliberately no
+      // file:line in this message: DescribeUnmappedLeaf already says so
+      // ("no outer QualType in hand") and inventing a location would be worse
+      // than admitting we do not have one.
+      static std::set<std::string> reported;
+      if (reported.insert(cpp_type).second) {
+        llvm::errs() << "MANGLED (triage): unmapped leaf type has no rule: `"
+                     << cpp_type << "` (would be emitted as the undefined name `"
+                     << ToRustName(cpp_type)
+                     << "`) rule key: " << cpp_type << " -- "
+                     << DescribeUnmappedLeaf(cpp_type) << '\n';
+      }
+      // Returning the MANGLED spelling, not the C++ spelling: this value is
+      // substituted into emitted Rust, so it must at least be an identifier.
+      // It is an UNDEFINED one -- that is the point, the emission does not
+      // compile and rc=0 here means even less than usual.
+      return ToRustName(cpp_type);
     }
     llvm::errs() << "unsupported unmapped " << DescribeUnmappedLeaf(cpp_type)
                  << '\n';
