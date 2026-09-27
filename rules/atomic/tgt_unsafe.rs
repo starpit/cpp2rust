@@ -84,3 +84,57 @@ unsafe fn f15(a0: *mut std::sync::atomic::AtomicU64, a1: u64, a2: std::sync::ato
 unsafe fn f16(a0: *mut std::sync::atomic::AtomicU64, a1: u64, a2: std::sync::atomic::Ordering) -> u64 {
     unsafe { std::sync::atomic::AtomicU64::swap(&*a0, a1, a2) }
 }
+
+fn t6() -> std::sync::atomic::AtomicI32 {
+    std::sync::atomic::AtomicI32::new(0)
+}
+
+fn t7() -> std::sync::atomic::AtomicI32 {
+    std::sync::atomic::AtomicI32::new(0)
+}
+
+fn t8() -> std::sync::atomic::AtomicI32 {
+    std::sync::atomic::AtomicI32::new(0)
+}
+
+unsafe fn f17() -> std::sync::atomic::AtomicI32 {
+    std::sync::atomic::AtomicI32::new(0)
+}
+
+unsafe fn f18(a0: i32) -> std::sync::atomic::AtomicI32 {
+    std::sync::atomic::AtomicI32::new(a0)
+}
+
+unsafe fn f19(a0: *mut std::sync::atomic::AtomicI32) -> i32 {
+    unsafe {
+        std::sync::atomic::AtomicI32::fetch_add(&*a0, 1, std::sync::atomic::Ordering::SeqCst)
+            .wrapping_add(1)
+    }
+}
+
+fn t9() -> std::sync::atomic::AtomicI64 {
+    std::sync::atomic::AtomicI64::new(0)
+}
+
+fn t10() -> std::sync::atomic::AtomicI64 {
+    std::sync::atomic::AtomicI64::new(0)
+}
+
+fn t11() -> std::sync::atomic::AtomicI64 {
+    std::sync::atomic::AtomicI64::new(0)
+}
+
+unsafe fn f20() -> std::sync::atomic::AtomicI64 {
+    std::sync::atomic::AtomicI64::new(0)
+}
+
+unsafe fn f21(a0: i64) -> std::sync::atomic::AtomicI64 {
+    std::sync::atomic::AtomicI64::new(a0)
+}
+
+unsafe fn f22(a0: *mut std::sync::atomic::AtomicI64) -> i64 {
+    unsafe {
+        std::sync::atomic::AtomicI64::fetch_sub(&*a0, 1, std::sync::atomic::Ordering::SeqCst)
+            .wrapping_sub(1)
+    }
+}

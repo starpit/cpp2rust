@@ -96,3 +96,40 @@ unsigned long f16(std::atomic<unsigned long> &a0, unsigned long a1,
                  std::memory_order a2) {
   return a0.exchange(a1, a2);
 }
+
+// g630 / g651: the PREFIX increment and decrement on the INTEGRAL atomics.
+//
+// WHICH CLASS THE KEY NAMES, AND WHY IT DIFFERS FROM load/store/exchange.
+// libc++ splits __atomic_base in two:
+//     template <class T, bool = is_integral<T>::value && !is_same<T,bool>::value>
+//     struct __atomic_base;                                  // primary: <T, false>
+//     template <class T> struct __atomic_base<T, true>        // integral extras
+//         : public __atomic_base<T, false> { ... operator++() ... operator--() ... };
+// load/store/exchange live in the PRIMARY, whose only written spelling in the
+// tree is the base clause `__atomic_base<_Tp, false>` -- which is exactly why
+// f14/f15/f16 above are recorded as `std::__atomic_base<unsigned long, false>`
+// and why the elided spelling was a DEAD KEY there.  operator++/operator--
+// live in the `<T, true>` partial specialization, which `std::atomic<int>`
+// names through the written base clause `__atomic_base<_Tp>` -- so the key the
+// converter searches for is `std::__atomic_base<int>`, WITHOUT a second
+// argument, exactly as the queue rows g630/g651 print it.  The two spellings
+// are therefore both real and both needed; they are NOT alternatives.
+typedef std::atomic<int> t6;
+typedef std::__atomic_base<int> t7;
+typedef std::__atomic_base<int, false> t8;
+
+std::atomic<int> f17() { return std::atomic<int>(); }
+std::atomic<int> f18(int a0) { return std::atomic<int>(a0); }
+
+// PREFIX, so the value returned is the NEW one.  C++ defines
+// `__atomic_base<T,true>::operator++()` as `fetch_add(1) + 1` with seq_cst.
+int f19(std::__atomic_base<int> &a0) { return a0.operator++(); }
+
+typedef std::atomic<long> t9;
+typedef std::__atomic_base<long> t10;
+typedef std::__atomic_base<long, false> t11;
+
+std::atomic<long> f20() { return std::atomic<long>(); }
+std::atomic<long> f21(long a0) { return std::atomic<long>(a0); }
+
+long f22(std::__atomic_base<long> &a0) { return a0.operator--(); }
