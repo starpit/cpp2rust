@@ -212,3 +212,104 @@ unsafe fn f40<T1: Eq + Hash + Clone, T2>(
 ) -> UnsafeHashMapIterator<T1, T2> {
     UnsafeHashMapIterator::erase(&*a0 as *const HashMap<T1, Box<T2>>, &a1)
 }
+
+// --- std::unordered_set<T1>::const_iterator (== ::iterator in libc++) ---------
+// One type key: libc++ typedefs both to __hash_const_iterator, and the element type
+// is T1 DIRECTLY (no __hash_value_type wrapper), so this is NOT t3/t4's shape.
+fn t5<T1: Eq + Hash + Clone>() -> libcc2rs::UnsafeHashSetIterator<T1> {
+    libcc2rs::UnsafeHashSetIterator::null()
+}
+
+unsafe fn f41<T1: Eq + Hash + Clone>(
+    a0: &mut HashSet<T1>,
+    a1: T1,
+) -> (libcc2rs::UnsafeHashSetIterator<T1>, bool) {
+    {
+        let __k = a1;
+        let __set = &mut *a0;
+        let __inserted = HashSet::insert(__set, __k.clone());
+        (
+            libcc2rs::UnsafeHashSetIterator::find_key(__set as *const HashSet<T1>, &__k),
+            __inserted,
+        )
+    }
+}
+
+unsafe fn f42<T1: Eq + Hash + Clone>(
+    a0: &mut HashSet<T1>,
+    a1: T1,
+) -> (libcc2rs::UnsafeHashSetIterator<T1>, bool) {
+    {
+        let __k = a1;
+        let __set = &mut *a0;
+        let __inserted = HashSet::insert(__set, __k.clone());
+        (
+            libcc2rs::UnsafeHashSetIterator::find_key(__set as *const HashSet<T1>, &__k),
+            __inserted,
+        )
+    }
+}
+
+unsafe fn f43<T1: Eq + Hash + Clone>(a0: HashSet<T1>) -> libcc2rs::UnsafeHashSetIterator<T1> {
+    libcc2rs::UnsafeHashSetIterator::begin(&a0 as *const HashSet<T1>)
+}
+
+unsafe fn f44<T1: Eq + Hash + Clone>(a0: HashSet<T1>) -> libcc2rs::UnsafeHashSetIterator<T1> {
+    libcc2rs::UnsafeHashSetIterator::end(&a0 as *const HashSet<T1>)
+}
+
+unsafe fn f45<T1: Eq + Hash + Clone>(a0: HashSet<T1>) -> libcc2rs::UnsafeHashSetIterator<T1> {
+    libcc2rs::UnsafeHashSetIterator::begin(&a0 as *const HashSet<T1>)
+}
+
+unsafe fn f46<T1: Eq + Hash + Clone>(a0: HashSet<T1>) -> libcc2rs::UnsafeHashSetIterator<T1> {
+    libcc2rs::UnsafeHashSetIterator::end(&a0 as *const HashSet<T1>)
+}
+
+unsafe fn f47<T1: Eq + Hash + Clone>(
+    a0: HashSet<T1>,
+    a1: T1,
+) -> libcc2rs::UnsafeHashSetIterator<T1> {
+    libcc2rs::UnsafeHashSetIterator::find_key(&a0 as *const HashSet<T1>, &a1)
+}
+
+unsafe fn f48<T1: Eq + Hash + Clone>(
+    a0: HashSet<T1>,
+    a1: T1,
+) -> libcc2rs::UnsafeHashSetIterator<T1> {
+    libcc2rs::UnsafeHashSetIterator::find_key(&a0 as *const HashSet<T1>, &a1)
+}
+
+unsafe fn f49<T1: PartialEq>(
+    a0: libcc2rs::UnsafeHashSetIterator<T1>,
+    a1: libcc2rs::UnsafeHashSetIterator<T1>,
+) -> bool {
+    a0 == a1
+}
+
+unsafe fn f50<T1: PartialEq>(
+    a0: libcc2rs::UnsafeHashSetIterator<T1>,
+    a1: libcc2rs::UnsafeHashSetIterator<T1>,
+) -> bool {
+    a0 != a1
+}
+
+unsafe fn f51<T1: Eq + Hash + Clone>(
+    a0: &mut libcc2rs::UnsafeHashSetIterator<T1>,
+) -> libcc2rs::UnsafeHashSetIterator<T1> {
+    a0.prefix_inc()
+}
+
+unsafe fn f52<T1: Eq + Hash + Clone>(
+    a0: &mut libcc2rs::UnsafeHashSetIterator<T1>,
+) -> libcc2rs::UnsafeHashSetIterator<T1> {
+    a0.postfix_inc()
+}
+
+
+unsafe fn f54<T1: Eq + Hash + Clone>(
+    a0: &mut HashSet<T1>,
+    a1: libcc2rs::UnsafeHashSetIterator<T1>,
+) -> libcc2rs::UnsafeHashSetIterator<T1> {
+    libcc2rs::UnsafeHashSetIterator::erase(&*a0 as *const HashSet<T1>, &a1)
+}

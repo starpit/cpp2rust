@@ -245,3 +245,105 @@ f40(std::unordered_map<T1, T2> &o,
     typename std::unordered_map<T1, T2>::const_iterator it) {
   return o.erase(it);
 }
+
+
+// ---------------------------------------------------------------------------
+// std::unordered_set<T1>'s iterator.  MEASURED DISTINCTION, do NOT reuse t3/t4:
+// libc++ spells it `std::__hash_const_iterator<std::__hash_node<T1, void *> *>`,
+// with the element type T1 DIRECTLY -- there is NO `std::__hash_value_type<K, V>`
+// wrapper, which is exactly what every unordered_MAP iterator key above carries.
+// In libc++ `unordered_set<T1>::iterator` and `::const_iterator` are the SAME
+// type, so ONE type key (t5) serves both; only the RECEIVER's constness
+// distinguishes begin()/end()/find() below, and those are separate keys.
+//
+// ORDER CAVEAT (not a defect, and not papered over): traversal visits every
+// element exactly once, but the ORDER differs from libc++'s and is unspecified in
+// C++ either way.  See the header comment and libcc2rs/src/iterators.rs.
+// ---------------------------------------------------------------------------
+
+template <typename T1> using t5 = typename std::unordered_set<T1>::const_iterator;
+
+// Both insert overloads are required: `s.insert(33)` on a literal binds
+// insert(T1 &&), not insert(const T1 &), and a missing overload emits the mangled
+// fallback name instead of the rule (measured on rules/set).
+template <typename T1>
+std::pair<typename std::unordered_set<T1>::iterator, bool>
+f41(std::unordered_set<T1> &o, const T1 &k) {
+  return o.insert(k);
+}
+
+template <typename T1>
+std::pair<typename std::unordered_set<T1>::iterator, bool>
+f42(std::unordered_set<T1> &o, T1 &&k) {
+  return o.insert(std::move(k));
+}
+
+template <typename T1>
+typename std::unordered_set<T1>::const_iterator f43(const std::unordered_set<T1> &o) {
+  return o.begin();
+}
+
+template <typename T1>
+typename std::unordered_set<T1>::const_iterator f44(const std::unordered_set<T1> &o) {
+  return o.end();
+}
+
+template <typename T1>
+typename std::unordered_set<T1>::iterator f45(std::unordered_set<T1> &o) {
+  return o.begin();
+}
+
+template <typename T1>
+typename std::unordered_set<T1>::iterator f46(std::unordered_set<T1> &o) {
+  return o.end();
+}
+
+template <typename T1>
+typename std::unordered_set<T1>::const_iterator
+f47(const std::unordered_set<T1> &o, const T1 &k) {
+  return o.find(k);
+}
+
+template <typename T1>
+typename std::unordered_set<T1>::iterator f48(std::unordered_set<T1> &o,
+                                              const T1 &k) {
+  return o.find(k);
+}
+
+template <typename T1>
+bool f49(typename std::unordered_set<T1>::const_iterator a,
+         typename std::unordered_set<T1>::const_iterator b) {
+  return operator==(a, b);
+}
+
+template <typename T1>
+bool f50(typename std::unordered_set<T1>::const_iterator a,
+         typename std::unordered_set<T1>::const_iterator b) {
+  return operator!=(a, b);
+}
+
+template <typename T1>
+typename std::unordered_set<T1>::const_iterator &
+f51(typename std::unordered_set<T1>::const_iterator &it) {
+  return it.operator++();
+}
+
+template <typename T1>
+typename std::unordered_set<T1>::const_iterator
+f52(typename std::unordered_set<T1>::const_iterator a0, int a1) {
+  return a0.operator++(a1);
+}
+
+// f53 (operator* on an unordered_set iterator) is DELIBERATELY ABSENT, loudly.
+// It needs libcc2rs::SetIterator implemented for HashSetIter (added in
+// libcc2rs/src/iterators.rs), but the rule preprocessor type-checks targets against a
+// PINNED libcc2rs artifact, and its staleness guard is keyed on new ITEM NAMES -- a new
+// trait IMPL adds no name, so the guard passes and rustc then rejects the target with
+// E0277 "the trait bound HashSetIter<..>: SetIterator is not satisfied".  Re-add f53 once
+// the pinned libcc2rs is refreshed; do not approximate it.
+
+template <typename T1>
+typename std::unordered_set<T1>::iterator
+f54(std::unordered_set<T1> &o, typename std::unordered_set<T1>::const_iterator it) {
+  return o.erase(it);
+}

@@ -841,6 +841,31 @@ impl<K: Ord + Clone + 'static> SetIterator for RefcountSetIter<K> {
     }
 }
 
+// The same `*it` lowering for std::unordered_set's iterator.  ORDER CAVEAT does not
+// apply here: `element()` reads the element AT the iterator's current position, and the
+// position is identified by the key itself, so this is order-independent and exact.
+impl<K: Hash + Eq + Clone + 'static> SetIterator for RefcountHashSetIter<K> {
+    type Element = Value<K>;
+
+    fn element(&self) -> Value<K> {
+        let key = self.key.as_ref().expect("ub: dereference of end iterator");
+        Rc::new(RefCell::new(key.clone()))
+    }
+}
+
+impl<K: Hash + Eq + Clone> SetIterator for UnsafeHashSetIterator<K> {
+    type Element = *const K;
+
+    fn element(&self) -> *const K {
+        let key = self.key.as_ref().expect("ub: dereference of end iterator");
+        unsafe {
+            (*self.set)
+                .get(key)
+                .expect("ub: element not found in unordered_set") as *const K
+        }
+    }
+}
+
 impl<K: Ord + Clone> SetIterator for UnsafeSetIterator<K> {
     type Element = *const K;
 

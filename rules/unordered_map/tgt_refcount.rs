@@ -235,3 +235,94 @@ fn f40<T1: Eq + Hash + Clone + 'static, T2: 'static>(
 ) -> RefcountHashMapIter<T1, T2> {
     RefcountHashMapIter::erase(a0, &a1)
 }
+
+// --- std::unordered_set<T1>::const_iterator (== ::iterator in libc++) ---------
+fn t5<T1: Eq + Hash + Clone + 'static>() -> RefcountHashSetIter<T1> {
+    RefcountHashSetIter::null()
+}
+
+fn f41<T1: Eq + Hash + Clone + 'static>(
+    a0: Ptr<HashSet<T1>>,
+    a1: T1,
+) -> (RefcountHashSetIter<T1>, bool) {
+    {
+        let __p = a0;
+        let __k = a1;
+        let __inserted = Ptr::with_mut(&__p, |__s: &mut HashSet<T1>| {
+            HashSet::insert(__s, __k.clone())
+        });
+        (RefcountHashSetIter::find_key(__p, &__k), __inserted)
+    }
+}
+
+fn f42<T1: Eq + Hash + Clone + 'static>(
+    a0: Ptr<HashSet<T1>>,
+    a1: T1,
+) -> (RefcountHashSetIter<T1>, bool) {
+    {
+        let __p = a0;
+        let __k = a1;
+        let __inserted = Ptr::with_mut(&__p, |__s: &mut HashSet<T1>| {
+            HashSet::insert(__s, __k.clone())
+        });
+        (RefcountHashSetIter::find_key(__p, &__k), __inserted)
+    }
+}
+
+fn f43<T1: Eq + Hash + Clone + 'static>(a0: Ptr<HashSet<T1>>) -> RefcountHashSetIter<T1> {
+    RefcountHashSetIter::begin(a0)
+}
+
+fn f44<T1: Eq + Hash + Clone + 'static>(a0: Ptr<HashSet<T1>>) -> RefcountHashSetIter<T1> {
+    RefcountHashSetIter::end(a0)
+}
+
+fn f45<T1: Eq + Hash + Clone + 'static>(a0: Ptr<HashSet<T1>>) -> RefcountHashSetIter<T1> {
+    RefcountHashSetIter::begin(a0)
+}
+
+fn f46<T1: Eq + Hash + Clone + 'static>(a0: Ptr<HashSet<T1>>) -> RefcountHashSetIter<T1> {
+    RefcountHashSetIter::end(a0)
+}
+
+fn f47<T1: Eq + Hash + Clone + 'static>(
+    a0: Ptr<HashSet<T1>>,
+    a1: T1,
+) -> RefcountHashSetIter<T1> {
+    RefcountHashSetIter::find_key(a0, &a1)
+}
+
+fn f48<T1: Eq + Hash + Clone + 'static>(
+    a0: Ptr<HashSet<T1>>,
+    a1: T1,
+) -> RefcountHashSetIter<T1> {
+    RefcountHashSetIter::find_key(a0, &a1)
+}
+
+fn f49<T1: PartialEq>(a0: RefcountHashSetIter<T1>, a1: RefcountHashSetIter<T1>) -> bool {
+    a0 == a1
+}
+
+fn f50<T1: PartialEq>(a0: RefcountHashSetIter<T1>, a1: RefcountHashSetIter<T1>) -> bool {
+    a0 != a1
+}
+
+fn f51<T1: Eq + Hash + Clone + 'static>(
+    a0: &mut RefcountHashSetIter<T1>,
+) -> RefcountHashSetIter<T1> {
+    a0.prefix_inc()
+}
+
+fn f52<T1: Eq + Hash + Clone + 'static>(
+    a0: &mut RefcountHashSetIter<T1>,
+) -> RefcountHashSetIter<T1> {
+    a0.postfix_inc()
+}
+
+
+fn f54<T1: Eq + Hash + Clone + 'static>(
+    a0: Ptr<HashSet<T1>>,
+    a1: RefcountHashSetIter<T1>,
+) -> RefcountHashSetIter<T1> {
+    RefcountHashSetIter::erase(a0, &a1)
+}
