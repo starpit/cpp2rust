@@ -69,6 +69,14 @@ llvm::cl::opt<std::string>
               llvm::cl::desc("Path for the --survey gap report (TSV)"),
               llvm::cl::value_desc("gaps.tsv"), llvm::cl::cat(cpp2rust_cmdargs));
 
+llvm::cl::opt<bool> MangleUnmapped(
+    "mangle-unmapped",
+    llvm::cl::desc("TRIAGE ONLY. Emit an undefined mangled name for an unmapped "
+                   "system type instead of failing, so every missing type in a "
+                   "TU can be counted in one pass. The output DOES NOT COMPILE; "
+                   "never use this in a harness default"),
+    llvm::cl::init(false), llvm::cl::cat(cpp2rust_cmdargs));
+
 llvm::cl::list<std::string> CXXFlags("cxxflags",
                                      llvm::cl::desc("Additional CXXFLAGS"),
                                      llvm::cl::value_desc("cxxflags"),
@@ -134,6 +142,7 @@ int main(int argc, char *argv[]) {
 
   cpp2rust::SetVerbose(Verbose);
 
+  cpp2rust::survey::MangleUnmapped() = MangleUnmapped;
   if (Survey) {
     if (SurveyOut.empty()) {
       llvm::errs() << "ERROR: --survey requires --survey-out=<file>\n";

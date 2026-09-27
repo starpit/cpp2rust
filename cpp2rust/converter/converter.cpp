@@ -2098,6 +2098,46 @@ void Converter::ReportUnresolvedCall(clang::CallExpr *expr,
   const std::string loc =
       expr->getExprLoc().printToString(ctx_.getSourceManager());
 
+  // A TYPE-DEPENDENT call is not an overload problem and must not be reported as
+  // one: there are no argument types to match, so overload resolution is
+  // impossible in principle. It means the converter is walking an
+  // UNINSTANTIATED TEMPLATE PATTERN -- in practice the body of a GENERIC LAMBDA
+  // (`[](const auto& entry) { ... isa<Key>(entry.first) ... }`, KTDFArch
+  // Attributes.h:126-129), where `entry.first` is `<dependent type>` and the
+  // only candidate is a function TEMPLATE, never a FunctionDecl. Name the
+  // construct rather than dying on a null callee.
+  bool dependent = expr->isTypeDependent() || expr->isValueDependent() ||
+                   (callee != nullptr && (callee->isTypeDependent() ||
+                                          callee->isValueDependent()));
+  for (unsigned i = 0; !dependent && i < expr->getNumArgs(); ++i) {
+    const auto *arg = expr->getArg(i);
+    dependent = arg != nullptr &&
+                (arg->isTypeDependent() || arg->isValueDependent());
+  }
+  if (dependent) {
+    const auto *method =
+        llvm::dyn_cast_or_null<clang::CXXMethodDecl>(curr_function_);
+    const bool in_generic_lambda =
+        method != nullptr && method->getParent() != nullptr &&
+        method->getParent()->isGenericLambda();
+    std::string dep_detail =
+        std::string("type-dependent call in an uninstantiated template "
+                    "pattern") +
+        (in_generic_lambda ? " (inside a GENERIC LAMBDA pattern)" : "") +
+        ": callee `" + name + "`, supplied argument types: (" + args +
+        "); the converter walks the pattern, so the argument types are"
+        " dependent and the candidates are function templates -- overload"
+        " resolution is impossible here, only the INSTANTIATION can be"
+        " converted" + candidates;
+    if (survey::Enabled()) {
+      survey::Record(survey::GapKind::kUnsupportedConstruct, dep_detail, loc);
+      return;
+    }
+    llvm::errs() << "unsupported " << dep_detail << " at " << loc << '\n';
+    assert(0 && "type-dependent call in an uninstantiated template pattern"
+                " (generic lambda pattern)\n");
+  }
+
   std::string detail = "unresolved call: callee `" + name +
                        "` has neither a function decl nor a prototype"
                        " (callee type: " +
@@ -3397,8 +3437,14 @@ void Converter::ReportUnmappedSystemType(const clang::RecordDecl *decl) {
   }
   detail += " rule key: " + key;
 
-  if (survey::Enabled()) {
-    survey::Record(survey::GapKind::kUnmappedType, detail, loc);
+  if (survey::Enabled() || survey::MangleUnmapped()) {
+    if (survey::Enabled()) {
+      survey::Record(survey::GapKind::kUnmappedType, detail, loc);
+    } else {
+      // --mangle-unmapped: still SAY SO on stderr for every distinct type, so a
+      // triage emission is never mistaken for a clean one.
+      llvm::errs() << "MANGLED (triage): " << detail << " at " << loc << '\n';
+    }
     StrCat(mangled);
     Mapper::AddRuleForUserDefinedType(const_cast<clang::RecordDecl *>(decl));
     return;
@@ -4537,7 +4583,73 @@ Converter::GetOverloadedFunctionName(const clang::FunctionDecl *decl) {
   }
 
   ToIdentifier(name);
+  ForceRustIdentifier(name, decl);
   return name;
+}
+
+// A Rust identifier admits only [A-Za-z0-9_] (and must not start with a digit).
+// `ToIdentifier` folds away the punctuation that C++ TYPE SPELLINGS carry, but
+// the text mangled in here is the type's RUST spelling, which comes from a RULE
+// TARGET and may carry punctuation no C++ type ever produces. The measured case
+// is a lifetime: a rules/mlir target of `Option<&'static dataflowir_gen::
+// TdOpDef>` -- the faithful shape of MLIR's nullable `Impl*` -- left `&` and `'`
+// untouched, so the converter emitted
+//     pub unsafe fn getNumPhasesAttrName_Option&'staticdataflowir_genTdOpDef(..)
+// and rustc died with "missing parameters for function definition" after the
+// output had already been truncated. So fold anything still not an identifier
+// character, and then REFUSE LOUDLY rather than emit a name rustc cannot parse:
+// a broken name is silent corruption, and this project takes a loud abort over
+// that every time.
+void Converter::ForceRustIdentifier(std::string &name,
+                                    const clang::FunctionDecl *decl) {
+  auto is_ident_char = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+  };
+
+  std::string folded;
+  folded.reserve(name.size());
+  for (char c : name) {
+    if (is_ident_char(c)) {
+      folded += c;
+    } else if (c == '&') {
+      // Same spelling Mapper::ToRustName uses for a reference.
+      folded += "ref";
+    } else if (c == '\'') {
+      // The apostrophe of a lifetime is punctuation, not part of the name.
+      folded += '_';
+    } else {
+      folded += '_';
+    }
+  }
+  if (!folded.empty() && std::isdigit(static_cast<unsigned char>(folded[0]))) {
+    folded.insert(folded.begin(), '_');
+  }
+  name = std::move(folded);
+
+  // Defensive: the fold above is total, so this cannot fire. If it ever does,
+  // name the offending target type instead of emitting a broken definition.
+  if (!std::ranges::all_of(name, is_ident_char) ||
+      (!name.empty() && std::isdigit(static_cast<unsigned char>(name[0])))) {
+    std::string params;
+    for (const auto *p : decl->parameters()) {
+      if (!params.empty()) {
+        params += ", ";
+      }
+      params += GetUnsafeTypeAsString(p->getType());
+    }
+    const std::string loc =
+        decl->getLocation().printToString(ctx_.getSourceManager());
+    const std::string detail =
+        "target type mangles to an invalid Rust identifier: `" + name +
+        "` for `" + Mapper::ToString(decl) + "`; rust parameter types: (" +
+        params + ")";
+    if (survey::Enabled()) {
+      survey::Record(survey::GapKind::kUnsupportedConstruct, detail, loc);
+      return;
+    }
+    llvm::errs() << "unsupported " << detail << " at " << loc << '\n';
+    assert(0 && "target type mangles to an invalid Rust identifier\n");
+  }
 }
 
 std::string Converter::GetRecordName(const clang::NamedDecl *decl) const {

@@ -70,6 +70,31 @@ inline State &state() {
 
 inline bool Enabled() { return state().enabled; }
 
+// --- TRIAGE-ONLY: keep the old mangled-name fallback for unmapped types -------
+//
+// By default an unmapped SYSTEM type is a LOUD translate-time failure: it used to
+// be mangled into an undefined identifier (`mlir::DictionaryAttr` ->
+// `mlir_DictionaryAttr`) and REGISTERED as a type rule, so translation reported
+// rc=0 and rustc then produced hundreds of `cannot find type` errors. That is the
+// same deferred-failure pattern the placeholder ban exists to stop.
+//
+// But making it loud removed the only way to MEASURE compile progress. The
+// aborting converter stops at the FIRST unmapped type, so a TU needing ~40 of
+// them emits nothing at all, and "rustc errors on the emitted Rust" -- the one
+// metric that tracks whether the port is converging -- cannot be taken. That
+// cost a whole agent slot: a rule author correctly refused to add ten type
+// models because no measurement could distinguish a right one from a wrong one.
+//
+// So the fallback survives as an EXPLICIT OPT-IN, for exactly one job: emit a
+// whole TU with every unmapped type mangled, so all of them can be counted in
+// one pass instead of peeled one abort at a time. It must never be a harness
+// default -- an emission produced under this flag DOES NOT COMPILE and its rc=0
+// means even less than usual.
+inline bool &MangleUnmapped() {
+  static bool v = false;
+  return v;
+}
+
 inline std::string Sanitize(std::string s) {
   for (auto &c : s) {
     if (c == '\t' || c == '\n' || c == '\r') {

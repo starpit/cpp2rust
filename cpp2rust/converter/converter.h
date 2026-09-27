@@ -604,6 +604,12 @@ protected:
   virtual std::string
   GetOverloadedFunctionName(const clang::FunctionDecl *decl);
 
+  // Folds anything ToIdentifier() left behind into [A-Za-z0-9_] so a rule
+  // target type carrying Rust-only punctuation (`&`, a lifetime's `'`) cannot
+  // become a function name rustc refuses to parse; refuses loudly, naming the
+  // offending type, if a name still is not a valid identifier.
+  void ForceRustIdentifier(std::string &name, const clang::FunctionDecl *decl);
+
   virtual std::string GetRecordName(const clang::NamedDecl *decl) const;
 
   virtual std::vector<const char *>
