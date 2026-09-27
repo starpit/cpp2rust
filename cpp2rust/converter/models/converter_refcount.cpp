@@ -1139,7 +1139,16 @@ bool ConverterRefCount::VisitCallExpr(clang::CallExpr *expr) {
   auto ref = clang::dyn_cast<clang::ReferenceType>(ty);
 
   if (ref && !isAddrOf() && !isVoid()) {
-    if (isLValue()) {
+    // pending_deref_'s contract is "this string is a `Ptr<T>`; a later
+    // EmitSetOrAssign / ConvertMappedMethodCall will consume it as
+    // `.write(..)` / `.with_mut(..)`". A rule that returns a Rust `&mut T` is
+    // NOT a Ptr, and nothing downstream will ever consume it -- the inner call
+    // of a chain then contributes the empty string and leaves the slot set,
+    // which is the `pending_deref_ not consumed` abort. Such a return is
+    // already a reference, so deref it here into an ordinary place; the
+    // enclosing placeholder reborrows it as `&mut (*..)` when its own rule
+    // parameter is declared `&mut`.
+    if (isLValue() && !Mapper::ReturnsMutRef(expr)) {
       if (ctx && !ctx->temporary_bindings.empty()) {
         str = std::format("{{ {} {} }}", ctx->temporary_bindings, str);
       }

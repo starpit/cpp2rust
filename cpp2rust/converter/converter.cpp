@@ -6084,7 +6084,15 @@ std::string Converter::ConvertPlaceholder(clang::Expr *expr, clang::Expr *arg,
   }
 
   if (ph_ctx.needs_lvalue()) {
-    return ConvertLValue(arg);
+    auto place = ConvertLValue(arg);
+    if (ph_ctx.needs_mut_borrow()) {
+      // The rule's parameter is `&mut T` and the inlined body puts this
+      // placeholder in argument position, so a bare place is an E0308. Emit the
+      // reborrow -- `&mut (*x)` when the place is itself a deref, which is what
+      // a reference-returning target produces one chain level down.
+      return "&mut " + std::move(place);
+    }
+    return place;
   }
 
   if (ph_ctx.access == TranslationRule::Access::kTake) {
@@ -6121,7 +6129,8 @@ std::string Converter::ConvertPlaceholder(clang::Expr *expr, clang::Expr *arg,
 std::string Converter::ConvertMappedMethodCall(
     clang::Expr *expr, const TranslationRule::MethodCallFragment &mc,
     clang::Expr **args, unsigned num_args, TempMaterializationCtx *ctx) {
-  return ConvertIRFragment(mc.receiver, expr, args, num_args, ctx) +
+  return ConvertIRFragment(mc.receiver, expr, args, num_args, ctx,
+                           /*is_method_call_receiver=*/true) +
          ConvertIRFragment(mc.body, expr, args, num_args, ctx);
 }
 
@@ -6142,7 +6151,7 @@ std::string Converter::GetMappedAsString(clang::Expr *expr, clang::Expr **args,
 std::string Converter::ConvertIRFragment(
     const std::vector<TranslationRule::BodyFragment> &fragments,
     clang::Expr *expr, clang::Expr **args, unsigned num_args,
-    TempMaterializationCtx *ctx) {
+    TempMaterializationCtx *ctx, bool is_method_call_receiver) {
   using namespace TranslationRule;
 
   auto all_args = BuildUnifiedArgs(expr, args, num_args);
@@ -6172,6 +6181,9 @@ std::string Converter::ConvertIRFragment(
           .declared_in_rule_as_rust_ptr =
               Mapper::ParamIsPointer(GetCalleeOrExpr(expr), arg_idx),
           .is_index_base = ph->is_index_base,
+          .needs_explicit_mut_borrow =
+              !is_method_call_receiver &&
+              Mapper::ParamIsMutRef(GetCalleeOrExpr(expr), arg_idx),
       };
       result += ConvertPlaceholder(expr, arg, ph_ctx);
     } else if (std::get_if<TranslationRule::VaArgsFragment>(&frag)) {

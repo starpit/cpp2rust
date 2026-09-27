@@ -74,6 +74,37 @@ struct TypeInfo {
 
   bool is_pointer() const { return is_refcount_pointer || is_unsafe_pointer; }
 
+  // True when the rule declared this parameter (or return) as a Rust MUTABLE
+  // REFERENCE. There is no structured flag for this in the IR -- the JSON
+  // emitted by the rule preprocessor carries `is_refcount_pointer` /
+  // `is_unsafe_pointer` and nothing else -- but `type` is the target's declared
+  // Rust type verbatim (`"&mut Vec<T1>"`), so the leading `&mut` IS the record,
+  // not a guess about a mapped type. A generic substitution `T1` can never
+  // introduce a leading `&mut` (rule generics are bare type params), so this
+  // does not need instantiation to be correct.
+  // A lifetime is part of the spelling whenever the target ties its return to
+  // an argument (`&'a mut T`), which a reference-returning rule MUST do, so the
+  // optional `'name` has to be skipped here.
+  bool is_mut_ref() const {
+    std::string_view s = type;
+    if (!s.starts_with("&")) {
+      return false;
+    }
+    s.remove_prefix(1);
+    while (!s.empty() && isspace((unsigned char)s.front()))
+      s.remove_prefix(1);
+    if (s.starts_with("'")) {
+      auto end = s.find_first_of(" \t");
+      if (end == std::string_view::npos) {
+        return false;
+      }
+      s.remove_prefix(end);
+      while (!s.empty() && isspace((unsigned char)s.front()))
+        s.remove_prefix(1);
+    }
+    return s.starts_with("mut ") || s.starts_with("mut\t");
+  }
+
   void dump() const;
 };
 
