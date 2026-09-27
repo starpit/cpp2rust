@@ -95,6 +95,25 @@ impl InFlightDiagnostic {
         self
     }
 
+    /// `operator<<` for the UNSAFE model's string payloads, which are
+    /// `Vec<libc::c_char>` (i.e. `i8` on every target this port builds for):
+    /// `llvm::StringRef` (rules/stringref t1), `llvm::StringLiteral` (t2) and
+    /// `std::string` (rules/string t1) all arrive in that shape.  Reinterpreting
+    /// `&[c_char]` as `&[u8]` is a no-op cast -- same size, same alignment, and
+    /// `u8` has no invalid bit patterns -- and then the NUL-stopping rule of
+    /// `shl_bytes` applies unchanged, so the unsafe and refcount models append
+    /// the same text.
+    ///
+    /// It exists as a method rather than being inlined into a rule body because a
+    /// rule body is ONE INLINED EXPRESSION in which every `aN` RE-EVALUATES its
+    /// argument: spelling the cast inline would need `a1.as_ptr()` AND `a1.len()`,
+    /// mentioning the streamed argument twice.
+    pub fn shl_c_chars(self, v: &[::std::os::raw::c_char]) -> Self {
+        let b: &[u8] =
+            unsafe { ::std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len()) };
+        self.shl_bytes(b)
+    }
+
     /// `operator<<(const char (&)[N])` in the UNSAFE model, where a string
     /// literal in this position arrives as a `*const c_char` pointing at NUL
     /// terminated bytes (rules/stringref f8's spelling, and the reason it is a

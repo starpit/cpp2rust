@@ -939,3 +939,100 @@ fn t70() -> libcc2rs::InFlightDiagnostic {
 unsafe fn f21(a0: libcc2rs::InFlightDiagnostic, a1: *const libc::c_char) -> libcc2rs::InFlightDiagnostic {
     unsafe { libcc2rs::InFlightDiagnostic::shl_c_str(a0, a1) }
 }
+
+// ---------------------------------------------------------------------------
+// f22-f38 -- the rest of the InFlightDiagnostic `<<` family.  src.cpp carries the
+// reasoning; the two invariants that matter in EVERY body below are:
+//   * `a0` AND `a1` ARE EACH MENTIONED EXACTLY ONCE.  A rule body is inlined as
+//     one expression and every `aN` re-evaluates its argument, so a second
+//     mention of a0 would emit a SECOND diagnostic and a second mention of a1
+//     would re-run whatever produced the streamed value.
+//   * exactly-once reporting comes from `self` BY VALUE: the chain moves one
+//     buffer through and `Drop` runs once, at end of full expression.
+// An LVALUE-reference argument (`T &` in the key) takes a Rust SHARED REFERENCE
+// rather than a value, so inlining cannot move the caller's variable.
+
+// f22 -- row g320, `llvm::StringRef &&`, 10 TUs
+unsafe fn f22(a0: libcc2rs::InFlightDiagnostic, a1: Vec<libc::c_char>) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_c_chars(a0, &a1)
+}
+
+// f23 -- row g346, `llvm::StringRef &`, 8 TUs
+unsafe fn f23(a0: libcc2rs::InFlightDiagnostic, a1: &Vec<libc::c_char>) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_c_chars(a0, a1)
+}
+
+// f24 -- row g396, `std::string &`, 5 TUs
+unsafe fn f24(a0: libcc2rs::InFlightDiagnostic, a1: &Vec<libc::c_char>) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_c_chars(a0, a1)
+}
+
+// f25 -- row g491, `mlir::Type &`, 3 TUs -- Display is MLIR's type syntax (ir.rs:50)
+unsafe fn f25(a0: libcc2rs::InFlightDiagnostic, a1: &dataflowir_gen::ir::Ty) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f26 -- row g553, `unsigned int &`, 2 TUs
+unsafe fn f26(a0: libcc2rs::InFlightDiagnostic, a1: &u32) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f27 -- row g1151 + g1161, `int &`
+unsafe fn f27(a0: libcc2rs::InFlightDiagnostic, a1: &i32) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f28 -- row g1152 + g1164, `long &`
+unsafe fn f28(a0: libcc2rs::InFlightDiagnostic, a1: &i64) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f29 -- row g1150, `const long &`
+unsafe fn f29(a0: libcc2rs::InFlightDiagnostic, a1: &i64) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f30 -- row g1160, `const int &`
+unsafe fn f30(a0: libcc2rs::InFlightDiagnostic, a1: &i32) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f31 -- row g1162, `const unsigned int &`
+unsafe fn f31(a0: libcc2rs::InFlightDiagnostic, a1: &u32) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f32 -- row g1163, `unsigned int &&`
+unsafe fn f32(a0: libcc2rs::InFlightDiagnostic, a1: u32) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f33 -- row g1157, `unsigned long &&`
+unsafe fn f33(a0: libcc2rs::InFlightDiagnostic, a1: u64) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f34 -- row g1158, `const std::string &`
+unsafe fn f34(a0: libcc2rs::InFlightDiagnostic, a1: &Vec<libc::c_char>) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_c_chars(a0, a1)
+}
+
+// f35 -- row g1159, `std::string &&`
+unsafe fn f35(a0: libcc2rs::InFlightDiagnostic, a1: Vec<libc::c_char>) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_c_chars(a0, &a1)
+}
+
+// f36 -- row g1155, `mlir::Attribute &` -- Display is MLIR's attr syntax (ir.rs:521)
+unsafe fn f36(a0: libcc2rs::InFlightDiagnostic, a1: &dataflowir_gen::ir::Attr) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f37 -- row g1156, `mlir::StringAttr &&` (t7 -> the same Attr)
+unsafe fn f37(a0: libcc2rs::InFlightDiagnostic, a1: dataflowir_gen::ir::Attr) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f38 -- row g1154, `llvm::StringLiteral &&`
+unsafe fn f38(a0: libcc2rs::InFlightDiagnostic, a1: Vec<libc::c_char>) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_c_chars(a0, &a1)
+}

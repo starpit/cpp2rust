@@ -807,6 +807,17 @@ class ArrayRef {};
 template <typename T>
 class MutableArrayRef {};
 
+// llvm/ADT/StringRef.h -- `class StringRef`, and llvm/ADT/StringRef.h's
+// `class StringLiteral : public StringRef`.  Declared here ONLY so the
+// InFlightDiagnostic `<<` keys that take them can be SPELLED; neither gets a
+// `using tN =` in this module, because rules/stringref already owns the type
+// rule (t1 -> Vec<libc::c_char> / Vec<u8>, t2 the same for StringLiteral) and a
+// second mapping of the same C++ type from a second module is a key collision.
+// A declared-but-unmapped class records nothing on its own -- the module header
+// says so -- so this is inert apart from making the parameter type nameable.
+class StringRef {};
+class StringLiteral {};
+
 // llvm/ADT/PointerUnion.h -- declared ONLY so the RegionRange base key can be
 // spelled.  NOT mapped (no `using tN =`).
 template <typename... PTs>
@@ -1405,4 +1416,127 @@ bool f20(mlir::Type a) { return a.operator!(); }
 mlir::InFlightDiagnostic &&f21(mlir::InFlightDiagnostic &&d,
                                const char (&s)[36]) {
   return std::move(d).operator<<(s);
+}
+
+// ---------------------------------------------------------------------------
+// f22-f38: THE REST OF THE InFlightDiagnostic `<<` FAMILY.
+//
+// Every one of these is the SAME member template as f21
+// (`Diagnostics.h:344-349  template <typename Arg> InFlightDiagnostic
+// &&operator<<(Arg &&arg) &&`) at a DIFFERENT deduced `Arg`, and the converter
+// keys on the INSTANTIATED signature -- so each deduction needs its own rule
+// even though most share a target body.  The work-queue row each one closes is
+// named on its line.  They are spelled with the receiver as an EXPLICIT rvalue
+// (`std::move(d).operator<<(x)`) for the same reason f21 is: the recorded callee
+// must unambiguously be this `&&`-qualified member and not a free ADL candidate.
+//
+// WHICH REFERENCE KIND EACH ARGUMENT IS, AND WHY IT IS NOT COSMETIC.  `Arg&&` is
+// a forwarding parameter, so an LVALUE argument deduces `Arg = T&` and the key
+// reads `T &`, while an RVALUE deduces `Arg = T` and the key reads `T &&`.  The
+// work queue records BOTH for StringRef (g346 / g320), for std::string (g396 /
+// g1159 / g1158) and for unsigned int (g553 / g1163 / g1162), and they are
+// DIFFERENT KEYS: a rule for one does not match the other.  The target bodies
+// follow the same split -- an lvalue-reference argument takes a Rust SHARED
+// REFERENCE, because copying the callee's `Vec` by value would MOVE the caller's
+// variable and a second use of it would then be E0382.
+// ---------------------------------------------------------------------------
+
+// ---- the string payloads --------------------------------------------------
+// row g320 (10 TUs), the largest remaining: `llvm::StringRef &&`.
+mlir::InFlightDiagnostic &&f22(mlir::InFlightDiagnostic &&d, llvm::StringRef s) {
+  return std::move(d).operator<<(std::move(s));
+}
+
+// row g346 (8 TUs): the same type as an LVALUE, so `Arg` deduces `StringRef&`.
+mlir::InFlightDiagnostic &&f23(mlir::InFlightDiagnostic &&d, llvm::StringRef &s) {
+  return std::move(d).operator<<(s);
+}
+
+// row g396 (5 TUs): `std::string &`.
+mlir::InFlightDiagnostic &&f24(mlir::InFlightDiagnostic &&d, std::string &s) {
+  return std::move(d).operator<<(s);
+}
+
+// ---- row g491 (3 TUs): `mlir::Type &` -- STREAMING A TYPE MEANS PRINTING IT.
+// This one was flagged as needing a fidelity check rather than a mechanical
+// body, because the message TEXT is observable and `ir::Ty`'s Rust rendering has
+// to be MLIR's.  It is (dataflowir-gen/src/ir.rs:50):
+//     Ty::Index     -> "index"          Ty::Int(w)  -> "i{w}"
+//     Ty::Float(w)  -> "f{w}"           Ty::Vector  -> "vector<64x...xELT>"
+//     Ty::MemRef    -> "memref<...>"    Ty::Opaque(s) -> the exact spelling
+// which is `mlir::Type::print`'s builtin-type syntax, and `Opaque` exists
+// precisely so a dialect type round-trips by its own spelling.  So `Display` is
+// the faithful renderer and the diagnostic text matches.  (The one place the two
+// could drift is a NEGATIVE vector dimension, printed `?x`; MLIR spells a
+// dynamic dim `?` in a memref and does not admit one in a plain vector, so no
+// site in this row can reach it.)
+mlir::InFlightDiagnostic &&f25(mlir::InFlightDiagnostic &&d, mlir::Type &t) {
+  return std::move(d).operator<<(t);
+}
+
+// ---- row g553 (2 TUs): `unsigned int &`.
+mlir::InFlightDiagnostic &&f26(mlir::InFlightDiagnostic &&d, unsigned int &v) {
+  return std::move(d).operator<<(v);
+}
+
+// ---- the 1-TU tail, g1150-g1164.  Note that the 15 rows collapse to 13 keys:
+// g1161's key is g1151's (`int &`, reached once through a typedef named `type`)
+// and g1164's is g1152's (`long &`, through `value_type`).  A key is a key -- the
+// spelling the mapper prints is what matches, so ONE rule closes both rows.
+mlir::InFlightDiagnostic &&f27(mlir::InFlightDiagnostic &&d, int &v) {   // g1151, g1161
+  return std::move(d).operator<<(v);
+}
+
+mlir::InFlightDiagnostic &&f28(mlir::InFlightDiagnostic &&d, long &v) {  // g1152, g1164
+  return std::move(d).operator<<(v);
+}
+
+mlir::InFlightDiagnostic &&f29(mlir::InFlightDiagnostic &&d, const long &v) {  // g1150
+  return std::move(d).operator<<(v);
+}
+
+mlir::InFlightDiagnostic &&f30(mlir::InFlightDiagnostic &&d, const int &v) {   // g1160
+  return std::move(d).operator<<(v);
+}
+
+mlir::InFlightDiagnostic &&f31(mlir::InFlightDiagnostic &&d,
+                               const unsigned int &v) {                        // g1162
+  return std::move(d).operator<<(v);
+}
+
+mlir::InFlightDiagnostic &&f32(mlir::InFlightDiagnostic &&d, unsigned int v) { // g1163
+  return std::move(d).operator<<(std::move(v));
+}
+
+mlir::InFlightDiagnostic &&f33(mlir::InFlightDiagnostic &&d, unsigned long v) { // g1157
+  return std::move(d).operator<<(std::move(v));
+}
+
+mlir::InFlightDiagnostic &&f34(mlir::InFlightDiagnostic &&d,
+                               const std::string &s) {                         // g1158
+  return std::move(d).operator<<(s);
+}
+
+mlir::InFlightDiagnostic &&f35(mlir::InFlightDiagnostic &&d, std::string s) {   // g1159
+  return std::move(d).operator<<(std::move(s));
+}
+
+// g1155 / g1156: streaming an attribute PRINTS it, and the same fidelity test as
+// f25 applies.  `ir::Attr`'s Display (ir.rs:521) is MLIR's attribute syntax --
+// `Str` quotes and escapes, `Int(v,t)` prints `v : t`, `Unit` prints nothing,
+// `I32Array` prints `[a : i32, b : i32]`, `Raw`/`Aliasable` the exact spelling --
+// so it is the faithful renderer.  `mlir::StringAttr` maps to the same `Attr`
+// (t7), so its body is the same.
+mlir::InFlightDiagnostic &&f36(mlir::InFlightDiagnostic &&d, mlir::Attribute &a) {
+  return std::move(d).operator<<(a);
+}
+
+mlir::InFlightDiagnostic &&f37(mlir::InFlightDiagnostic &&d, mlir::StringAttr a) {
+  return std::move(d).operator<<(std::move(a));
+}
+
+// g1154: `llvm::StringLiteral &&`, the same byte payload as a StringRef
+// (rules/stringref t2 gives it the identical model).
+mlir::InFlightDiagnostic &&f38(mlir::InFlightDiagnostic &&d, llvm::StringLiteral s) {
+  return std::move(d).operator<<(std::move(s));
 }
