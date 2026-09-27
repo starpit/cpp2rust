@@ -604,6 +604,95 @@ bool Converter::ConvertVarDeclSkipInit(clang::VarDecl *decl) {
   return true;
 }
 
+// A two-binding structured binding whose Rust model is a 2-tuple.
+//
+// Measured as the largest remaining terminating abort after c9b6ffc cleared the
+// previous one: on 5 of 18 re-run TUs the LAST abort was `unsupported structured
+// binding / DecompositionDecl with 2 bindings`, every measured shape two-binding
+// over `std::pair` (`auto [it, inserted] = map.try_emplace(...)`) or
+// `llvm::detail::DenseMapPair` (`auto [child_val, parent_val] = ...`).
+//
+// This deliberately IGNORES clang's tuple-like desugaring -- a hidden holding
+// VarDecl per binding initialised to `std::get<I>(__d)`. `std::get` has no rule,
+// so converting the holding vars would only move the refusal to an unmapped
+// call. Instead the initialiser is bound ONCE to a synthetic name and each
+// binding reads a tuple index off it, which is exactly the Rust model: both
+// `rules/pair` t1 and `rules/densemap` t7 emit a bare Rust 2-tuple. The gate is
+// therefore the MAPPED type text, not the C++ class name: any type whose model
+// is parenthesised is indexable as `.0` / `.1`.
+//
+// REFERENCE bindings are REFUSED, not copied. `std::tuple<const mlir::Attribute
+// &, const mlir::Attribute &>` (RegDefTracker.cpp), `std::tuple<mlir::Operation
+// *&, mlir::Operation *&>` (TransformPagedMemViewImpl.cpp) and `auto &[a, b]`
+// all ALIAS in C++, and indexing a by-value temporary would silently duplicate
+// what the source shares -- a write through one binding would not be seen
+// through the other. Those stay on the loud refusal path.
+bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
+  // Only a local `let` is lowered: a file-scope or static-local decomposition
+  // would need one `static mut` per binding plus the init hoisting that goes
+  // with it, and no measured shape is one.
+  if (!decl->isLocalVarDecl() || decl->isStaticLocal() || !decl->hasInit()) {
+    return false;
+  }
+  auto bindings = decl->bindings();
+  if (bindings.size() != 2) {
+    return false;
+  }
+  auto type = decl->getType();
+  if (type->isReferenceType()) {
+    return false;
+  }
+  for (const auto *binding : bindings) {
+    if (binding->getType()->isReferenceType()) {
+      return false;
+    }
+  }
+  if (!Mapper::Contains(type.getUnqualifiedType())) {
+    return false;
+  }
+  // The model must be a Rust tuple for `.0` / `.1` to mean the C++ elements.
+  // With exactly two bindings a parenthesised model can only be a 2-tuple --
+  // any other arity would not have type-checked in C++.
+  const std::string model = Mapper::Map(type.getUnqualifiedType());
+  if (model.size() < 2 || model.front() != '(' || model.back() != ')') {
+    return false;
+  }
+
+  // REFCOUNT IS REFUSED, measured: that model wraps every local in
+  // `Rc<RefCell<..>>`, so the holder comes out as
+  // `Rc<RefCell<(Rc<RefCell<i32>>, Rc<RefCell<bool>>)>>` and the index gives
+  // `E0609: no field `0``. Reaching the elements needs a borrow of the cell
+  // before the index, which is not expressible from here without duplicating
+  // that model's access-mode expansion. `keyword_unsafe_` is the only model
+  // discriminator the base class has -- ConverterRefCount passes "" for it
+  // (converter_refcount.cpp:33) and ConverterUnsafe passes "unsafe".
+  if (keyword_unsafe_ == nullptr || *keyword_unsafe_ == '\0') {
+    return false;
+  }
+
+  HoistMaterializedTempBindings hoist_temps(*this);
+  // A DecompositionDecl has no name of its own.
+  const std::string holder = GetDecompositionIterName(decl);
+  StrCat(keyword::kLet, holder, token::kColon);
+  // Annotate: without the type, `let t = <init>;` left one measured case at
+  // `E0282: type annotations needed` because the tuple element types are only
+  // pinned by the (separate) binding statements.
+  Convert(type);
+  StrCat(token::kAssign);
+  ConvertVarInit(type, decl->getInit());
+  StrCat(token::kSemiColon);
+
+  unsigned index = 0;
+  for (const auto *binding : bindings) {
+    StrCat(keyword::kLet, keyword::kMut, GetNamedDeclAsString(binding),
+           token::kAssign);
+    StrCat(std::format("{}.{}", holder, index));
+    StrCat(token::kSemiColon);
+    ++index;
+  }
+  return true;
+}
+
 bool Converter::ConvertLambdaVarDecl(clang::VarDecl *decl) {
   if (decl->getType()->isFunctionPointerType()) {
     return false;
@@ -676,7 +765,9 @@ bool Converter::VisitVarDecl(clang::VarDecl *decl) {
     return false;
   }
   if (auto *decomp = llvm::dyn_cast<clang::DecompositionDecl>(decl)) {
-    ReportUnsupportedStructuredBinding(decomp);
+    if (!ConvertTupleDecompositionDecl(decomp)) {
+      ReportUnsupportedStructuredBinding(decomp);
+    }
     return false;
   }
   if (ConvertLambdaVarDecl(decl)) {

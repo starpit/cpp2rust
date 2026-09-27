@@ -773,6 +773,7 @@ protected:
   // C++17 structured bindings are not lowered yet; name the construct loudly
   // instead of emitting an undefined Rust name for each binding.
   void ReportUnsupportedStructuredBinding(const clang::DecompositionDecl *decl);
+  bool ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl);
   // Name of the synthetic iterator variable a decomposing map for-range binds.
   // Carries line and column so two loops nested in one another -- e.g.
   // RegDefTracker.cpp:127 and :128 -- get DISTINCT names.
