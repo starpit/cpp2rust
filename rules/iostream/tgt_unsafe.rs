@@ -44,3 +44,16 @@ unsafe fn f3() -> *mut ::std::fs::File {
 unsafe fn f4() -> *mut ::std::fs::File {
     libcc2rs::cerr_unsafe()
 }
+
+// f5/f6 -- std::ios_base::in / out.  libcxx/ios:287-288 gives in = 0x08 and
+// out = 0x10 with `typedef unsigned int openmode`, and the converter maps
+// `unsigned int` to u32 (`search type unsigned int, result: u32`).  These are
+// plain constants: no receiver, no pointer text, so the refcount model inherits
+// them unchanged (ir_unsafe.json is the unconditional base layer).
+fn f5() -> u32 {
+    0x08
+}
+
+fn f6() -> u32 {
+    0x10
+}
