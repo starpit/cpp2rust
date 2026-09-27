@@ -78,6 +78,9 @@
 // `(T1, T2)` / `<(T1, T2)>::default()` shape models it faithfully.  ADDED as
 // t7/f6 below.
 
+// <utility> for std::pair (DenseMapPair's BASE, see below) and std::move.
+#include <utility>
+
 namespace llvm {
 
 // DEFINED (not merely forward-declared) so that an EXPLICIT default constructor
@@ -96,7 +99,16 @@ namespace detail {
 // The template PARAMETER LIST is byte-identical to the forward declaration it
 // replaces, so the DEFAULT-ARGUMENT spellings in DenseMap/DenseMapIterator that
 // mention it are unchanged and t1/t3/t4/t5's keys are unaffected.
-template <typename KeyT, typename ValueT> struct DenseMapPair {
+// DERIVES FROM std::pair, exactly as real LLVM does (llvm/ADT/DenseMap.h:45).
+// This is NOT cosmetic and it is NOT about the type key (which stays
+// `llvm::detail::DenseMapPair<T1, T2>`): it is what makes `it->first` record as
+//   llvm::DenseMapIterator<T1, T2>->std::pair<T1, T2>::first
+// -- MEASURED, that is the key string the converter searches (dmv2 trace), because
+// the member `first` is DECLARED in the std::pair base, not in DenseMapPair.  With
+// DenseMapPair as a standalone struct the rule would record `...->llvm::detail::
+// DenseMapPair<T1, T2>::first` and match NOTHING.
+template <typename KeyT, typename ValueT>
+struct DenseMapPair : public std::pair<KeyT, ValueT> {
   DenseMapPair();
 };
 } // namespace detail
@@ -106,7 +118,14 @@ template <typename KeyT, typename ValueT,
           typename BucketT = detail::DenseMapPair<KeyT, ValueT>>
 class DenseMap {
 public:
-  DenseMap();
+  // `unsigned InitialReserve = 0`, NOT a nullary ctor -- MEASURED.  A plain
+  // `llvm::DenseMap<unsigned, unsigned> m;` searches for
+  //   void llvm::DenseMap<unsigned int, unsigned int>::DenseMap(unsigned int)
+  // (dmv2 trace, `search expr` line), because real LLVM spells the default
+  // constructor with a defaulted reserve argument.  A nullary key here would be a
+  // DEAD rule and the TU would translate rc=0 and then fail to compile with
+  // E0433 on `llvm_DenseMap::new()`.
+  explicit DenseMap(unsigned InitialReserve = 0);
 };
 
 template <typename ValueT, typename ValueInfoT = DenseMapInfo<ValueT, void>>
@@ -140,6 +159,16 @@ template <typename DerivedT, typename KeyT, typename ValueT, typename KeyInfoT,
 class DenseMapBase {
 public:
   DenseMapBase();
+  // operator[] lives on the CRTP BASE, so its key carries all five of
+  // DenseMapBase's arguments.  MEASURED spelling for the rvalue overload:
+  //   unsigned int & llvm::DenseMapBase<llvm::DenseMap<unsigned int, unsigned int>,
+  //     unsigned int, unsigned int, llvm::DenseMapInfo<unsigned int>,
+  //     llvm::detail::DenseMapPair<unsigned int, unsigned int>>::operator[](unsigned int &&)
+  // Both overloads are declared: `m[3u]` binds KeyT&& while `m[k]` on an lvalue
+  // binds const KeyT&, and a missing overload emits the mangled fallback name
+  // instead of the rule (the rules/set lesson).
+  ValueT &operator[](const KeyT &Key);
+  ValueT &operator[](KeyT &&Key);
   // MUTABLE begin/end: return the TWO-argument sugared iterator spelling (t4).
   DenseMapIterator<KeyT, ValueT> begin();
   DenseMapIterator<KeyT, ValueT> end();
@@ -186,6 +215,16 @@ template <typename KeyT, typename ValueT, typename KeyInfoT,
 class DenseMapIterator {
 public:
   DenseMapIterator();
+  // ++ is a MEMBER operator, so the rule bodies below must use the MEMBER call
+  // form (`a0.operator++()`); an infix spelling records nothing at all, silently,
+  // and a qualified `llvm::operator++(a0)` aborts at
+  // cpp_rule_preprocessor.cpp:888.  Pre- and post-increment are DIFFERENT KEYS
+  // with different return types.
+  DenseMapIterator &operator++();
+  DenseMapIterator operator++(int);
+  // Declared so that `it->first` parses.  No rule is written FOR it -- see the
+  // note on f15-f18.
+  detail::DenseMapPair<KeyT, ValueT> *operator->() const;
 };
 
 // Free comparison operators, found by ADL in namespace llvm -- which is why the
@@ -354,4 +393,105 @@ f10(const llvm::DenseMapBase<llvm::DenseMap<T1, T2>, T1, T2,
                              llvm::DenseMapInfo<T1>,
                              llvm::detail::DenseMapPair<T1, T2>> &o) {
   return o.end();
+}
+
+
+// ---------------------------------------------------------------------------
+// f11-f14 -- the iterator's ++ .  MEASURED first-abort at 7b3de8f was exactly
+//   unsupported CXXOperatorCallExpr: ++ on (llvm::DenseMapIterator<unsigned int,
+//   unsigned int>) rule key: llvm::DenseMapIterator<unsigned int, unsigned int> &
+//   llvm::DenseMapIterator<unsigned int, unsigned int>::operator++()
+// Shapes copied from rules/unordered_map's committed f32/f33 (mutable) and
+// f34/f35 (const): the PRE-increment rule takes its receiver by C++ reference and
+// the POST-increment rule takes it BY VALUE plus an `int`, while BOTH targets
+// declare a single `&mut` receiver parameter and return the iterator BY VALUE.
+template <typename T1, typename T2>
+llvm::DenseMapIterator<T1, T2> &f11(llvm::DenseMapIterator<T1, T2> &a0) {
+  return a0.operator++();
+}
+
+template <typename T1, typename T2>
+llvm::DenseMapIterator<T1, T2> f12(llvm::DenseMapIterator<T1, T2> a0, int a1) {
+  return a0.operator++(a1);
+}
+
+template <typename T1, typename T2>
+llvm::DenseMapIterator<T1, T2, llvm::DenseMapInfo<T1>,
+                       llvm::detail::DenseMapPair<T1, T2>, true> &
+f13(llvm::DenseMapIterator<T1, T2, llvm::DenseMapInfo<T1>,
+                           llvm::detail::DenseMapPair<T1, T2>, true> &a0) {
+  return a0.operator++();
+}
+
+template <typename T1, typename T2>
+llvm::DenseMapIterator<T1, T2, llvm::DenseMapInfo<T1>,
+                       llvm::detail::DenseMapPair<T1, T2>, true>
+f14(llvm::DenseMapIterator<T1, T2, llvm::DenseMapInfo<T1>,
+                           llvm::detail::DenseMapPair<T1, T2>, true> a0,
+    int a1) {
+  return a0.operator++(a1);
+}
+
+// ---------------------------------------------------------------------------
+// f15-f18 -- `it->first` / `it->second`.  These are FUSED keys: the whole
+// arrow-member-access is one rule, spelled
+//   llvm::DenseMapIterator<T1, T2>->std::pair<T1, T2>::first
+// exactly as rules/unordered_map's committed f36-f39 are.  NO RULE IS WRITTEN FOR
+// `operator->` ITSELF, and that is deliberate: the dmv2 trace shows the converter
+// searches the fused key FIRST and only falls back to `operator->` + a Rust deref
+// when the fused key misses -- and that fallback cannot work here, because the
+// iterator maps to a libcc2rs `HashMapIter`, which is not a pointer to a tuple, so
+// `(*it).first` would be E0614.  A rule returning `*const (T1, T2)` for operator->
+// would additionally have to fabricate a pointer to a bucket that does not exist in
+// the Rust model.  With f15-f18 FOUND the fallback is never taken.
+template <typename T1, typename T2>
+const T1 &f15(llvm::DenseMapIterator<T1, T2> a0) {
+  return a0->first;
+}
+
+template <typename T1, typename T2>
+T2 &f16(llvm::DenseMapIterator<T1, T2> a0) {
+  return a0->second;
+}
+
+template <typename T1, typename T2>
+const T1 &f17(llvm::DenseMapIterator<T1, T2, llvm::DenseMapInfo<T1>,
+                                     llvm::detail::DenseMapPair<T1, T2>, true>
+                  a0) {
+  return a0->first;
+}
+
+template <typename T1, typename T2>
+const T2 &f18(llvm::DenseMapIterator<T1, T2, llvm::DenseMapInfo<T1>,
+                                     llvm::detail::DenseMapPair<T1, T2>, true>
+                  a0) {
+  return a0->second;
+}
+
+// ---------------------------------------------------------------------------
+// f19/f20 -- DenseMapBase::operator[].  Receiver is the FIVE-argument CRTP base
+// (t3), whose first argument is the derived DenseMap in its SUGARED two-argument
+// spelling -- the same receiver shape f7-f10 already use and which is MEASURED to
+// match.  Body in MEMBER call form for the same reason ++ is.
+template <typename T1, typename T2>
+T2 &f19(llvm::DenseMapBase<llvm::DenseMap<T1, T2>, T1, T2, llvm::DenseMapInfo<T1>,
+                           llvm::detail::DenseMapPair<T1, T2>> &a0,
+        T1 &&a1) {
+  return a0.operator[](std::move(a1));
+}
+
+template <typename T1, typename T2>
+T2 &f20(llvm::DenseMapBase<llvm::DenseMap<T1, T2>, T1, T2, llvm::DenseMapInfo<T1>,
+                           llvm::detail::DenseMapPair<T1, T2>> &a0,
+        const T1 &a1) {
+  return a0.operator[](a1);
+}
+
+// ---------------------------------------------------------------------------
+// f21 -- t1's CONSTRUCTOR, and the RIGHT OVERLOAD: `DenseMap(unsigned)`, not a
+// nullary one.  See the note on the declaration above.  A type key without its
+// constructor gives rc=0 and then E0433; measured seven times.
+template <typename T1, typename T2>
+llvm::DenseMap<T1, T2> f21(unsigned a0) {
+  return llvm::DenseMap<T1, T2>(a0);
 }

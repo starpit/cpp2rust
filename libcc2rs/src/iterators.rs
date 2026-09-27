@@ -347,6 +347,26 @@ impl<K: Hash + Eq + Clone, MapRef: HashMapAccess<Key = K>> HashMapIter<K, MapRef
         &self.key
     }
 
+    /// `it->first` / `it->second` for ANY `MapRef`, including one whose `Value` is the
+    /// bare mapped type rather than `Box<V>`.  The `MapIterator` impls below are bound
+    /// to the two ALIASES (`*const HashMap<K, Box<V>>` and `Ptr<HashMap<K, Value<V>>>`),
+    /// and a generic `impl MapIterator for HashMapIter<K, *const HashMap<K, V>>` cannot
+    /// be added alongside the `Box<V>` one -- the two overlap (V = Box<V'>) and rustc
+    /// rejects it with E0119.  These inherent methods are therefore the coherence-free
+    /// way for a module whose map is a BARE `HashMap<K, V>` (rules/densemap's t1) to
+    /// reach the same two accessors.  Names deliberately differ from `first`/`second`
+    /// so that no call can silently resolve to the wrong one.
+    pub fn key_ptr(&self) -> *const K {
+        self.key.as_ref().expect("ub: dereference of end iterator") as *const K
+    }
+
+    pub fn value_ptr(&self) -> *mut MapRef::Value {
+        let key = self.key.as_ref().expect("ub: dereference of end iterator");
+        self.map.with_mut(|m| {
+            m.get_mut(key).expect("ub: key not found in map") as *mut MapRef::Value
+        })
+    }
+
     /// Advance in HashMap's own iteration order. That order is unspecified but
     /// deterministic for an unmodified table, so walking to the current key and taking
     /// the next one is a stable traversal that visits every element exactly once.
