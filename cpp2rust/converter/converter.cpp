@@ -126,7 +126,50 @@ bool Converter::Convert(clang::QualType qual_type) {
   }
 
   qual_type = qual_type.getUnqualifiedType().getDesugaredType(ctx_);
-  return TraverseType(qual_type);
+  // MEASURED: a type that reaches TraverseType and matches no Visit*Type emits
+  // ZERO TOKENS, and every caller splices that nothing into a position that
+  // syntactically requires a type. A 39-TU random-sample census found this in 6
+  // of the 10 translate-to-completion TUs it parse-checked, in six shapes that
+  // are all THIS one site (`Convert(QualType)` is the only path type text comes
+  // from -- `ToString(QualType)` just buffers it):
+  //     pub struct S { pub f : , }            field
+  //     let mut loop_ : = ...                  `auto` local
+  //     let mut m : = <>::default() ;          default-init of the same local
+  //     fn f ( p : *const , )                  pointee (variadic pack parm)
+  //     fn f ( ... ) -> { ...                  return type
+  //     ( ( loop_ as ) ) . getBody ( )         cast target
+  // rustfmt cannot parse any of them, so the WHOLE file is unparseable and the
+  // one metric that tracks convergence -- rustc errors on the emission -- cannot
+  // be taken at all. Emitting a named, undefined placeholder turns each site
+  // into a local `E0412 cannot find type`, i.e. a PARSEABLE file with a
+  // diagnosable gap. Deliberately NOT the bare mangled name that
+  // `--mangle-unmapped` uses (survey.h:100): that spelling is exactly what a
+  // PORTED type would be called, so it can silently resolve to an unrelated
+  // `pub struct` emitted in the same TU and compile. The `Cpp2RustUnmapped_`
+  // prefix is emitted by nothing else, so it can only ever fail, and it carries
+  // the C++ spelling so the missing model can be named from the rustc error
+  // alone.
+  const size_t before = rs_code_->size();
+  bool res = TraverseType(qual_type);
+  if (rs_code_->size() == before) {
+    const std::string cpp = Mapper::ToString(qual_type);
+    // A dependent/deduced type can print as nothing at all; fall back to the
+    // AST type class so the placeholder still says WHAT was dropped.
+    std::string tail = Mapper::ToRustName(cpp);
+    if (tail.empty()) {
+      tail = qual_type->getTypeClassName();
+    }
+    StrCat("Cpp2RustUnmapped_" + tail);
+    static std::set<std::string> reported;
+    if (reported.insert(tail).second) {
+      llvm::errs() << "note: no Rust type text for `" << cpp << "` ("
+                   << qual_type->getTypeClassName()
+                   << "); emitting the undefined placeholder "
+                      "`Cpp2RustUnmapped_"
+                   << tail << "` so the file parses\n";
+    }
+  }
+  return res;
 }
 
 bool Converter::ConvertMappedType(clang::QualType qual_type) {
