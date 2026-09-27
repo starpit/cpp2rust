@@ -167,9 +167,75 @@ public:
 // `%` sigil, and a name is unique within a function in MLIR's own printer, so
 // name+type equality is SSA identity here.
 
+
+// ---------------------------------------------------------------------------
+// TYPES ADDED FROM THE FIRST REAL COMPILE MEASUREMENT (compile1.unsafe.rs).
+// Every one of these is a `cannot find type` in the emitted Rust of
+// dataflow-scheduler/lib/Dialect/KTDF/Utils/Utils.cpp -- the mangled fallback
+// name the converter emits for an MLIR type with no rule.  Declarations are
+// EMPTY for the reason the header gives: a type rule needs only the name, and
+// declaring a member that has no rule records nothing.
+//
+// The ORDER of these declarations is load-bearing: tN in the target files is
+// matched to the Nth class declared in this file.
+// ---------------------------------------------------------------------------
+
+// mlir/include/mlir/IR/BuiltinAttributes.h -- a sorted key->Attribute map.
+// -> dataflowir_gen::ir::AttrDict (ir.rs:559), which is literally documented as
+// "`mlir::DictionaryAttr`" and is a BTreeMap because MLIR sorts by key on
+// construction and the printer walks that order.
+class DictionaryAttr {};
+
+// mlir/include/mlir/IR/BuiltinAttributes.h.  ir::Attr::Int(i64, Ty) (ir.rs:470)
+// is documented as "`mlir::IntegerAttr`".  There is no distinct Rust type for
+// the SUBCLASS, so the map is to the whole `Attr` enum: that WIDENS the C++
+// static guarantee (an `IntegerAttr` is known integral; an `Attr` is not).  The
+// widening is sound for storage and comparison and is the same choice already
+// made for mlir::Attribute (t6).
+class IntegerAttr {};
+
+// ir.rs:491 `Attr::I32Array` is documented as "`mlir::ArrayAttr` of IntegerAttrs".
+// Same widening as IntegerAttr, and for the same reason.
+class ArrayAttr {};
+
+// ir.rs:480/482 -- `Attr::AffineMapAlias` / `Attr::AffineMap` are both
+// documented as `mlir::AffineMapAttr` spellings.  Same widening.
+class AffineMapAttr {};
+
+// mlir/include/mlir/IR/OpDefinition.h -- `struct EmptyProperties {};`, the
+// properties type ODS gives an op with no `let arguments` properties.  It has NO
+// MEMBERS, so the Rust unit type is not an approximation of it, it is the same
+// thing.  (The one difference, sizeof 1 vs 0, is only observable through
+// pointer identity in an array of them, which ODS never builds.)
+struct EmptyProperties {};
+
+// mlir/include/mlir/IR/ValueRange.h.  BORROWED VIEWS in C++ -> OWNING Vec here;
+// see the cost note in tgt_unsafe.rs.
+class OperandRange {};
+class ResultRange {};
+class ValueRange {};
+
+// mlir/include/mlir/IR/Region.h -- a view over an op's regions.
+class RegionRange {};
+
+// mlir/include/mlir/IR/OperationName.h -- a HANDLE to the registered operation
+// info (`Impl *`, nullable, uniqued per name).  dataflowir_gen's
+// `TdOpDef` (generated, re-exported at lib.rs:72) is exactly that record: it
+// carries def_name/base/mnemonic/traits and the ODS `arguments` -- which is what
+// `OperationName::getAttributeNames()` reads.  The handle is therefore
+// `Option<&'static TdOpDef>`, and `None` is the null handle a
+// default-constructed `OperationName` is.  No MEMBER is mapped, so
+// `getAttributeNames()` still aborts loudly rather than lying.
+class OperationName {};
+
 } // namespace mlir
 
 // ---- type rules, and nothing else ----------------------------------------
+namespace llvm {
+template <typename T>
+class ArrayRef {};
+} // namespace llvm
+
 using t1 = mlir::Operation;
 using t2 = mlir::Block;
 using t3 = mlir::Region;
@@ -178,6 +244,17 @@ using t5 = mlir::Type;
 using t6 = mlir::Attribute;
 using t7 = mlir::StringAttr;
 using t8 = mlir::AffineMap;
+using t9 = mlir::DictionaryAttr;
+using t10 = mlir::IntegerAttr;
+using t11 = mlir::ArrayAttr;
+using t12 = mlir::AffineMapAttr;
+using t13 = mlir::EmptyProperties;
+using t14 = mlir::OperandRange;
+using t15 = mlir::ResultRange;
+using t16 = mlir::ValueRange;
+using t17 = mlir::RegionRange;
+using t18 = mlir::OperationName;
+template <typename T1> using t19 = llvm::ArrayRef<T1>;
 
 // ---- the two operator rules ----------------------------------------------
 // The member `==` on mlir::Attribute.  Spelled `.operator==(...)` rather than
@@ -252,3 +329,11 @@ bool f17(mlir::Value a, mlir::Value b) { return a.operator!=(b); }
 bool f18(mlir::Type a, mlir::Type b) { return a.operator==(b); }
 
 bool f19(mlir::Type a, mlir::Type b) { return a.operator!=(b); }
+
+// ---------------------------------------------------------------------------
+// llvm::ArrayRef<T>.  Declared HERE, not in a new module, because the compile
+// measurement that found it is this module's and a fresh module dir that is not
+// wired into the build is an INCOMPLETE MODULE DIR that aborts every
+// translation project-wide.  `llvm::ArrayRef<llvm::StringRef>` (49 errors) and
+// `llvm::ArrayRef<mlir::Attribute>` (35) are both instances of this one rule.
+// ---------------------------------------------------------------------------

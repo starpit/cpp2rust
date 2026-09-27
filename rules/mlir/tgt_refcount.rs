@@ -247,3 +247,84 @@ fn f18(a0: dataflowir_gen::ir::Ty, a1: dataflowir_gen::ir::Ty) -> bool {
 fn f19(a0: dataflowir_gen::ir::Ty, a1: dataflowir_gen::ir::Ty) -> bool {
     a0 != a1
 }
+
+// --- t9..t19: the types from the first real compile measurement ------------
+// THE BORROWED-VIEW DECISION, stated once for OperandRange / ResultRange /
+// ValueRange / RegionRange / llvm::ArrayRef.
+//
+// In C++ all five are NON-OWNING VIEWS: a pointer/iterator pair into storage the
+// Operation owns.  Rust has slices, but a slice needs a lifetime, and a rule
+// target is INLINED into arbitrary caller code where no lifetime is in scope --
+// a `&[T]` target would make every struct FIELD of this type (`odsRegions:
+// mlir_RegionRange`, compile1.unsafe.rs:280) unspellable.  So these map to an
+// OWNING `Vec<T>`, the same choice rules/array already makes for
+// `std::array<T,N>` (extent erased, ownership added).
+//
+// WHAT THAT COSTS, explicitly:
+//   * ALIASING.  A C++ range sees writes made through the Operation after the
+//     range was taken; a Vec is a SNAPSHOT.  Code that mutates an operand and
+//     re-reads it through a previously-obtained range will read the old value.
+//   * COPY COST turns O(1) into O(n), and a `Value` clone is no longer the
+//     same object (ir::Value derives Clone, and equality is structural, so
+//     comparisons still agree -- but pointer identity does not exist to begin
+//     with in the Rust model, so nothing depended on it).
+//   * ArrayRef's NULL-vs-EMPTY distinction is lost; both become an empty Vec.
+//     MLIR's own accessors never distinguish them.
+// A borrowing model is the right long-term answer and needs converter support
+// for lifetime-carrying rule targets; it is not something a rule can express.
+
+fn t9() -> dataflowir_gen::ir::AttrDict {
+    Default::default()
+}
+
+fn t10() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(String::new())
+}
+
+fn t11() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(String::new())
+}
+
+fn t12() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(String::new())
+}
+
+fn t13() -> () {
+    ()
+}
+
+fn t14() -> Vec<dataflowir_gen::ir::Value> {
+    Default::default()
+}
+
+fn t15() -> Vec<dataflowir_gen::ir::Value> {
+    Default::default()
+}
+
+fn t16() -> Vec<dataflowir_gen::ir::Value> {
+    Default::default()
+}
+
+fn t17() -> Vec<dataflowir_gen::fmt::Region> {
+    Default::default()
+}
+
+// The null handle.  `OperationName()` is not default-constructible in MLIR, but
+// `std::optional<OperationName>`'s empty state and an unregistered name both
+// reach a "no registered op" value, and `None` is that value.
+// NO LIFETIME IN A RULE TARGET TYPE.  This was first written
+// `Option<&'static dataflowir_gen::TdOpDef>` -- the exact shape of MLIR's
+// nullable `Impl *` handle -- and the converter MANGLES a parameter's Rust type
+// text into the overload-disambiguating function name, producing
+// `fn getNumPhasesAttrName_Option&'staticdataflowir_genTdOpDef(...)`, which is
+// not an identifier: 2009 lines emitted, then rustc `missing parameters for
+// function definition`.  So the handle is spelled as an OWNING copy of the
+// registry row.  That is sound because a TdOpDef is immutable static data, and
+// it costs only the copy; `None` is still the null handle.
+fn t18() -> Option<dataflowir_gen::TdOpDef> {
+    None
+}
+
+fn t19<T1>() -> Vec<T1> {
+    Default::default()
+}
