@@ -109,3 +109,15 @@ unsafe fn f20<T1: Clone>(a0: &Option<T1>) -> Option<T1> {
 unsafe fn f21<T1>(a0: &Option<T1>) -> bool {
     a0.is_some()
 }
+
+// See src.cpp: `[[noreturn]]` -- the body DIVERGES and yields no initializer.
+// The message is a NUL-terminated C string behind a raw pointer, so it has to
+// be read as one; `{:?}` on the pointer would print an address.
+unsafe fn f22(a0: *const u8, a1: *const u8, a2: u32) {
+    panic!(
+        "llvm_unreachable: {} at {}:{}",
+        std::ffi::CStr::from_ptr(a0 as *const libc::c_char).to_string_lossy(),
+        std::ffi::CStr::from_ptr(a1 as *const libc::c_char).to_string_lossy(),
+        a2
+    )
+}

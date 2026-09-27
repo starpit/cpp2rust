@@ -117,3 +117,14 @@ fn f20<T1: Clone>(a0: &Option<Value<T1>>) -> Option<Value<T1>> {
 fn f21<T1>(a0: &Option<Value<T1>>) -> bool {
     a0.is_some()
 }
+
+// See src.cpp.  `Ptr<u8>::to_rust_string` (libcc2rs/src/cstr.rs:167) walks to
+// the NUL, which is the refcount counterpart of CStr::from_ptr in tgt_unsafe.rs.
+fn f22(a0: Ptr<u8>, a1: Ptr<u8>, a2: u32) {
+    panic!(
+        "llvm_unreachable: {} at {}:{}",
+        a0.to_rust_string(),
+        a1.to_rust_string(),
+        a2
+    )
+}

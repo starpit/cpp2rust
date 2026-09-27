@@ -65,9 +65,31 @@ template <typename T1> std::optional<T1> f1() { return std::optional<T1>(); }
 //   * `return std::optional<T1>{std::move(a0)};`  -> records the SAME thing
 //     (brace-init does NOT change the recorded overload; checked in ir_src.json)
 // The preprocessor's synthetic resolution picks the COPY constructor over
-// libc++'s `template<class U = T> optional(U&&)` in this dependent context.  The
-// next step is a spelling that forces U, which probably needs the
-// `explicit-template-args` marker (regen-rule.sh:68) -- it has no user today.
+// libc++'s `template<class U = T> optional(U&&)` in this dependent context.
+//
+// CORRECTION, MEASURED 2026-09-27 -- the `explicit-template-args` HYPOTHESIS IS
+// DEAD.  This comment used to say the next step was a spelling that forces U,
+// "which probably needs the `explicit-template-args` marker
+// (regen-rule.sh:68)".  Two slots have now measured that: THREE different
+// spellings all record the COPY ctor, INCLUDING with the marker turned ON, so
+// the marker changes nothing here and is not the missing piece.  (It is also not
+// carried by any module in the tree -- see the corrected note in
+// regen-rule.sh:68 itself.)
+// The defect is still live and still a MISSING KEY, not a wrong body:
+// `search expr void std::optional<S>::optional(S &&)` returns None, so
+// `std::optional<S> a{S{7}}` emits `let mut a: Option<S> = S { v: 7 };` with the
+// `Some(...)` wrap missing in BOTH models.  The key wanted is
+// `void std::optional<T1>::optional(T1 &&)`.
+// THE REMAINING PATH, from evidence in rules/support: its `f18` records
+// `llvm::FailureOr<T1>::FailureOr(T1 &&)` SUCCESSFULLY, because support RESTATES
+// the class, so the ctor is a plain non-template rather than libc++'s
+// `template<class U = T> optional(U&&)`.  The recorder only produces a key
+// STRING and the converter matches by string, so RESTATING `std::optional<T1>`
+// with a non-template `optional(T1&&)` should record the wanted key distinctly
+// from the copy ctor.  That is a WHOLE-MODULE rewrite (30 keys, plus the two
+// `__optional_*_base` receivers that exist precisely because libc++ splits the
+// members) and it is depended on by rules/support/FailureOr, so it needs a slot
+// of its own -- do not start it piecemeal.
 
 template <typename T1> std::optional<T1> f3(std::nullopt_t n) {
   return std::optional<T1>(n);

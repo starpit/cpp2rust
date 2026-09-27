@@ -207,3 +207,44 @@ llvm::LogicalResult f21(const llvm::FailureOr<T1> &a0) {
 // `Option<Value<T1>>`, not `Option<T1>`.  Otherwise the derived-to-base
 // conversion is between two DIFFERENT Rust types and rustc reports
 // `non-primitive cast: Option<i64> as Option<Rc<RefCell<i64>>>`.
+
+// --- llvm_unreachable ------------------------------------------------------
+//
+// llvm/Support/ErrorHandling.h:141 --
+//   [[noreturn]] void llvm_unreachable_internal(const char *msg = nullptr,
+//                                               const char *file = nullptr,
+//                                               unsigned line = 0);
+// This is the target of the `llvm_unreachable` MACRO, and the macro has TWO
+// expansions:
+//   * ErrorHandling.h:164, !NDEBUG            -> llvm_unreachable_internal(msg, __FILE__, __LINE__)
+//   * ErrorHandling.h:167, NDEBUG w/o builtin -> llvm_unreachable_internal()
+// MEASURED 2026-09-27: the DEFAULTED-ARGUMENT TRAP DOES **NOT** APPLY HERE, and
+// this is the opposite of what it was briefed as.  Writing a second rule that
+// calls the 0-arg form recorded the **IDENTICAL** key string
+//   void llvm::llvm_unreachable_internal(const char *, const char *, unsigned int)
+// because the recorder emits the CALLEE'S DECLARED signature, not the spelled
+// argument list -- defaulted parameters are present in the declaration and so
+// they are present in the key.  So there is exactly ONE key for both macro
+// expansions, and adding an arity-0 sibling produces a DUPLICATE key string,
+// after which `search` refuses as ambiguous and the caller emits a nonexistent
+// fallback.  (Contrast `std::optional`'s copy-vs-move ctors, which are two
+// DISTINCT declarations; a defaulted argument is one declaration.)
+// 30+ reachable sites in PCFGToDataflowIR.cpp alone (:440, :1171, :1223-1229).
+//
+// `[[noreturn]]` buys NO exemption from the void-body rule -- the src body must
+// still be spelled `return f(...);` -- but the RUST body may DIVERGE, i.e. a
+// bare `panic!` that yields no initializer is accepted.  MEASURED.
+//
+// The parameters arrive as `*const u8` / `Ptr<u8>`, NOT as slices, so the
+// message must be CONVERTED.  Formatting the pointer itself (`{:?}` on a0)
+// would still abort and would still look like a pass, while printing an address
+// instead of the diagnostic -- silent wrongness, not a style choice.
+namespace llvm {
+[[noreturn]] void llvm_unreachable_internal(const char *msg = nullptr,
+                                            const char *file = nullptr,
+                                            unsigned line = 0);
+} // namespace llvm
+
+void f22(const char *a0, const char *a1, unsigned a2) {
+  return llvm::llvm_unreachable_internal(a0, a1, a2);
+}
