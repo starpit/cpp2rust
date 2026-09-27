@@ -599,6 +599,33 @@ void addBuiltinTypes(Model model) {
 
   add_size_rules(ctx_->getSizeType(), {"size_t", "size_type"}, "usize");
   add_size_rules(ctx_->getSignedSizeType(), {"ssize_t"}, "isize");
+
+  // THE <cstdint> FIXED-WIDTH ALIASES. Only size_t/ssize_t were registered, so a
+  // type spelled `int64_t` or `uint32_t` had no model even though `long` and
+  // `unsigned int` did.
+  //
+  // This is not hypothetical: the printer that Mapper::search() uses keeps the
+  // SUGARED spelling, so these aliases are exactly what it looks up, while the
+  // diagnostic's printer canonicalises them away. Two rows today were nothing but
+  // this gap:
+  //   `unmapped type 'int64_t' ... while mapping mlir::detail::DenseArrayAttrImpl<int64_t>`
+  //     -- 3 TUs, reached because that rule had to be made generic precisely because
+  //     its canonicalised `<long>` spelling never matched;
+  //   `llvm::SmallVectorBase<uint32_t>` searched while the diagnostic printed
+  //     `<unsigned int>`.
+  // Each alias maps to the same Rust type its underlying builtin already maps to, so
+  // the two spellings cannot disagree: on this target `long` -> i64 and
+  // `unsigned int` -> u32, matching int64_t and uint32_t below.
+  add_scalar_rule("int8_t", "i8", "0_i8");
+  add_scalar_rule("uint8_t", "u8", "0_u8");
+  add_scalar_rule("int16_t", "i16", "0_i16");
+  add_scalar_rule("uint16_t", "u16", "0_u16");
+  add_scalar_rule("int32_t", "i32", "0_i32");
+  add_scalar_rule("uint32_t", "u32", "0_u32");
+  add_scalar_rule("int64_t", "i64", "0_i64");
+  add_scalar_rule("uint64_t", "u64", "0_u64");
+  add_scalar_rule("intptr_t", "isize", "0_isize");
+  add_scalar_rule("uintptr_t", "usize", "0_usize");
 }
 
 clang::QualType normalizeQualType(clang::QualType qual_type) {
