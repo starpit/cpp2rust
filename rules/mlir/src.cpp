@@ -388,7 +388,15 @@ class OpOperand;
 // measured (they are absent from the triage list).  Declaring without a `using
 // tN =` registers nothing -- see the note in the header.
 class IndexType {};
-class MemRefType {};
+// ⭐ UPDATE 2026-09-27 (fourth slot): `MemRefType` IS NOW A KEY IN ITS OWN RIGHT
+// -- t73, 16 TUs (queue g053, `searched as: mlir::MemRefType`).  Its DEFAULT
+// CONSTRUCTOR is declared here and keyed as f42; without the ctor the type key
+// alone gives rc=0 and then E0433.  The paragraph above still holds for the
+// OTHER names in this block.
+class MemRefType {
+public:
+  MemRefType();
+};
 class RankedTensorType {};
 namespace ktdf {
 class TokenType {};
@@ -594,7 +602,13 @@ class OpOperandOpaqueTag {};
 // a generic `TypedValue<T1>` forces the converter to map the template ARGUMENT
 // and regresses to `mapper.cpp:722 Assertion 0 && "Type is not present in
 // types_"`.  Six recorded regressions.  Concrete for MLIR types, always.
-class VectorType {};
+// ⭐ UPDATE 2026-09-27 (fourth slot): `VectorType` IS NOW A KEY IN ITS OWN RIGHT
+// -- t75, 16 TUs (queue g055, `searched as: mlir::VectorType`).  Its DEFAULT
+// CONSTRUCTOR is declared here and keyed as f44.
+class VectorType {
+public:
+  VectorType();
+};
 class IntegerType {};
 namespace ktdf_arch {
 class MemoryType {};
@@ -785,6 +799,61 @@ public:
   // Diagnostics.h:344-349 -- `template <typename Arg> InFlightDiagnostic
   // &&operator<<(Arg &&arg) &&`.
   template <typename Arg> InFlightDiagnostic &&operator<<(Arg &&arg) &&;
+};
+
+// ---------------------------------------------------------------------------
+// PASS 2026-09-27 (fourth slot).  SIX type rows, t71-t76, EACH WITH ITS DEFAULT
+// CONSTRUCTOR (f40-f45).  Keys read off `searched as:` in the sweep samples
+// (/home/agent/work/queue/samples/g0{31,36,53,54,55,69}.txt), and each type's
+// SPELLING read from the OWNING TOOLCHAIN HEADER, never from a sibling:
+//
+//   t71 mlir::UnitAttr          mlir/IR/BuiltinAttributes.h.inc:412  `class UnitAttr;`
+//   t72 mlir::TypeID            mlir/Support/TypeID.h:107            `class TypeID {`
+//   t73 mlir::MemRefType        mlir/IR/BuiltinTypes.h.inc:1009      `class MemRefType : public ::mlir::Type::TypeBase<...>`
+//   t74 mlir::TypedAttr         mlir/IR/BuiltinAttributeInterfaces.h.inc:14 `class TypedAttr;`
+//   t75 mlir::VectorType        mlir/IR/BuiltinTypes.h.inc:1283      `class VectorType : public ::mlir::Type::TypeBase<...>`
+//   t76 mlir::FlatSymbolRefAttr mlir/IR/BuiltinAttributes.h:26       `class FlatSymbolRefAttr;`
+//
+// ⭐ THE DESTRUCTOR TEST WAS APPLIED TO ALL SIX.  `grep -rn '~UnitAttr|~TypeID|
+// ~MemRefType|~TypedAttr|~VectorType|~FlatSymbolRefAttr' mlir/IR/` over this
+// toolchain's headers returns ZERO HITS: every one of the six is a trivially
+// destructible handle (a uniquer pointer, or in TypeID's case an
+// aligned-storage pointer), so none of them is the `mlir::OwningOpRef` /
+// `mlir::InFlightDiagnostic` case where a destructor with observable effect
+// FORBIDS an opaque model.
+//
+// ⭐ EVERY ONE IS CONCRETE, NOT GENERIC.  MemRefType and VectorType are already
+// DECLARED above (at the IndexType/RankedTensorType block and next to
+// IntegerType respectively) purely so the concrete TypedValue instantiations
+// could be spelled; they now get `using tN =` of their own, which is what
+// actually registers a rule.  Their declarations are NOT re-stated here.
+//
+// ⭐ EACH ONE DEFAULT-CONSTRUCTS IN PORTED CODE (`MemRefType t;`, a null
+// return, `TypeID id;`), so each gets an EXPLICIT default constructor declared
+// here and an fN rule at the bottom.  A `using tN =` ALONE gives rc=0 and then
+// `error[E0433]: cannot find module or crate <mangled>` -- measured FOUR times
+// in one day (mlir::Attribute, std::__thread_id, std::plus,
+// mlir::InFlightDiagnostic/t70, the last of which is in THIS module and was
+// fixed by f39).  The `-verbose` line is `search expr void T::T(), result:
+// None`.
+class UnitAttr {
+public:
+  UnitAttr();
+};
+class TypedAttr {
+public:
+  TypedAttr();
+};
+class FlatSymbolRefAttr {
+public:
+  FlatSymbolRefAttr();
+};
+// `mlir::TypeID` is NOT an attribute or a type -- it is MLIR's RTTI token, one
+// pointer into a per-type static storage object (TypeID.h:112-115).  Declared
+// here rather than with the Attr/Type families for that reason.
+class TypeID {
+public:
+  TypeID();
 };
 
 } // namespace mlir
@@ -1248,6 +1317,102 @@ using t69 = mlir::OpPrintingFlags;
 // every diagnostic the ported compiler emits.
 using t70 = mlir::InFlightDiagnostic;
 
+// ---------------------------------------------------------------------------
+// t71-t76: THE SIX ROWS ADDED 2026-09-27 (fourth slot).  See the declaration
+// block at the end of `namespace mlir` for the per-type header line each
+// spelling was read from and for the zero-hit destructor grep.  EACH ONE ALSO
+// HAS ITS DEFAULT CONSTRUCTOR, f40-f45, at the bottom of this file.
+// ---------------------------------------------------------------------------
+
+// t71: `mlir::UnitAttr` -> `dataflowir_gen::ir::Attr` (ir.rs:466).  34 TUs, the
+// largest open rules/mlir row.  ⭐ THIS ONE IS WELL-GROUNDED, NOT A WIDENING:
+// `Attr::Unit` (ir.rs:473-474) is documented IN THE CRATE as `mlir::UnitAttr`
+// -- "present with no value; the dictionary prints only the key" -- and its
+// Display prints the empty string (ir.rs:539) with the key-only form handled at
+// ir.rs:569.  So unlike t54-t57 the target enum really does model this
+// attribute.
+// ⛔ WHAT IS STILL LOST: the `init` is NOT `Attr::Unit`.  A default-constructed
+// `mlir::UnitAttr` is a NULL HANDLE, not a present unit attribute, and
+// `Attr::Unit` would print as a REAL unit attr.  The init is therefore t5's
+// EMPTY-SPELLING `Attr::Raw("")` null sentinel, the same sentinel t54-t57 use,
+// which no real attribute can print as.  `UnitAttr::get(ctx)` -- the factory
+// that would actually yield `Attr::Unit` -- is NOT mapped and still aborts
+// loudly; mapping it would need the per-overload parameter form read off
+// `-verbose`, which this slot did not measure (same refusal as
+// `mlir::IndexType::get`).
+using t71 = mlir::UnitAttr;
+
+// t72: `mlir::TypeID` -> AN OPAQUE UNIT.  28 TUs.  The SAME model and the same
+// bargain as t58 (`mlir::detail::InterfaceMap`), t59 (`mlir::Builder`), t69
+// (`mlir::OpPrintingFlags`).
+// ⭐ WHY A UNIT IS ADMISSIBLE HERE: TypeID is MLIR's RTTI token -- one pointer
+// into a per-type static `Storage` (TypeID.h:112-115) -- and the crate has NO
+// RTTI concept at all.  Its destructor test is clean: there is no `~TypeID` in
+// TypeID.h, it owns nothing (`TypeIDAllocator`/`SelfOwningTypeID` are separate
+// classes), so dropping it has no observable effect.  The 28-TU row is
+// DECLARATION sites and `const TypeID &` parameters, which need the type alone.
+// ⛔ WHAT IS LOST, AND IT IS THE WHOLE POINT OF THE TYPE: IDENTITY.  Every
+// translated TypeID is the same `()`, so if `operator==` / `operator!=`
+// (TypeID.h:118-123) were ever mapped, every type would compare EQUAL to every
+// other -- silently wrong, which is worse than an abort.  They are therefore
+// DELIBERATELY NOT MAPPED, and neither is `TypeID::get<T>()` (TypeID.h:127-130),
+// so every comparison and every factory call through one still aborts loudly.
+// The unit buys the declarations and NOTHING ELSE.
+using t72 = mlir::TypeID;
+
+// t73: `mlir::MemRefType` -> `dataflowir_gen::ir::Ty` (ir.rs:37).  16 TUs.  A
+// WIDENING, the same one t41 (`ShapedType`), t42 (`TensorType`) and t60
+// (`IndexType`) make: every MemRefType IS a `mlir::Type` and t5 already maps
+// `mlir::Type -> ir::Ty`.
+// ⭐ BETTER GROUNDED THAN t41/t42: `Ty::MemRef(Vec<i64>, Box<Ty>)` (ir.rs:44)
+// EXISTS and carries exactly the dimension list and element type, negative dim =
+// dynamic `?` (ir.rs:56-60), so the shape SURVIVES the mapping -- there is no
+// reparse-from-spelling loss of the kind `RankedTensorType` takes.
+// ⛔ The `init` is still the EMPTY-SPELLING `Ty::Opaque("")` null sentinel, not
+// `Ty::MemRef(vec![], ...)`: a default-constructed MemRefType is a NULL handle
+// and an empty-shaped memref is a REAL type that prints `memref<f32>`.  NO
+// accessor is mapped -- `getShape`, `getElementType`, `getRank`, `getLayout`,
+// `getMemorySpace`, `MemRefType::get` are ALL absent and still abort loudly.
+using t73 = mlir::MemRefType;
+
+// t74: `mlir::TypedAttr` -> `dataflowir_gen::ir::Attr` (ir.rs:466).  16 TUs.
+// The TWELFTH widening of an attribute class to that enum, and it has the same
+// interface-over-subclasses shape as t41/t42/t55: `TypedAttr` is the ODS
+// attribute INTERFACE for "an attribute that carries a type"
+// (BuiltinAttributeInterfaces.h.inc:14), over IntegerAttr / FloatAttr /
+// DenseElementsAttr and the rest.
+// ⛔ WHAT IS LOST: the CONSTRAINT "this attribute has a type".  `Attr` has no
+// variant that pairs an arbitrary payload with a `Ty` except `Attr::Int(i64,
+// Ty)` (ir.rs:469), which is IntegerAttr-specific, so a TypedAttr that is not
+// an integer lands in `Attr::Raw`/`Attr::Aliasable` BY SPELLING.  `getType()`
+// -- the ONE member the interface exists for -- is NOT mapped and still aborts.
+using t74 = mlir::TypedAttr;
+
+// t75: `mlir::VectorType` -> `dataflowir_gen::ir::Ty` (ir.rs:37).  16 TUs.  Same
+// widening as t73, and it is the BEST-GROUNDED of the type rows: `Ty::Vector(
+// Vec<i64>, Box<Ty>)` is documented at ir.rs:41-42 as `vector<64xf16> --
+// mlir::VectorType`, i.e. the crate models this exact class by name.
+// ⛔ Same two losses as t73: the `init` is the `Ty::Opaque("")` null sentinel
+// rather than a real empty vector type, and NO accessor is mapped
+// (`getShape`/`getElementType`/`getNumScalableDims`/`VectorType::get` all still
+// abort).  ⛔ NOTE the pre-existing declaration of `class VectorType` in this
+// file is ALSO the template argument of t47 (`TypedValue<VectorType>`); adding
+// `using t75` registers a rule for the TYPE ITSELF and does not change t47,
+// which stays CONCRETE.
+using t75 = mlir::VectorType;
+
+// t76: `mlir::FlatSymbolRefAttr` -> `dataflowir_gen::ir::Attr` (ir.rs:466).  12
+// TUs.  The THIRTEENTH widening to that enum.
+// ⛔ WHAT IS LOST: `Attr` HAS NO SYMBOL-REFERENCE VARIANT (`grep -n
+// 'SymbolRef\|Flat' ir.rs` finds only the two lines of `Attr::Unit` doc prose
+// and `I32Array`'s, i.e. ZERO symbol-ref hits), so the referenced symbol NAME
+// lands in `Attr::Raw` BY SPELLING rather than as a structured reference, and
+// `getValue()`/`getAttr()`/`FlatSymbolRefAttr::get` are NOT mapped and still
+// abort loudly.  A Raw spelling round-trips the printed `@name` form, which is
+// what the fmt layer needs, and loses the ability to RESOLVE the symbol -- a
+// capability the crate does not have for any attribute.
+using t76 = mlir::FlatSymbolRefAttr;
+
 // ---- WHAT THIS PASS DELIBERATELY LEFT OUT, and why -------------------------
 // * `mlir::IndexType::get(mlir::MLIRContext *)`, the ONE factory the verbose logs
 //   show in expression position (see t60).  NOT ADDED, because its only honest
@@ -1558,3 +1723,23 @@ mlir::InFlightDiagnostic &&f38(mlir::InFlightDiagnostic &&d, llvm::StringLiteral
 // `std::__thread_id` (rules/thread_id/src.cpp:63) -- the pattern is: every
 // mapped type that ported code DEFAULT-CONSTRUCTS needs its ctor keyed too.
 mlir::InFlightDiagnostic f39() { return mlir::InFlightDiagnostic(); }
+
+// ---- f40-f45: THE DEFAULT CONSTRUCTORS FOR t71-t76 -------------------------
+// ⭐ ONE PER TYPE KEY, NO EXCEPTIONS.  f39's note above is the whole argument
+// and it applies verbatim to all six: a `using tN =` maps the TYPE ONLY, and the
+// converter looks the default constructor up as an ORDINARY EXPR RULE under the
+// key `void <T>::<T>()`.  On a miss it falls back to `<mangled type>::new()`,
+// which does not exist, so the translation gets rc=0 and rustc then gets
+// `error[E0433]: cannot find module or crate ...`.  Adding a type key WITHOUT
+// its constructor is how four separate rows shipped DEAD today.
+//
+// Each body is the type's NULL-HANDLE sentinel, chosen per type in the `using`
+// comments above, NOT a valid value: `Attr::Raw("")` for the three attribute
+// rows (t5's empty-spelling sentinel), `Ty::Opaque("")` for the two type rows,
+// `()` for the TypeID unit.  Appended AFTER f39, which renumbers nothing.
+mlir::UnitAttr f40() { return mlir::UnitAttr(); }
+mlir::TypeID f41() { return mlir::TypeID(); }
+mlir::MemRefType f42() { return mlir::MemRefType(); }
+mlir::TypedAttr f43() { return mlir::TypedAttr(); }
+mlir::VectorType f44() { return mlir::VectorType(); }
+mlir::FlatSymbolRefAttr f45() { return mlir::FlatSymbolRefAttr(); }

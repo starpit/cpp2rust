@@ -916,6 +916,77 @@ fn t70() -> libcc2rs::InFlightDiagnostic {
     libcc2rs::InFlightDiagnostic::new()
 }
 
+// ---------------------------------------------------------------------------
+// t71-t76 -- THE SIX ROWS ADDED 2026-09-27 (fourth slot).  src.cpp carries the
+// full argument for each, including the OWNING HEADER LINE each spelling was
+// read from and the zero-hit `~TypeName` destructor grep that clears all six for
+// a non-Drop model.  In one paragraph:
+//
+// t71 `mlir::UnitAttr`   -> `ir::Attr` (ir.rs:466).  ⭐ WELL-GROUNDED, not a
+//   widening: `Attr::Unit` (ir.rs:473) is documented in the crate as
+//   `mlir::UnitAttr` itself.  ⛔ But the INIT IS NOT `Attr::Unit` -- a
+//   default-constructed UnitAttr is a NULL HANDLE and `Attr::Unit` is a REAL
+//   present attribute, so the init is t5's empty-spelling `Attr::Raw("")`
+//   sentinel.  `UnitAttr::get(ctx)`, the factory that would yield `Attr::Unit`,
+//   is NOT mapped and still aborts loudly.
+fn t71() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(::std::string::String::new())
+}
+
+// t72 `mlir::TypeID` -> AN OPAQUE UNIT, the same model as t58/t59/t69.  MLIR's
+//   RTTI token, one pointer into a per-type static `Storage` (TypeID.h:112-115);
+//   no `~TypeID` exists and it owns nothing, so the drop is effect-free.
+//   ⛔ WHAT IS LOST IS THE ENTIRE POINT OF THE TYPE -- IDENTITY.  Every
+//   translated TypeID is the same `()`, so `operator==`/`operator!=`
+//   (TypeID.h:118-123) are DELIBERATELY NOT MAPPED: mapping them would make
+//   every type compare EQUAL to every other, which is silently wrong and ranks
+//   BELOW an abort.  `TypeID::get<T>()` is likewise absent.  The body is `()`,
+//   not empty: an empty body panics at syntactic.rs:591.
+fn t72() -> () {
+    ()
+}
+
+// t73 `mlir::MemRefType` -> `ir::Ty` (ir.rs:37).  A WIDENING, the same one t41,
+//   t42 and t60 make.  ⭐ BETTER GROUNDED than t41/t42: `Ty::MemRef(Vec<i64>,
+//   Box<Ty>)` (ir.rs:44) carries the dimension list and element type, negative
+//   dim = dynamic `?`, so the SHAPE SURVIVES.  ⛔ The init is still the
+//   empty-spelling `Ty::Opaque("")` null sentinel, because an empty-shaped
+//   memref is a REAL type (`memref<f32>`) and a null handle is not.  NO
+//   accessor is mapped -- getShape/getElementType/getRank/getLayout/
+//   getMemorySpace/MemRefType::get all still abort.
+fn t73() -> dataflowir_gen::ir::Ty {
+    dataflowir_gen::ir::Ty::Opaque(::std::string::String::new())
+}
+
+// t74 `mlir::TypedAttr` -> `ir::Attr` (ir.rs:466).  A WIDENING, the 12th, with
+//   the interface-over-subclasses shape of t41/t42/t55.  ⛔ `Attr` has no
+//   variant pairing an arbitrary payload with a `Ty` except the
+//   IntegerAttr-specific `Attr::Int(i64, Ty)` (ir.rs:469), so a non-integer
+//   TypedAttr lands in `Attr::Raw` BY SPELLING and `getType()` -- the one member
+//   the interface exists for -- is NOT mapped and still aborts.
+fn t74() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(::std::string::String::new())
+}
+
+// t75 `mlir::VectorType` -> `ir::Ty` (ir.rs:37).  The BEST-GROUNDED of the two
+//   type rows: `Ty::Vector(Vec<i64>, Box<Ty>)` is documented at ir.rs:41-42 as
+//   `vector<64xf16> -- mlir::VectorType`, this exact class by name.  ⛔ Same two
+//   losses as t73: null-handle init rather than a real empty vector type, and NO
+//   accessor mapped.
+fn t75() -> dataflowir_gen::ir::Ty {
+    dataflowir_gen::ir::Ty::Opaque(::std::string::String::new())
+}
+
+// t76 `mlir::FlatSymbolRefAttr` -> `ir::Attr` (ir.rs:466).  A WIDENING, the
+//   13th.  ⛔ `Attr` HAS NO SYMBOL-REFERENCE VARIANT (`grep -n
+//   'SymbolRef\|Flat' ir.rs` = zero symbol-ref hits), so the referenced symbol
+//   NAME lands in `Attr::Raw` BY SPELLING -- the printed `@name` form
+//   round-trips, the ability to RESOLVE the symbol does not, and the crate has
+//   that capability for no attribute.  getValue()/getAttr()/get are NOT mapped.
+fn t76() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(::std::string::String::new())
+}
+
 // f21 -- `mlir::InFlightDiagnostic && operator shl(const char (&)[_]) &&`
 // (Diagnostics.h:344-349's member template, instantiated on a string literal),
 // work-queue row g286, 21 TUs.  a0 IS THE RECEIVER (see src.cpp for why the
@@ -1041,4 +1112,28 @@ unsafe fn f38(a0: libcc2rs::InFlightDiagnostic, a1: Vec<libc::c_char>) -> libcc2
 // in-flight, empty diagnostic; `live` is true so Drop reports it (diag.rs).
 unsafe fn f39() -> libcc2rs::InFlightDiagnostic {
     libcc2rs::InFlightDiagnostic::new()
+}
+
+// f40-f45 -- THE DEFAULT CONSTRUCTORS FOR t71-t76, one per type key.  A `using
+// tN =` maps the TYPE ONLY; the converter looks `void <T>::<T>()` up as an
+// ORDINARY EXPR RULE and on a miss emits `<mangled type>::new()`, which does not
+// exist -- rc=0 and then `error[E0433]`.  Each body is the SAME null-handle
+// sentinel as its type's `init` above, NOT a valid value.
+unsafe fn f40() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(::std::string::String::new())
+}
+unsafe fn f41() -> () {
+    ()
+}
+unsafe fn f42() -> dataflowir_gen::ir::Ty {
+    dataflowir_gen::ir::Ty::Opaque(::std::string::String::new())
+}
+unsafe fn f43() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(::std::string::String::new())
+}
+unsafe fn f44() -> dataflowir_gen::ir::Ty {
+    dataflowir_gen::ir::Ty::Opaque(::std::string::String::new())
+}
+unsafe fn f45() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(::std::string::String::new())
 }
