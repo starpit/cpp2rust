@@ -643,6 +643,48 @@ void addBuiltinTypes(Model model) {
     return std::format("{}{}", sign, bits);
   };
 
+  // `void` ITSELF, mapped to Rust's unit type `()`.
+  //
+  // Only `void *` was registered (just below), so a BARE `void` reaching
+  // mapTypeStringRecursive had no model. That was the single largest gap in the
+  // 403-TU survey-v5 (263 TUs record it), and it is reached in exactly two
+  // shapes, both of which are TYPE ARGUMENTS of an already-mapped family:
+  //   * `std::function<void ()>` -- matched by the committed arrow-shape key
+  //     `std::function<T1 ()>`, which binds T1 to the RETURN type `void`;
+  //   * `std::shared_ptr<void>` / `std::unique_ptr<void>` -- the type-erased
+  //     element.
+  // Both want `()` in Rust, which is what the QualType path already produces
+  // for a void return (`fn tN() -> () { () }`).
+  //
+  // NO GUARD RESTRICTING IT TO TEMPLATE-ARGUMENT POSITION, and that is a
+  // deliberate, checkable decision rather than an omission: C++ itself forbids
+  // `void` in every position where a value model would be wrong. [basic.types]
+  // makes void an incomplete type that can never be completed, so a variable,
+  // a non-static data member, an array element and a by-value parameter of type
+  // `void` are all ill-formed and cannot reach the mapper -- clang rejects them
+  // before the converter runs. The only remaining positions are a function
+  // RETURN type (where `()` is correct and is what the existing
+  // Converter::VisitFunctionDecl path emits), a template argument (the two
+  // shapes above) and a cast-to-void discard (which never consults types_).
+  // So a position-sensitive guard would have no position left to reject; it
+  // would only be dead code claiming a safety property it does not provide.
+  //
+  // Registered with a BARE AddTypeRule, NOT through add_scalar_rule: that
+  // helper also synthesises `void *` / `const void *` as `*mut ()` / `*const
+  // ()`, which CONFLICTS with the `::libc::c_void` (unsafe) and `AnyPtr`
+  // (refcount) entries added immediately below -- AddTypeRule treats a
+  // disagreeing duplicate as fatal and would `exit(EXIT_FAILURE)` during rule
+  // loading, i.e. every TU would stop translating. The pointer spellings stay
+  // as they are; only the bare leaf is new.
+  {
+    auto unit = TranslationRule::TypeRule::Plain("()");
+    unit.initializer = "()";
+    unit.type_info.derives = {"Copy",  "Clone",     "Default",  "Debug",
+                              "PartialEq", "PartialOrd", "Eq", "Ord", "Hash"};
+    AddTypeRule(ToString(ctx_->VoidTy), TranslationRule::TypeRule(unit));
+    AddTypeRule("const " + ToString(ctx_->VoidTy), std::move(unit));
+  }
+
   // Misc
   add_builtin_rule(ctx_->BoolTy, "bool");
   add_builtin_rule(ctx_->FloatTy, "f32");
