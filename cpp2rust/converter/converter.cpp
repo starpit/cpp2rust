@@ -3474,7 +3474,20 @@ void Converter::ReportUnmappedSystemType(const clang::RecordDecl *decl) {
     detail += ", reached while converting `" +
               curr_function_->getQualifiedNameAsString() + "`";
   }
-  detail += " rule key: " + key;
+  // Print the key from the SAME printer `Mapper::search(QualType)` uses, not one
+  // rebuilt from the RecordDecl. `ToString(GetTypeForDecl(decl))` CANONICALISES
+  // and does not elide defaulted template args, while `search()` looks up the
+  // SUGARED spelling and only falls back to the canonical one IF THE TWO STRINGS
+  // DIFFER -- so the old single `rule key:` instructed authors to write a key
+  // that is never searched. Measured on three axes, each of which produced a
+  // committed DEAD rule:
+  //   search type std::__hash_impl<SenComponents>   vs  rule key: <..., void>
+  //   search type ...DenseArrayAttrImpl<int64_t>    vs  rule key: <long>
+  //   searched     llvm::SmallVector<long>          vs  recorded key <T1, _>
+  // Both spellings are printed, clearly labelled; the FIRST is the key to write.
+  detail += " rule key: " + Mapper::DescribeLastTypeSearch() +
+            "; from decl (NOT a key -- canonicalised, defaulted args kept): " +
+            key;
 
   if (survey::Enabled() || survey::MangleUnmapped()) {
     if (survey::Enabled()) {

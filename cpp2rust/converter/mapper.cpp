@@ -36,6 +36,18 @@ std::unordered_multimap<std::string, TranslationRule::ExprRule>
 std::unordered_multimap<std::string, TranslationRule::TypeRule>
     types_; // src -> TypeRule
 
+// The spelling(s) the last `search(clang::QualType)` actually looked up. See
+// Mapper::DescribeLastTypeSearch in mapper.h for why the diagnostics must quote
+// these and not a spelling rebuilt from the RecordDecl.
+std::string last_type_search_sugared_;
+std::string last_type_search_canonical_; // empty when it equalled the sugared
+
+// Index of PROJECT (user-defined) tag decls in this TU, keyed by the MAPPER's
+// own spelling of the type -- the same string a leaf reaching
+// mapTypeStringRecursive carries. Built lazily, once, only on a lookup miss.
+std::unordered_map<std::string, const clang::TagDecl *> user_tags_;
+bool user_tags_built_ = false;
+
 clang::PrintingPolicy getPrintPolicy() {
   assert(ctx_);
   clang::PrintingPolicy policy(ctx_->getLangOpts());
@@ -411,6 +423,8 @@ TranslationRule::ExprRule *search(const clang::Expr *expr) {
 std::pair<TranslationRule::TypeRule *, std::vector<std::optional<std::string>>>
 search(clang::QualType qual_type) {
   auto sugared = ToString(qual_type, ScalarSugar::kPreserve);
+  last_type_search_sugared_ = sugared;
+  last_type_search_canonical_.clear();
   if (auto res = search(types_, sugared, GetTypeMapKey(sugared)); res.first) {
     log() << "search type " << sugared
           << ", result: " << res.first->type_info.type << '\n';
@@ -421,6 +435,7 @@ search(clang::QualType qual_type) {
     log() << "search type " << type << ", result: None\n";
     return {};
   }
+  last_type_search_canonical_ = type;
   auto res = search(types_, type, GetTypeMapKey(type));
   log() << "search type " << type
         << ", result: " << (res.first ? res.first->type_info.type : "None")
@@ -677,6 +692,38 @@ void CollectTagDecls(clang::QualType ty,
   }
 }
 
+// Walk every DeclContext in the TU collecting PROJECT tag decls, keyed by the
+// mapper's spelling of their type. This is the only way to answer
+// "is this SPELLING a project type?" on the mapTypeStringRecursive path, which
+// by construction holds neither a clang::Decl nor a QualType: the leaf arrives
+// as a template argument of a mapped library type (e.g. the enum inside
+// `std::optional<mlir::ktdp::SpyreMemorySpaceKind>`) and is a bare string.
+// Deliberately skips unnamed tags (they have no stable spelling to key on) and
+// template specialisations (GetTypeForDecl rebuilds a specialisation type whose
+// spelling is not what a leaf string carries -- a wrong hit there would emit a
+// name nothing defines, so we prefer the loud assert).
+void CollectUserTags(const clang::DeclContext *dc, int depth = 0) {
+  if (depth > 32) {
+    return;
+  }
+  for (const auto *d : dc->decls()) {
+    if (const auto *tag = llvm::dyn_cast<clang::TagDecl>(d)) {
+      if (tag->getIdentifier() != nullptr &&
+          !llvm::isa<clang::ClassTemplateSpecializationDecl>(tag) &&
+          IsUserDefinedDecl(tag)) {
+        auto ty = GetTypeForDecl(tag);
+        if (!ty.isNull()) {
+          user_tags_.emplace(ToString(ty), tag);
+        }
+      }
+    }
+    if (llvm::isa<clang::NamespaceDecl>(d) || llvm::isa<clang::RecordDecl>(d) ||
+        llvm::isa<clang::LinkageSpecDecl>(d)) {
+      CollectUserTags(llvm::cast<clang::DeclContext>(d), depth + 1);
+    }
+  }
+}
+
 std::string DescribeUnmappedLeaf(const std::string &cpp_type) {
   std::string msg = "type `" + cpp_type + "` has no model in types_";
   if (!map_ctx_.outer.empty()) {
@@ -717,6 +764,40 @@ std::string mapTypeStringRecursive(const std::string &cpp_type) {
       // No Rust is emitted in survey mode, so the returned spelling is never
       // written anywhere; it only keeps the walk going.
       return cpp_type;
+    }
+    // A PROJECT leaf is NOT a missing model: the converter ports the type and
+    // emits a `pub struct`/`pub type` for it in this same TU, under exactly the
+    // name GetRecordName computes -- `ToRustName(ToString(GetTypeForDecl))`,
+    // converter.cpp:4755-4760. It has no `types_` entry here only because
+    // AddRuleForUserDefinedType has not run for it YET (the leaf is reached
+    // through a mapped library template before VisitEnumDecl/VisitRecordDecl
+    // gets to the decl). Asserting made a CORRECT port of the enum abort the
+    // whole TU. Measured on mlir::ktdp::SpyreMemorySpaceKind, an I32EnumAttr in
+    // a GENERATED header reached via a plain -I (so isInSystemHeader is false
+    // and IsUserDefinedDecl is true), arriving as the argument of
+    // `std::optional<...>`.
+    //
+    // We deliberately do NOT AddTypeRule here: VisitEnumDecl bails on
+    // `Mapper::Contains(...)` (converter.cpp:4215), so registering the rule
+    // would SUPPRESS the `pub type` emission and turn the name undefined.
+    //
+    // SYSTEM types with no rule keep asserting. That loud failure is
+    // load-bearing -- it is what stops a missing model becoming an undefined
+    // Rust name at rc=0 -- and is not weakened by this branch.
+    if (const clang::TagDecl *tag = nullptr;
+        LooksLikeUserDefinedTypeName(cpp_type, &tag)) {
+      static std::set<std::string> ported_leaves;
+      if (ported_leaves.insert(cpp_type).second) {
+        llvm::errs() << "note: project leaf type `" << cpp_type
+                     << "` has no types_ entry yet; emitting its PORTED name `"
+                     << ToRustName(cpp_type) << "` (declared at "
+                     << (ctx_ != nullptr
+                             ? tag->getLocation().printToString(
+                                   ctx_->getSourceManager())
+                             : std::string("<no ASTContext>"))
+                     << ")\n";
+      }
+      return ToRustName(cpp_type);
     }
     if (survey::MangleUnmapped()) {
       // --mangle-unmapped (TRIAGE ONLY): the twin of the fallback in
@@ -781,10 +862,48 @@ std::string normalizeTranslationRule(std::string rule) {
 
 } // namespace
 
+std::string DescribeLastTypeSearch() {
+  if (last_type_search_sugared_.empty()) {
+    return "searched as: <no type search recorded>";
+  }
+  std::string out = "searched as: " + last_type_search_sugared_;
+  if (!last_type_search_canonical_.empty()) {
+    out += ", canonical (searched only because it differs): " +
+           last_type_search_canonical_;
+  }
+  return out;
+}
+
+bool LooksLikeUserDefinedTypeName(const std::string &cpp_type,
+                                  const clang::TagDecl **decl) {
+  if (ctx_ == nullptr) {
+    return false;
+  }
+  if (!user_tags_built_) {
+    user_tags_built_ = true;
+    CollectUserTags(ctx_->getTranslationUnitDecl());
+  }
+  auto it = user_tags_.find(cpp_type);
+  if (it == user_tags_.end()) {
+    return false;
+  }
+  if (decl != nullptr) {
+    *decl = it->second;
+  }
+  return true;
+}
+
 PushASTContext::PushASTContext(clang::ASTContext &ctx) : prev_(ctx_) {
   ctx_ = &ctx;
+  // The tag index holds decls owned by the OLD context; never let it outlive it.
+  user_tags_.clear();
+  user_tags_built_ = false;
 }
-PushASTContext::~PushASTContext() { ctx_ = prev_; }
+PushASTContext::~PushASTContext() {
+  ctx_ = prev_;
+  user_tags_.clear();
+  user_tags_built_ = false;
+}
 
 bool Contains(clang::QualType qual_type) {
   return search(qual_type).first != nullptr;

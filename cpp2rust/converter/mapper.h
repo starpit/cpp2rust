@@ -55,6 +55,22 @@ std::string ToString(const clang::Expr *expr);
 std::string ToString(const clang::NamedDecl *decl);
 std::string ToRustName(std::string name);
 
+// Describes the spelling(s) the LAST failed `search(QualType)` actually looked
+// up, as `searched as: X` (plus `, canonical: Y` when the canonical fallback
+// differs and was therefore also tried). The diagnostics must quote THESE, not
+// a spelling reconstructed from the RecordDecl: `search()` looks up the SUGARED
+// spelling first and only falls back to the canonical one IF THE TWO STRINGS
+// DIFFER, while `ToString(GetTypeForDecl(decl))` canonicalises and does not
+// elide defaulted template args. Three separate rule authors wrote a DEAD rule
+// straight off the old message.
+std::string DescribeLastTypeSearch();
+
+// True when `cpp_type` -- a bare leaf SPELLING, with no decl and no QualType in
+// hand -- names a PROJECT (user-defined) tag decl in this TU, i.e. one the
+// converter itself ports and emits. Out-parameter `decl` receives it.
+bool LooksLikeUserDefinedTypeName(const std::string &cpp_type,
+                                  const clang::TagDecl **decl = nullptr);
+
 void LoadTranslationRules(Model model, clang::ASTContext &ctx,
                           const std::string &rules_dir);
 void AddRuleForUserDefinedType(clang::NamedDecl *decl);
