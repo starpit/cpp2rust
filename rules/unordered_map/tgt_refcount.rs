@@ -16,12 +16,14 @@ fn t2<T1>() -> HashSet<T1> {
 }
 
 fn f1<T1: Eq + Hash + Clone + 'static, T2: Default + 'static>(
-    a0: &mut HashMap<T1, Value<T2>>,
+    a0: Ptr<HashMap<T1, Value<T2>>>,
     a1: T1,
 ) -> Ptr<T2> {
-    a0.entry(a1)
-        .or_insert_with(|| Rc::new(RefCell::new(<T2>::default())))
-        .as_pointer()
+    a0.with_mut(|__v: &mut HashMap<T1, Value<T2>>| {
+        __v.entry(a1)
+            .or_insert_with(|| Rc::new(RefCell::new(<T2>::default())))
+            .as_pointer()
+    })
 }
 
 fn f2<T1, T2>(a0: HashMap<T1, Value<T2>>) -> usize {
@@ -44,16 +46,18 @@ fn f6<T1: Eq + Hash, T2>(a0: HashMap<T1, Value<T2>>, a1: T1) -> usize {
     (if a0.contains_key(&a1) { 1 } else { 0 })
 }
 
-fn f8<T1: Eq + Hash, T2: 'static>(a0: &mut HashMap<T1, Value<T2>>, a1: T1) -> usize {
-    (if a0.remove(&a1).is_some() { 1 } else { 0 })
+fn f8<T1: Eq + Hash + 'static, T2: 'static>(a0: Ptr<HashMap<T1, Value<T2>>>, a1: T1) -> usize {
+    a0.with_mut(|__v: &mut HashMap<T1, Value<T2>>| {
+        if __v.remove(&a1).is_some() { 1 } else { 0 }
+    })
 }
 
 fn f9<T1, T2>(a0: HashMap<T1, Value<T2>>) -> bool {
     a0.is_empty()
 }
 
-fn f10<T1: 'static, T2: 'static>(a0: &mut HashMap<T1, Value<T2>>) {
-    a0.clear()
+fn f10<T1: 'static, T2: 'static>(a0: Ptr<HashMap<T1, Value<T2>>>) {
+    a0.with_mut(|__v: &mut HashMap<T1, Value<T2>>| __v.clear())
 }
 
 fn f11<T1: Eq + Hash, T2: PartialEq>(
@@ -64,13 +68,14 @@ fn f11<T1: Eq + Hash, T2: PartialEq>(
 }
 
 fn f13<T1: Eq + Hash + Clone + 'static, T2: Clone + 'static>(
-    a0: &mut HashMap<T1, Value<T2>>,
+    a0: Ptr<HashMap<T1, Value<T2>>>,
     a1: HashMap<T1, Value<T2>>,
 ) {
-    *a0 = a1
-        .iter()
-        .map(|(k, v)| (k.clone(), Rc::new(RefCell::new(v.borrow().clone()))))
-        .collect()
+    a0.write(
+        a1.iter()
+            .map(|(k, v)| (k.clone(), Rc::new(RefCell::new(v.borrow().clone()))))
+            .collect(),
+    )
 }
 
 fn f14<T1>() -> HashSet<T1> {
@@ -85,19 +90,148 @@ fn f16<T1: Eq + Hash>(a0: HashSet<T1>, a1: T1) -> usize {
     (if a0.contains(&a1) { 1 } else { 0 })
 }
 
-fn f18<T1: Eq + Hash + 'static>(a0: &mut HashSet<T1>, a1: T1) -> usize {
-    (if a0.remove(&a1) { 1 } else { 0 })
+fn f18<T1: Eq + Hash + 'static>(a0: Ptr<HashSet<T1>>, a1: T1) -> usize {
+    a0.with_mut(|__v: &mut HashSet<T1>| if __v.remove(&a1) { 1 } else { 0 })
 }
 
 fn f19<T1>(a0: HashSet<T1>) -> bool {
     a0.is_empty()
 }
 
-fn f20<T1: 'static>(a0: &mut HashSet<T1>) {
-    a0.clear()
+fn f20<T1: 'static>(a0: Ptr<HashSet<T1>>) {
+    a0.with_mut(|__v: &mut HashSet<T1>| __v.clear())
 }
 
 fn f21<T1: Eq + Hash>(a0: &HashSet<T1>, a1: &HashSet<T1>) -> bool {
     a0 == a1
 }
 
+
+fn t3<T1: Clone + Eq + Hash + 'static, T2: 'static>() -> RefcountHashMapIter<T1, T2> {
+    RefcountHashMapIter::null()
+}
+
+fn t4<T1: Clone + Eq + Hash + 'static, T2: 'static>() -> RefcountHashMapIter<T1, T2> {
+    RefcountHashMapIter::null()
+}
+
+fn f22<T1: Eq + Hash + Clone + 'static, T2: 'static>(
+    a0: Ptr<HashMap<T1, Value<T2>>>,
+) -> RefcountHashMapIter<T1, T2> {
+    RefcountHashMapIter::begin(a0)
+}
+
+fn f23<T1: Eq + Hash + Clone + 'static, T2: 'static>(
+    a0: Ptr<HashMap<T1, Value<T2>>>,
+) -> RefcountHashMapIter<T1, T2> {
+    RefcountHashMapIter::end(a0)
+}
+
+fn f24<T1: Eq + Hash + Clone + 'static, T2: 'static>(
+    a0: Ptr<HashMap<T1, Value<T2>>>,
+    a1: T1,
+) -> RefcountHashMapIter<T1, T2> {
+    RefcountHashMapIter::find_key(a0, &a1)
+}
+
+fn f25<T1: Eq + Hash + Clone + 'static, T2: 'static>(
+    a0: Ptr<HashMap<T1, Value<T2>>>,
+) -> RefcountHashMapIter<T1, T2> {
+    RefcountHashMapIter::begin(a0)
+}
+
+fn f26<T1: Eq + Hash + Clone + 'static, T2: 'static>(
+    a0: Ptr<HashMap<T1, Value<T2>>>,
+) -> RefcountHashMapIter<T1, T2> {
+    RefcountHashMapIter::end(a0)
+}
+
+fn f27<T1: Eq + Hash + Clone + 'static, T2: 'static>(
+    a0: Ptr<HashMap<T1, Value<T2>>>,
+    a1: T1,
+) -> RefcountHashMapIter<T1, T2> {
+    RefcountHashMapIter::find_key(a0, &a1)
+}
+
+fn f28<T1: PartialEq, T2>(
+    a0: RefcountHashMapIter<T1, T2>,
+    a1: RefcountHashMapIter<T1, T2>,
+) -> bool {
+    a0 == a1
+}
+
+fn f29<T1: PartialEq, T2>(
+    a0: RefcountHashMapIter<T1, T2>,
+    a1: RefcountHashMapIter<T1, T2>,
+) -> bool {
+    a0 != a1
+}
+
+fn f30<T1: PartialEq, T2>(
+    a0: RefcountHashMapIter<T1, T2>,
+    a1: RefcountHashMapIter<T1, T2>,
+) -> bool {
+    a0 == a1
+}
+
+fn f31<T1: PartialEq, T2>(
+    a0: RefcountHashMapIter<T1, T2>,
+    a1: RefcountHashMapIter<T1, T2>,
+) -> bool {
+    a0 != a1
+}
+
+fn f32<T1: Eq + Hash + Clone + 'static, T2: 'static>(
+    a0: &mut RefcountHashMapIter<T1, T2>,
+) -> RefcountHashMapIter<T1, T2> {
+    a0.prefix_inc()
+}
+
+fn f33<T1: Eq + Hash + Clone + 'static, T2: 'static>(
+    a0: &mut RefcountHashMapIter<T1, T2>,
+) -> RefcountHashMapIter<T1, T2> {
+    a0.postfix_inc()
+}
+
+fn f34<T1: Eq + Hash + Clone + 'static, T2: 'static>(
+    a0: &mut RefcountHashMapIter<T1, T2>,
+) -> RefcountHashMapIter<T1, T2> {
+    a0.prefix_inc()
+}
+
+fn f35<T1: Eq + Hash + Clone + 'static, T2: 'static>(
+    a0: &mut RefcountHashMapIter<T1, T2>,
+) -> RefcountHashMapIter<T1, T2> {
+    a0.postfix_inc()
+}
+
+fn f36<T1: Eq + Hash + Clone + 'static, T2: 'static>(
+    a0: RefcountHashMapIter<T1, T2>,
+) -> Value<T1> {
+    a0.first()
+}
+
+fn f37<T1: Eq + Hash + Clone + 'static, T2: 'static>(
+    a0: RefcountHashMapIter<T1, T2>,
+) -> Value<T2> {
+    a0.second()
+}
+
+fn f38<T1: Eq + Hash + Clone + 'static, T2: 'static>(
+    a0: RefcountHashMapIter<T1, T2>,
+) -> Value<T1> {
+    a0.first()
+}
+
+fn f39<T1: Eq + Hash + Clone + 'static, T2: 'static>(
+    a0: RefcountHashMapIter<T1, T2>,
+) -> Value<T2> {
+    a0.second()
+}
+
+fn f40<T1: Eq + Hash + Clone + 'static, T2: 'static>(
+    a0: Ptr<HashMap<T1, Value<T2>>>,
+    a1: RefcountHashMapIter<T1, T2>,
+) -> RefcountHashMapIter<T1, T2> {
+    RefcountHashMapIter::erase(a0, &a1)
+}

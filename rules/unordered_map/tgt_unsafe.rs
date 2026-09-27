@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+use libcc2rs::{MapIterator, PostfixInc, PrefixInc, UnsafeHashMapIterator};
 
 fn t1<T1, T2>() -> HashMap<T1, Box<T2>> {
     HashMap::new()
@@ -90,3 +91,124 @@ unsafe fn f21<T1: Eq + Hash>(a0: &HashSet<T1>, a1: &HashSet<T1>) -> bool {
     a0 == a1
 }
 
+
+fn t3<T1: Clone + Eq + Hash, T2>() -> UnsafeHashMapIterator<T1, T2> {
+    UnsafeHashMapIterator::null()
+}
+
+fn t4<T1: Clone + Eq + Hash, T2>() -> UnsafeHashMapIterator<T1, T2> {
+    UnsafeHashMapIterator::null()
+}
+
+unsafe fn f22<T1: Eq + Hash + Clone, T2>(
+    a0: &mut HashMap<T1, Box<T2>>,
+) -> UnsafeHashMapIterator<T1, T2> {
+    UnsafeHashMapIterator::begin(&*a0 as *const HashMap<T1, Box<T2>>)
+}
+
+unsafe fn f23<T1: Eq + Hash + Clone, T2>(
+    a0: &mut HashMap<T1, Box<T2>>,
+) -> UnsafeHashMapIterator<T1, T2> {
+    UnsafeHashMapIterator::end(&*a0 as *const HashMap<T1, Box<T2>>)
+}
+
+unsafe fn f24<T1: Eq + Hash + Clone, T2>(
+    a0: &mut HashMap<T1, Box<T2>>,
+    a1: T1,
+) -> UnsafeHashMapIterator<T1, T2> {
+    UnsafeHashMapIterator::find_key(&*a0 as *const HashMap<T1, Box<T2>>, &a1)
+}
+
+unsafe fn f25<T1: Eq + Hash + Clone, T2>(
+    a0: HashMap<T1, Box<T2>>,
+) -> UnsafeHashMapIterator<T1, T2> {
+    UnsafeHashMapIterator::begin(&a0 as *const HashMap<T1, Box<T2>>)
+}
+
+unsafe fn f26<T1: Eq + Hash + Clone, T2>(
+    a0: HashMap<T1, Box<T2>>,
+) -> UnsafeHashMapIterator<T1, T2> {
+    UnsafeHashMapIterator::end(&a0 as *const HashMap<T1, Box<T2>>)
+}
+
+unsafe fn f27<T1: Eq + Hash + Clone, T2>(
+    a0: HashMap<T1, Box<T2>>,
+    a1: T1,
+) -> UnsafeHashMapIterator<T1, T2> {
+    UnsafeHashMapIterator::find_key(&a0 as *const HashMap<T1, Box<T2>>, &a1)
+}
+
+unsafe fn f28<T1: PartialEq, T2>(
+    a0: UnsafeHashMapIterator<T1, T2>,
+    a1: UnsafeHashMapIterator<T1, T2>,
+) -> bool {
+    a0 == a1
+}
+
+unsafe fn f29<T1: PartialEq, T2>(
+    a0: UnsafeHashMapIterator<T1, T2>,
+    a1: UnsafeHashMapIterator<T1, T2>,
+) -> bool {
+    a0 != a1
+}
+
+unsafe fn f30<T1: PartialEq, T2>(
+    a0: UnsafeHashMapIterator<T1, T2>,
+    a1: UnsafeHashMapIterator<T1, T2>,
+) -> bool {
+    a0 == a1
+}
+
+unsafe fn f31<T1: PartialEq, T2>(
+    a0: UnsafeHashMapIterator<T1, T2>,
+    a1: UnsafeHashMapIterator<T1, T2>,
+) -> bool {
+    a0 != a1
+}
+
+unsafe fn f32<T1: Eq + Hash + Clone, T2>(
+    a0: &mut UnsafeHashMapIterator<T1, T2>,
+) -> UnsafeHashMapIterator<T1, T2> {
+    a0.prefix_inc()
+}
+
+unsafe fn f33<T1: Eq + Hash + Clone, T2>(
+    a0: &mut UnsafeHashMapIterator<T1, T2>,
+) -> UnsafeHashMapIterator<T1, T2> {
+    a0.postfix_inc()
+}
+
+unsafe fn f34<T1: Eq + Hash + Clone, T2>(
+    a0: &mut UnsafeHashMapIterator<T1, T2>,
+) -> UnsafeHashMapIterator<T1, T2> {
+    a0.prefix_inc()
+}
+
+unsafe fn f35<T1: Eq + Hash + Clone, T2>(
+    a0: &mut UnsafeHashMapIterator<T1, T2>,
+) -> UnsafeHashMapIterator<T1, T2> {
+    a0.postfix_inc()
+}
+
+unsafe fn f36<T1: Eq + Hash + Clone, T2>(a0: UnsafeHashMapIterator<T1, T2>) -> *const T1 {
+    a0.first()
+}
+
+unsafe fn f37<T1: Eq + Hash + Clone, T2>(a0: UnsafeHashMapIterator<T1, T2>) -> *mut T2 {
+    a0.second()
+}
+
+unsafe fn f38<T1: Eq + Hash + Clone, T2>(a0: UnsafeHashMapIterator<T1, T2>) -> *const T1 {
+    a0.first()
+}
+
+unsafe fn f39<T1: Eq + Hash + Clone, T2>(a0: UnsafeHashMapIterator<T1, T2>) -> *mut T2 {
+    a0.second()
+}
+
+unsafe fn f40<T1: Eq + Hash + Clone, T2>(
+    a0: &mut HashMap<T1, Box<T2>>,
+    a1: UnsafeHashMapIterator<T1, T2>,
+) -> UnsafeHashMapIterator<T1, T2> {
+    UnsafeHashMapIterator::erase(&*a0 as *const HashMap<T1, Box<T2>>, &a1)
+}

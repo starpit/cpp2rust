@@ -98,6 +98,12 @@ impl<T: 'static> ByteRepr for *const T {}
 impl<T: 'static> ByteRepr for *mut T {}
 impl<A: ByteRepr, B: ByteRepr> ByteRepr for (A, B) {}
 impl<K: 'static, V: 'static> ByteRepr for std::collections::BTreeMap<K, V> {}
+// Same shape as BTreeMap above: every ByteRepr method has a panicking default, so this
+// impl claims only "a Ptr may point at one of these", which is what Ptr::with_mut /
+// Ptr::write require. No byte-level representation is (or could be) modelled for a hash
+// table, exactly as for BTreeMap.
+impl<K: 'static, V: 'static, S: 'static> ByteRepr for std::collections::HashMap<K, V, S> {}
+impl<T: 'static, S: 'static> ByteRepr for std::collections::HashSet<T, S> {}
 
 // Runs `f` with a zeroed scratch buffer of `len` bytes. Small buffers live on
 // the stack so that accessing memory through a reinterpreted pointer does not

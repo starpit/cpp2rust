@@ -117,3 +117,131 @@ bool f21(const std::unordered_set<T1> &a, const std::unordered_set<T1> &b) {
   return operator==(a, b);
 }
 
+
+// ---------------------------------------------------------------------------
+// Iterator-returning operations. Backed by libcc2rs's HashMapIter
+// (UnsafeHashMapIterator / RefcountHashMapIter), added alongside the BTreeMap
+// MapIter and following the same protocol, so the converter's for-range lowering
+// and the it->first / it->second routing to MapIterator::first/second work unchanged.
+// ORDER CAVEAT: see libcc2rs/src/iterators.rs -- traversal visits every element
+// exactly once but in an order that differs from libc++'s.
+//
+// insert / emplace are still NOT mapped: they return std::pair<iterator, bool>, whose
+// lowering needs a pair whose first element is a mapped iterator type, and that is not
+// modelled here. Left out rather than approximated.
+// ---------------------------------------------------------------------------
+
+template <typename T1, typename T2>
+using t3 = typename std::unordered_map<T1, T2>::iterator;
+
+template <typename T1, typename T2>
+using t4 = typename std::unordered_map<T1, T2>::const_iterator;
+
+template <typename T1, typename T2>
+typename std::unordered_map<T1, T2>::iterator f22(std::unordered_map<T1, T2> &o) {
+  return o.begin();
+}
+
+template <typename T1, typename T2>
+typename std::unordered_map<T1, T2>::iterator f23(std::unordered_map<T1, T2> &o) {
+  return o.end();
+}
+
+template <typename T1, typename T2>
+typename std::unordered_map<T1, T2>::iterator f24(std::unordered_map<T1, T2> &o,
+                                                  const T1 &key) {
+  return o.find(key);
+}
+
+template <typename T1, typename T2>
+typename std::unordered_map<T1, T2>::const_iterator
+f25(const std::unordered_map<T1, T2> &o) {
+  return o.begin();
+}
+
+template <typename T1, typename T2>
+typename std::unordered_map<T1, T2>::const_iterator
+f26(const std::unordered_map<T1, T2> &o) {
+  return o.end();
+}
+
+template <typename T1, typename T2>
+typename std::unordered_map<T1, T2>::const_iterator
+f27(const std::unordered_map<T1, T2> &o, const T1 &key) {
+  return o.find(key);
+}
+
+template <typename T1, typename T2>
+bool f28(typename std::unordered_map<T1, T2>::iterator a,
+         typename std::unordered_map<T1, T2>::iterator b) {
+  return operator==(a, b);
+}
+
+template <typename T1, typename T2>
+bool f29(typename std::unordered_map<T1, T2>::iterator a,
+         typename std::unordered_map<T1, T2>::iterator b) {
+  return operator!=(a, b);
+}
+
+template <typename T1, typename T2>
+bool f30(typename std::unordered_map<T1, T2>::const_iterator a,
+         typename std::unordered_map<T1, T2>::const_iterator b) {
+  return operator==(a, b);
+}
+
+template <typename T1, typename T2>
+bool f31(typename std::unordered_map<T1, T2>::const_iterator a,
+         typename std::unordered_map<T1, T2>::const_iterator b) {
+  return operator!=(a, b);
+}
+
+template <typename T1, typename T2>
+typename std::unordered_map<T1, T2>::iterator &
+f32(typename std::unordered_map<T1, T2>::iterator &it) {
+  return it.operator++();
+}
+
+template <typename T1, typename T2>
+typename std::unordered_map<T1, T2>::iterator
+f33(typename std::unordered_map<T1, T2>::iterator a0, int a1) {
+  return a0.operator++(a1);
+}
+
+template <typename T1, typename T2>
+typename std::unordered_map<T1, T2>::const_iterator &
+f34(typename std::unordered_map<T1, T2>::const_iterator &it) {
+  return it.operator++();
+}
+
+template <typename T1, typename T2>
+typename std::unordered_map<T1, T2>::const_iterator
+f35(typename std::unordered_map<T1, T2>::const_iterator a0, int a1) {
+  return a0.operator++(a1);
+}
+
+template <typename T1, typename T2>
+const T1 &f36(typename std::unordered_map<T1, T2>::iterator it) {
+  return it->first;
+}
+
+template <typename T1, typename T2>
+T2 &f37(typename std::unordered_map<T1, T2>::iterator it) {
+  return it->second;
+}
+
+template <typename T1, typename T2>
+const T1 &f38(typename std::unordered_map<T1, T2>::const_iterator it) {
+  return it->first;
+}
+
+template <typename T1, typename T2>
+const T2 &f39(typename std::unordered_map<T1, T2>::const_iterator it) {
+  return it->second;
+}
+
+template <typename T1, typename T2>
+typename std::unordered_map<T1, T2>::iterator
+f40(std::unordered_map<T1, T2> &o,
+    typename std::unordered_map<T1, T2>::const_iterator it) {
+  return o.erase(it);
+}
