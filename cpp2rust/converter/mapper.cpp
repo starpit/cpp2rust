@@ -375,8 +375,28 @@ std::string instantiateTgt(const std::vector<std::optional<std::string>> &types,
       ++pos;
       continue;
     }
-    const auto &repl = types.at(instantiated_template[pos + 1] - '1').value();
-    instantiated_template.replace(pos, 2, repl);
+    // Parse the FULL multi-digit index. A single-digit scan consumed only `T1`
+    // of `T10` and left the trailing `0` glued onto the substituted type, which
+    // emitted struct field types spelled `*const f640` / `*const f641` for the
+    // 10th..27th element of a 27-ary std::tie (measured on probe/tup27:
+    // `error[E0425]: cannot find type f640`). Same defect shape as the src-side
+    // scanner fixed in translation_rule.cpp:366.
+    std::string::size_type digits = pos + 1;
+    while (digits < instantiated_template.size() &&
+           std::isdigit(instantiated_template[digits])) {
+      ++digits;
+    }
+    // `T0` is not a placeholder (indices are 1-based); skip it rather than
+    // indexing types.at(-1).
+    if (instantiated_template[pos + 1] == '0') {
+      ++pos;
+      continue;
+    }
+    const size_t idx =
+        std::stoul(instantiated_template.substr(pos + 1, digits - (pos + 1))) -
+        1;
+    const auto &repl = types.at(idx).value();
+    instantiated_template.replace(pos, digits - pos, repl);
     pos += repl.length();
   }
   return instantiated_template;

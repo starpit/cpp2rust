@@ -27,6 +27,11 @@ enum class GapKind : uint8_t {
   kUnsupportedExpr,
   kUnsupportedConstruct,
   kMissingTraitBody,
+  // A construct that IS lowered correctly but whose lowering loses a C++
+  // property, so it is worth a trace without being a gap. Kept separate from
+  // the kinds above because those crowd the sweep: the one current producer
+  // (BaseTargetNamesTrait) fired in 269 TUs and blocked none of them.
+  kInfo,
 };
 
 inline const char *KindName(GapKind kind) {
@@ -39,6 +44,8 @@ inline const char *KindName(GapKind kind) {
     return "unsupported-construct";
   case GapKind::kMissingTraitBody:
     return "missing-trait-body";
+  case GapKind::kInfo:
+    return "info";
   }
   return "unknown";
 }

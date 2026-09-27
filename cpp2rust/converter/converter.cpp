@@ -5625,17 +5625,34 @@ bool Converter::BaseTargetNamesTrait(clang::QualType base_type,
       base_record != nullptr
           ? base_record->getLocation().printToString(ctx_.getSourceManager())
           : "<unknown>";
+  // MEASURED: this path is NOT a failure. On a TU whose only survey row was
+  // this one, a plain run is rc=0, emits Rust, and the caller
+  // (VirtualMethodsFor, below) lowers the base's virtuals as four INHERENT
+  // impls -- `impl mlir_dataflow_DataflowDialect { ... }`, zero `impl ... for
+  // ...`, zero occurrences of the rule target name. That is the correct
+  // lowering, because a rule target names a Rust TYPE and a type is never a
+  // trait. The old `assert(0)` here therefore aborted an assertions build on a
+  // construct that is handled, and the old kUnsupportedConstruct record made
+  // the sweep carry 269 phantom gap rows that crowded out real ones.
+  //
+  // What IS lost is virtual dispatch through a reference to the rule-mapped
+  // base, so the row is kept as INFORMATIONAL rather than deleted. The only
+  // such dispatch anywhere in the corpus is
+  // `dialect->getCanonicalizationPatterns(patterns)` over
+  // `ctx->getLoadedDialects()`
+  // (dataflow-scheduler/lib/Conversion/backend/ScheduleIRToDFIR/KTDFLowToDFIR/
+  // KTDFLowToDFIR.cpp:70), which dispatches inside MLIR over MLIR's own
+  // dialects -- on the far side of the rule boundary, never through a ported
+  // derived type. So nothing observable differs today; the record exists so a
+  // future non-MLIR rule-mapped base with called virtuals is still traceable.
   const std::string detail =
       "rule-mapped base class `" + base_type.getAsString() + "` -> `" +
       std::string(base_target) +
-      "` in trait position: the rule language cannot declare that a target "
-      "names a trait";
+      "` lowered as inherent impls (correct); virtual dispatch through a "
+      "reference to the base is not available";
   if (survey::Enabled()) {
-    survey::Record(survey::GapKind::kUnsupportedConstruct, detail, loc);
-    return false;
+    survey::Record(survey::GapKind::kInfo, detail, loc);
   }
-  llvm::errs() << "unsupported " << detail << " at " << loc << '\n';
-  assert(0 && "rule-mapped base class in trait position");
   return false;
 }
 
