@@ -779,9 +779,138 @@ std::string DescribeUnmappedLeaf(const std::string &cpp_type) {
   return msg;
 }
 
+std::string mapTypeStringRecursive(const std::string &cpp_type);
+
+// A C++ FUNCTION-POINTER TYPE HAS NO `types_` ENTRY UNDER ANY SPELLING, and it
+// never can: the signature is part of the type, so `R (*)(A, B)` would need one
+// rule per signature, naming dt_src user types that no system-rule module can
+// reach. 26 of 403 dxp TUs aborted here on exactly one spelling reached as the
+// VALUE type of a mapped `llvm::DenseMap`:
+//   unsupported unmapped type `llvm::LogicalResult (*)(mlir::Operation *,
+//     const mlir::NamedAttribute &)` has no model in types_
+// So the model is DERIVED STRUCTURALLY, the way pointers and references already
+// are (and the way addBuiltinTypes' add_scalar_rule already synthesises `T *`
+// per scalar -- this is the same idea one level up).
+//
+// Shape and calling convention deliberately MATCH the QualType path, which has
+// emitted `Option<unsafe fn(..) -> R>` for a pointer-to-function since before
+// this change (Converter::VisitPointerType / ConvertFunctionPointerType,
+// converter.cpp:359,375). Two paths for one C++ type must not disagree.
+//   * `Option<..>`: a function pointer is NULLABLE in C++ and the corpus does
+//     assign/compare against null, so the Rust type must be able to represent
+//     it. `Option<fn(..)>` is niche-optimised, so this costs no space.
+//   * `unsafe fn`: the corpus pointers are stored in tables and called from
+//     translated code, so `extern "Rust"` would be sound here; `unsafe fn` is
+//     chosen only for agreement with the existing path, and a safe fn item
+//     coerces to it implicitly. It is NOT `extern "C"`: no corpus instance was
+//     found crossing an FFI boundary, and claiming a C ABI we have not verified
+//     would be silently wrong in the ABI.
+//
+// Splits at TOP LEVEL only (paren, angle-bracket and square-bracket depth), so
+// a nested function pointer or a template argument containing a comma survives.
+// Every component is mapped through mapTypeStringRecursive, so `void` -> the
+// unit return, `llvm::LogicalResult` -> `bool` (rules/support) and
+// `mlir::Operation *` -> `*mut fmt::OpInst` (rules/mlir) come from the rules --
+// and an UNMAPPED component asserts naming THE COMPONENT, not the signature.
+std::optional<std::string> tryDeriveFunctionPointerType(
+    const std::string &cpp_type) {
+  const std::string kMarker = "(*)(";
+  const size_t marker = cpp_type.find(kMarker);
+  if (marker == std::string::npos) {
+    return std::nullopt;
+  }
+  // The parameter list opens at the marker's last '(' and must close at the
+  // very end of the spelling. Anything trailing (`const`, a member-pointer
+  // form, an array of function pointers) is NOT this shape; return nullopt and
+  // let the existing loud path report it rather than guessing.
+  const size_t args_open = marker + kMarker.size() - 1;
+  int depth = 0;
+  size_t args_close = std::string::npos;
+  for (size_t i = args_open; i < cpp_type.size(); ++i) {
+    if (cpp_type[i] == '(') {
+      ++depth;
+    } else if (cpp_type[i] == ')') {
+      if (--depth == 0) {
+        args_close = i;
+        break;
+      }
+    }
+  }
+  if (args_close == std::string::npos) {
+    return std::nullopt;
+  }
+  auto trim = [](std::string s) {
+    while (!s.empty() && isspace(static_cast<unsigned char>(s.front()))) {
+      s.erase(s.begin());
+    }
+    while (!s.empty() && isspace(static_cast<unsigned char>(s.back()))) {
+      s.pop_back();
+    }
+    return s;
+  };
+  if (!trim(cpp_type.substr(args_close + 1)).empty()) {
+    return std::nullopt;
+  }
+  const std::string ret = trim(cpp_type.substr(0, marker));
+  if (ret.empty()) {
+    return std::nullopt;
+  }
+  const std::string args_str =
+      cpp_type.substr(args_open + 1, args_close - args_open - 1);
+
+  std::vector<std::string> params;
+  {
+    int d = 0;
+    std::string cur;
+    for (char c : args_str) {
+      if (c == '(' || c == '<' || c == '[') {
+        ++d;
+      } else if (c == ')' || c == '>' || c == ']') {
+        --d;
+      }
+      if (c == ',' && d == 0) {
+        params.push_back(trim(cur));
+        cur.clear();
+        continue;
+      }
+      cur += c;
+    }
+    cur = trim(cur);
+    if (!cur.empty()) {
+      params.push_back(cur);
+    }
+  }
+  // `R (*)(void)` and `R (*)()` are both zero-parameter.
+  if (params.size() == 1 && params.front() == "void") {
+    params.clear();
+  }
+
+  PushMapContext ctx(cpp_type, map_ctx_.outer_type);
+  std::string out = "Option<unsafe fn(";
+  for (size_t i = 0; i < params.size(); ++i) {
+    if (i != 0) {
+      out += ", ";
+    }
+    out += mapTypeStringRecursive(params[i]);
+  }
+  out += ")";
+  if (ret != "void") {
+    out += " -> " + mapTypeStringRecursive(ret);
+  }
+  out += ">";
+  return out;
+}
+
 std::string mapTypeStringRecursive(const std::string &cpp_type) {
   auto [rule, subs] = search(types_, cpp_type, GetTypeMapKey(cpp_type));
   if (!rule) {
+    // Before ANY fallback or failure: a function-pointer spelling gets a
+    // structurally derived model. Ahead of the survey branch too, because a
+    // derivable type is not a gap and recording it as one would keep a
+    // now-solved row on the work queue.
+    if (auto derived = tryDeriveFunctionPointerType(cpp_type)) {
+      return *derived;
+    }
     if (survey::Enabled()) {
       // Keep the DETAIL exactly the bare spelling: it is the survey's grouping
       // key and the work queue's row label. The new context goes in the
