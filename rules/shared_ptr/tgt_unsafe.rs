@@ -48,21 +48,37 @@ unsafe fn f16<T1>(a0: &mut Option<Rc<T1>>) -> Option<Rc<T1>> {
 }
 
 // f17/f18 -- `p == nullptr` / `p != nullptr`.  a1 is the `nullptr` literal,
-// which carries no information and is deliberately unused.
+// which carries no information and is deliberately unused.  The annotation on
+// `let _: () = a1` is LOAD-BEARING: the converter inlines the nullptr literal as
+// a BARE UNTYPED `Default::default()`, and `let _ = Default::default();` is
+// error[E0790] on its own.  Measured: the probe that first ran these keys did NOT
+// report E0790 only because f19's E0308 (below) had already tainted the same
+// function body, and rustc suppresses unresolved-inference-variable errors in a
+// body that already has an error.  Fix f19 and the E0790 surfaces.
 unsafe fn f17<T1>(a0: &Option<Rc<T1>>, a1: ()) -> bool {
-    let _ = a1;
+    let _: () = a1;
     a0.is_none()
 }
 
 unsafe fn f18<T1>(a0: &Option<Rc<T1>>, a1: ()) -> bool {
-    let _ = a1;
+    let _: () = a1;
     a0.is_some()
 }
 
 // f19 -- shared_ptr's operator== compares the STORED POINTERS, so this is
-// Rc::ptr_eq and not a comparison of the pointees.
+// Rc::ptr_eq and not a comparison of the pointees.  Discriminator EXECUTED: two
+// make_shared<S>(5) at distinct allocations compare UNEQUAL, a copy compares
+// EQUAL.
+//
+// `match (a0, a1)` was WRONG and did not compile: a declared `&Option<..>`
+// parameter constrains NOTHING because the body is INLINED and the converter
+// substitutes its own by-value expression (`(*a.borrow())` in refcount), so the
+// arms bound `x: Rc<..>` by value and `Rc::ptr_eq` wants `&Rc<..>`
+// (error[E0308]).  `.as_ref()` works for BOTH a by-value and a by-reference
+// substitution -- it takes `&self`, so it autorefs a place and auto-derefs a
+// reference -- and yields `Option<&..>` either way.
 unsafe fn f19<T1>(a0: &Option<Rc<T1>>, a1: &Option<Rc<T1>>) -> bool {
-    match (a0, a1) {
+    match (a0.as_ref(), a1.as_ref()) {
         (None, None) => true,
         (Some(x), Some(y)) => Rc::ptr_eq(x, y),
         _ => false,
