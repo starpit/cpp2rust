@@ -49,3 +49,12 @@ fn f5<T1: PartialEq, T2: PartialEq, T3: PartialEq, T4: PartialEq, T5: PartialEq,
     let __y = &a1;
     __x.0 == __y.0 && __x.1 == __y.1 && __x.2 == __y.2 && __x.3 == __y.3 && __x.4 == __y.4 && __x.5 == __y.5 && __x.6 == __y.6 && __x.7 == __y.7 && __x.8 == __y.8 && __x.9 == __y.9 && __x.10 == __y.10 && __x.11 == __y.11 && __x.12 == __y.12 && __x.13 == __y.13 && __x.14 == __y.14 && __x.15 == __y.15 && __x.16 == __y.16 && __x.17 == __y.17 && __x.18 == __y.18 && __x.19 == __y.19 && __x.20 == __y.20 && __x.21 == __y.21 && __x.22 == __y.22 && __x.23 == __y.23 && __x.24 == __y.24 && __x.25 == __y.25 && __x.26 == __y.26
 }
+
+// std::tie -> a tuple of RAW CONST POINTERS, one per element: the converter already
+// maps `const double &` to `*const f64`, so the emitted `tie()` method's declared
+// return type is `(*const f64, ...)` and this target must produce exactly that.
+// A tuple of VALUES would be a silent copy where C++ referenced (and would not even
+// typecheck against the mapped return type).  Each `aN` appears EXACTLY ONCE.
+fn f6<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, T23, T24, T25, T26, T27>(a0: *const T1, a1: *const T2, a2: *const T3, a3: *const T4, a4: *const T5, a5: *const T6, a6: *const T7, a7: *const T8, a8: *const T9, a9: *const T10, a10: *const T11, a11: *const T12, a12: *const T13, a13: *const T14, a14: *const T15, a15: *const T16, a16: *const T17, a17: *const T18, a18: *const T19, a19: *const T20, a20: *const T21, a21: *const T22, a22: *const T23, a23: *const T24, a24: *const T25, a25: *const T26, a26: *const T27) -> (*const T1, *const T2, *const T3, *const T4, *const T5, *const T6, *const T7, *const T8, *const T9, *const T10, *const T11, *const T12, *const T13, *const T14, *const T15, *const T16, *const T17, *const T18, *const T19, *const T20, *const T21, *const T22, *const T23, *const T24, *const T25, *const T26, *const T27) {
+    (a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, a23, a24, a25, a26)
+}

@@ -53,3 +53,22 @@ template <typename T1, typename T2, typename T3, typename T4, typename T5, typen
 bool f5(const std::tuple<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, T23, T24, T25, T26, T27> &a0, const std::tuple<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, T23, T24, T25, T26, T27> &a1) {
   return operator==(a0, a1);
 }
+
+// g018 / dsc/dims.h:283: `std::tie(a,b,...)` inside `DataStructDims::tie() const`.
+// The key the preprocessor records is
+//   `std::tuple<const T1 &, ..., const T27 &> std::tie(&&...)`
+// -- the parameter list COLLAPSES to the unexpanded pack `&&...` exactly as the
+// tuple constructors f1-f4 do, so the arity lives entirely in the RETURN type.
+// Elements are spelled `const TN &` rather than plain `TN` because that is what
+// `std::tie(Types&...) -> std::tuple<Types&...>` deduces, and it is the whole
+// point of the function: `tie()` REFERS to the members, it does not copy them.
+// ARITY: 27 only.  Every other `std::tie` call site in the corpus (50 of them,
+// `grep -rn 'std::tie' dt_src`) is an ASSIGNMENT target -- `std::tie(x,y) = f()`
+// -- at arity 2-4, which needs assign-through-reference semantics this key does
+// NOT provide; adding a short key would ALSO swallow longer calls (GetTypeMapKey
+// strips at `<`, matchTemplate scans to the final depth-0 `>`), so a 2-ary key is
+// active harm.  27 is what g018 needs and 27 is what this covers.
+template <typename T1, typename T2, typename T3, typename T4, typename T5, typename T6, typename T7, typename T8, typename T9, typename T10, typename T11, typename T12, typename T13, typename T14, typename T15, typename T16, typename T17, typename T18, typename T19, typename T20, typename T21, typename T22, typename T23, typename T24, typename T25, typename T26, typename T27>
+std::tuple<const T1 &, const T2 &, const T3 &, const T4 &, const T5 &, const T6 &, const T7 &, const T8 &, const T9 &, const T10 &, const T11 &, const T12 &, const T13 &, const T14 &, const T15 &, const T16 &, const T17 &, const T18 &, const T19 &, const T20 &, const T21 &, const T22 &, const T23 &, const T24 &, const T25 &, const T26 &, const T27 &> f6(const T1 &a0, const T2 &a1, const T3 &a2, const T4 &a3, const T5 &a4, const T6 &a5, const T7 &a6, const T8 &a7, const T9 &a8, const T10 &a9, const T11 &a10, const T12 &a11, const T13 &a12, const T14 &a13, const T15 &a14, const T16 &a15, const T17 &a16, const T18 &a17, const T19 &a18, const T20 &a19, const T21 &a20, const T22 &a21, const T23 &a22, const T24 &a23, const T25 &a24, const T26 &a25, const T27 &a26) {
+  return std::tie(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, a23, a24, a25, a26);
+}
