@@ -895,3 +895,47 @@ fn t69() -> () {
 unsafe fn f20(a0: dataflowir_gen::ir::Ty) -> bool {
     a0 == dataflowir_gen::ir::Ty::Opaque(::std::string::String::new())
 }
+
+// t70 `mlir::InFlightDiagnostic` -> `libcc2rs::InFlightDiagnostic`, A REAL
+//   ACCUMULATING BUFFER THAT PRINTS ON `Drop` -- NOT an opaque unit.  This is the
+//   one type in this module whose DESTRUCTOR is its entire purpose:
+//     Diagnostics.h:325-328  ~InFlightDiagnostic() { if (isInFlight()) report(); }
+//     Diagnostics.h:319-324  the move ctor explicitly `rhs.abandon()`s
+//   so the accumulated message reaches the DiagnosticEngine ON DESTRUCTION,
+//   exactly once.  ⛔ A UNIT WOULD SILENTLY DELETE EVERY DIAGNOSTIC the ported
+//   compiler emits -- the same axis on which `mlir::OwningOpRef` was REFUSED
+//   (src.cpp, "THIRD SLOT"), and worse here because the dominant call sites are
+//   tablegen-generated parse/verify bodies (KTDFAttributes.cpp.inc:132,
+//   KTDFLowering.cpp.inc:30, SDSCBundleTypes.cpp.inc:216) whose ONLY externally
+//   visible behaviour IS the message.
+//   THE INIT is a fresh in-flight diagnostic with an empty message, which is
+//   exactly what `InFlightDiagnostic()` (Diagnostics.h:316) is.
+//   WHERE IT PRINTS: stderr, prefixed `error: `, matching MLIR's default handler
+//   (`llvm::errs()`); libcc2rs/src/diag.rs argues this.
+fn t70() -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::new()
+}
+
+// f21 -- `mlir::InFlightDiagnostic && operator shl(const char (&)[_]) &&`
+// (Diagnostics.h:344-349's member template, instantiated on a string literal),
+// work-queue row g286, 21 TUs.  a0 IS THE RECEIVER (see src.cpp for why the
+// shift family's key omits it) and a1 the streamed literal.
+//
+// `a0` and `a1` ARE EACH MENTIONED EXACTLY ONCE.  A rule body is INLINED as one
+// expression and every `aN` RE-EVALUATES its argument, so mentioning a0 twice
+// would DUPLICATE the diagnostic -- for this type that is a second message, not
+// a wasted copy.
+//
+// EXACTLY-ONCE COMES FROM BY-VALUE `self`.  `shl_c_str` takes `self` by value and
+// returns `Self`, so the chain MOVES one value through and a moved-from binding
+// is statically dead -- Rust does not run `Drop` for it.  The single `drop` fires
+// at the end of the enclosing full expression, which is when the C++ temporary
+// `InFlightDiagnostic` dies.  This is the model of C++'s
+// move-ctor-plus-`abandon()`, without needing an explicit abandon per link.
+//
+// `a1` IS A `*const c_char`, NOT A SLICE: rules/stringref f8 records why -- the
+// converter materialises a string literal in this position as a `c"..."` CStr and
+// adds `.as_ptr()` only when the declared parameter is a pointer.
+unsafe fn f21(a0: libcc2rs::InFlightDiagnostic, a1: *const libc::c_char) -> libcc2rs::InFlightDiagnostic {
+    unsafe { libcc2rs::InFlightDiagnostic::shl_c_str(a0, a1) }
+}

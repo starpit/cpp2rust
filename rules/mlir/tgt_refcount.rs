@@ -847,3 +847,24 @@ fn t69() -> () {
 fn f20(a0: dataflowir_gen::ir::Ty) -> bool {
     a0 == dataflowir_gen::ir::Ty::Opaque(::std::string::String::new())
 }
+
+// t70 `mlir::InFlightDiagnostic` -> `libcc2rs::InFlightDiagnostic`, A REAL
+//   ACCUMULATING BUFFER THAT PRINTS ON `Drop` -- NOT an opaque unit.  Identical
+//   to the unsafe model: the type is a VALUE with an owned `String`, so neither
+//   model's pointer representation appears.  The full argument (Diagnostics.h:
+//   325-328's reporting destructor, :319-324's abandoning move ctor, and why a
+//   unit would silently delete every diagnostic) is in tgt_unsafe.rs and in
+//   libcc2rs/src/diag.rs.
+fn t70() -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::new()
+}
+
+// f21 -- `mlir::InFlightDiagnostic && operator shl(const char (&)[_]) &&`, row
+// g286, 21 TUs.  a0 is the receiver, a1 the streamed literal, each mentioned
+// EXACTLY ONCE (a second mention would re-evaluate and emit a second message).
+// In the REFCOUNT model a `const char (&)[N]` argument arrives as `Ptr<u8>`
+// (rules/stringref f8's spelling), whose `to_c_bytes()` gives the bytes up to the
+// NUL; `shl_bytes` stops at a NUL anyway, so the two models append the same text.
+fn f21(a0: libcc2rs::InFlightDiagnostic, a1: libcc2rs::Ptr<u8>) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_bytes(a0, &a1.to_c_bytes())
+}

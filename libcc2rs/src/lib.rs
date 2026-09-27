@@ -61,4 +61,10 @@ pub use variant::*;
 mod sync;
 pub use sync::*;
 
+// `mlir::InFlightDiagnostic`: an accumulating message buffer that PRINTS ON
+// `Drop`.  rules/mlir t70/f21 map to it; the type's destructor is its whole
+// purpose, so it cannot be an opaque unit.
+mod diag;
+pub use diag::*;
+
 pub use libcc2rs_macros::{ByteRepr, goto, goto_block, switch};

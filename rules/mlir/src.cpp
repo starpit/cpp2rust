@@ -746,6 +746,47 @@ public:
 // that absence is what keeps the opaque claim enforceable (see t69).
 class OpPrintingFlags {};
 
+// ---------------------------------------------------------------------------
+// PASS 2026-09-27 (fourth rules/mlir slot): `mlir::InFlightDiagnostic`, the
+// `operator<<` family, queue rows g286/g320/g346/... (22 rows, 66 TU-rows).
+//
+// ⛔ A UNIT MODEL IS FORBIDDEN HERE.  Diagnostics.h:325-328 is
+// `~InFlightDiagnostic() { if (isInFlight()) report(); }` and Diagnostics.h:
+// 319-324's move ctor explicitly `rhs.abandon()`s -- the accumulated message
+// reaches the DiagnosticEngine ON DESTRUCTION, exactly once.  A destructor with
+// an observable effect is the axis on which `mlir::OwningOpRef` was REFUSED
+// above; a unit plus unit-returning `<<` keys would translate, compile, and
+// SILENTLY DELETE every diagnostic, and the dominant call sites are the
+// tablegen-generated parse/verify bodies (KTDFAttributes.cpp.inc:132,
+// KTDFLowering.cpp.inc:30, SDSCBundleTypes.cpp.inc:216) whose ONLY externally
+// visible behaviour IS the message.  So it maps to a REAL accumulating type,
+// `libcc2rs::InFlightDiagnostic`, which prints on `Drop` (libcc2rs/src/diag.rs).
+//
+// ⭐ `operator<<` IS DECLARED AS MLIR DECLARES IT -- a `template <typename Arg>`
+// on an `&&`-qualified member returning `InFlightDiagnostic &&`
+// (Diagnostics.h:344-349).  The KEY is recorded from the RESOLVED signature at
+// the call in the rule body below, so `Arg` deduces to `const char (&)[36]` for
+// a 36-byte literal and the key prints `const char (&)[_]` -- ONE key for every
+// literal length, because normalizeTranslationRule (mapper.cpp:1200-1213)
+// rewrites `\b\d+\b` to `_` across the whole key.  g286's 21 TUs therefore need
+// ONE key, not 21.
+//
+// ⭐ THE RECEIVER ARRIVES AS a0.  For the shift family only, mapper.cpp:1597-
+// 1602 prints the return type then the WRITTEN nested-name-specifier, which is
+// empty for a member declared in its own class body -- hence the bare
+// `operator shl(...)` in the key, with the implicit object argument absent from
+// the printed parameter list (mapper.cpp:1648-1666) but PRESENT in the call.
+// So the target body sees the receiver as a0 and the streamed value as a1.
+// Confirmed by f11, whose key has an empty parameter list while its target is
+// `fn f11(a0: ir::Attr) -> bool`.
+class InFlightDiagnostic {
+public:
+  InFlightDiagnostic();
+  // Diagnostics.h:344-349 -- `template <typename Arg> InFlightDiagnostic
+  // &&operator<<(Arg &&arg) &&`.
+  template <typename Arg> InFlightDiagnostic &&operator<<(Arg &&arg) &&;
+};
+
 } // namespace mlir
 
 // ---- type rules, and nothing else ----------------------------------------
@@ -1189,6 +1230,13 @@ using t68 = mlir::detail::PassOptions::ListOption<int>;
 // member and t61 maps no member either.)
 using t69 = mlir::OpPrintingFlags;
 
+// t70: `mlir::InFlightDiagnostic` -> `libcc2rs::InFlightDiagnostic`, a REAL
+// accumulating buffer that prints on `Drop`.  Argued in full at the class
+// declaration above and in libcc2rs/src/diag.rs; in one line, this type's
+// destructor is its entire purpose, so an opaque unit would silently delete
+// every diagnostic the ported compiler emits.
+using t70 = mlir::InFlightDiagnostic;
+
 // ---- WHAT THIS PASS DELIBERATELY LEFT OUT, and why -------------------------
 // * `mlir::IndexType::get(mlir::MLIRContext *)`, the ONE factory the verbose logs
 //   show in expression position (see t60).  NOT ADDED, because its only honest
@@ -1345,3 +1393,16 @@ bool f19(mlir::Type a, mlir::Type b) { return a.operator!=(b); }
 // whose key `bool mlir::Attribute::operator!() const` likewise has an empty
 // parameter list while its target takes a0).
 bool f20(mlir::Type a) { return a.operator!(); }
+
+// ---- f21: the InFlightDiagnostic `<<` family, row g286 --------------------
+// `mlir::InFlightDiagnostic && operator shl(const char (&)[_]) &&`, 21 TUs.
+// Spelled `std::move(d).operator<<(s)` -- EXPLICIT member-call form on an
+// EXPLICIT rvalue -- so the recorded callee is unambiguously the `&&`-qualified
+// member template and not any free ADL candidate.  The literal length is written
+// concretely (36) because normalizeTranslationRule rewrites every `\b\d+\b` in
+// the key to `_`, making this ONE key that serves every literal length; g286's
+// sites carry lengths 2, 14, 15, 19 and 36.
+mlir::InFlightDiagnostic &&f21(mlir::InFlightDiagnostic &&d,
+                               const char (&s)[36]) {
+  return std::move(d).operator<<(s);
+}
