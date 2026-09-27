@@ -5472,14 +5472,57 @@ void Converter::ConvertCXXMethodDecls(
   }
 }
 
+bool Converter::BaseTargetNamesTrait(clang::QualType base_type,
+                                     std::string_view base_target) const {
+  const auto *base_record = base_type->getAsCXXRecordDecl();
+  if (base_record != nullptr && IsUserDefinedDecl(base_record)) {
+    // A user-written base is lowered by THIS converter, and an abstract one
+    // becomes a trait (ConvertAbstractClass). Leave that path untouched.
+    return true;
+  }
+  // The base came from a system header, so its Rust spelling comes from the
+  // rule table, which maps C++ types to Rust TYPES. A type is never a trait.
+  if (base_target == "()") {
+    // A `()`-mapped base contributes no state and no methods, so there is
+    // nothing to implement: the caller emits an inherent impl instead.
+    return false;
+  }
+  const std::string loc =
+      base_record != nullptr
+          ? base_record->getLocation().printToString(ctx_.getSourceManager())
+          : "<unknown>";
+  const std::string detail =
+      "rule-mapped base class `" + base_type.getAsString() + "` -> `" +
+      std::string(base_target) +
+      "` in trait position: the rule language cannot declare that a target "
+      "names a trait";
+  if (survey::Enabled()) {
+    survey::Record(survey::GapKind::kUnsupportedConstruct, detail, loc);
+    return false;
+  }
+  llvm::errs() << "unsupported " << detail << " at " << loc << '\n';
+  assert(0 && "rule-mapped base class in trait position");
+  return false;
+}
+
 Converter::DeferredBlock &
 Converter::VirtualMethodsFor(const clang::CXXRecordDecl *decl) {
   auto name = GetRecordName(decl);
   auto [it, inserted] = virtual_methods_.try_emplace(name);
   if (inserted) {
-    it->second.header = std::format(
-        "{} impl {} for {}", keyword_unsafe_,
-        GetUnsafeTypeAsString(decl->bases_begin()->getType()), name);
+    auto base_type = decl->bases_begin()->getType();
+    auto base_target = GetUnsafeTypeAsString(base_type);
+    if (BaseTargetNamesTrait(base_type, base_target)) {
+      it->second.header =
+          std::format("{} impl {} for {}", keyword_unsafe_, base_target, name);
+    } else {
+      // The base is not lowered to a Rust trait (a rule-mapped base names a
+      // TYPE, not a trait), so there is no trait to implement. Its virtual
+      // methods become INHERENT methods on the derived type. Emitting
+      // `impl <type> for <derived>` here is a category error: rustfmt rejects
+      // it outright ("expected a trait, found type").
+      it->second.header = std::format("{} {}", keyword::kImpl, name);
+    }
   }
   return it->second;
 }

@@ -1058,6 +1058,13 @@ protected:
 
   static void EmitDeferredBlock(const DeferredBlock &block, std::string &out);
 
+  // True if the Rust spelling `base_target` of a base class names a TRAIT, so
+  // that `impl <base_target> for <derived>` is legal. False for a base whose
+  // mapped target is a type (notably `()`), in which case the base's virtual
+  // methods must be emitted as inherent methods on the derived type.
+  bool BaseTargetNamesTrait(clang::QualType base_type,
+                            std::string_view base_target) const;
+
   DeferredBlock &VirtualMethodsFor(const clang::CXXRecordDecl *decl);
 
   std::string hoisted_records_;
