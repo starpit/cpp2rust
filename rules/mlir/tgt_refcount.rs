@@ -1244,3 +1244,15 @@ fn t86<T1>() -> Vec<T1> {
 fn f120<T1>() -> Vec<T1> {
     Vec::new()
 }
+
+// t151 -- `mlir::RegisteredOperationName` -> the SAME model as t18
+// (`mlir::OperationName`), mirrored VERBATIM.  A registered op name IS the
+// .td-parsed op def, and the derived type carries no additional state: the base
+// holds the single nullable `Impl *`.  Spelled as an OWNING copy of the registry
+// row rather than `Option<&'static TdOpDef>` for exactly t18's reason -- the
+// converter mangles a parameter's Rust type text into the overload-disambiguating
+// function name, and a lifetime in that text is not an identifier.  `None` is the
+// null handle.  NO member is mapped, so any read still aborts loudly.
+fn t151() -> Option<dataflowir_gen::TdOpDef> {
+    None
+}

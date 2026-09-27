@@ -260,6 +260,29 @@ class RegionRange {};
 // `getAttributeNames()` still aborts loudly rather than lying.
 class OperationName {};
 
+// mlir/include/mlir/IR/OperationSupport.h:525 --
+// `class RegisteredOperationName : public OperationName`.  A REGISTERED op name
+// IS the .td-parsed op def, so the faithful model for the derived type is THE
+// SAME Rust type as t18 with an EMPTY member set.
+// WHY IT IS NEEDED: in the three TUs it gates (VectorChain.cpp, KTDFOps.cpp,
+// Uniform.cpp) the type is never NAMED in source at all -- it is reached as a
+// LEAF record while mapping `std::optional<mlir::RegisteredOperationName>`,
+// i.e. purely the declared return type of `getRegisteredInfo()`
+// (OperationSupport.h:186-189), with NOTHING read from it.
+// DELIBERATELY NOT KEYED, each for a stated reason:
+//  * `==`/`!=` -- the t72 TypeID precedent, and `operator==` is declared on
+//    OperationName, so a derived-class key would be DEAD anyway.
+//  * `getCanonicalizationPatterns` -- INHERITED, and a key on a derived class
+//    cannot relocate an inherited member (measured on llvm::FailureOr: six keys
+//    FOUND, all six DEAD).  Its one call site still fails at rustc, loudly.
+//  * `getDialect`, `lookup`, `insert`, `getFromOpaquePointer` -- never called
+//    anywhere in the corpus.
+// No destructor exists (no `~RegisteredOperationName`, no `~OperationName`), so
+// the handle model is permitted.  NO CONSTRUCTOR KEY: t18 itself is committed
+// without one and the type is not default-constructible in C++ -- every value
+// comes from `lookup()` / `getRegisteredInfo()` / `getRegisteredOperations()`.
+class RegisteredOperationName : public OperationName {};
+
 // mlir/include/mlir/IR/OpDefinition.h:272 -- `class OpFoldResult : public
 // PointerUnion<Attribute, Value>`.  THE RESULT OF FOLDING: either a constant
 // `Attribute` or an existing SSA `Value`, never both and never a third thing.
@@ -2480,3 +2503,7 @@ template <typename T1> using t86 = llvm::SetVector<T1>;
 template <typename T1> llvm::SetVector<T1> f120() {
   return llvm::SetVector<T1>();
 }
+
+// t151 -- see the restatement of `mlir::RegisteredOperationName` above for the
+// full argument.  Arity 0, so no normalization or swallow hazard.
+using t151 = mlir::RegisteredOperationName;
