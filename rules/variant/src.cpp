@@ -28,6 +28,27 @@ template <typename T1, typename T2> using t1 = std::variant<T1, T2>;
 template <typename T1, typename T2, typename T3>
 using t2 = std::variant<T1, T2, T3>;
 
+// ARITY 8 -- THE ONLY ARITY THE CORPUS ACTUALLY INSTANTIATES.  Measured on
+// dxp_standalone: exactly one std::variant instantiation exists,
+// `OperandAttr::data_` at sys-arch-spec/progir/progir.h:256, and it is 8-ary;
+// arities 2 and 3 have ZERO uses.  t1/t2 above were therefore not merely
+// unused, they were HARMFUL: GetTypeMapKey (mapper.cpp:94) truncates the bucket
+// key at the first `<`, so ARITY IS NOT PART OF THE KEY and t1/t2 were
+// candidates for the 8-ary type.  matchTemplate (mapper.cpp:250ff) resolves each
+// Tn by scanning to the literal text that follows it in the rule src, and for
+// `std::variant<T1, T2, T3>` the text after T3 is `>`, which
+// findNextLiteralSameDepth finds at the FINAL depth-0 position -- so T3 captured
+// alternatives 3..8 JOINED INTO ONE STRING, mapper.cpp:1242 recursed on that
+// non-type, and the assert at :1233 (a no-op under the release build's NDEBUG)
+// fell through to a null deref: rc=139 on Pipeline.cpp, StageCoarsening.cpp and
+// RunProgramPipelines.cpp.  An 8-placeholder src beats t2 DETERMINISTICALLY
+// rather than by luck: `search` (mapper.cpp:383) tie-breaks on src.size() and
+// prefers the LONGER src.  kMaxGenerics is 64 (translation_rule.h:23), so 8 is
+// well inside the limit.
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+using t3 = std::variant<T1, T2, T3, T4, T5, T6, T7, T8>;
+
 // Default construction value-initialises ALTERNATIVE 0.
 template <typename T1, typename T2> std::variant<T1, T2> f1() {
   return std::variant<T1, T2>();
@@ -71,5 +92,73 @@ std::size_t f8(const std::variant<T1, T2> &a0) {
 
 template <typename T1, typename T2, typename T3>
 std::size_t f9(const std::variant<T1, T2, T3> &a0) {
+  return a0.index();
+}
+
+// ---- arity 8 ------------------------------------------------------------
+// A TYPE KEY WITHOUT ITS CONSTRUCTORS GIVES rc=0 AND THEN E0433: the converter
+// looks the default ctor up as an ordinary expr rule and, on a miss, falls back
+// to `<mangled-type>::new()`, which does not exist.  So t3 is accompanied by its
+// default ctor and ALL EIGHT value ctors.  The alternative is identified by the
+// PARAMETER TYPE, never by an explicit template argument, so each of the eight
+// records a DISTINCT key -- which is exactly why these are safe to model where
+// std::get<I> is not.
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+std::variant<T1, T2, T3, T4, T5, T6, T7, T8> f10() {
+  return std::variant<T1, T2, T3, T4, T5, T6, T7, T8>();
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+std::variant<T1, T2, T3, T4, T5, T6, T7, T8> f11(T1 a0) {
+  return std::variant<T1, T2, T3, T4, T5, T6, T7, T8>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+std::variant<T1, T2, T3, T4, T5, T6, T7, T8> f12(T2 a0) {
+  return std::variant<T1, T2, T3, T4, T5, T6, T7, T8>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+std::variant<T1, T2, T3, T4, T5, T6, T7, T8> f13(T3 a0) {
+  return std::variant<T1, T2, T3, T4, T5, T6, T7, T8>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+std::variant<T1, T2, T3, T4, T5, T6, T7, T8> f14(T4 a0) {
+  return std::variant<T1, T2, T3, T4, T5, T6, T7, T8>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+std::variant<T1, T2, T3, T4, T5, T6, T7, T8> f15(T5 a0) {
+  return std::variant<T1, T2, T3, T4, T5, T6, T7, T8>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+std::variant<T1, T2, T3, T4, T5, T6, T7, T8> f16(T6 a0) {
+  return std::variant<T1, T2, T3, T4, T5, T6, T7, T8>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+std::variant<T1, T2, T3, T4, T5, T6, T7, T8> f17(T7 a0) {
+  return std::variant<T1, T2, T3, T4, T5, T6, T7, T8>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+std::variant<T1, T2, T3, T4, T5, T6, T7, T8> f18(T8 a0) {
+  return std::variant<T1, T2, T3, T4, T5, T6, T7, T8>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+std::size_t f19(const std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0) {
   return a0.index();
 }
