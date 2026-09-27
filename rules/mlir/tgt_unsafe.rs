@@ -1328,3 +1328,19 @@ unsafe fn f119() -> dataflowir_gen::ir::IntegerSet {
         constraints: Vec::new(),
     }
 }
+
+// t86 -- `llvm::SetVector<T1>` -> `Vec<T1>`.  SetVector is INSERTION-ORDERED and
+// the corpus ITERATES them into emitted MLIR (six sites, see src.cpp), so a
+// HashSet would silently permute the output and a Vec keeps the order exactly.
+// NO member is mapped -- notably not `insert`, whose `bool` return the corpus
+// relies on at DoubleBuffering.cpp:268 -- so every operation aborts loudly rather
+// than dropping the dedup.  The t79 BitVector shape.
+fn t86<T1>() -> Vec<T1> {
+    Vec::new()
+}
+
+// f120 -- the default constructor for t86.  `SetVector() = default;` leaves both
+// the vector and the membership set empty.
+unsafe fn f120<T1>() -> Vec<T1> {
+    Vec::new()
+}

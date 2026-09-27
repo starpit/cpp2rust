@@ -2390,3 +2390,93 @@ using t85 = mlir::IntegerSet;
 // 0-ary is the only form a translated program can write here, and it is the form
 // Helper.cpp:59 writes.
 mlir::IntegerSet f119() { return mlir::IntegerSet(); }
+
+// ---- t86: `llvm::SetVector<T>`, the MEASURED terminating gate of
+// dataflow-scheduler/.../KTDFLowToDFIR/OperationLowerings.cpp -----------------
+// The abort names the CONTAINER, not an element:
+//   LLVM ERROR: unsupported unmapped type `llvm::SetVector<mlir::Attribute>` has
+//               no model in types_, while mapping
+//               `std::map<mlir::Operation *, llvm::SetVector<mlir::Attribute>>`
+// `mlir::Attribute` is ALREADY keyed (t1), so unlike t83/t84/t85 the missing key
+// is the container itself.
+// ⭐ WHERE `<mlir::Attribute>` COMES FROM, which the earlier triage got wrong: it
+// is NOT an MLIR header type.  dt_src spells `SetVector<mlir::Attribute>` zero
+// times because it spells it `SetVector<ResourceType>`, and `ResourceType` is a
+// bare alias for `mlir::Attribute` declared SIX times in dt_src
+// (ApplicableUnits.h:32, SchedulerExtContext.h:28, ComponentClassifier.h:33,
+// MemoryTracker.h:37, RoutingGraph.h:48, MemoryTree.h:45).  The gating `std::map`
+// is ComponentClassifier.h:38,
+// `std::map<mlir::Operation*, llvm::SetVector<ResourceType>>`.
+// ⭐ OWNERSHIP.  `rules/smallvector/src.cpp:134-136` says THE RECEIVER DECIDES THE
+// MODULE and this file's 1681-1686 note claims `llvm::` types only the MLIR corpus
+// reaches.  Every SetVector site in the corpus is under `dataflow-scheduler/` and
+// every element type is an MLIR type (`mlir::Attribute` via ResourceType,
+// `mlir::Operation*`, `mlir::ktdf::StageOp`, `mlir::ktdf_arch::GroupOp`), so the
+// receiver is the MLIR corpus and this is the module -- the SAME rule that put
+// t79 `llvm::BitVector` and t19 `llvm::ArrayRef` here.  A separate
+// `rules/setvector` module was NOT created: `GetTypeMapKey` (mapper.cpp:94) strips
+// at `<`, so the bare name `SetVector` may live in exactly ONE module, and a grep
+// of all 80 modules' `ir_src.json` for `SetVector` found ZERO hits, so there is no
+// existing claim to respect and no reason to add an 81st module.
+// ⭐ WHY `Vec<T1>` AND NOT A HASH SET -- this is the load-bearing measurement.
+// `llvm::SetVector` is INSERTION-ORDERED (a vector plus a set used only for
+// membership).  THE CORPUS ITERATES THEM, at six sites:
+//     LogicalMemoryViewBuilder.cpp:133   for (auto ms : needed_spaces)
+//     ComponentClassifier.cpp:68         for (auto comp : temp_non_parallel_components)
+//     UnitMaterializer.cpp:62,92,128     for (auto component : ...)
+//     UniformInfra.cpp:47,87,153         for (auto component : ...)
+// and those loops BUILD MLIR OPS, so the iteration order is the order of the
+// emitted IR.  A `HashSet` model would silently permute the emitted output; a
+// `Vec` keeps the order exactly, which is why `Vec<T1>` is the only model here
+// that cannot lie about what the program prints.  (The same argument t81 makes
+// for `CopyOnWriteArrayRef`: the LLVM side's extra membership set is an
+// asymptotic optimisation, not something a mapped operation observes.)
+// ⭐ WHY EVERY MEMBER IS LEFT UNMAPPED -- the t79 `BitVector` shape, and the
+// SECOND measurement is what forces it.  `SetVector::insert` returns `bool`
+// (`false` if the element was already present) and THE CORPUS USES THAT RETURN
+// VALUE: `DoubleBuffering.cpp:268`, `if (visited.insert(succ))` over the
+// `llvm::SmallSetVector<mlir::ktdf::StageOp, 8>` declared at :243 -- the BFS
+// visited-set guard, where dropping the bool turns a terminating search into an
+// infinite loop.  A `Vec` CAN answer that bool (contains-then-push), but only with
+// a body that also performs the dedup, and no such body is measured in this slot.
+// So NOTHING is claimed: not `insert`, not `contains`, not `empty`, not `size`,
+// not `count`, not `remove`, not `clear`, not `begin`/`end`, not
+// `operator[]`, and not the `SmallSetVector` arity form.  Every one of them
+// ABORTS LOUDLY, exactly as t79 omits `operator[]` so a bit WRITE cannot silently
+// no-op.  In particular a bare `v.insert(x)` must NOT become `v.push(x)`: that
+// would drop the dedup and duplicate emitted ops.
+// ⭐ DESTRUCTOR TEST: `grep -rn '~SetVector' $LLVM_ROOT/include/llvm/ADT/SetVector.h`
+// is ZERO hits -- the class is `set_type set; vector_type vector;` and destruction
+// has no observable program effect, so an ordinary mapped value is permitted
+// (the OwningOpRef/InFlightDiagnostic test).
+// ⛔ WHAT IS LOST: the O(1) membership test, and -- until the members above are
+// authored with real dedup bodies -- every operation on the container.  The type
+// key exists so that `std::map<mlir::Operation*, SetVector<Attribute>>` and
+// `SetVector<ResourceType>`-by-value returns become EXPRESSIBLE; the first call
+// still stops the translation, which is the correct state for an unmapped member.
+namespace llvm {
+
+// llvm/ADT/SetVector.h -- the real declaration is
+// `template <typename T, typename Vector, typename Set, unsigned N> class SetVector`
+// with all but T defaulted.  Declared here with ONE parameter, which is all the
+// key needs (`GetTypeMapKey` strips at `<`), and with ONLY the default
+// constructor, because no member is mapped -- the t79 BitVector / sys::SmartMutex
+// declaration style in this file.
+template <typename T> class SetVector {
+public:
+  SetVector();
+};
+
+} // namespace llvm
+
+template <typename T1> using t86 = llvm::SetVector<T1>;
+
+// f120 -- THE CONSTRUCTOR FOR t86.  A type key without one is rc=0 and then
+// `E0433: cannot find module or crate llvm_SetVector`; the `-verbose` tell is
+// `search expr void T::T(), result: None`.  `SetVector() = default;` leaves both
+// the vector and the set empty, i.e. an empty Vec.  0-ary is the form every
+// corpus site writes (LogicalMemoryViewBuilder.cpp:69,132;
+// ComponentClassifier.cpp:33-34).
+template <typename T1> llvm::SetVector<T1> f120() {
+  return llvm::SetVector<T1>();
+}
