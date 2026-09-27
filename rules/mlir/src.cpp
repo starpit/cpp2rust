@@ -228,6 +228,116 @@ class RegionRange {};
 // `getAttributeNames()` still aborts loudly rather than lying.
 class OperationName {};
 
+// ---------------------------------------------------------------------------
+// TYPES ADDED FROM THE `--mangle-unmapped` TRIAGE PASS (commit bac7590) over
+// dataflow-scheduler/lib/Dialect/KTDF/Utils/Utils.cpp, plus the first-abort
+// ranking over the 68-TU dxp sample.  Same rule as everything above: a type rule
+// needs only the NAME, no member is declared because no member rule is written,
+// and anything that could not be GROUNDED in the dataflowir-gen model was left
+// out rather than guessed (the absence list is in tgt_unsafe.rs).
+// ---------------------------------------------------------------------------
+
+// mlir/include/mlir/IR/BuiltinAttributes.h -- `mlir::BoolAttr`.
+// dataflowir-gen models it EXPLICITLY: ir.rs:471 `Attr::Bool(bool)` is documented
+// as "`mlir::BoolAttr` -- true / false, with no type suffix".  There is no
+// distinct Rust type for the subclass, so the map is to the whole `Attr` enum --
+// the same WIDENING already made for IntegerAttr (t10), ArrayAttr (t11) and
+// AffineMapAttr (t12), sound for storage and comparison, losing only the C++
+// static guarantee that the handle is a boolean attribute.
+class BoolAttr {};
+
+// mlir/include/mlir/IR/Attributes.h -- `class NamedAttribute { StringAttr name;
+// Attribute value; }`.  ONE ENTRY OF A DICTIONARY, and that is exactly what
+// dataflowir-gen models: `ir::AttrDict = BTreeMap<String, Attr>` (ir.rs:559) is
+// documented as `mlir::DictionaryAttr` and its ENTRY TYPE is (key, Attr).  So the
+// pair is the crate's own entry shape, not a wrapper invented here.
+// The key is carried as a plain `String` rather than a second `Attr`, matching
+// AttrDict: MLIR's name is a StringAttr but a dictionary key is only ever its
+// text, and `print_attr_dict` (ir.rs) walks `String` keys.
+class NamedAttribute {};
+
+// mlir/include/mlir/IR/Dialect.h -- the registered dialect record.
+// GROUNDED, and not by analogy: dataflowir-gen's .td parser produces a real model
+// of a dialect record, `td_ext::TdDialect` (td_ext.rs:22), built from
+// `def X_Dialect { let name = ... }` (td_ext.rs:364) and carrying def_name/name/
+// cpp_namespace/file/line.  That is the same data `mlir::Dialect` holds for the
+// printer's purposes (`getNamespace()` is `name`).
+class Dialect {};
+
+// mlir/include/mlir/IR/MLIRContext.h -- the UNIQUER/ALLOCATOR.  It has NO
+// analogue in dataflowir-gen and cannot have one: the crate models printed IR,
+// not the storage MLIR interns it in.
+//
+// MAPPED AS AN OPAQUE UNIT, AND ONLY BECAUSE NOTHING READS THROUGH IT.  Measured
+// before mapping, on the emitted Rust of the reference TU: every one of the 35
+// occurrences of the mangled name is the same shape,
+//     let mut ___args_1: *mut mlir_MLIRContext = ...
+// i.e. a context POINTER threaded through a call and never dereferenced --
+//     grep -c 'mlir_MLIRContext' base.rs                     = 35
+//     grep 'mlir_MLIRContext' base.rs | grep -v '\*mut ...'  = 0 lines
+// so no member of it is reached in this TU.  DELIBERATELY NO MEMBER RULE IS
+// WRITTEN: a context whose `getLoadedDialect()` silently did nothing would be the
+// exact silent-wrongness this port exists to prevent, so any call on it still
+// ABORTS loudly.  If a future TU calls a method here, the honest answer is a real
+// model, not a member rule on a unit.
+class MLIRContext {};
+
+// mlir/include/mlir/IR/Value.h:28 -- `class OpResult : public Value`.  It IS a
+// Value (a narrowing subclass that additionally knows its owner op and result
+// number), so `ir::Value` (ir.rs:21) is the faithful representation and the only
+// thing lost is the static narrowing -- the same widening direction as t10-t12.
+class OpResult {};
+
+// mlir/include/mlir/IR/OpDefinition.h:100 -- `class OpState`, the base of every
+// ODS-generated op class: one `Operation *`.  So it maps where `mlir::Operation`
+// maps, `fmt::OpInst`.
+//
+// ⛔ NO COMPARISON OR IDENTITY OPERATION IS MAPPED ON THIS TYPE, DELIBERATELY,
+// AND NOBODY SHOULD ADD ONE.  A C++ OpState is a HANDLE: two OpStates are the
+// same op exactly when their `Operation *` are equal.  `fmt::OpInst` is a VALUE
+// (an op's printed content), so a derived `PartialEq` on it would say two
+// distinct operations with identical content ARE the same operation -- silently
+// wrong, and invisible to any probe that does not build two identical ops.  The
+// TYPE is mapped so TUs can name it (33 rustc errors in the reference TU, and it
+// is a first-abort gate); equality is NOT, and stays absent so that a comparison
+// site aborts loudly instead.
+class OpState {};
+
+namespace detail {
+// mlir/include/mlir/IR/BuiltinAttributes.h:760 -- `DenseArrayAttrImpl<T>`, the
+// implementation base that `DenseI64ArrayAttr` (T = long) is a typedef of.
+// ⛔ MAPPED AT THE CONCRETE `<long>` INSTANTIATION, NOT AS A TEMPLATE, AND THAT
+// IS A MEASURED CONSTRAINT, NOT A STYLE CHOICE.  Written generically first
+// (`template<typename T1> using t26 = ...<T1>`), the converter then has to map
+// the ARGUMENT too and aborts rc=134 on the first argument that has no rule:
+//   unsupported unmapped type `mlir::IndexType` has no model in types_, while
+//   mapping `mlir::detail::TypedValue<mlir::IndexType>`
+//   mapper.cpp:722 Assertion `0 && "Type is not present in types_"'
+// i.e. a GENERIC type rule over MLIR types turns a countable mangled fallback
+// into a hard abort.  `long` is a builtin and already has a model, so the
+// concrete key is safe.  For the same reason `mlir::detail::TypedValue<T>` is
+// NOT mapped at all -- see the absence list in tgt_unsafe.rs.  It is a member of the ONE uniqued
+// `mlir::Attribute` hierarchy, and `ir::Attr` is the closed union of that
+// hierarchy -- so this is the SAME widening as t10/t11/t12/t20, not a new kind of
+// claim.  ⛔ What it costs, stated: `ir::Attr` has no dense-array variant
+// (ir.rs:466-499 lists Str/Int/Bool/Unit/AffineMap*/I32Array/Aliasable/Raw), so a
+// dense i64 array can only be carried as its printed spelling; no ELEMENT
+// ACCESSOR is mapped, so `operator[]`/`asArrayRef()` still abort loudly rather
+// than returning an empty array.  It is the largest single mangled type in the
+// triage pass (24 of 93).
+template <typename T>
+class DenseArrayAttrImpl {};
+
+} // namespace detail
+
+namespace scf {
+// mlir/include/mlir/Dialect/SCF/IR/SCF.h -- `scf::ForOp`, an ODS-generated op
+// class, i.e. an `OpState` subclass wrapping one `Operation *`.  Maps where
+// `mlir::Operation`/`OpState` map, `fmt::OpInst`, and carries the SAME
+// prohibition: no equality, for the handle-vs-value reason given on OpState.
+class ForOp {};
+} // namespace scf
+
 } // namespace mlir
 
 // ---- type rules, and nothing else ----------------------------------------
@@ -255,6 +365,14 @@ using t16 = mlir::ValueRange;
 using t17 = mlir::RegionRange;
 using t18 = mlir::OperationName;
 template <typename T1> using t19 = llvm::ArrayRef<T1>;
+using t20 = mlir::BoolAttr;
+using t21 = mlir::NamedAttribute;
+using t22 = mlir::Dialect;
+using t23 = mlir::MLIRContext;
+using t24 = mlir::OpResult;
+using t25 = mlir::OpState;
+using t26 = mlir::detail::DenseArrayAttrImpl<long>;
+using t27 = mlir::scf::ForOp;
 
 // ---- the two operator rules ----------------------------------------------
 // The member `==` on mlir::Attribute.  Spelled `.operator==(...)` rather than

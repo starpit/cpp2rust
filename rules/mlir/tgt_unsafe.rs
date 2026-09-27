@@ -341,3 +341,126 @@ fn t18() -> Option<dataflowir_gen::TdOpDef> {
 fn t19<T1>() -> Vec<T1> {
     Default::default()
 }
+
+// --- t20..t27: the types from the `--mangle-unmapped` triage pass ------------
+// Every `init` below is either the crate's own `Default` or the SAME null-handle
+// sentinel t6/t7 already use, and each is justified at its declaration in
+// src.cpp.  The unsafe and refcount targets are identical here for the reason the
+// header gives: these are all VALUE types in this model, so no pointer
+// representation appears.
+//
+// t20 `mlir::BoolAttr` -> `ir::Attr`, whose `Attr::Bool` row (ir.rs:471) IS this
+// C++ type.  Null handle = `Attr::Raw("")`, the same sentinel as t6/t7/t10-t12,
+// and it does NOT collide with a BoolAttr holding `false` (that is `Attr::Bool
+// (false)`, a different variant, so derived PartialEq reports them unequal and a
+// null test on `BoolAttr(false)` correctly answers "not null").
+fn t20() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(String::new())
+}
+
+// t21 `mlir::NamedAttribute` -> the ENTRY TYPE of `ir::AttrDict` (ir.rs:559).
+// A default-constructed NamedAttribute is a null name plus a null value, which is
+// the empty key plus the same `Attr::Raw("")` null handle.  NOTE: no member rule
+// is written for this type, and that is not only the usual caution -- a method
+// call whose RECEIVER TYPE CONTAINS A TUPLE is unresolved by the rule
+// preprocessor (semantic.rs:261), so `getName()`/`getValue()` could not be
+// written in receiver form even if a model existed for them.
+fn t21() -> (::std::string::String, dataflowir_gen::ir::Attr) {
+    (
+        ::std::string::String::new(),
+        dataflowir_gen::ir::Attr::Raw(String::new()),
+    )
+}
+
+// t22 `mlir::Dialect` -> `td_ext::TdDialect` (td_ext.rs:22), the .td parser's own
+// dialect record.  `TdDialect` derives `Default` (td_ext.rs:20), and that default
+// -- empty def_name/name/cpp_namespace -- is the faithful "no dialect": a real
+// registered dialect always has a non-empty `let name`, so the default is not a
+// value any registered dialect can equal.
+fn t22() -> dataflowir_gen::td_ext::TdDialect {
+    Default::default()
+}
+
+// t23 `mlir::MLIRContext` -> an OPAQUE UNIT.  See src.cpp for the measurement
+// that licenses this: in the reference TU the context appears only as a `*mut`
+// threaded through calls and is never dereferenced.  The unit is not a claim that
+// a context is empty -- it is a claim that this port never reads one, enforced by
+// there being NO member rule, so any call on it aborts loudly.
+fn t23() -> () {
+    ()
+}
+
+// t24 `mlir::OpResult` -> `ir::Value`.  OpResult IS a Value (Value.h:28), so the
+// representation is the base's and the `init` is the base's null handle, byte
+// identical to t4's -- which it must be, or `Value v = someOpResult;` and a
+// default-constructed OpResult would disagree about being null.
+fn t24() -> dataflowir_gen::ir::Value {
+    dataflowir_gen::ir::Value::new(
+        ::std::string::String::new(),
+        dataflowir_gen::ir::Ty::Opaque(::std::string::String::new()),
+    )
+}
+
+// t25 `mlir::OpState` -> `fmt::OpInst`, the same representation `mlir::Operation`
+// (t1) gets, because an OpState IS one `Operation *`.
+//
+// ⛔ EQUALITY IS DELIBERATELY ABSENT ON THIS TYPE AND MUST STAY ABSENT.  In C++
+// two OpStates are equal iff their `Operation *` are the same object; `OpInst` is
+// an op's printed CONTENT, so any comparison written here would report two
+// distinct operations with identical content as the same operation.  That is
+// silent wrongness no probe catches unless it deliberately builds two identical
+// ops.  The TYPE is mapped only so a TU can name it and get as far as the real
+// gap; no `operator==`, no `operator!=`, no identity test is provided, so such a
+// site still aborts loudly.  Do not add one without a handle-identity model.
+//
+// The `init` is t1's, and for t1's reason: `OpState` has no public default
+// constructor (it is constructed only from an `Operation *`), so this init is
+// unreachable from any well-formed C++ and exists only to type-check.
+fn t25() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+// t26 `mlir::detail::DenseArrayAttrImpl<T>` -> `ir::Attr`, the same widening onto
+// the uniqued-Attribute union that t10-t12 and t20 make.  The element type `T` is
+// NOT reflected in the representation, because `ir::Attr` has no dense-array
+// variant; that is stated as a cost in src.cpp, and it is why no element accessor
+// is mapped.  Null handle = the usual `Attr::Raw("")`.
+fn t26() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(String::new())
+}
+
+// t27 `mlir::scf::ForOp` -> `fmt::OpInst`, an ODS op handle, so t25's
+// representation and t25's PROHIBITION: no equality, no identity test.
+fn t27() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+// --- WHAT THIS PASS DELIBERATELY LEFT OUT, with the reason ------------------
+// * `mlir::OpOperand` (23 rustc errors).  NOT GROUNDED.  It is not a Value: it is
+//   the USE EDGE (`IROperand`, an intrusive node in a value's use-list holding
+//   owner + value).  dataflowir-gen models printed IR and has no use-list at all
+//   (`grep -rn OpOperand dataflowir-gen/src` = 0 hits), so any mapping would
+//   either conflate a use with the value it uses or invent a representation.
+//   Left unmapped, so it stays a loud undefined name.
+// * `mlir::detail::TypedValue<T>` (5 mangled sites).  A TypedValue IS a Value and
+//   `ir::Value` would be the faithful representation -- but a GENERIC type rule
+//   makes the converter map the template ARGUMENT, and it then aborts rc=134 with
+//   `mlir::IndexType` has no model in types_ (mapper.cpp:722).  Mapping it would
+//   therefore require type rules for all five instantiating MLIR types
+//   (TokenType, FifoSlotType, RankedTensorType, MemRefType, IndexType) first.
+//   Left out: a hard abort in exchange for 5 undefined names is a regression.
+// * `mlir::FileLineColLoc` and the `mlir::Location` family.  NOT GROUNDED: the
+//   crate has no location type (`grep -n 'Location\|FileLineCol' src/*.rs` finds
+//   only doc prose), because DataflowIR's printer emits no locations.
+// * `llvm::detail::indexed_accessor_range_base<mlir::RegionRange, ...>` (4
+//   errors).  This is the IMPLEMENTATION BASE that OperandRange, ResultRange,
+//   ValueRange AND RegionRange all derive from at DIFFERENT element types, so a
+//   single generic rule would have to pick one element type and would then be
+//   wrong for the other three -- exactly the base-class trap std::atomic hit.  A
+//   correct rule is the fully-spelled 5-argument instantiation (it needs local
+//   restatements of `llvm::PointerUnion` and `std::unique_ptr`), which is worth
+//   doing but is not a guess I will commit blind.
