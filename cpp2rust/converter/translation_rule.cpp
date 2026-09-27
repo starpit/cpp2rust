@@ -358,16 +358,28 @@ void ExprRule::validate(const std::string &name) const {
   if (generics.empty())
     return;
 
-  bool has_generic[kMaxGenerics] = {false};
+  // Sized off the rule's own generic count, never off a fixed bound: the
+  // validation loop below indexes this by `i < generics.size()`, and a rule
+  // with more generics than a fixed array's extent read out of bounds.
+  std::vector<bool> has_generic(generics.size(), false);
   for (size_t i = 0, e = src.size(); i < e; ++i) {
     auto pos = src.find('T', i);
     if (pos == std::string::npos)
       break;
-    auto ch = pos + 1 < e ? src[pos + 1] : '\0';
-    if (ch >= '1' && ch <= '9') {
-      has_generic[ch - '1'] = true;
-      i = pos + 1;
+    // Parse the FULL multi-digit index. A single-digit scan misreads `T27` as
+    // `T2` and then never marks T27 as present, which makes every rule with
+    // more than 9 generics fail the "absent generic from src" check below.
+    size_t digits = pos + 1;
+    while (digits < e && src[digits] >= '0' && src[digits] <= '9')
+      ++digits;
+    if (digits == pos + 1 || src[pos + 1] == '0') {
+      i = pos;
+      continue;
     }
+    size_t n = std::stoul(src.substr(pos + 1, digits - (pos + 1)));
+    if (n >= 1 && n <= has_generic.size())
+      has_generic[n - 1] = true;
+    i = digits - 1;
   }
 
   for (size_t i = 0, e = generics.size(); i < e; ++i) {

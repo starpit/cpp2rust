@@ -15,7 +15,12 @@
 
 namespace cpp2rust::TranslationRule {
 
-static inline constexpr unsigned kMaxGenerics = 9;
+// Upper bound on the `Tn` placeholder index a rule may use. The largest index
+// in the committed rule IR today is T27 (rules/tuple's 27-generic type rule
+// t5); a variadic `operator==` over two N-ary tuples needs 2N generics, so 20
+// -ary tuple rules can plausibly reach T40. 64 leaves headroom for that and is
+// only a sanity bound -- no fixed-size storage is sized by it any more.
+static inline constexpr unsigned kMaxGenerics = 64;
 
 struct TextFragment {
   std::string text;
