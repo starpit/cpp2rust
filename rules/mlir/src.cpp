@@ -2200,3 +2200,111 @@ template <typename T1>
 llvm::ArrayRef<T1> f60(const mlir::CopyOnWriteArrayRef<T1> &o) {
   return o.operator llvm::ArrayRef<T1>();
 }
+
+// ---- t83/t84: the two MEASURED terminating gates of 2026-09-27 -------------
+// Both arrive through `llvm::SmallVector<...>`; the abort is
+//   LLVM ERROR: unsupported unmapped type `X` has no model in types_,
+//               while mapping `llvm::SmallVector<X, _>`
+// i.e. rules/smallvector already maps the CONTAINER and dies on the ELEMENT, so
+// the key that is missing is the ELEMENT TYPE ITSELF, not a SmallVector arity.
+// (Confirmed from the LAST `LLVM ERROR` line of four first-abort logs:
+// dcc/src/Conversion/AgenToSentient/AccessDetails.cpp and
+// dcc/src/Transform/Dataflow/TransformPagedMemView/TransformPagedMemViewImpl.cpp
+// for AffineExpr; dcc/src/Dialect/Trace/TraceOps.cpp and
+// dataflow-scheduler/.../Dialect/KTDFLowering/KTDFLoweringOps.cpp for
+// UnresolvedOperand.)  Neither type has a destructor anywhere in
+// mlir/include (`grep -rn '~AffineExpr|~UnresolvedOperand'` = 0 hits), so both
+// pass the OwningOpRef/InFlightDiagnostic destructor test.
+namespace mlir {
+
+// t83 -- `mlir::AffineExpr`, mlir/IR/AffineExpr.h:69.  A uniquer handle
+// (`ImplType *expr`, null-initialised by `constexpr AffineExpr() {}`).
+// ⭐ THIS IS NOT A NEW MODELLING DECISION AND IT IS NOT A UNIT.  `dataflowir-gen`
+// ALREADY has the real tree at `ir.rs:124` (`enum AffineExpr { Dim, Symbol,
+// Constant, Add, Mul, Mod, FloorDiv, CeilDiv }`), and t8 already maps
+// `mlir::AffineMap` to `ir::AffineMap` whose field is `results: Vec<AffineExpr>`
+// (ir.rs:315).  So `mlir::AffineExpr` -> `ir::AffineExpr` is FORCED by t8: any
+// other choice would make `AffineMap::get(..., results, ...)` untypeable.
+// A UNIT WOULD HAVE BEEN SILENTLY WRONG HERE, and the corpus proves it: the two
+// gating TUs INSPECT and BUILD these expressions --
+//   AccessDetails.cpp:229-235  `expr.getKind() == AffineExprKind::Mod` / `::Constant` / `::DimId`
+//   TransformPagedMemViewImpl.cpp:94  `getAffineSymbolExpr(sym_idx, context_)`
+//   PropagationAnalysis.cpp:468-703   `getAffineDimExpr` + `getAffineBinaryOpExpr(Add/Mul, ...)`
+// -- which is exactly the "inspects or builds them" case the AffineMap note at
+// t8 and ir.rs:119 both warn about.  The tree carries kind and operands, so
+// `getKind` and the builders are all EXPRESSIBLE against it (they are separately
+// keyed elsewhere or still mangled; none is claimed here).
+// ⛔ WHAT IS STILL LOST, restated from ir.rs:121 because it is the one real
+// limit: MLIR CANONICALISES ON CONSTRUCTION (uniqued, flattened, constant-folded)
+// and this tree does not.  So the SIMPLIFIERS must stay unmapped --
+// `getFlattenedAffineExpr` (TransformPagedMemViewImpl.cpp:429,
+// PropagationAnalysis.cpp:1362,1509), `replaceDimsAndSymbols`, `isPureAffine`,
+// `getLargestKnownDivisor`, `isMultipleOf`, `walk`.  Same refusal t8 already
+// records for `simplifyAffineMap`: a simplifier that returned its input unchanged
+// would be silently wrong rather than loudly missing.  NOTHING BELOW MAPS ONE.
+// ⭐ ON `==`/`!=` -- and this is the one place this type DIFFERS from t72
+// `mlir::TypeID`.  C++ `operator==` compares the uniquer POINTER
+// (AffineExpr.h:77, `expr == other.expr`), which for an INTERNED type means
+// pointer equality IS structural equality, and `ir::AffineExpr` derives
+// `PartialEq`/`Eq` structurally (ir.rs:123).  So mapping them WOULD be faithful,
+// unlike TypeID (where the model is `()` and every value would compare equal) and
+// unlike OpState (a handle mapped to printed content).  They are nevertheless
+// LEFT OUT of this slot: no site in the two gating TUs compares two AffineExprs,
+// and `operator==(int64_t)` (AffineExpr.h:79) is a DIFFERENT, non-structural
+// overload -- it asks "is this the constant v" -- so keying the handle form
+// without it would leave a near-identical spelling silently taking the wrong
+// body.  Both are a separate row with its own evidence.
+class AffineExpr {
+public:
+  AffineExpr();
+};
+
+// t84 -- `mlir::OpAsmParser::UnresolvedOperand`, mlir/IR/OpImplementation.h:1567:
+//     struct UnresolvedOperand { SMLoc location; StringRef name; unsigned number; };
+// A PARSER-SIDE TOKEN: the three fields are the source location and the textual
+// name (`%42`, `%abc#12`) of a use before it has been resolved to a `Value`.
+// ⭐ OPAQUE UNIT, and here the corpus really does only STORE AND FORWARD them --
+// every one of the eleven carrying files has the same two-line shape:
+//     llvm::SmallVector<OpAsmParser::UnresolvedOperand, N> ops;   // declared
+//     parser.parseOperandList(ops, ...)                          // filled
+//     parser.resolveOperands(ops, type, loc, result.operands)     // consumed
+// (KTDFLoweringOps.cpp:56-61,99-103; TraceOps.cpp:66-107; also SentientOps,
+// KtdpOps, Agen, DataflowOps, VectorChain, Symbol, Uniform, KTDFOps, DdlOps.)
+// NO field is ever read, no element is ever indexed, and no `.size()` is taken --
+// I checked, because `Vec<()>` still has a LENGTH and that is the only property a
+// unit element would preserve.  `mlir::OpAsmParser` itself has NO model, so
+// `parseOperandList`/`resolveOperands` stay unmapped and every call through them
+// still fails LOUDLY -- the t40 `mlir::Pass` / t43 `mlir::OpOperand` precedent:
+// map the type so the CONTAINER becomes expressible, map no member.
+// ⭐ ON `==`/`!=`: they MUST BE LEFT OUT, and in this case C++ declares NEITHER
+// (there is no `operator==` on UnresolvedOperand anywhere in OpImplementation.h).
+// Mapping one would be the t72 TypeID error in its purest form -- against a `()`
+// model every token would compare equal, so two distinct `%a`/`%b` uses would
+// read as the same operand.  Nothing here maps one.
+// ⛔ WHAT IS LOST: `location`, `name` and `number` are unreachable.  That is the
+// deliberate content of the decision, not an oversight -- the moment a TU reads
+// one of them, this key must be replaced by a real three-field struct rather than
+// extended, and the read will fail loudly (unmapped member) rather than silently.
+class OpAsmParser {
+public:
+  struct UnresolvedOperand {
+    UnresolvedOperand();
+  };
+};
+
+} // namespace mlir
+
+using t83 = mlir::AffineExpr;
+using t84 = mlir::OpAsmParser::UnresolvedOperand;
+
+// f61/f62 -- THE CONSTRUCTORS FOR t83/t84.  A type key without one is rc=0 then
+// `E0433: cannot find module or crate mlir_AffineExpr`, measured eight times in
+// this tree; the `-verbose` tell is `search expr void T::T(), result: None`.
+// Both are the 0-ary form, which is the only form either type has that a
+// translated program can write (`constexpr AffineExpr() {}` at AffineExpr.h:73;
+// UnresolvedOperand is an aggregate whose implicit default constructor is what
+// `SmallVector::resize`/value-init reaches).
+mlir::AffineExpr f61() { return mlir::AffineExpr(); }
+mlir::OpAsmParser::UnresolvedOperand f62() {
+  return mlir::OpAsmParser::UnresolvedOperand();
+}

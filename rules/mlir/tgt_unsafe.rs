@@ -1265,3 +1265,39 @@ unsafe fn f59<T1>(a0: &mut Vec<T1>, a1: Vec<T1>) {
 unsafe fn f60<T1: Clone>(a0: &Vec<T1>) -> Vec<T1> {
     a0.clone()
 }
+
+// t83 -- `mlir::AffineExpr` -> `dataflowir_gen::ir::AffineExpr` (ir.rs:124), the
+// real affine tree the .td model already carries.  FORCED by t8: `ir::AffineMap`
+// (ir.rs:315) has `results: Vec<AffineExpr>`, so no other representation types.
+// THE `init` IS A SENTINEL NO REAL VALUE CAN EQUAL, exactly as t4/t5/t6 are.
+// C++ `AffineExpr()` leaves `expr == nullptr` and null-testing is a live idiom
+// (`explicit operator bool()`, `operator!`, AffineExpr.h:81-83); the enum has no
+// null variant and `Default` is deliberately NOT derived on it.  `Symbol(u32::MAX)`
+// is the null: a symbol POSITION indexes an AffineMap's symbol list, so u32::MAX is
+// unreachable for any expression a real map can hold.  NOT `Constant(..)` -- every
+// i64 is a legitimate affine constant, so a constant sentinel would COLLIDE with
+// data, which is the mistake the `Attr::Unit` note at the top of this file refuses.
+unsafe fn t83() -> dataflowir_gen::ir::AffineExpr {
+    dataflowir_gen::ir::AffineExpr::Symbol(u32::MAX)
+}
+
+// f61 -- the default constructor for t83.  Byte-identical to t83's `init` on
+// purpose: they describe the same value by two routes (the type's `init` and the
+// expression a written `AffineExpr e;` becomes), the same way f12 mirrors t8.
+unsafe fn f61() -> dataflowir_gen::ir::AffineExpr {
+    dataflowir_gen::ir::AffineExpr::Symbol(u32::MAX)
+}
+
+// t84 -- `mlir::OpAsmParser::UnresolvedOperand` -> `()`.  An opaque unit for a
+// parser token the corpus only ever stores in a SmallVector and forwards to
+// `parseOperandList`/`resolveOperands`, neither of which has a model.  Its three
+// fields are unreachable BY DESIGN -- see src.cpp -- and no `==` exists to lie with.
+unsafe fn t84() -> () {
+    ()
+}
+
+// f62 -- the default constructor for t84; the unit, per t84.  0-ary, so there is
+// no argument whose evaluation could be dropped (the f52 DominanceInfo hazard).
+unsafe fn f62() -> () {
+    ()
+}
