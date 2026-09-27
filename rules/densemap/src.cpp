@@ -1,0 +1,84 @@
+// Copyright (c) 2022-present INESC-ID.
+// Distributed under the MIT license that can be found in the LICENSE file.
+
+// llvm::DenseMap<K, V> / llvm::DenseSet<K> -- LLVM's open-addressing hash
+// containers.
+//
+// MODEL
+//   llvm::DenseMap<K, V> -> HashMap<K, V>
+//   llvm::DenseSet<K>    -> HashSet<K>
+//
+// WHY THE DECLARATIONS ARE RESTATED AND NOT #included: same reason as
+// rules/smallvector, rules/support, rules/stringref and rules/twine --
+// cpp-rule-preprocessor compiles this file with a fixed flag set and the only
+// flags that would reach LLVM's headers are absolute -I paths into whatever
+// LLVM tree the target project happens to have built.
+//
+// ARITY -- MEASURED, and it is NOT what the diagnostic prints.  The converter's
+// unsupported-type diagnostic renders the FULL four-argument spelling:
+//   `llvm::DenseMap<mlir::Attribute, unsigned long,
+//                   llvm::DenseMapInfo<mlir::Attribute, void>,
+//                   llvm::detail::DenseMapPair<mlir::Attribute, unsigned long>>`
+// but that is a DIFFERENT printer from the one `search()` uses.  With -verbose
+// the actual lookup is:
+//   search type llvm::DenseMap<mlir::Attribute, unsigned long>, result: None
+//   search type llvm::DenseSet<mlir::Operation *>, result: None
+// i.e. SuppressDefaultTemplateArgs elides the defaulted KeyInfoT/BucketT, so the
+// key has TWO parameters for DenseMap and ONE for DenseSet.  A four-argument key
+// is a DEAD rule: it matches nothing.  (An earlier revision of this module was
+// written to the diagnostic's spelling and was measured to move neither TU.)
+//
+// A pleasant consequence: because the traits and bucket parameters are NOT part
+// of the key, a GENERIC rule here does not force the converter to find rules for
+// `llvm::DenseMapInfo<K, void>` or `llvm::detail::DenseMapPair<K, V>` -- the
+// generic-rule regression that bites when a defaulted argument survives into the
+// key does not apply.  Measured: the generic two-arg form matches the concrete
+// `<mlir::Attribute, unsigned long>` instantiation.
+//
+// DenseMapInfo IS A TRAITS CLASS AND IS DELIBERATELY NOT MODELLED.  Its
+// getEmptyKey / getTombstoneKey / getHashValue are implementation details of the
+// open-addressing table (the sentinel keys that mark empty and deleted
+// buckets).  HashMap has no analogue -- it brings its own hasher and has no
+// caller-visible sentinels -- so inventing values for them would be silently
+// wrong.  Mapping DenseMap to HashMap is what makes them unreachable, and that
+// was CHECKED: neither TU searches for any DenseMapInfo member after this
+// module loads.
+//
+// NOT COVERED, deliberately: the operation surface (find/lookup/count/
+// try_emplace/erase/begin/end and the iterator's ==/!=/++/deref).  Those
+// methods live on the CRTP base `llvm::DenseMapBase<DerivedT, K, V, KeyInfoT,
+// BucketT>`, whose key therefore carries FIVE template arguments, the first of
+// which is the derived DenseMap itself.  Adding them requires harvesting each
+// overload's exact base-class key with `-verbose`, which the two measured rows
+// do not yet reach, and a guessed key records a DEAD rule.  The two measured
+// first-abort rows are TYPE failures ("unsupported system type has no rule"),
+// so the type rules are what those rows need; the operations are the next
+// blocker.
+
+namespace llvm {
+
+template <typename KeyT, typename ValueT> struct DenseMapInfo;
+
+namespace detail {
+template <typename KeyT, typename ValueT> struct DenseMapPair;
+} // namespace detail
+
+template <typename KeyT, typename ValueT,
+          typename KeyInfoT = DenseMapInfo<KeyT, void>,
+          typename BucketT = detail::DenseMapPair<KeyT, ValueT>>
+class DenseMap {
+public:
+  DenseMap();
+};
+
+template <typename ValueT, typename ValueInfoT = DenseMapInfo<ValueT, void>>
+class DenseSet {
+public:
+  DenseSet();
+};
+
+} // namespace llvm
+
+template <typename T1, typename T2> using t1 = llvm::DenseMap<T1, T2>;
+
+template <typename T1> using t2 = llvm::DenseSet<T1>;
