@@ -25,11 +25,21 @@ std::string TranspileSrc(std::string_view cc_code, Model model,
   auto end_flags = getPlatformClangEndFlags();
   tool_args.insert(tool_args.end(), end_flags.begin(), end_flags.end());
 
+  // The in-memory TU must keep the real path of the file it was read from:
+  // a quoted #include is resolved relative to the *including file's*
+  // directory, so passing a bare basename makes clang believe the TU lives in
+  // the process CWD and every sibling header becomes invisible.
+  // Redefine __FILE__ to just the basename (as TranspileDir does) so the
+  // generated code still does not contain system-specific absolute paths.
+  auto basename = std::filesystem::path(filename).filename().string();
+  tool_args.push_back("-Wno-builtin-macro-redefined");
+  tool_args.push_back("-D__FILE__=\"" + basename + "\"");
+
   std::string rs_code;
   clang::tooling::runToolOnCodeWithArgs(
       std::make_unique<FrontendAction>(rs_code, model, /*first=*/true,
                                        rules_dir),
-      cc_code, tool_args, std::filesystem::path(filename).filename().string(),
+      cc_code, tool_args, std::string(filename),
       filename.ends_with(".c") ? CLANG_C_COMPILER : CLANG_CXX_COMPILER);
   Converter::EmitOpaqueRecords(rs_code);
   Converter::EmitVirtualMethods(rs_code);
