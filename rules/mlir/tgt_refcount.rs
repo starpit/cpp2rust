@@ -772,3 +772,43 @@ fn t64() -> () {
     ()
 }
 
+// t65 `mlir::OpBuilder::Listener` -> AN OPAQUE UNIT.  87 TUs -- the BIGGEST row
+//   left in this module.  MLIR's insertion-callback interface (the
+//   `notifyOperationInserted` / `notifyBlockInserted` virtuals an OpBuilder calls
+//   as it mutates IR).  `dataflowir-gen` BUILDS NO IR: it models PRINTED
+//   DataflowIR, so there is no insertion to be notified of and no callback
+//   registry to map onto.  Same ground as t40 (`Pass`) and t64 (`PassManager`).
+//   Reached ONLY while lowering a signature (`Listener *listener`), measured: 0
+//   of 4229 rule lookups on an aborting TU mention it.  NO member mapped -- a
+//   real hook invocation still aborts loudly.  Body is `()`.
+fn t65() -> () {
+    ()
+}
+
+// t66 `mlir::detail::PassOptions::Option<int>` -> AN OPAQUE UNIT.  59 TUs.  A
+//   command-line-backed pass option (`llvm::cl::opt<int>` + MLIR's `OptionBase`).
+//   ⛔ NOT `i32`: the value comes from argv parsing inside `llvm::cl`, which this
+//   port does not translate, so an `i32` would be a DEFAULT-INITIALISED ZERO
+//   silently standing in for whatever the user passed -- the silently-wrong
+//   class the playbook ranks below an abort.  `getValue()` and friends are
+//   absent, so any READ aborts.  Body is `()`.
+fn t66() -> () {
+    ()
+}
+
+// t67 `mlir::detail::PassOptions::ListOption<std::string>` -> AN OPAQUE UNIT.
+//   59 TUs, 8 occurrences in the measurement set.  The comma-separated list form.
+//   ⛔ NOT `Vec<String>`: an EMPTY vec is not a neutral stand-in for an unparsed
+//   option list -- a loop over it runs ZERO iterations and the TU silently does
+//   nothing.  No iteration or indexing mapped.  Body is `()`.
+fn t67() -> () {
+    ()
+}
+
+// t68 `mlir::detail::PassOptions::ListOption<int>` -> AN OPAQUE UNIT.  59 TUs, 12
+//   occurrences -- the largest single count in the measurement set.  A SECOND
+//   INSTANTIATION of t67's template, keyed separately because the key carries the
+//   concrete argument.  Identical model, identical refusal.  Body is `()`.
+fn t68() -> () {
+    ()
+}

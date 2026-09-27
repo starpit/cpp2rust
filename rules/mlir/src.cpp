@@ -41,6 +41,10 @@
 // For `std::unique_ptr` / `std::default_delete`, which appear inside the
 // fully-spelled `RegionRange` range-base key below.
 #include <memory>
+// For `std::string`, which appears inside the ListOption key (t67).  The key
+// printer renders it `std::string`, not `std::__1::basic_string<...>`: verified,
+// 55 recorded keys across the published IR tree spell it that way.
+#include <string>
 
 namespace mlir {
 
@@ -670,6 +674,46 @@ struct OperationState {};
 // same refusal-to-model that t40 (`mlir::Pass`) already made.
 class PassManager {};
 
+// ---------------------------------------------------------------------------
+// PASS 2026-09-27 (second rules/mlir slot): the four rows c39aaa6 left out.
+// Declared ONLY so the key can be SPELLED; each is argued at its `using tN =`.
+// ---------------------------------------------------------------------------
+// `mlir::OpBuilder::Listener` -- Builders.h:285:10, `struct Listener : public
+// ListenerBase`.  ⭐ IT IS NESTED INSIDE `class OpBuilder`, NOT in a namespace,
+// so `OpBuilder` must be declared COMPLETE here purely to hold it.  OpBuilder
+// itself is NOT mapped (no `using tN =` names it) -- a previous slot landed
+// `IROperandBase` in `llvm::detail` by reopening the wrong `detail`, and this is
+// the same hazard one level down: get the ENCLOSER wrong and the key is dead.
+class OpBuilder {
+public:
+  struct Listener {};
+};
+
+namespace detail {
+// `mlir::detail::PassOptions::Option` / `::ListOption` -- PassOptions.h:192:9 and
+// :239:9.  ⭐ THE TEMPLATES ARE DECLARED WITH ONE PARAMETER, NOT TWO, AND THAT IS
+// DELIBERATE.  The real MLIR declarations are
+//     template <typename DataType, typename OptionParser = OptionParser<DataType>>
+// and the converter prints the row TWO WAYS: the canonicalised `from decl` form
+// KEEPS the defaulted argument (`Option<int, llvm::cl::parser<int>>`) while the
+// `searched as:` form -- the ONLY one a rule key is looked up by -- ELIDES it
+// (`Option<int>`).  That is the sugar-vs-canonical axis that has already burned
+// this project (see the DenseMapInfo note in the common brief).  Declaring ONE
+// parameter here makes it IMPOSSIBLE for the recorded key to carry the defaulted
+// argument, so the key cannot silently drift to the dead canonical spelling; it
+// does not need the default to exist, and so does not need `llvm::cl::parser`
+// declared at all.  Verified by reading all four keys back out of ir_src.json.
+// NO MEMBER IS DECLARED: `getValue()`, `operator=`, the `llvm::cl::opt` /
+// `llvm::cl::list` bases and the `OptionBase` virtuals are all absent.
+class PassOptions {
+public:
+  template <typename DataType>
+  class Option {};
+  template <typename DataType>
+  class ListOption {};
+};
+} // namespace detail
+
 } // namespace mlir
 
 // ---- type rules, and nothing else ----------------------------------------
@@ -987,6 +1031,83 @@ using t63 = mlir::OperationState;
 // mapped, all still abort loudly.  This rule buys the TYPE and nothing else.
 using t64 = mlir::PassManager;
 
+// ---------------------------------------------------------------------------
+// PASS 2026-09-27 (second slot): the four rows the note below used to list as
+// LEFT OUT.  Both reasons it gave were MEASUREMENT ERRORS, now corrected:
+//   * `OpBuilder::Listener` is NOT "one row in one TU" -- it is 87 TUs.  The
+//     "1" came from an exact-spelling grep; `cat survey-v4/*.tsv | grep -F
+//     'mlir::OpBuilder::Listener'` returns 87 lines.  It is the BIGGEST
+//     unclaimed row in this module.
+//   * `PassOptions::Option<int>` is NOT zero.  A grep for `Option<int>` finds
+//     nothing because the survey records the CANONICALISED `from decl` form
+//     WITH the defaulted template argument KEPT.
+// ⭐ ALL FOUR KEYS BELOW ARE THE `searched as:` SPELLING, TAKEN VERBATIM FROM THE
+// CONVERTER'S OWN unmapped-type DIAGNOSTIC, which prints both sides:
+//     `... rule key: searched as: mlir::detail::PassOptions::Option<int>;
+//      from decl (NOT a key -- canonicalised, defaulted args kept):
+//      mlir::detail::PassOptions::Option<int, llvm::cl::parser<int>>`
+// The left side is the key; the right side is a DEAD key that LOOKS like
+// coverage.  See the declarations above for why the templates are declared with
+// ONE parameter so the dead spelling is unreachable.
+//
+// GATE FOR ALL FOUR -- MEASURED, not argued.  On an aborting TU
+// (Transform/Sentient/ToggleReordering.cpp), `grep -c 'search expr'` = 4229 rule
+// lookups, of which the number mentioning `OpBuilder::Listener` or `PassOptions`
+// is ZERO.  The raw mentions of those names in the log are ALL clang AST-dump
+// lines (`ParmVarDecl '::mlir::OperationState &'`, `CXXMethodDecl build`) --
+// DECLARATIONS being lowered, never EXPRESSIONS being looked up, which matches
+// the survey's own context column (every site is a member or parameter type in
+// an MLIR header).  So `pm.addPass(...)`, `option.getValue()`,
+// `listener->notifyOperationInserted(...)` DO NOT OCCUR in this corpus, and an
+// OPAQUE unit with NO MEMBER MAPPED is honest for all four.
+// ⛔ NOT ONE MEMBER IS MAPPED, deliberately: an unmapped member ABORTS LOUDLY,
+// and that abort is the ENFORCEMENT that makes the opaque claim TRUE rather than
+// merely convenient.  If a TU ever does read one of these, it stops, loudly.
+
+// t65: `mlir::OpBuilder::Listener` -> AN OPAQUE UNIT.  87 TUs, 4 occurrences in
+// the 4-TU measurement set, single site `Builders.h:285:10` reached while the
+// converter lowers `mlir::sentient::IfOp::getThenBodyBuilder`'s SIGNATURE (the
+// `Listener *listener` parameter).  MLIR's INSERTION-CALLBACK INTERFACE: a set
+// of `notifyOperationInserted` / `notifyBlockInserted` virtuals an OpBuilder
+// calls as it mutates IR.  ⛔ WHY OPAQUE: `dataflowir-gen` BUILDS NO IR -- it
+// models printed DataflowIR, so there is no insertion to be notified OF, and no
+// callback registry to map this onto (`grep -rn Listener` over
+// `dataflowir-gen/src` = 0).  Same ground as t40 (`Pass`) and t64
+// (`PassManager`): the pass/builder INFRASTRUCTURE is exactly what this port
+// does not reproduce.  ⛔ COST: every virtual is absent, so a TU that actually
+// implements or invokes a listener hook still aborts.
+using t65 = mlir::OpBuilder::Listener;
+
+// t66: `mlir::detail::PassOptions::Option<int>` -> AN OPAQUE UNIT.  59 TUs, 4
+// occurrences, site `PassOptions.h:192:9`, reached while lowering `DCC::getModule`
+// -- i.e. a pass's OPTION MEMBER declaration, not a read of it.  A
+// command-line-backed pass option: an `llvm::cl::opt<int>` plus MLIR's
+// `OptionBase` bookkeeping.  ⛔ WHY OPAQUE: this is COMMAND-LINE PLUMBING.  Its
+// value comes from argv parsing inside `llvm::cl`, which this port does not
+// translate at all, so there is no value to model -- mapping it to `i32` would
+// invent a DEFAULT-INITIALISED ZERO and silently substitute it for whatever the
+// user passed on the command line.  That is the silently-wrong outcome the
+// playbook ranks worse than an abort.  ⛔ COST: `getValue()`, `operator=`,
+// `operator int`, `hasValue()` -- none mapped, all abort loudly.
+using t66 = mlir::detail::PassOptions::Option<int>;
+
+// t67: `mlir::detail::PassOptions::ListOption<std::string>` -> AN OPAQUE UNIT.
+// 59 TUs, 8 occurrences (2 per TU), site `PassOptions.h:239:9`, same
+// `DCC::getModule` declaration context.  The comma-separated LIST form, backed by
+// `llvm::cl::list<std::string>`.  ⛔ Same refusal as t66, and the list form makes
+// it sharper: an empty `Vec<String>` is not a neutral stand-in for an unparsed
+// option list -- a loop over it would run ZERO iterations and the TU would
+// silently do nothing.  ⛔ COST: `begin()`/`end()`, `size()`, `operator[]`,
+// `operator=` -- none mapped.
+using t67 = mlir::detail::PassOptions::ListOption<std::string>;
+
+// t68: `mlir::detail::PassOptions::ListOption<int>` -> AN OPAQUE UNIT.  59 TUs,
+// 12 occurrences (3 per TU -- the largest single count in the measurement set),
+// same site and same context as t67.  Identical model, identical refusal; it is a
+// SECOND INSTANTIATION of one template and is keyed separately because the key
+// carries the concrete argument.  ⛔ Same absent members.
+using t68 = mlir::detail::PassOptions::ListOption<int>;
+
 // ---- WHAT THIS PASS DELIBERATELY LEFT OUT, and why -------------------------
 // * `mlir::IndexType::get(mlir::MLIRContext *)`, the ONE factory the verbose logs
 //   show in expression position (see t60).  NOT ADDED, because its only honest
@@ -997,18 +1118,16 @@ using t64 = mlir::PassManager;
 //   per-overload parameter form read off `-verbose` for the specific call, which
 //   this slot did not have time to measure.  LEFT OUT rather than guessed; it
 //   aborts loudly, which is the correct state.
-// * `mlir::OpBuilder::Listener` -- CONFIRMED LIVE, but only ONE row in ONE of 403
-//   TUs (`mlir::sentient::IfOp::getThenBodyBuilder`, Builders.h:285:10), below
-//   this module's >=4-TU bar.
-// * `mlir::detail::PassOptions::ListOption<T, llvm::cl::parser<T>>` -- CONFIRMED
-//   LIVE, in THREE concrete instantiations (`int`, `long`, `std::string`; the
-//   mangled fallback names are `mlir_detail_PassOptions_ListOption_int__llvm_cl_
-//   parser_int__` and friends, plus a `mlir_Pass_ListOption_long_...` spelling
-//   under a DIFFERENT enclosing class).  NOT ADDED: the key carries a DEFAULTED
-//   template argument (`llvm::cl::parser<T>`), which is precisely the
-//   sugar-vs-canonical axis that has burned this project, and the two enclosing
-//   spellings mean at least four keys.  Needs a `-verbose` reading per
-//   instantiation, which this slot did not have time for.
+// * `mlir::OpBuilder::Listener` and the PassOptions family were listed here as
+//   left out; BOTH ENTRIES WERE WRONG and are now DONE as t65-t68 above -- see
+//   there for the corrected counts (87 TUs, not 1) and for the `searched as:`
+//   spellings.
+// * `mlir::detail::PassOptions::ListOption<long>`, and any `mlir::Pass::ListOption
+//   <...>` spelling under a DIFFERENT enclosing class.  NOT ADDED: neither
+//   appears in the 4-TU measurement set this slot could read a `searched as:`
+//   line off, and the whole point of t65-t68 is that the spelling must be READ,
+//   never inferred from a sibling.  A key in the wrong spelling is a DEAD key
+//   that LOOKS like coverage, so these wait for a slot that can measure them.
 
 
 
