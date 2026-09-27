@@ -32,6 +32,9 @@
 //     returning `LogicalResult&` would have to be `&mut bool`; no site in the
 //     corpus needs it (`LogicalResult r = success();` is initialisation).
 
+#include <optional>
+#include <utility>
+
 namespace llvm {
 
 // llvm/Support/LogicalResult.h:25
@@ -86,10 +89,47 @@ bool operator==(const hash_code &lhs, const hash_code &rhs);
 bool operator!=(const hash_code &lhs, const hash_code &rhs);
 unsigned long hash_value(const hash_code &code);
 
+// llvm/Support/LogicalResult.h:74 --
+//   template <typename T> class [[nodiscard]] FailureOr : public std::optional<T>
+// It PUBLICLY DERIVES FROM std::optional<T> and adds no data member of its own,
+// which is the whole reason the model below is `Option<T1>` and not
+// `Result<T1, ()>`: every reader the corpus uses (`operator*`, `operator->`,
+// `value()`, `value_or`) is INHERITED and keys against
+// `std::optional<T1>::...`, which rules/optional already maps onto `Option<T1>`
+// (its t1/t2/t3 all target `Option<T1>`).  A `Result` model would type-mismatch
+// every one of those inherited keys.
+//
+// The two `FailureOr`-specific members ARE mapped, because without them the
+// abort just moves one call along:
+//   * the LogicalResult constructor -- `return failure();` in a
+//     FailureOr-returning function goes through it, and the class ASSERTS
+//     `failed(Result)`, so `None` is the faithful body, not a lost branch;
+//   * `operator LogicalResult() const { return success(has_value()); }` -- this
+//     is how `succeeded(fo)`/`failed(fo)` work at all, since those free
+//     functions take a LogicalResult by value.  It is t1, i.e. `bool`, so the
+//     body is `is_some()`.
+// `succeeded`/`failed`/`success`/`failure` themselves are ALREADY modelled here
+// as f1-f8, so the failure monad is complete rather than half-mapped.
+//
+// NOT restated: the private `using std::optional<T>::operator bool;` /
+// `has_value;` hiding (a rule cannot call an inaccessible member anyway) and
+// the converting `FailureOr(const FailureOr<U> &)` template (no corpus site
+// converts between two different payload types).
+template <typename T> class FailureOr : public std::optional<T> {
+public:
+  FailureOr();
+  FailureOr(LogicalResult Result);
+  FailureOr(T &&Y);
+  FailureOr(const T &Y);
+  FailureOr(const FailureOr<T> &Other);
+  operator LogicalResult() const;
+};
+
 } // namespace llvm
 
 using t1 = llvm::LogicalResult;
 using t2 = llvm::hash_code;
+template <typename T1> using t3 = llvm::FailureOr<T1>;
 
 // --- LogicalResult ---------------------------------------------------------
 
@@ -128,3 +168,42 @@ bool f13(const llvm::hash_code &a0, const llvm::hash_code &a1) {
 unsigned long f14(const llvm::hash_code &a0) { return llvm::hash_value(a0); }
 
 llvm::hash_code f15(llvm::hash_code a0) { return llvm::hash_code(a0); }
+
+// --- FailureOr -------------------------------------------------------------
+
+template <typename T1> llvm::FailureOr<T1> f16() { return llvm::FailureOr<T1>(); }
+
+template <typename T1> llvm::FailureOr<T1> f17(llvm::LogicalResult a0) {
+  return llvm::FailureOr<T1>(a0);
+}
+
+template <typename T1> llvm::FailureOr<T1> f18(T1 &&a0) {
+  return llvm::FailureOr<T1>(std::move(a0));
+}
+
+template <typename T1> llvm::FailureOr<T1> f19(const T1 &a0) {
+  return llvm::FailureOr<T1>(a0);
+}
+
+template <typename T1>
+llvm::FailureOr<T1> f20(const llvm::FailureOr<T1> &a0) {
+  return llvm::FailureOr<T1>(a0);
+}
+
+template <typename T1>
+llvm::LogicalResult f21(const llvm::FailureOr<T1> &a0) {
+  return a0.operator llvm::LogicalResult();
+}
+
+// MEASURED, 2026-09-27: restating FailureOr WITHOUT the std::optional base and
+// keying `operator*`/`operator->`/`value()` directly on `llvm::FailureOr<T1>`
+// RECORDS SIX LIVE KEYS THAT CAN NEVER MATCH.  The rule file only fixes the
+// SPELLING of a key; the converter reads the REAL llvm/Support/LogicalResult.h,
+// where those members are declared by std::optional, so every reader keys as
+// `std::optional<T1>::...` no matter what this file says.  The base must stay.
+//
+// What DID move the probe is directly below: the refcount model of FailureOr has
+// to be the SAME Rust type rules/optional gives std::optional, i.e.
+// `Option<Value<T1>>`, not `Option<T1>`.  Otherwise the derived-to-base
+// conversion is between two DIFFERENT Rust types and rustc reports
+// `non-primitive cast: Option<i64> as Option<Rc<RefCell<i64>>>`.
