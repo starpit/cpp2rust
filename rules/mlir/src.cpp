@@ -228,6 +228,36 @@ class RegionRange {};
 // `getAttributeNames()` still aborts loudly rather than lying.
 class OperationName {};
 
+// mlir/include/mlir/IR/OpDefinition.h:272 -- `class OpFoldResult : public
+// PointerUnion<Attribute, Value>`.  THE RESULT OF FOLDING: either a constant
+// `Attribute` or an existing SSA `Value`, never both and never a third thing.
+//
+// WHY IT IS THE HIGHEST-VALUE TYPE LEFT IN THIS MODULE.  It is not reached
+// directly; it is reached as the ELEMENT of a container.  Once rules/smallvector
+// maps the SmallVector CRTP family, the mapper RECURSES into the element type of
+// `llvm::SmallVector<mlir::OpFoldResult, _>` (every `getMixed*` accessor ODS
+// generates for an op with `$static_sizes`/`$dynamic_sizes` returns one), and an
+// element with no model is NOT a countable mangled name -- it is a hard
+// `mapper.cpp:722` abort that emits nothing.  Measured: with rules/smallvector
+// published into pin/ir, the reference TU (KTDF/Utils/Utils.cpp) goes rc=134 with
+// zero lines emitted, on exactly this type.
+//
+// ⛔ IT IS A UNION AND THE MODEL MUST BE A SUM.  Mapping it to `ir::Attr` alone
+// or `ir::Value` alone would compile and would be silently wrong: folding really
+// does return both, so either collapse makes half of all fold results read as the
+// wrong kind, and no probe distinguishes them.  See tgt_unsafe.rs' t28 for the
+// representation actually used and the note that this rule INTRODUCES it -- the
+// crate has no OpFoldResult type (`grep -rnE 'OpFoldResult' dataflowir-gen/src`
+// = 0 hits), but both ALTERNATIVES are already modelled here (t6 Attribute ->
+// ir::Attr, t4 Value -> ir::Value), so the sum is built out of existing models
+// rather than invented.
+//
+// NO MEMBER IS MAPPED, deliberately: `is<Attribute>()`, `get<Value>()`,
+// `dyn_cast` and `PointerUnion`'s conversions all stay absent, so a TU that
+// INSPECTS a fold result still aborts loudly instead of guessing a discriminant.
+// This rule is only about making the CONTAINER mappable.
+class OpFoldResult {};
+
 // ---------------------------------------------------------------------------
 // TYPES ADDED FROM THE `--mangle-unmapped` TRIAGE PASS (commit bac7590) over
 // dataflow-scheduler/lib/Dialect/KTDF/Utils/Utils.cpp, plus the first-abort
@@ -373,6 +403,7 @@ using t24 = mlir::OpResult;
 using t25 = mlir::OpState;
 using t26 = mlir::detail::DenseArrayAttrImpl<long>;
 using t27 = mlir::scf::ForOp;
+using t28 = mlir::OpFoldResult;
 
 // ---- the two operator rules ----------------------------------------------
 // The member `==` on mlir::Attribute.  Spelled `.operator==(...)` rather than

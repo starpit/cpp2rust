@@ -454,3 +454,15 @@ fn t27() -> dataflowir_gen::fmt::OpInst {
 //   correct rule is the fully-spelled 5-argument instantiation (it needs local
 //   restatements of `llvm::PointerUnion` and `std::unique_ptr`), which is worth
 //   doing but is not a guess I will commit blind.
+
+// t28 `mlir::OpFoldResult` -> `Result<ir::Attr, ir::Value>`, the SUM of the two
+// alternatives `PointerUnion<Attribute, Value>` holds.  IDENTICAL to the unsafe
+// target because both alternatives are VALUE types in this model, so no pointer
+// representation appears.  tgt_unsafe.rs' t28 comment carries the full
+// justification: the crate models nothing for OpFoldResult, this rule INTRODUCES
+// the sum out of t6's and t4's existing models, and collapsing it to one
+// alternative would be silently wrong.  `init` is the null union, carried as the
+// same `Attr::Raw("")` null-handle sentinel the other Attr rules use.
+fn t28() -> ::std::result::Result<dataflowir_gen::ir::Attr, dataflowir_gen::ir::Value> {
+    ::std::result::Result::Ok(dataflowir_gen::ir::Attr::Raw(::std::string::String::new()))
+}

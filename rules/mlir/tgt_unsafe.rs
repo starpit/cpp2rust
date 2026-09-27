@@ -464,3 +464,53 @@ fn t27() -> dataflowir_gen::fmt::OpInst {
 //   correct rule is the fully-spelled 5-argument instantiation (it needs local
 //   restatements of `llvm::PointerUnion` and `std::unique_ptr`), which is worth
 //   doing but is not a guess I will commit blind.
+
+// ---------------------------------------------------------------------------
+// t28 `mlir::OpFoldResult` -- THE ONE TYPE IN THIS FILE WHOSE REPRESENTATION IS
+// NOT A CRATE TYPE, AND THIS COMMENT IS THE DISCLOSURE.
+//
+// What the C++ is: `class OpFoldResult : public PointerUnion<Attribute, Value>`
+// (mlir/IR/OpDefinition.h:272) -- the result of folding, EITHER a constant
+// attribute OR an SSA value.  A two-alternative tagged union, nothing else.
+//
+// WHAT THE CRATE MODELS FOR IT: NOTHING.  `grep -rnE 'OpFoldResult' \
+// dataflowir-gen/src` returns zero hits, and that is expected -- the crate models
+// what DataflowIR PRINTS, and a fold result is a transient of the folder, never
+// printed.  So unlike every other `tN` here I could not point at a generated row.
+//
+// WHAT I DID INSTEAD, and why it is not an invention: both ALTERNATIVES already
+// have models in this module -- t6 `mlir::Attribute` -> `ir::Attr` and t4
+// `mlir::Value` -> `ir::Value`.  The faithful shape is therefore the SUM of two
+// existing models, and `Result<A, B>` is std's two-variant sum, used here purely
+// structurally: `Ok` = the constant-attribute alternative, `Err` = the SSA-value
+// alternative.  No error semantics are implied by `Err`; it is the second variant
+// and nothing more.
+//
+// ⛔ WHY NOT `ir::Attr` ALONE (or `ir::Value` alone).  It would compile, keep the
+// TU at rc=0, and be SILENTLY WRONG: `OpFoldResult` genuinely carries both kinds
+// (`getMixedSourceSizes()` returns a static size as an `IntegerAttr` and a
+// dynamic one as the `Value` that computes it, in one list), so a collapse makes
+// half the elements the wrong kind with nothing to observe the difference.  The
+// union has to stay a union.
+//
+// ⚠ WHY NOT A NAMED `ir::OpFoldResult` ENUM.  That is the nicer spelling and it
+// is the recommended follow-up, but it means editing
+// `dataflowir-gen/src/ir.rs`, which is outside this module and shared: the sweep
+// driver `verif/sweep/chk.sh` REFUSES to measure when a crate source file is
+// newer than the prebuilt rlib, so adding the enum would have broken every other
+// agent's in-flight measurement.  `Result<Attr, Value>` is the same two-variant
+// sum with no cross-repo edit, so it was preferred for this pass.
+//
+// THE `init` is the NULL UNION.  `OpFoldResult()` leaves the PointerUnion null;
+// that is represented as the FIRST variant holding the SAME null-Attribute
+// sentinel t6/t7/t10-t12/t20 already use, `Attr::Raw("")`, which is unreachable
+// as a real attribute spelling.  Choosing the `Ok` side for null is a
+// representation choice, not a claim that null is an attribute -- a null fold
+// result is what a failed fold returns and this corpus never inspects one.
+//
+// NO MEMBER IS MAPPED: `is<T>()`, `get<T>()`, `dyn_cast<T>()` and PointerUnion's
+// conversions are all absent on purpose, so any TU that actually DISCRIMINATES a
+// fold result aborts loudly instead of getting a guessed variant.
+fn t28() -> ::std::result::Result<dataflowir_gen::ir::Attr, dataflowir_gen::ir::Value> {
+    ::std::result::Result::Ok(dataflowir_gen::ir::Attr::Raw(::std::string::String::new()))
+}
