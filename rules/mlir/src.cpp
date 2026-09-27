@@ -639,7 +639,36 @@ namespace detail {
 // mapper.  It appears only in ODS-generated op-definition machinery, where the
 // spelling must be nameable and nothing calls through it.
 class InterfaceMap {};
+
+// `mlir::detail::IROperandBase` -- mlir/IR/UseDefLists.h:35.  The UNTYPED BASE of
+// the use edge; `mlir::OpOperand` derives from it.  Its single corpus site is
+// `visitLinksImpl`.
+class IROperandBase {};
 } // namespace detail
+
+
+// ---------------------------------------------------------------------------
+// PASS 2026-09-27 (rules/mlir slot): six handle rows, 500+ summed occurrences.
+// Each is declared here ONLY so its key can be spelled; the model is argued at
+// its `using tN =` below.
+// ---------------------------------------------------------------------------
+// `mlir::Builder` is declared INCOMPLETE on purpose, because that is EXACTLY how
+// the corpus reaches it: all 102 TUs resolve to ONE site, the bare forward
+// declaration `class Builder;` at mlir/IR/AffineMap.h:37:7, reached while the
+// converter emits an AffineMap signature.  No TU names Builder itself.
+class Builder;
+
+// `mlir::ModuleOp` -- BuiltinOps.h.inc:199, reached as the RETURN type of
+// `runOnOperation`.  An OP HANDLE (a pointer-sized wrapper over Operation*).
+class ModuleOp {};
+
+// `mlir::OperationState` -- OperationSupport.h:948, a `struct`.  MLIR's mutable
+// construction bag handed to `Operation::create`.
+struct OperationState {};
+
+// `mlir::PassManager` -- Pass/PassManager.h:232.  See t62 for why this is the
+// same refusal-to-model that t40 (`mlir::Pass`) already made.
+class PassManager {};
 
 } // namespace mlir
 
@@ -853,6 +882,134 @@ using t57 = mlir::DenseIntElementsAttr;
 // t58: `mlir::detail::InterfaceMap` -> AN OPAQUE UNIT.  See the class
 // declaration for the full reasoning and the zero-hit grep of the crate.
 using t58 = mlir::detail::InterfaceMap;
+
+// ---------------------------------------------------------------------------
+// t59-t64: THE SIX ROWS ADDED 2026-09-27.  Keys read off `searched as:` in the
+// survey diagnostic, NOT off the canonicalised `from decl` spelling (trap 1).
+// ---------------------------------------------------------------------------
+
+// t59: `mlir::Builder` -> AN OPAQUE UNIT.  102 TUs, the largest single row left
+// in this module.  ⭐ THE OPAQUE GATE IS CLEARED BY MEASUREMENT, not by
+// reasoning.  The worry was that a survey records only RECOVERABLE gaps, so a
+// method call on Builder could be hiding behind an rc=134 abort.  Cleared with
+// `-verbose ... 2>&1 | grep -A1 'search expr'` on the two TUs that REACH the
+// site (WriteSetScan.cpp, 62,440 log lines, 726 AffineMap mentions;
+// SplitDFIROutput.cpp, 69,039 lines, 494 AffineMap mentions -- the third TU
+// tried, StageCoarsening/Materializer.cpp, aborted at mapper.cpp:1191 with ZERO
+// AffineMap mentions and is therefore NOT a valid gate TU):
+//     `search expr` lines mentioning Builder, summed over all three logs: 0
+// while the same grep finds 124 for IndexType.  So the converter NEVER searches
+// for a rule on any Builder method or expression -- it needs the TYPE and
+// nothing else.  The 645/754 raw "Builder" hits in those logs are AST-dump and
+// signature text (`::mlir::OpBuilder &` parameters), not rule lookups.
+// ⛔ THE COST, STATED: no member is mapped, so `builder.getIndexType()`,
+// `getContext()`, `getI32IntegerAttr(...)` -- every real call through a Builder
+// -- still ABORTS LOUDLY in the mapper rather than compiling and lying.  A
+// Builder is a FACTORY over an MLIRContext, and t23 already maps that context to
+// the same opaque unit for the same reason: `dataflowir-gen` models printed IR
+// DATA and has no builder/uniquer infrastructure to map behaviour onto.
+using t59 = mlir::Builder;
+
+// t60: `mlir::IndexType` -> `dataflowir_gen::ir::Ty` (ir.rs:37).  101 TUs.
+// A WIDENING, the same one t41 (`ShapedType`) and t42 (`TensorType`) make: every
+// `IndexType` IS an `mlir::Type` and t5 already maps `mlir::Type -> ir::Ty`.
+// ⭐ BETTER GROUNDED THAN t41/t42 IN ONE RESPECT: `ir::Ty` has a REAL `Index`
+// variant (ir.rs:39, printing `index`), so the crate can represent this type
+// exactly -- nothing lands in `Ty::Opaque(spelling)` the way a tensor does.
+// The site is the CHEAPEST kind: a RETURN type
+// (`mlir::agen::...::getMulticastInfoType`, BuiltinTypes.h.inc:958).
+// ⛔ WHAT THE `init` IS AND WHY.  `Ty::Opaque("")` -- t5's EMPTY-SPELLING NULL
+// SENTINEL, which no real MLIR type can print as -- NOT `Ty::Index`.  A
+// default-constructed `mlir::IndexType` is a NULL handle, and returning
+// `Ty::Index` would claim a live index type where C++ has none.  The whole
+// t5/t41/t42 family uses this sentinel; disagreeing here would make
+// `IndexType t;` and `Type t;` compare unequal.
+// ⛔ AND THE ONE THING THIS ROW DOES NOT BUY, measured: unlike the five other
+// rows in this pass, IndexType IS reached in EXPRESSION position.  The verbose
+// logs show exactly ONE real lookup on it,
+//     mlir::IndexType mlir::IndexType::get(mlir::MLIRContext *)
+// (the other 123 hits are IndexType appearing inside OTHER keys' signatures --
+// `OneTypedResult<mlir::IndexType>::Impl`, `TypedValue<mlir::IndexType>`, both
+// already covered by t30).  That FACTORY IS DELIBERATELY NOT MAPPED HERE: see
+// the note at the end of this block for why, and it still aborts loudly.
+using t60 = mlir::IndexType;
+
+// t61: `mlir::ModuleOp` -> AN OPAQUE UNIT.  83 TUs.  Reached as a RETURN type
+// (`runOnOperation`, BuiltinOps.h.inc:199).  Gate cleared the same way as t59:
+// `search expr` hits mentioning ModuleOp across the three verbose logs = 0.
+// ⛔ `fmt::OpInst` (fmt.rs:391) WAS CHECKED AND REFUSED as the target.  An
+// `OpInst` carries a `def` that is "a row of the GENERATED `TD_OPS` table, so an
+// `OpInst` cannot name an op the table does not contain" (fmt.rs:388) -- and
+// `builtin.module` is an MLIR BUILTIN, not a DataflowIR op, so it has no TD_OPS
+// row.  Mapping ModuleOp to OpInst would require naming an op the generated
+// table cannot spell.  t40 (`Pass`) / t43 (`OpOperand`) precedent applies.
+// ⛔ NO EQUALITY IS ADDED for this or any op handle, on purpose.  Two distinct
+// handles to ONE operation must compare EQUAL, and two handles to two ops that
+// happen to print identically must compare UNEQUAL -- mapping a handle onto a
+// printed-content type inverts exactly that, which is a DIFFERENT RELATION.
+// ⛔ COST: no member mapped, so `getBody()`, `walk()`, `getOps<...>()` abort.
+using t61 = mlir::ModuleOp;
+
+// t62: `mlir::detail::IROperandBase` -> AN OPAQUE UNIT.  92 TUs, single site
+// `visitLinksImpl` via mlir/IR/UseDefLists.h.  ⭐ THIS IS NOT A NEW JUDGEMENT:
+// it is the UNTYPED BASE of `mlir::OpOperand`, the same USE-EDGE family, and
+// t43's refusal to map that as `ir::Value` STANDS.  t43's opaque mapping is now
+// EVIDENCE rather than reasoning -- it took its row to 0 across 5 TUs with
+// nothing reading through it.  An IROperandBase records "slot N of some op uses
+// some value"; `grep -rn IROperandBase dataflowir-gen/src` has nothing to map it
+// to, and calling it a Value would CONFLATE a use with the value used.
+// ⛔ COST: `getOwner()`, `getNextOperandUsingThisValue()`, the whole link
+// walk -- none mapped, all still abort loudly.
+using t62 = mlir::detail::IROperandBase;
+
+// t63: `mlir::OperationState` -> AN OPAQUE UNIT.  87 TUs (CONFIRMED LIVE this
+// slot -- the handover listed it as unconfirmed; 87 of 403 survey-v3 TSVs carry
+// the row, first site `mlir::sentient::SyncOp::build`).  Gate cleared: 0
+// `search expr` hits across the three verbose logs.  MLIR's MUTABLE
+// CONSTRUCTION BAG (name, location, operands, result types, attributes,
+// regions) filled by a generated `build()` and consumed by `Operation::create`.
+// ⛔ WHY OPAQUE AND NOT `fmt::OpInst`: an OpInst is a BUILT op bound to a TD_OPS
+// row, whereas an OperationState is the half-filled argument pack on the way in,
+// and the generated `build()` methods that fill it are exactly the code this
+// port does not reproduce.  The unit is not a claim the bag is empty -- it is a
+// claim this port never READS one, enforced by there being NO member rule, so
+// every `state.addOperands(...)`/`addTypes(...)` still ABORTS LOUDLY.
+using t63 = mlir::OperationState;
+
+// t64: `mlir::PassManager` -> AN OPAQUE UNIT.  59 TUs (also CONFIRMED LIVE this
+// slot, first site `mlir::init::SymLocOp::getAttributeNameForIndex`).  Gate
+// cleared: 0 `search expr` hits across the three verbose logs.  ⭐ t40's comment
+// on `mlir::Pass` ALREADY ARGUES THIS ROW: "the crate models DataflowIR's DATA
+// ...; it models no PASS INFRASTRUCTURE at all -- THERE IS NO PassManager, no
+// pipeline, no runOnOperation in `dataflowir-gen`".  This is that same sentence
+// applied to the type it names, so it is the same refusal, not a new one.
+// ⛔ COST: `pm.addPass(...)`, `pm.run(module)`, `nest<...>()` -- no member is
+// mapped, all still abort loudly.  This rule buys the TYPE and nothing else.
+using t64 = mlir::PassManager;
+
+// ---- WHAT THIS PASS DELIBERATELY LEFT OUT, and why -------------------------
+// * `mlir::IndexType::get(mlir::MLIRContext *)`, the ONE factory the verbose logs
+//   show in expression position (see t60).  NOT ADDED, because its only honest
+//   body is `ir::Ty::Index` -- a body that IGNORES `a0`.  A rule body is INLINED
+//   as ONE EXPRESSION at the call site, so dropping `a0` DROPS THE EVALUATION of
+//   whatever expression the caller wrote for the context (commonly a call such as
+//   `op.getContext()`), changing C++ evaluation.  Getting that right needs the
+//   per-overload parameter form read off `-verbose` for the specific call, which
+//   this slot did not have time to measure.  LEFT OUT rather than guessed; it
+//   aborts loudly, which is the correct state.
+// * `mlir::OpBuilder::Listener` -- CONFIRMED LIVE, but only ONE row in ONE of 403
+//   TUs (`mlir::sentient::IfOp::getThenBodyBuilder`, Builders.h:285:10), below
+//   this module's >=4-TU bar.
+// * `mlir::detail::PassOptions::ListOption<T, llvm::cl::parser<T>>` -- CONFIRMED
+//   LIVE, in THREE concrete instantiations (`int`, `long`, `std::string`; the
+//   mangled fallback names are `mlir_detail_PassOptions_ListOption_int__llvm_cl_
+//   parser_int__` and friends, plus a `mlir_Pass_ListOption_long_...` spelling
+//   under a DIFFERENT enclosing class).  NOT ADDED: the key carries a DEFAULTED
+//   template argument (`llvm::cl::parser<T>`), which is precisely the
+//   sugar-vs-canonical axis that has burned this project, and the two enclosing
+//   spellings mean at least four keys.  Needs a `-verbose` reading per
+//   instantiation, which this slot did not have time for.
+
 
 
 // ---- the two operator rules ----------------------------------------------

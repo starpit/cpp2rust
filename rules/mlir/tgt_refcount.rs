@@ -714,3 +714,61 @@ fn t57() -> dataflowir_gen::ir::Attr {
 fn t58() -> () {
     ()
 }
+
+// t59 `mlir::Builder` -> AN OPAQUE UNIT.  102 TUs, the biggest row in the module.
+//   THE GATE IS CLEARED BY MEASUREMENT: `grep -A1 'search expr'` over the two
+//   verbose logs that REACH the site found ZERO lookups on any Builder member
+//   (the same grep finds 124 for IndexType), so the converter needs only the
+//   TYPE.  See src.cpp for the log line counts.  NO member is mapped, so every
+//   real call through a Builder still aborts loudly.  The body is `()`, not
+//   empty: `fn t59() -> () {}` panics at syntactic.rs:591.
+fn t59() -> () {
+    ()
+}
+
+// t60 `mlir::IndexType` -> `ir::Ty` (ir.rs:37).  A WIDENING, the same one t41 and
+//   t42 make.  The `init` is t5's EMPTY-SPELLING NULL SENTINEL, NOT `Ty::Index`:
+//   a default-constructed IndexType is a NULL handle and claiming `Ty::Index`
+//   would assert a live index type where C++ has none.  `Ty::Index` (ir.rs:39)
+//   IS the value a real one carries, which is why this row is better grounded
+//   than t41/t42 -- nothing lands in `Ty::Opaque(spelling)`.  NO accessor and
+//   NOT the `IndexType::get(MLIRContext*)` factory are mapped; see src.cpp.
+fn t60() -> dataflowir_gen::ir::Ty {
+    dataflowir_gen::ir::Ty::Opaque(::std::string::String::new())
+}
+
+// t61 `mlir::ModuleOp` -> AN OPAQUE UNIT.  `fmt::OpInst` was CHECKED AND REFUSED:
+//   an OpInst's `def` must be a row of the GENERATED TD_OPS table (fmt.rs:388)
+//   and `builtin.module` is an MLIR builtin with no such row.  NO EQUALITY is
+//   added for this or any op handle -- mapping a handle onto a printed-content
+//   type would make two handles to ONE op, and two handles to two
+//   identically-printing ops, compare the wrong way round.  Body is `()`.
+fn t61() -> () {
+    ()
+}
+
+// t62 `mlir::detail::IROperandBase` -> AN OPAQUE UNIT.  The UNTYPED BASE of the
+//   use edge; `OpOperand` derives from it, so t43's refusal to map the use edge
+//   as `ir::Value` applies unchanged and is now backed by t43 taking its row to
+//   0 across 5 TUs.  NO member mapped; the link walk still aborts.  Body `()`.
+fn t62() -> () {
+    ()
+}
+
+// t63 `mlir::OperationState` -> AN OPAQUE UNIT.  MLIR's construction bag, filled
+//   by a generated `build()` and consumed by `Operation::create` -- neither of
+//   which this port reproduces.  The unit claims this port never READS one, and
+//   that claim is ENFORCED: no member is mapped, so `addOperands`/`addTypes`
+//   abort loudly.  Body `()`.
+fn t63() -> () {
+    ()
+}
+
+// t64 `mlir::PassManager` -> AN OPAQUE UNIT.  t40's comment on `mlir::Pass`
+//   already states the ground: `dataflowir-gen` has NO PassManager, no pipeline,
+//   no runOnOperation to map behaviour onto.  Same refusal, same cost -- no
+//   member mapped, `addPass`/`run` abort loudly.  Body `()`.
+fn t64() -> () {
+    ()
+}
+
