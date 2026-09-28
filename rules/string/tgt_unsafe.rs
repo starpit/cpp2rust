@@ -10,7 +10,8 @@ fn t2() -> *mut libc::c_char {
 }
 
 unsafe fn f1(a0: Vec<libc::c_char>, a1: usize, a2: usize) -> Vec<libc::c_char> {
-    let mut __tmp1 = a0[(a1) as usize..::std::cmp::min((a1 + a2) as usize, a0.len() - 1)].to_vec();
+    let mut __tmp1 =
+        a0[(a1) as usize..::std::cmp::min((a1.saturating_add(a2)) as usize, a0.len() - 1)].to_vec();
     __tmp1.push(0);
     __tmp1
 }
