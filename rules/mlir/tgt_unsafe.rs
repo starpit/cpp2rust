@@ -3403,3 +3403,31 @@ unsafe fn f600(a0: &bool) -> bool {
 unsafe fn f601(a0: &i32) -> i32 {
     *a0
 }
+
+
+// t720 `mlir::DialectRegistry` -> AN OPAQUE UNIT, the t58/t59/t72 model.
+//   122 open queue rows, 13 emitted sites, ALL of them the parameter type of a
+//   generated pass base's `getDependentDialects` override.  The target has no
+//   registry, no MLIRContext and no dynamic dialect loading, so there is no model
+//   type to widen to -- see src.cpp for the census and the argument.
+//   The body is `()`, not empty: an empty body panics at syntactic.rs:591 (t59).
+fn t720() -> () {
+    ()
+}
+
+// f620 -- `void mlir::DialectRegistry::insert()` -> A NO-OP, 13 sites.
+//   ⭐ THE HALF THAT MAKES t720 LEGITIMATE.  `insert` is the ONLY member the corpus
+//   ever reads on a registry (census pattern C = `13 insert`, nothing else), so with
+//   this key the row leaves NOTHING silently textual behind it.  Without it, t720
+//   would be the `OperationState -> ()` bargain: 13 loud placeholders traded for 13
+//   silent calls to a method `()` does not have.
+//   ⭐ THE NO-OP IS EXACT, NOT LOSSY.  `registry.insert<XDialect>()` records a
+//   dialect ALLOCATOR so an MLIRContext can load the dialect before the pass runs;
+//   it never touches the IR.  Here every op is a compiled-in Rust type, always
+//   available, so there is nothing to register.
+//   ⭐ `a0` IS NAMED ZERO TIMES, which is f124's established shape (`a0: &()`,
+//   dropped, probe-confirmed reached).  The receiver is a bare ParmVarDecl
+//   DeclRefExpr at all 13 sites, so dropping it drops no side effect.
+unsafe fn f620(a0: &mut ()) {
+    ()
+}

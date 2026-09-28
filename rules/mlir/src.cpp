@@ -7257,3 +7257,93 @@ using t701 = llvm::cl::initializer<int>;
 // The body names the parameter EXACTLY ONCE and calls nothing but `cl::init`.
 llvm::cl::initializer<bool> f600(const bool &v) { return llvm::cl::init(v); }
 llvm::cl::initializer<int> f601(const int &v) { return llvm::cl::init(v); }
+
+
+// ===========================================================================
+// t720 / f620 -- `mlir::DialectRegistry`: 122 OPEN QUEUE ROWS, 13 EMITTED SITES.
+// (queue over-attributes ~9x; the row is real, the site count is 13.)
+//
+// ⭐ THE CENSUS, FROM BOTH READS, RECONCILED ACROSS FOUR PATTERNS
+// (corpus = /home/agent/work/fresh36/out, v35, 58 bucket-A `.rs`):
+//   * TYPE sites: 13, in 12 files, and EVERY ONE of them is the same construct --
+//     the PARAMETER TYPE of a generated pass base's `getDependentDialects`
+//     override:
+//       `unsafe fn getDependentDialects(&self, registry: *mut Cpp2RustUnmapped_mlir_DialectRegistry)`
+//     7 of the 13 have an EMPTY body; 6 files (13 calls) have bodies.
+//   * MEMBER sites: `insert` is THE ONLY MEMBER THE CORPUS EVER READS on a
+//     registry.  `'registry[)]? *\. *[A-Za-z_0-9]+'` over all 58 files ->
+//     `13 insert`, NOTHING ELSE.  No `appendTo`, no `getDialectNames`, no
+//     `applyExtensions`.
+//   ⛔ THE FOUR PATTERNS DISAGREE AND THIS IS WHY ALL FOUR ARE MANDATORY:
+//     - receiver-anchored `'[A-Za-z_0-9]\. *insert *[(]'`  -> 9   (NONE of them ours)
+//     - paren-receiver    `'[)] *\. *insert *[(]'`          -> 14  (13 ours + 1)
+//     - `'registry *\. *insert'`                            -> **0**  <-- the emitter
+//       writes `(*registry).insert()`, so the dot follows `)` and a receiver-anchored
+//       grep reads ZERO where the truth is 13.
+//     - bare `insert` -> 279 lines / `insert[A-Za-z]*` split -> 1088 `insertData`,
+//       344 `insert`, 343 `insertBeta`, 343 `insertAlpha`, ... i.e. the bare token is
+//       dominated ~8x by LONGER names and the arity-0 registry form is 13 of the 344.
+//
+// ⭐ THE KEYS ARE TAKEN FROM `searched as:` / `result: None`, NOT from the header.
+// Witness `dataflow-scheduler/lib/Conversion/frontend/KTIRToScheduleIR/KTIRLegalityCheck.cpp`,
+// `--verbose`, CONVERTER_RC=0 (echoed from inside), 89,697 log lines, grep -A1:
+//     search type mlir::DialectRegistry &, result: None
+//     search type mlir::DialectRegistry, result: None
+//     ... rule key: searched as: mlir::DialectRegistry; from decl (NOT a key --
+//         canonicalised, defaulted args kept): mlir::DialectRegistry at
+//         .../include/mlir/Interfaces/CastInterfaces.h:20:7
+//     search expr void mlir::DialectRegistry::insert(), result:
+//     None
+//
+// ⭐⭐ THE DECISIVE FACT: THE RECORDER ERASES THE TEMPLATE ARGUMENT LIST ENTIRELY.
+// The C++ the corpus writes is `registry.insert<scheduler::KTDFDialect>()` -- a
+// VARIADIC MEMBER TEMPLATE whose only payload is its template argument -- and the
+// recorded key is `void mlir::DialectRegistry::insert()`: arity 0, NO template
+// arguments, IDENTICAL for every dialect.  So ONE key covers all 13 sites and no
+// per-dialect key is possible (nor needed).  That is also why the emitted corpus
+// already shows `(*registry).insert()` with the dialect GONE -- the member is
+// unmapped and therefore emitted TEXTUALLY at rc=0, which is the
+// `unmapped-MEMBERS-do-not-abort` class.
+//
+// ⭐ WHY A BARE TYPE KEY WOULD HAVE BEEN REFUSED, AND WHY THIS IS NOT ONE.
+// A member IS read here, so `DialectRegistry -> ()` ALONE is the `OperationState ->
+// ()` bargain: it would delete 13 loud placeholders and leave 13 silent calls to a
+// method `()` does not have.  That is a pure diagnosability regression and it is
+// what got `simple_ilist` refused twice.  This row is landed ONLY because the
+// member is also modelled, and modelled EXACTLY:
+//   * In MLIR, `DialectRegistry` is a LOADING table.  `insert<XDialect>()` records
+//     an allocator so an `MLIRContext` can instantiate the dialect on demand, and
+//     `getDependentDialects` is a hint the PassManager consumes BEFORE the pass runs.
+//     Neither has any effect on the IR the pass then builds.
+//   * The target has NO registry, NO `MLIRContext` and NO dynamic dialect loading:
+//     `dataflowir_gen::ir` is one monolithic IR and every op is a compiled-in Rust
+//     type, always available.  `grep -ri 'dialect|registry'` over
+//     `dataflowir-gen/src/*.rs` finds only `AsmPrinter`'s `default_dialect` STRING
+//     STACK (asm.rs:110-241) -- a printing concern, not a registry -- and nothing in
+//     `libcc2rs/src/`.  There is no model method to name and therefore nothing is
+//     being deferred to the `dataflowir-gen` slot.
+//   ⭐ So "register dialect X" has target semantics NOTHING.  f620 is a no-op
+//     because the no-op is EXACT, not because the payload was dropped: the erased
+//     template argument names information the target does not consume.
+//
+// ⛔ WHAT IS DELIBERATELY NOT KEYED: no `appendTo`, no `getDialectNames`, no
+// `applyExtensions`, no constructor.  The corpus never names them (census pattern C
+// = `13 insert`, nothing else), so keys for them would be dead by construction and
+// would ALSO silently absorb a future site that does need a real model.  Any member
+// other than arity-0 `insert` still lands in the unmapped-member path and stays
+// visible.
+// ⛔ AND THE ARITY-0 SPELLING CANNOT COLLIDE.  This is the `NOperands<N>::Impl`
+// worry and it does not apply: `NOperands`'s four arity-erased spellings were left
+// out because erasure destroyed the value the target had to COMPUTE.  Here the
+// return type is `void` and the target computes nothing, so the erased key is
+// total.  Both verbose asks are arity-0 and the corpus has no other registry
+// overload, so no real-argument `insert` is shadowed.
+// ===========================================================================
+namespace mlir {
+class DialectRegistry {
+public:
+  void insert();
+};
+} // namespace mlir
+using t720 = mlir::DialectRegistry;
+void f620(mlir::DialectRegistry &a0) { return a0.insert(); }
