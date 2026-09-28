@@ -122,3 +122,19 @@ template <typename T1, typename T2, typename T3, typename T4>
 std::tuple<T1 &, T2 &, T3 &, T4 &> f9(T1 &a0, T2 &a1, T3 &a2, T4 &a3) {
   return std::tie(a0, a1, a2, a3);
 }
+
+// ARITY 1: `std::tuple<X>` -- 7 queue rows (g2925-g2930, g2935), every one an
+// MLIR attribute-storage `getAsKey()` returning a ONE-element tuple
+// (`std::tuple<DdlDummy>`, `std::tuple<unsigned int>`, ...).  t1..t5 cover
+// arities 2/3/4/5/27 and NONE of them matches a 1-element tuple, which is why
+// those rows abort with `system type has no rule: std::tuple<X>`.
+// WHY A 1-ARY KEY IS SAFE HERE, unlike the 2-ary `std::tie` key this module
+// deliberately refuses: `GetTypeMapKey` strips at `<` and `matchTemplate` scans
+// to the final depth-0 `>`, so a SHORT src can swallow a LONGER instantiation --
+// but `search()`'s longer-src tie-break (mapper.cpp:433-437) means this src can
+// only ever win where nothing longer matches.  For any arity >= 2, `t1`
+// (`std::tuple<T1, T2>`) is strictly longer and is already a candidate by the
+// very same mechanism, so it wins; and if `matchTemplate` does NOT in fact
+// swallow commas, then this src cannot match an arity >= 2 instantiation either.
+// Either way this key is confined to arity 1 and changes no existing outcome.
+template <typename T1> using t6 = std::tuple<T1>;

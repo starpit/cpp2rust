@@ -83,3 +83,9 @@ fn f8<T1, T2, T3>(a0: *mut T1, a1: *mut T2, a2: *mut T3) -> (*mut T1, *mut T2, *
 fn f9<T1, T2, T3, T4>(a0: *mut T1, a1: *mut T2, a2: *mut T3, a3: *mut T4) -> (*mut T1, *mut T2, *mut T3, *mut T4) {
     (a0, a1, a2, a3)
 }
+
+// arity-1 tuple: Rust's 1-tuple is `(T1,)` -- the trailing comma is load-bearing,
+// `(T1)` is just T1 in parentheses and would silently erase the tuple.
+fn t6<T1: Default>() -> (T1,) {
+    Default::default()
+}
