@@ -1527,6 +1527,29 @@ fn f125() -> dataflowir_gen::fmt::OpInst {
     )
 }
 
+// t158 -- `mlir::affine::AffineForOp` -> `fmt::OpInst`.  An ordinary ODS-generated op
+// class (`::mlir::Op<AffineForOp, ...>`), i.e. one `Operation *` through its OpState
+// base, so this is t25's representation and t152/t157's immediate precedent.  The model
+// for this op is HAND-WRITTEN rather than `.td`-derived: `custom.rs:10,47,68` registers
+// the printer `affine_for(op: &OpInst, ctx: &PrintCtx)` for `("affine","for")`, citing
+// MLIR's `AffineForOp::print`.
+//
+// ⛔ t25's PROHIBITION APPLIES UNCHANGED: no `operator==`, no `operator!=`, no identity
+// test is mapped, and none may be added without a handle-identity model.  NO MEMBER and
+// NO CONSTRUCTOR is mapped either -- nothing in the four gating TUs default-constructs
+// one, and every read (`hasConstantBounds`, `getConstantUpperBound`, `getInductionVar`,
+// `getBody`, `getStepAsInt`, `AffineForOp::create`) still aborts loudly in the mapper
+// rather than returning a plausible lie.  See src.cpp at t158 for both greps.
+//
+// The `init` is t25's/t152's/t157's, and for their reason: a default-constructed ODS op
+// handle is the NULL handle, `fmt::OpInst` has no null, and this expression exists only
+// to type-check the type key.
+fn t158() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // f126-f128 -- the free `llvm::raw_ostream <<` family.  See src.cpp for the three
 // searched spellings, the 20-site ceiling, and the FOUR refusals of this family

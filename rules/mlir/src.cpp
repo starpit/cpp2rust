@@ -2698,6 +2698,21 @@ class CallOp {};
 class FuncOp {};
 } // namespace func
 
+namespace affine {
+// mlir/Dialect/Affine/IR/AffineOps.h.inc -- `class AffineForOp : public ::mlir::Op<
+// AffineForOp, ...>`, an ORDINARY ODS-GENERATED OP CLASS exactly like func::CallOp and
+// func::FuncOp above, i.e. one `Operation *` through its OpState base.  Declared here
+// ONLY so t158's key can be spelled; the model is argued at `using t158 =`, including
+// why the concept comes from `dataflowir-gen/src/custom.rs` rather than from a `.td`
+// (the Affine dialect's include dir is absent from this toolchain).
+//
+// SAME MIS-SERVICE CHECK AS CallOp/FuncOp, re-run rather than assumed: `grep -n
+// 'OpState::' src.cpp` still keys no OpState member, so no existing key can serve an
+// inherited member call on an AffineForOp receiver.  No member and no constructor are
+// keyed, so every corpus read stays LOUD -- see t158 for the enumerated sites.
+class AffineForOp {};
+} // namespace affine
+
 namespace linalg {
 // mlir/Dialect/Linalg/IR/LinalgInterfaces.h.inc:477 --
 // `class LinalgOp : public ::mlir::OpInterface<LinalgOp,
@@ -2784,6 +2799,81 @@ using t157 = mlir::func::FuncOp;
 // A default-constructed ODS op handle is the NULL handle and `fmt::OpInst` has no
 // null, so the target is t152/f121's unreachable placeholder and says so there.
 mlir::func::FuncOp f125() { return mlir::func::FuncOp(); }
+
+// ---------------------------------------------------------------------------
+// t158 -- `mlir::affine::AffineForOp`.  Arity 0, so no `\b\d+\b` normalization and
+// no last-placeholder swallow hazard.  ⭐ FIRST-ABORT for FOUR n=150 census rows --
+// the only repeat offender in the `unsupported unmapped type` tail (4 of 49):
+//     LLVM ERROR: unsupported unmapped type `mlir::affine::AffineForOp` has no model
+//     in types_, while mapping
+//       `std::map<const dsc2::BlockNode *, mlir::affine::AffineForOp>`
+//         dsc-based-utils/DSC2ToDataflowIR/V3/SNTransferLowering.cpp
+//         dsc-based-utils/DSC2ToDataflowIR/V3/SNComputeLowering.cpp
+//         dsc-based-utils/DSC2ToDataflowIR/V3/SNControlFlowLowering.cpp
+//     and `llvm::SmallVector<mlir::affine::AffineForOp>`
+//         dbo/src/Transforms/sdsc_bundle/LoopUnroll.cpp:76
+// Every row aborts on the BARE type: `std::map` and `llvm::SmallVector` are already
+// modelled, so the mapper RECURSES into the ELEMENT and the element is the whole gap
+// -- t151/t157's situation exactly, and the key spelled here is the bare type taken
+// verbatim from the abort text, not the container.
+//
+// THE MODEL, CHECKED RATHER THAN ASSUMED.  `$LLVM_ROOT/include/mlir/Dialect/Affine/IR/`
+// is ABSENT here, so no `.td` describes this op and the concept does NOT come from the
+// dataflowir-gen `.td` parser.  It comes from the HAND-WRITTEN custom-printer table:
+// `cpp2rust-port/dataflowir-gen/src/custom.rs:10,47,68` registers the op
+// `("affine","for")` with its own printer `affine_for(op, ctx)`, citing MLIR's
+// `mlir/lib/Dialect/Affine/IR/AffineOps.cpp::AffineForOp::print`.  Its parameter type
+// is `&OpInst` (`src/fmt.rs:391  pub struct OpInst`).  So the model's notion of an
+// `affine.for` IS an `OpInst`, and NO `repos/dt_src` edit is needed or permitted --
+// this stays on the sanctioned side of the do-not-port-MLIR boundary, the same side
+// t83/t85/t154 sit on.
+//
+// REPRESENTATION.  `AffineForOp` is an ORDINARY ODS-GENERATED OP CLASS
+// (`::mlir::Op<AffineForOp, ...>`), i.e. one `Operation *` through its `OpState` base,
+// so this is t25's representation and t152/t157's immediate precedent: widen to
+// `dataflowir_gen::fmt::OpInst`.  ⛔ t25's PROHIBITION APPLIES UNCHANGED: no `==`,
+// no `!=`, no identity test -- a C++ op handle compares `Operation *` while an
+// `OpInst` is an op's printed CONTENT (the g045 refusal).
+//
+// ⛔ NO CONSTRUCTOR KEY, AND THAT IS CHECKED, NOT ASSUMED -- check (1) of the two this
+// row was held back on.  `grep -nE '(affine::)?AffineForOp[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*(;|=|\()'`
+// over all four gating TUs is ZERO HITS.  Nothing default-constructs one: every value
+// comes from `llvm::dyn_cast<...>(loop)`, from the static factory
+// `mlir::affine::AffineForOp::create(builder, ...)`, or from a function parameter
+// (`performFullUnroll(affine::AffineForOp for_op, ...)` LoopUnroll.cpp:135,144,174).
+// `SmallVector<affine::AffineForOp> affine_loops;` (LoopUnroll.cpp:76) and
+// `std::map<const dsc2::BlockNode *, AffineForOp>` construct no ELEMENT.  So an `fN`
+// here would be a key nobody reaches -- exactly the dead-key trap that retracted four
+// `mlir::Location` follow-ons -- and it is deliberately absent.  t151/t153/t27 are the
+// precedent (all committed without a constructor); t152/f121 and t157/f125 needed one
+// only because a TU really writes `func::CallOp found;` / `func::FuncOp curr_func_;`.
+//
+// ⛔ NO MEMBER IS KEYED, AND THE MIS-SERVICE HAZARD WAS RE-CHECKED -- check (2).  The
+// four TUs DO reach members, so this matters:
+//   `affine_for.affine::AffineForOp::hasConstantBounds()`      SNControlFlowLowering.cpp:807
+//   `affine_for.affine::AffineForOp::getConstantUpperBound()`  :808
+//   `affine_for.affine::AffineForOp::getInductionVar()`        :809
+//   `dyn_cast<AffineForOp>(loop).getBody()`                    :780,:788,:847,:882
+//   `for_loop.getRegionIterArgs()`                             :742
+//   `synthetic_root.getBody(0)`                                :1199
+//   `for_op.getOperation()`, `.getLowerBound()`, `.getUpperBound()`, `.getStep()`,
+//   `.hasConstantBounds()`, `.getConstantLowerBound()`,
+//   `.getConstantUpperBound()`, `.getStepAsInt()`  LoopUnroll.cpp:110,120,151,153,155,175,177,178,179
+//   `mlir::affine::AffineForOp::create(...)`  a STATIC member on AffineForOp itself,
+//                                            SNTransferLowering.cpp:776,1444 and
+//                                            SNControlFlowLowering.cpp:777,785,844,879,1170,1196
+// None of those is keyed, and none CAN be mis-served: a key on a DERIVED class cannot
+// relocate an INHERITED member (measured on `llvm::FailureOr`: six keys FOUND, all six
+// DEAD), and the reverse direction is closed too because `grep -n 'OpState::' src.cpp`
+// keys NO OpState member at all (its only two hits are the two comment lines that cite
+// this very grep, at t152 and t157).  So EVERY corpus read stays LOUD in the mapper
+// rather than returning a plausible lie -- the `OpAsmParser::Argument` test.  The
+// EXPECTED consequence, stated up front: these four TUs' first abort MOVES to one of
+// those member calls; it does not clear.  That is the intended outcome, not a failure.
+//
+// No destructor exists (neither `Op` nor `OpState` declares one, and there is no
+// `~AffineForOp`), so the handle model is permitted -- the OwningOpRef test.
+using t158 = mlir::affine::AffineForOp;
 
 // ---------------------------------------------------------------------------
 // PASS 2026-09-28: the `mlir::Location` row, keyed against the model that landed
