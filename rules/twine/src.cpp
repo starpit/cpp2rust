@@ -185,6 +185,14 @@ public:
   Twine(const std::string &Str);
   // llvm/ADT/Twine.h:288 -- /*implicit*/ Twine(StringRef Str)
   Twine(StringRef Str);
+  // llvm/ADT/Twine.h:348 -- explicit Twine(int Val)
+  explicit Twine(int Val);
+  // The COPY constructor.  LLVM does not declare it (Twine is trivially
+  // copyable, so it is implicit), and it is restated here only because a rule
+  // matches on a signature STRING and the implicit one is spelled exactly
+  // `void llvm::Twine::Twine(const llvm::Twine &)` -- which is the spelling the
+  // converter searches for and, before f10, did not find.
+  Twine(const Twine &Other);
   // llvm/ADT/Twine.h:434 -- LLVM_ABI std::string str() const
   std::string str() const;
 };
@@ -219,3 +227,24 @@ llvm::Twine f6(llvm::StringRef s) { return llvm::Twine(s); }
 llvm::Twine f7(const char *a, llvm::StringRef b) {
   return llvm::operator+(a, b);
 }
+
+// f8/f10 -- READ BACK OFF THE CONVERTER, NOT GUESSED (2026-09-28, binary
+// pin/cpp2rust md5 f192371f1134d83f63b2bf997e7745cf + pin/ir.v18):
+//     search expr void llvm::Twine::Twine(int), result:
+//     None
+//     search expr void llvm::Twine::Twine(const llvm::Twine &), result:
+//     None
+// while `Twine(const char *)` and `operator+(const Twine &, const Twine &)`
+// both report `Matching:` on the same run.  Without these two keys the
+// fallback emits a call to `llvm_Twine::new_<N>` -- a function defined
+// NOWHERE -- and the run still exits rc=0 with no placeholder token
+// (66 such sites corpus-wide, FABRICATED-NEWN.md §2).
+//
+// `Twine(char)` is ALSO `None` on that run and is deliberately NOT keyed here:
+// the two models disagree on the Rust type a bare C++ `char` parameter takes
+// (u8 vs libc::c_char) and I had no budget to read that back, so guessing it
+// would be a signature guess of exactly the kind this file's optional sibling
+// documents as a budget sink.
+llvm::Twine f8(int v) { return llvm::Twine(v); }
+
+llvm::Twine f10(const llvm::Twine &t) { return llvm::Twine(t); }

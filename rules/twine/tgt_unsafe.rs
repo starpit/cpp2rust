@@ -58,3 +58,20 @@ unsafe fn f7(a0: *const libc::c_char, a1: Vec<libc::c_char>) -> Vec<libc::c_char
         .chain(a1.iter().copied())
         .collect::<Vec<libc::c_char>>()
 }
+
+// f8 -- `Twine(int)`; see tgt_refcount.rs.  Only the byte type differs.
+unsafe fn f8(a0: i32) -> Vec<libc::c_char> {
+    let mut __s: Vec<libc::c_char> = a0
+        .to_string()
+        .into_bytes()
+        .into_iter()
+        .map(|b| b as libc::c_char)
+        .collect();
+    __s.push(0);
+    __s
+}
+
+// f10 -- the copy constructor.
+unsafe fn f10(a0: Vec<libc::c_char>) -> Vec<libc::c_char> {
+    a0.clone()
+}

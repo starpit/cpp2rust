@@ -53,3 +53,18 @@ fn f7(a0: Ptr<u8>, a1: Vec<u8>) -> Vec<u8> {
         .chain(a1.into_iter())
         .collect::<Vec<u8>>()
 }
+
+// f8 -- `Twine(int)`.  The model is "a Twine is the NUL-terminated bytes it
+// denotes", so an integer Twine is its DECIMAL spelling, which is what LLVM's
+// Twine prints for a NumberInt child (Twine::printOneChild -> itostr).
+fn f8(a0: i32) -> Vec<u8> {
+    let mut __s = a0.to_string().into_bytes();
+    __s.push(0);
+    __s
+}
+
+// f10 -- the copy constructor.  A Twine IS its bytes here, so copying is the
+// identity; there is no rope and no borrowed operand to share.
+fn f10(a0: Vec<u8>) -> Vec<u8> {
+    a0
+}
