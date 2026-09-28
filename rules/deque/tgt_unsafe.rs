@@ -66,3 +66,11 @@ unsafe fn f13<T1>(a0: &mut Vec<Vec<T1>>, init: Vec<T1>) {
 unsafe fn f14<T1>() -> Vec<T1> {
     Vec::new()
 }
+
+unsafe fn f15<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
+    a0 == a1
+}
+
+unsafe fn f16<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
+    a0 != a1
+}

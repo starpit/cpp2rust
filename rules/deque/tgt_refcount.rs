@@ -29,3 +29,11 @@ fn f13<T1: ByteRepr>(a0: Ptr<Vec<Value<Vec<T1>>>>, init: Vec<T1>) {
     let __init = init;
     a0.with_mut(|__v: &mut Vec<Value<Vec<T1>>>| __v.push(Rc::new(RefCell::new(__init))))
 }
+
+fn f15<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
+    a0 == a1
+}
+
+fn f16<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
+    a0 != a1
+}

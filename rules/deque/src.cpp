@@ -55,3 +55,21 @@ std::vector<T1> &f13(std::deque<std::vector<T1>> &o,
 }
 
 template <typename T1> std::deque<T1> f14() { return std::deque<T1>(); }
+
+// g419 (fixed 2026-09-28) -- the free comparison operators.  libc++ declares them
+// in the INLINE namespace `std::__1`, and the converter searches for
+// `bool std::__1::operator==(const std::deque<long> &, const std::deque<long> &)`
+// (its own diagnostic prints that spelling).  The UNQUALIFIED call form below is
+// what records that spelling: the `__1` component comes from the RESOLVED callee's
+// qualified name, not from how the call is written, so writing `std::__1::` here is
+// neither necessary nor possible (it aborts at cpp_rule_preprocessor.cpp:888,
+// because the rule's own synthesized namespace has no `std::__1` to look into).
+template <typename T1>
+bool f15(const std::deque<T1> &a, const std::deque<T1> &b) {
+  return operator==(a, b);
+}
+
+template <typename T1>
+bool f16(const std::deque<T1> &a, const std::deque<T1> &b) {
+  return operator!=(a, b);
+}
