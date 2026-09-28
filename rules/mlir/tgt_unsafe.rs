@@ -1693,3 +1693,69 @@ fn t162() -> dataflowir_gen::fmt::OpInst {
         <dataflowir_gen::ops::mlir_arith_ConstantOp as dataflowir_gen::MlirOp>::DEF,
     )
 }
+
+// ============================================================================================
+// t163 = mlir::OptionalParseResult -> Option<bool>.  See src.cpp for the full model note.
+// It is NOT rules/support t4 (`bool`): OpDefinition.h:56 gives it its own
+// `std::optional<ParseResult> impl`, and its own comment says the point is a TRI-STATE
+// absent / present-success / present-failure that a bool would collapse.
+// Default-constructed (`OptionalParseResult() = default`) leaves `impl` empty -> None.
+// ⚠️ THIS BLOCK IS BYTE-IDENTICAL IN tgt_refcount.rs AND tgt_unsafe.rs ON PURPOSE: the model is
+// `Option<bool>`, a Copy scalar, and no member returns a reference into the receiver, so there
+// is nothing for the two models to disagree about.
+fn t163() -> Option<bool> {
+    None
+}
+
+// f130 -- has_value().  `impl.has_value()`; no polarity involved.
+unsafe fn f130(a0: &Option<bool>) -> bool {
+    a0.is_some()
+}
+
+// f131 -- value().  Returns the contained ParseResult BY VALUE, so this is an unwrap of a Copy
+// scalar and borrows nothing from the receiver.
+// ⭐⭐ NO `!` HERE, AND THAT IS THE LOAD-BEARING DECISION.  `ParseResult::operator bool()`
+// returns `failed()`, not `succeeded()` -- but that inversion is rules/support f24`s job
+// (`unsafe fn f24(a0: bool) -> bool { !a0 }`).  `if (*optRes)` in C++ is TWO calls, `operator*`
+// then `operator bool`, so the emitted Rust is f24(f132(x)) and negating here as well would
+// DOUBLE-INVERT every parse branch -- which still compiles and still type-checks.  The inner
+// bool is in the SUCCESS polarity, matching t1/t4.
+unsafe fn f131(a0: &Option<bool>) -> bool {
+    a0.expect("OptionalParseResult::value() on an absent result")
+}
+
+// f132 -- operator*(), which C++ defines as `return value();`.  Same text as f131 by
+// construction, not by coincidence.
+unsafe fn f132(a0: &Option<bool>) -> bool {
+    a0.expect("OptionalParseResult::operator*() on an absent result")
+}
+
+// f133 -- OptionalParseResult(std::nullopt_t): THE ABSENT STATE.  The parameter is rules/optional
+// t4, which models std::nullopt_t as `()`; the unit type has exactly one value so it is exact.
+unsafe fn f133(a0: ()) -> Option<bool> {
+    let _ = a0;
+    None
+}
+
+// f134 -- OptionalParseResult(LogicalResult): PRESENT, carrying the LogicalResult unchanged.
+// rules/support t1 models LogicalResult as `bool` with true == success, and the C++ ctor is
+// `impl(result)`, an identity on that scalar (rules/support f23 is likewise identity).
+unsafe fn f134(a0: bool) -> Option<bool> {
+    Some(a0)
+}
+
+// f135 -- OptionalParseResult(ParseResult): identical for the identical reason; rules/support t4
+// is the same `bool` in the same polarity as t1.
+unsafe fn f135(a0: bool) -> Option<bool> {
+    Some(a0)
+}
+
+// f136 -- OptionalParseResult(const InFlightDiagnostic &) : OptionalParseResult(failure()).
+// UNCONDITIONALLY PRESENT-FAILURE, and the diagnostic is discarded by C++ itself (the parameter
+// is unnamed at OpDefinition.h:45).  `false` == failure in the t1/t4 polarity.  Taking the
+// diagnostic by value here would drop it, and `libcc2rs::InFlightDiagnostic` PRINTS ON `Drop`
+// (t70`s note, src.cpp:1680-), so it is taken BY REFERENCE and left alive for its real owner.
+unsafe fn f136(a0: &libcc2rs::InFlightDiagnostic) -> Option<bool> {
+    let _ = a0;
+    Some(false)
+}

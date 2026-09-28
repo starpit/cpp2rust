@@ -41,6 +41,7 @@
 // For `std::initializer_list`, which appears in the ArrayRef initializer-list
 // constructor key (f55) that row g325's `ArrayRef({num_ports, num_ports})`
 // call site reaches.
+#include <optional>   // std::nullopt_t, f133`s parameter (rules/optional t4 -> `()`)
 #include <initializer_list>
 // For `std::unique_ptr` / `std::default_delete`, which appear inside the
 // fully-spelled `RegionRange` range-base key below.
@@ -3411,3 +3412,171 @@ using t161 = mlir::arith::ConstantOp;
 // `mlir::arith::ConstantIndexOp::create(builder, loc, n)` -- the op-creating SINK
 // refusal above -- so no member and no constructor is keyed here either.
 using t162 = mlir::arith::ConstantIndexOp;
+
+// ============================================================================================
+// REFUSED, WITH REASONS: the 9 trait-class type rows g081 g088 g096 g099 g102 g104 g107 g112
+// g125.  No key is written for any of them.  The deciding measurement, run 2026-09-28:
+//
+// (1) LOCATION CHECK over /home/agent/work/queue/samples/<id>.txt.  Every one of the 9 rows has
+//     exactly ONE distinct location, and it is the trait's OWN declaration inside the prebuilt
+//     LLVM include tree -- ZERO locations anywhere in repos/dt_src:
+//        g081/g096/g112  OpDefinition.h:702:9    class Impl                 (35/24/17 locs)
+//        g099/g102       OpDefinition.h:881:8    class SingleBlock          (23/22 locs)
+//        g104            OpDefinition.h:535:8    MultiRegionTraitBase       (21 locs)
+//        g107            OpDefinition.h:628:8    MultiResultTraitBase       (20 locs)
+//        g088            SymbolInterfaces.h.inc:262:10    SymbolOpInterfaceTrait   (33 locs)
+//        g125            FunctionInterfaces.h.inc:739:10  FunctionOpInterfaceTrait (16 locs)
+//     So the type is only ever reached as a BASE-CLASS SPECIFIER of a tablegen'd Op.  No corpus
+//     expression has one of these as its object type, therefore no corpus TU can read a member
+//     of it.  That is the check the queue rows were waiting on and it comes back negative for
+//     all nine.
+//
+// (2) SPELLING CHECK over repos/dt_src (`rg -c`, build dirs excluded): `OneTypedResult` 0,
+//     `OpTrait::SingleBlock` 0, `SymbolOpInterfaceTrait` 0.  `MultiRegionTraitBase` 3,
+//     `MultiResultTraitBase` 18, `FunctionOpInterfaceTrait` 8 and `OpTrait::` 16 hits exist, but
+//     none is an object whose member is read -- they are trait mentions in op definitions / trait
+//     lists, consistent with (1)'s single decl-site location.
+//
+// REASON PER ROW -- deliberately NOT one blanket reason:
+//   g081 g096 g112 g099 g102 g104 g107  (7 rows, all `mlir::OpTrait::...`)
+//     PURE TRAITS CLASS, exactly the `rules/densemap/src.cpp:33-44` precedent which refuses
+//     `DenseMapInfo` as "IS A TRAITS CLASS AND IS DELIBERATELY NOT MODELLED".  Tag/CRTP bases
+//     with no state; a Rust type for them would be an empty struct nothing can be done with, and
+//     a too-short key there swallows placeholders (the densemap note records that hazard).
+//   g088 `mlir::detail::SymbolOpInterfaceTrait<ktdf_arch::DeviceOp>`
+//   g125 `mlir::detail::FunctionOpInterfaceTrait<func::FuncOp>`
+//     HANDLED INDIVIDUALLY, because these are `mlir::detail::` INTERFACE traits: they carry
+//     DEFAULT METHOD IMPLEMENTATIONS, not just tags, so the "pure traits class" argument above is
+//     weaker for them.  They are still refused, on the narrower and stronger ground that the
+//     member-read check in (1)/(2) is negative FOR THEM SPECIFICALLY: 0 corpus locations, 0
+//     `SymbolOpInterfaceTrait` spellings, and all 8 `FunctionOpInterfaceTrait` spellings are in
+//     op definitions.  Any default method these supply (`getName`/`setName`,
+//     `getFunctionType`/`getArgAttrs`) is called in the corpus THROUGH THE OP
+//     (`op.getName()`), so it would record against the Op or the OpInterface -- never against the
+//     trait class type.  A `tN` for the trait would therefore be a DEAD key.
+//
+// ⚠️ CORRECTION to a check quoted at :2734 and in the t152/t157/t158/t159 notes: that comment
+// says "no `tN` in this file names `mlir::OpState` or `mlir::Op<...>`".  The `mlir::OpState` half
+// is NO LONGER TRUE at HEAD -- `using t25 = mlir::OpState;` is at :1295.  The `mlir::Op<...>`
+// half still holds (its only occurrences are comments).  It does not change any verdict above,
+// because t25 maps the OpState base, not these trait bases, and (1) shows nothing reads a trait
+// member regardless.  Recorded so the next slot does not rely on the stale half.
+// ============================================================================================
+
+// ============================================================================================
+// t163 / f130-f137 -- `mlir::OptionalParseResult` -> `Option<bool>`.  15 queue rows
+// g2320..g2334 (one TU each), 247 placeholder lines.  Declaration:
+// mlir/IR/OpDefinition.h:40 (verbatim, from the row's own location list:
+// `.../include/mlir/IR/OpDefinition.h:40:7   class OptionalParseResult {`).
+//
+// SEARCHED AS: `mlir::OptionalParseResult` -- verbatim from g2320's
+// `rule key: searched as: mlir::OptionalParseResult; from decl (NOT a key --
+// canonicalised, defaulted args kept): mlir::OptionalParseResult`.  Searched form and
+// from-decl form are IDENTICAL, so there is no typedef/default-arg divergence of the kind that
+// killed `rules/fstream`'s t4 and `rules/chrono`'s t2.
+//
+// ⛔ SWALLOW-SAFETY: `GetTypeMapKey` truncates at the first `<`.  `mlir::OptionalParseResult`
+// contains NO `<` and is not a template, so its key is the WHOLE spelling and the match is
+// EXACT-MATCH-ONLY.  It cannot swallow any other type's placeholder -- unlike the
+// `DenseMapInfo` hazard recorded at rules/densemap/src.cpp:33-44.  Swallow-safe.
+//
+// ⛔ IT IS **NOT** `ParseResult`-SHAPED AND IS DELIBERATELY NOT FOLDED INTO rules/support's
+// t4.  OpDefinition.h:56 gives it a data member of its OWN:
+//     private: std::optional<ParseResult> impl;
+// so the honest model is `Option<bool>`, NOT `bool`.  Its own comment at OpDefinition.h:35-39
+// says why the distinction is load-bearing: "We don't directly use Optional here, because it
+// provides an implicit conversion to 'bool' which we want to avoid.  This class is used to
+// implement tri-state 'parseOptional' functions that may have a failure mode when parsing that
+// shouldn't be attributed to 'not present'."  THREE STATES: absent / present-success /
+// present-failure.  Collapsing it to `bool` would merge two of them.
+//
+// ⭐ ALL FIVE MEMBERS BELOW ARE ITS OWN, NOT INHERITED -- it derives from nothing.  So the
+// `llvm::FailureOr` dead-key lesson (six reader keys written on a DERIVED class, all SIX dead,
+// because a key on a derived class cannot relocate an INHERITED member -- see
+// rules/support/src.cpp:145-150) DOES NOT APPLY HERE.  Every one of `has_value`, `value`,
+// `operator*` and the four constructors is declared in the class body at OpDefinition.h:42-54,
+// so each keys against this type.
+//
+// ⚠️⚠️ THE POLARITY TRAP, AND WHY MY BODIES ARE IDENTITY RATHER THAN INVERTED.
+// `ParseResult::operator bool()` returns `failed()`, NOT `succeeded()` -- the sibling row paid
+// for that, and rules/support's f24 is `!a0` on purpose.  The inversion therefore lives
+// ENTIRELY IN THAT ONE KEY.  `OptionalParseResult::value()`/`operator*()` return a
+// **ParseResult**, not a bool: in C++ `if (*optRes)` is TWO calls, `operator*` then
+// `ParseResult::operator bool`, so the emitted Rust is `f24(f132(x))` and the negation is
+// supplied by support's f24.  Writing `!` HERE TOO would DOUBLE-INVERT and land back on the
+// wrong branch -- the mirror image of the sibling's bug and just as silent.  The inner `bool` of
+// my `Option<bool>` is in the SUCCESS polarity (`true` == success), exactly as rules/support's
+// t1/t4 are, and the probe below pins all three states so neither error can hide.
+//
+// f136's `mlir::InFlightDiagnostic` ctor IS keyed, and only because the type is ALREADY
+// MODELLED IN THIS MODULE as t70 -> `libcc2rs::InFlightDiagnostic` (src.cpp:1685).  Had it not
+// been, this one ctor would have been left out with a scope note rather than a diagnostic type
+// invented, which is `rules/error_code`'s accepted pattern.  No invention was needed.
+//
+// f133's `std::nullopt_t` is likewise already modelled -- rules/optional t4 -> `()`
+// (rules/optional/src.cpp:45, tgt `fn t4() -> ()`), so the parameter has a real target type.
+// ============================================================================================
+
+namespace llvm {
+// Declared LOCALLY for the reason this file's header gives for every other type here: the rule
+// preprocessor compiles with a fixed flag set and cannot reach real LLVM/MLIR headers.  Both are
+// MODELLED IN rules/support (t1 and t4, both `bool`); these declarations exist only to spell the
+// parameter types of f134/f135 correctly.  No member of either is keyed here -- their members
+// key against rules/support, and a declared-but-unmapped member records nothing.
+class LogicalResult {
+public:
+  LogicalResult();
+};
+class ParseResult : public LogicalResult {
+public:
+  ParseResult(LogicalResult r);
+};
+} // namespace llvm
+
+namespace mlir {
+// mlir/IR/OpDefinition.h:40-57, member-for-member.  `impl` is omitted because a rule
+// declaration needs no storage, but it is the reason the model is Option<bool>.
+class OptionalParseResult {
+public:
+  OptionalParseResult();                                  // :42  = default
+  OptionalParseResult(llvm::LogicalResult result);        // :43
+  OptionalParseResult(llvm::ParseResult result);          // :44
+  OptionalParseResult(const InFlightDiagnostic &);        // :45-46 -> OptionalParseResult(failure())
+  OptionalParseResult(std::nullopt_t);                    // :47
+  bool has_value() const;                                 // :50
+  llvm::ParseResult value() const;                        // :53
+  llvm::ParseResult operator*() const;                    // :54
+};
+} // namespace mlir
+
+using t163 = mlir::OptionalParseResult;
+
+// :50  `bool has_value() const { return impl.has_value(); }`
+bool f130(const mlir::OptionalParseResult &r) { return r.has_value(); }
+
+// :53  `ParseResult value() const { return *impl; }` -- BY VALUE, not by reference.
+// ⚠️ THE DANGLING GATE: a member returning a REFERENCE into a BY-VALUE receiver is silently
+// dangling under refcount (why `string_view::front()` was refused today).  Checked: both :53
+// and :54 return `ParseResult` BY VALUE, which the model makes a `bool` -- a Copy scalar.
+// Nothing borrows from the receiver, so there is no dangling shape here in either model, and
+// tgt_refcount.rs and tgt_unsafe.rs are byte-identical for this whole block.
+llvm::ParseResult f131(const mlir::OptionalParseResult &r) { return r.value(); }
+
+// :54  `ParseResult operator*() const { return value(); }`
+llvm::ParseResult f132(const mlir::OptionalParseResult &r) { return r.operator*(); }
+
+// :47  `OptionalParseResult(std::nullopt_t) : impl(std::nullopt) {}` -- the ABSENT state.
+mlir::OptionalParseResult f133(std::nullopt_t n) { return mlir::OptionalParseResult(n); }
+
+// :43  `OptionalParseResult(LogicalResult result) : impl(result) {}`
+mlir::OptionalParseResult f134(llvm::LogicalResult r) { return mlir::OptionalParseResult(r); }
+
+// :44  `OptionalParseResult(ParseResult result) : impl(result) {}`
+mlir::OptionalParseResult f135(llvm::ParseResult r) { return mlir::OptionalParseResult(r); }
+
+// :45-46  `OptionalParseResult(const InFlightDiagnostic &) : OptionalParseResult(failure()) {}`
+// The diagnostic is DISCARDED by C++ itself -- the parameter is unnamed -- and the result is
+// unconditionally present-FAILURE.  t70 models the parameter, so nothing is invented.
+mlir::OptionalParseResult f136(const mlir::InFlightDiagnostic &d) {
+  return mlir::OptionalParseResult(d);
+}
