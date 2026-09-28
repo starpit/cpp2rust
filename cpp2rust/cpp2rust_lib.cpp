@@ -6,11 +6,14 @@
 #include <clang/Tooling/ArgumentsAdjusters.h>
 #include <clang/Tooling/CompilationDatabase.h>
 #include <clang/Tooling/Tooling.h>
+#include <llvm/Support/ErrorHandling.h>
+#include <llvm/Support/MemoryBuffer.h>
 
 #include <csetjmp>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
+#include <set>
 
 #include "compat/platform_flags.h"
 #include "converter/converter.h"
@@ -58,6 +61,17 @@ void InstallHandlers() {
   for (int sig : {SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE}) {
     std::signal(sig, SignalTrampoline);
   }
+  // `LLVM ERROR:` (llvm::report_fatal_error, used by mapper.cpp for an
+  // unmapped type) calls exit(1) directly -- neither a signal nor a route
+  // through BailOut -- so without this handler ONE such TU kills the whole
+  // --dir run and the remaining TUs are never even attempted.
+  llvm::install_fatal_error_handler(
+      [](void *, const char *reason, bool) {
+        llvm::errs() << "LLVM ERROR: " << reason << '\n';
+        BailOut("llvm::report_fatal_error");
+        std::exit(1); // unreachable when armed
+      },
+      nullptr);
 }
 } // namespace
 
@@ -79,6 +93,100 @@ int DroppedCount() { return g_dropped; }
 const std::string &DroppedSummary() { return g_summary; }
 
 } // namespace tu_guard
+
+namespace {
+// The ONE way this process drives clang, shared by --file and --dir.
+//
+// --dir used to use `clang::tooling::ClangTool`, and every single `#include`
+// in that path failed with `err_cannot_open_file` on search-path entry 1:
+// header search claimed to find a FileEntryRef and then createFileID could not
+// open it. A two-line `#include <cstdint>` hello-world reproduced it, with the
+// DB's exact argv parsing cleanly under raw clang++, so the breakage was in
+// ClangTool's own FileManager/OverlayFileSystem, not in the flags. Going
+// through runToolOnCodeWithArgs -- which builds a fresh FileManager over an
+// InMemoryFileSystem-on-RealFileSystem overlay per call -- resolves includes
+// correctly, so --dir now reads each TU's bytes and comes through here too.
+//
+// `factory` is the run-wide FrontendActionFactory: its `first_` flag gates the
+// file preamble, so it must be passed in rather than created per TU.
+//
+// Returns false if the compilation emitted an error or fatal diagnostic; the
+// caller MUST treat that as a dropped TU, never as a silent success.
+bool RunOneTU(clang::tooling::FrontendActionFactory &factory,
+              std::string_view cc_code, std::vector<std::string> tool_args,
+              std::string_view filename) {
+  // The in-memory TU must keep the real path of the file it was read from:
+  // a quoted #include is resolved relative to the *including file's*
+  // directory, so passing a bare basename makes clang believe the TU lives in
+  // the process CWD and every sibling header becomes invisible.
+  // Redefine __FILE__ to just the basename so the generated code still does
+  // not contain system-specific absolute paths.
+  auto basename = std::filesystem::path(filename).filename().string();
+  tool_args.push_back("-Wno-builtin-macro-redefined");
+  tool_args.push_back("-D__FILE__=\"" + basename + "\"");
+
+  return clang::tooling::runToolOnCodeWithArgs(
+      factory.create(), cc_code, tool_args, std::string(filename),
+      filename.ends_with(".c") ? CLANG_C_COMPILER : CLANG_CXX_COMPILER);
+}
+
+// Turn one compile-database entry's argv into flags for RunOneTU: drop
+// argv[0], `-c`, `-o <x>`, the diagnostic noise and the source path itself,
+// and make relative include directories absolute against the entry's
+// `directory` field (the process CWD is not that directory). Mirrors the
+// filter in verif/dxpflags.py, which is the known-working reference.
+void AppendDbFlags(const clang::tooling::CompileCommand &cmd,
+                   std::vector<std::string> &out) {
+  static const std::set<std::string> kTakesArg = {
+      "-I",       "-isystem", "-iquote",   "-idirafter", "-include",
+      "-D",       "-U",       "-std",      "-Xclang",    "-isysroot",
+      "--sysroot"};
+  static const std::set<std::string> kPathArg = {"-I", "-isystem", "-iquote",
+                                                 "-idirafter"};
+  const std::string &dir = cmd.Directory;
+  auto absolutize = [&dir](const std::string &p) {
+    if (p.empty() || p[0] == '/') {
+      return p;
+    }
+    return (std::filesystem::path(dir) / p).lexically_normal().string();
+  };
+
+  const auto &toks = cmd.CommandLine;
+  for (size_t i = 1; i < toks.size(); ++i) { // i = 1: skip argv[0]
+    const std::string &t = toks[i];
+    if (t.empty() || t[0] != '-') {
+      continue; // the source path, and anything else positional
+    }
+    if (t == "-c") {
+      continue;
+    }
+    if (t == "-o") {
+      ++i;
+      continue;
+    }
+    // Diagnostic and codegen options: irrelevant to translation, and -Werror
+    // would turn a warning into a dropped TU.
+    if (t.rfind("-W", 0) == 0 || t.rfind("-O", 0) == 0 ||
+        t.rfind("-M", 0) == 0 || t == "-g" || t == "-pedantic" ||
+        t == "-pipe") {
+      continue;
+    }
+    if (kTakesArg.count(t) && i + 1 < toks.size()) { // separated: -I <dir>
+      out.push_back(t);
+      out.push_back(kPathArg.count(t) ? absolutize(toks[i + 1]) : toks[i + 1]);
+      ++i;
+      continue;
+    }
+    if (t.size() > 2 && t.rfind("-I", 0) == 0) { // joined: -I<dir>
+      out.push_back("-I");
+      out.push_back(absolutize(t.substr(2)));
+      continue;
+    }
+    out.push_back(t);
+  }
+}
+} // namespace
+
 std::string TranspileSrc(std::string_view cc_code, Model model,
                          const std::vector<std::string_view> &cxx_flags,
                          const std::string &rules_dir,
@@ -89,22 +197,9 @@ std::string TranspileSrc(std::string_view cc_code, Model model,
   auto end_flags = getPlatformClangEndFlags();
   tool_args.insert(tool_args.end(), end_flags.begin(), end_flags.end());
 
-  // The in-memory TU must keep the real path of the file it was read from:
-  // a quoted #include is resolved relative to the *including file's*
-  // directory, so passing a bare basename makes clang believe the TU lives in
-  // the process CWD and every sibling header becomes invisible.
-  // Redefine __FILE__ to just the basename (as TranspileDir does) so the
-  // generated code still does not contain system-specific absolute paths.
-  auto basename = std::filesystem::path(filename).filename().string();
-  tool_args.push_back("-Wno-builtin-macro-redefined");
-  tool_args.push_back("-D__FILE__=\"" + basename + "\"");
-
   std::string rs_code;
-  clang::tooling::runToolOnCodeWithArgs(
-      std::make_unique<FrontendAction>(rs_code, model, /*first=*/true,
-                                       rules_dir),
-      cc_code, tool_args, std::string(filename),
-      filename.ends_with(".c") ? CLANG_C_COMPILER : CLANG_CXX_COMPILER);
+  FrontendActionFactory factory(rs_code, model, rules_dir);
+  RunOneTU(factory, cc_code, std::move(tool_args), filename);
   Converter::EmitOpaqueRecords(rs_code);
   Converter::EmitVirtualMethods(rs_code);
   if (model == Model::kRefCount) {
@@ -123,10 +218,7 @@ std::string TranspileDir(std::string_view build_dir, Model model,
     return {};
   }
 
-  std::vector<std::string> files;
-  for (const auto &compile_command : compile_dbase->getAllCompileCommands()) {
-    files.emplace_back(compile_command.Filename);
-  }
+  auto commands = compile_dbase->getAllCompileCommands();
 
   std::string rs_code;
   // ONE factory for the whole run: its `first_` flag gates the prelude, so it
@@ -138,58 +230,70 @@ std::string TranspileDir(std::string_view build_dir, Model model,
 
   tu_guard::InstallHandlers();
 
-  for (size_t i = 0; i < files.size(); ++i) {
-    const std::string &file = files[i];
-    llvm::errs() << '[' << (i + 1) << '/' << files.size() << "] Processing "
+  for (size_t i = 0; i < commands.size(); ++i) {
+    const std::string &file = commands[i].Filename;
+    llvm::errs() << '[' << (i + 1) << '/' << commands.size() << "] Processing "
                  << file << '\n';
 
     // Snapshot the emitted code so a failing TU can be rolled back whole.
     const size_t pre_tu_size = rs_code.size();
     tu_guard::g_current_file = file.c_str();
 
-    if (sigsetjmp(tu_guard::g_recover, 1) != 0) {
-      // A TU aborted. Truncate back to the pre-TU boundary and record it
-      // LOUDLY: on stderr above, and as a comment in the emitted file.
-      tu_guard::g_armed = false;
+    // Roll the emitted code back to the pre-TU boundary and record the drop
+    // LOUDLY: on stderr, and as a comment in the emitted file.
+    auto drop = [&](const char *why) {
       rs_code.resize(pre_tu_size);
       rs_code += "// cpp2rust: DROPPED TU ";
       rs_code += file;
-      rs_code += " -- aborted during translation; see stderr for the site\n";
+      rs_code += " -- ";
+      rs_code += why;
+      rs_code += "\n";
       ++tu_guard::g_dropped;
       tu_guard::g_summary += "  " + file + '\n';
+    };
+
+    if (sigsetjmp(tu_guard::g_recover, 1) != 0) {
+      tu_guard::g_armed = false;
+      drop("aborted during translation; see stderr for the site");
       continue;
     }
 
-    tu_guard::g_armed = true;
-    {
-      clang::tooling::ClangTool Tool(*compile_dbase,
-                                     std::vector<std::string>{file});
-      Tool.appendArgumentsAdjuster(clang::tooling::getInsertArgumentAdjuster(
-          getPlatformClangBeginFlags(),
-          clang::tooling::ArgumentInsertPosition::BEGIN));
-      Tool.appendArgumentsAdjuster(clang::tooling::getInsertArgumentAdjuster(
-          getPlatformClangEndFlags(),
-          clang::tooling::ArgumentInsertPosition::END));
-      // Redefine __FILE__ to use just the basename, so the generated code
-      // doesn't contain system-specific absolute paths.
-      Tool.appendArgumentsAdjuster(
-          [](const clang::tooling::CommandLineArguments &args,
-             llvm::StringRef filename) {
-            auto result = args;
-            auto basename =
-                std::filesystem::path(filename.str()).filename().string();
-            result.push_back("-Wno-builtin-macro-redefined");
-            result.push_back("-D__FILE__=\"" + basename + "\"");
-            return result;
-          });
-      Tool.run(&factory);
+    // Read the TU's bytes: --dir goes through the same runToolOnCodeWithArgs
+    // machinery as --file, because ClangTool's FileManager cannot open any
+    // #include it finds (see RunOneTU).
+    auto buffer = llvm::MemoryBuffer::getFile(file);
+    if (!buffer) {
+      llvm::errs() << "cpp2rust: cannot read " << file << ": "
+                   << buffer.getError().message() << '\n';
+      drop("source file could not be read");
+      continue;
     }
+
+    std::vector<std::string> tool_args = getPlatformClangBeginFlags();
+    tool_args.push_back("-fparse-all-comments");
+    AppendDbFlags(commands[i], tool_args);
+    auto end_flags = getPlatformClangEndFlags();
+    tool_args.insert(tool_args.end(), end_flags.begin(), end_flags.end());
+
+    tu_guard::g_armed = true;
+    const bool ok =
+        RunOneTU(factory, (*buffer)->getBuffer(), std::move(tool_args), file);
     tu_guard::g_armed = false;
+
+    // MEASUREMENT INTEGRITY: a TU whose compilation emitted an error or fatal
+    // diagnostic (an #include that never resolved, say) has not been
+    // translated. Before this, --dir reported such a TU as a silent success,
+    // which made every translate-rate number from --dir untrustworthy.
+    if (!ok) {
+      llvm::errs() << "cpp2rust: FATAL DIAGNOSTIC in TU " << file
+                   << " -- not translated\n";
+      drop("compilation emitted a fatal diagnostic; see stderr");
+    }
   }
 
   if (tu_guard::g_dropped > 0) {
     llvm::errs() << "cpp2rust: DROPPED " << tu_guard::g_dropped << " of "
-                 << files.size() << " TUs:\n"
+                 << commands.size() << " TUs:\n"
                  << tu_guard::g_summary;
   }
 
