@@ -2542,6 +2542,25 @@ bool Converter::VisitCXXForRangeStmt(clang::CXXForRangeStmt *stmt) {
     if (GetClassName(range_init_type) == "std::unordered_map") {
       return VisitCXXForRangeStmtMap(stmt);
     }
+    // A DECOMPOSING loop over llvm::DenseMap is routed to the map path for the
+    // same reason, with the same "only the decomposing case" restriction: a
+    // non-decomposing `for (auto &kv : dense_map)` keeps going down the
+    // pre-existing (index-based) path, so no existing output changes.
+    //
+    // REFCOUNT IS REFUSED, deliberately and loudly. rules/densemap's REFCOUNT
+    // t4 is `RefcountHashMapIter<T1, T2>` -- a DIFFERENT Rust type from the
+    // unsafe arm's `libcc2rs::HashMapIter<T1, *const HashMap<T1, T2>>` -- so
+    // the iterator spelling MapRangeIteratorName hands back would not be the
+    // one that model uses. `keyword_unsafe_` is the only model discriminator
+    // the base class has; this mirrors the gate on the standalone
+    // map-iterator decomposition path in ConvertTupleDecompositionDecl.
+    if (GetClassName(range_init_type) == "llvm::DenseMap") {
+      if (keyword_unsafe_ == nullptr || *keyword_unsafe_ == '\0') {
+        ReportUnsupportedStructuredBinding(decomp);
+        return false;
+      }
+      return VisitCXXForRangeStmtMap(stmt);
+    }
   }
 
   if (!Mapper::Contains(range_init_type.getUnqualifiedType())) {
@@ -2580,12 +2599,16 @@ Converter::GetDecompositionIterName(const clang::DecompositionDecl *decl) {
 // no rule support either. Synthesising the iterator and re-deriving the two
 // accessors is the only path that needs nothing new.
 bool Converter::EmitMapDecompositionBindings(
-    const clang::DecompositionDecl *decl, const std::string &iter_name) {
+    const clang::DecompositionDecl *decl, const std::string &iter_name,
+    bool ptr_accessors) {
   auto bindings = decl->bindings();
   if (bindings.size() != 2) {
     return false;
   }
-  static const char *const kAccessors[] = {"first", "second"};
+  static const char *const kTraitAccessors[] = {"first", "second"};
+  static const char *const kInherentAccessors[] = {"key_ptr", "value_ptr"};
+  const char *const *kAccessors =
+      ptr_accessors ? kInherentAccessors : kTraitAccessors;
   unsigned index = 0;
   for (const auto *binding : bindings) {
     StrCat(keyword::kLet);
@@ -2598,16 +2621,47 @@ bool Converter::EmitMapDecompositionBindings(
   return true;
 }
 
-// The two range classes whose iterator model exposes `first()`/`second()`, i.e.
-// the two the decomposing map lowering can address. Kept as one predicate so the
-// dispatch and the iterator-name choice cannot drift apart.
+// The range classes whose MODELLED iterator exposes a key accessor and a value
+// accessor, i.e. the ones the decomposing map lowering can address. Kept as one
+// predicate so the dispatch, the iterator-name choice and the accessor-name
+// choice cannot drift apart.
+//
+// `llvm::DenseMap` qualifies for exactly the same reason `std::unordered_map`
+// does -- rules/densemap models it as a `std::collections::HashMap<K, V>` whose
+// iterator (t4/t5) is `libcc2rs::HashMapIter<K, *const HashMap<K, V>>`, with
+// begin/end (f7-f10), ++ (f11-f14) and key/value (f15-f18) all keyed. The ONE
+// place it differs is the ACCESSOR NAMES; see
+// MapDecompositionUsesPtrAccessors.
 bool Converter::IsMapLikeRangeClass(const std::string &class_name) {
-  return class_name == "std::map" || class_name == "std::unordered_map";
+  return class_name == "std::map" || class_name == "std::unordered_map" ||
+         class_name == "llvm::DenseMap";
 }
 
 const char *Converter::MapRangeIteratorName(const std::string &class_name) {
+  // rules/densemap's t4/t5 is the BARE `libcc2rs::HashMapIter<K, *const
+  // HashMap<K, V>>`, NOT the `UnsafeHashMapIterator` alias -- that alias is
+  // bound to `HashMap<K, Box<V>>` while densemap's t1 is a bare
+  // `HashMap<K, V>`. `HashMapIter::begin` is inherent on the generic type, so
+  // naming the type itself is what type-checks, and it is what f7 emits.
+  if (class_name == "llvm::DenseMap") {
+    return "libcc2rs::HashMapIter";
+  }
   return class_name == "std::unordered_map" ? "UnsafeHashMapIterator"
                                            : "UnsafeMapIterator";
+}
+
+// MEASURED out of rules/densemap/tgt_unsafe.rs (the comment above f15): the
+// `MapIterator` trait -- whose methods are `first()` / `second()` -- is
+// implemented for the two libcc2rs ALIASES only, and a generic impl for
+// `HashMapIter<K, *const HashMap<K, V>>` CANNOT be added beside the `Box<V>`
+// one because the two overlap at V = Box<V'> and rustc rejects it with E0119.
+// libcc2rs therefore carries the same two accessors as INHERENT methods
+// `key_ptr()` / `value_ptr()` on the generic impl, and rules/densemap's
+// f15-f18 call those. Both families return the same two things -- `*const K`
+// and `*mut V` -- which is why the ptr_bindings_ registration below is
+// identical for either and only the spelling has to switch.
+bool Converter::MapDecompositionUsesPtrAccessors(const std::string &class_name) {
+  return class_name == "llvm::DenseMap";
 }
 
 bool Converter::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
@@ -2637,7 +2691,10 @@ bool Converter::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
     PushBrace brace(*this);
     std::optional<ScopedPtrBindings> ptr_bindings;
     if (decomp) {
-      if (!EmitMapDecompositionBindings(decomp, loop_var_name)) {
+      if (!EmitMapDecompositionBindings(
+              decomp, loop_var_name,
+              MapDecompositionUsesPtrAccessors(
+                  GetClassName(stmt->getRangeInit()->getType())))) {
         ReportUnsupportedStructuredBinding(decomp);
         return false;
       }

@@ -813,8 +813,15 @@ protected:
   // decomposition, so the caller keeps the loud diagnostic.
   static bool IsMapLikeRangeClass(const std::string &class_name);
   static const char *MapRangeIteratorName(const std::string &class_name);
+  // `true` for the range classes whose modelled iterator exposes the key/value
+  // accessors as the INHERENT `key_ptr()` / `value_ptr()` rather than as the
+  // `MapIterator` trait's `first()` / `second()`. See
+  // MapDecompositionUsesPtrAccessors's definition for why the two families
+  // cannot be unified in libcc2rs.
+  static bool MapDecompositionUsesPtrAccessors(const std::string &class_name);
   bool EmitMapDecompositionBindings(const clang::DecompositionDecl *decl,
-                                    const std::string &iter_name);
+                                    const std::string &iter_name,
+                                    bool ptr_accessors = false);
 
   std::string GetMappedAsString(clang::Expr *expr, clang::Expr **args = nullptr,
                                 unsigned num_args = 0,
