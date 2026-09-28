@@ -4468,3 +4468,138 @@ using t214 = mlir::OpTrait::OneTypedResult<mlir::VectorType>::Impl<mlir::vector:
 using t215 = mlir::OpTrait::OneTypedResult<mlir::VectorType>::Impl<mlir::vector::FromElementsOp>;
 // t216 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_VectorType__Impl_mlir_vector_ShuffleOp_, 1 occurrence.  DEF `ops::mlir_vector_ShuffleOp` present.
 using t216 = mlir::OpTrait::OneTypedResult<mlir::VectorType>::Impl<mlir::vector::ShuffleOp>;
+
+// ============================================================================================
+// t217-t235 -- THREE MORE `mlir::OpTrait` CRTP TRAIT BASES, NINETEEN concrete instantiations.
+// Same shape and same justification as t167-t216 (`OneTypedResult<RT>::Impl<Op>`): the implicit
+// derived-to-base upcast of an ODS op handle to one of its trait bases.
+//
+// MEASUREMENT 2026-09-28 over `/home/agent/work/verify0928/out`, each family anchored to its own
+// STANDALONE prefix `(^|[^A-Za-z0-9_])Cpp2RustUnmapped_mlir_OpTrait_<family>` -- NOT to the
+// substring inside the much longer `Cpp2RustUnmapped_mlir_Op_<Op>__<traits>_` names of the
+// separately-unkeyed `mlir::Op<...>`, because the short family names ARE substrings of those and
+// counting them together measures two defects at once:
+//     OpTrait::detail::MultiResultTraitBase   113 occurrences /  9 distinct spellings
+//     OpTrait::SingleBlock                     77 occurrences / 10 distinct spellings
+//     OpTrait::detail::MultiOperandTraitBase    16 occurrences /  7 distinct spellings
+// EVERY occurrence of all three is in CAST-TARGET (type) POSITION and NO MEMBER IS EVER READ, so
+// each site needs a NAME for the cast target and NO MEMBER RULES AT ALL.
+//
+// ⛔ MONOMORPHIC, FULLY CONCRETE, one `using` per spelling -- for the t166 / t37-t39 / t167-t216
+// reason.  Each of these three buckets was EMPTY before this block, so a GENERIC key
+// (`MultiResultTraitBase<T1, T2>`) would be the SOLE candidate in its bucket and `search()`'s
+// longer-src tie-break (mapper.cpp:430-437) could not protect it: that is the densemap failure
+// verbatim, where a short key ate `llvm::StringRef, void`.  Arity 0 rules a swallow out entirely.
+//
+// ⛔ THREE SPELLINGS ARE DELIBERATELY LEFT UNKEYED AND STAY LOUD, and it is WHOLE-DIALECT:
+// `mlir::ktdf` has NO generated `DEF` in dataflow_ods.rs at all --
+//     SingleBlock<mlir::ktdf::StageOp>                                (3 occurrences)
+//     SingleBlock<mlir::ktdf::PipelineOp>                             (2 occurrences)
+//     MultiOperandTraitBase<mlir::ktdf::PrivateYieldOp, VariadicOperands>  (3 occurrences)
+// `grep -cE "struct mlir_ktdf_<Op>\b"` against
+// dataflowir-gen-654e676bccb4a05f/out/dataflow_ods.rs returns 0 for all three, exactly as
+// `mlir::LLVM` / `mlir::math` / `mlir::memref` did for t167-t216.  A key naming an ABSENT DEF
+// records fine, passes the load smoke test, and FAILS AT RUSTC -- so this is a dataflowir-gen
+// `.td` coverage gap, not a rules gap, and it must not be papered over here.
+//
+// ⛔ FOUR MORE `MultiOperandTraitBase` SPELLINGS ARE ALSO LEFT OUT, for a DIFFERENT and purely
+// mechanical reason: their second template argument is `mlir::OpTrait::NOperands<N>::Impl` /
+// `mlir::OpTrait::AtLeastNOperands<N>::Impl`, whose NON-TYPE argument `N` is ERASED by the
+// unmapped-name mangler (`..._NOperands____Impl_`), so the corpus name does not determine which
+// arity to write and a guessed `N` would be a DIFFERENT type that silently never matches:
+//     vectorchain::RotateOp   / NOperands<N>::Impl         (3 occurrences)
+//     vectorchain::ShuffleOp  / AtLeastNOperands<N>::Impl  (2)
+//     vectorchain::CastOp     / AtLeastNOperands<N>::Impl  (2)
+//     sentient::ForOp         / AtLeastNOperands<N>::Impl  (2)
+// These need `N` read out of the ODS-generated C++ op definition, not out of the emitted corpus.
+//
+// ⛔ t25's PROHIBITION CARRIES TO ALL NINETEEN: no `operator==`, no `operator!=`, no identity
+// test, and NO MEMBER.  No `fN` either -- nothing constructs a trait base, these are upcast
+// targets only.
+// ============================================================================================
+namespace mlir {
+namespace OpTrait {
+// mlir/IR/OpDefinition.h -- the two `template <typename ConcreteType> class` trait tags that
+// appear as the TEMPLATE-TEMPLATE second argument of the two `detail::` bases below, and
+// `SingleBlock` itself (OpDefinition.h:881).  Declared here ONLY so the nineteen keys can be
+// SPELLED; all three are pure tag bases in the model and no member of any of them is mapped.
+template <typename ConcreteType> class VariadicResults {};
+template <typename ConcreteType> class VariadicOperands {};
+template <typename ConcreteType> class SingleBlock {};
+namespace detail {
+// mlir/IR/OpDefinition.h:628 / :560 -- `template <typename ConcreteType,
+// template <typename> class TraitType> class MultiResultTraitBase` and its operand twin.
+template <typename ConcreteType, template <typename> class TraitType>
+class MultiResultTraitBase {};
+template <typename ConcreteType, template <typename> class TraitType>
+class MultiOperandTraitBase {};
+} // namespace detail
+} // namespace OpTrait
+
+// The ODS-generated op classes these keys name that are NOT already declared above.  Each one is
+// `Operation *` through its `OpState` base, declared for the t161 reason and nothing more.
+// ALREADY DECLARED ELSEWHERE and deliberately NOT redeclared here (a second declaration would be
+// a duplicate): `mlir::ModuleOp` (:963), `mlir::UnrealizedConversionCastOp` (:977),
+// `mlir::scf::ForOp` / `mlir::scf::IfOp` (:611), `mlir::func::CallOp` (:2845),
+// `mlir::affine::AffineForOp` (:2924), `mlir::sentient::ConstantOp` (:4345).
+namespace agen {
+class CompositeLoadOp {};
+class CompositeStoreOp {};
+} // namespace agen
+
+namespace dataflow {
+class GetUnitOp {};
+class ProgramUnitOp {};
+} // namespace dataflow
+
+namespace sentient {
+class ForOp {};
+class IfOp {};
+class MacOp {};
+class YieldOp {};
+} // namespace sentient
+
+namespace uniform {
+class UniformizeRegionsOp {};
+} // namespace uniform
+
+} // namespace mlir
+
+// t217 -- Cpp2RustUnmapped_mlir_OpTrait_detail_MultiResultTraitBase_mlir_dataflow_GetUnitOp__mlir_OpTrait_VariadicResults_, 72 occurrences.  DEF `ops::mlir_dataflow_GetUnitOp` present.
+using t217 = mlir::OpTrait::detail::MultiResultTraitBase<mlir::dataflow::GetUnitOp, mlir::OpTrait::VariadicResults>;
+// t218 -- Cpp2RustUnmapped_mlir_OpTrait_detail_MultiResultTraitBase_mlir_scf_ForOp__mlir_OpTrait_VariadicResults_, 14 occurrences.  DEF `ops::mlir_scf_ForOp` present.
+using t218 = mlir::OpTrait::detail::MultiResultTraitBase<mlir::scf::ForOp, mlir::OpTrait::VariadicResults>;
+// t219 -- Cpp2RustUnmapped_mlir_OpTrait_detail_MultiResultTraitBase_mlir_UnrealizedConversionCastOp__mlir_OpTrait_VariadicResults_, 7 occurrences.  DEF `ops::mlir_UnrealizedConversionCastOp` present.
+using t219 = mlir::OpTrait::detail::MultiResultTraitBase<mlir::UnrealizedConversionCastOp, mlir::OpTrait::VariadicResults>;
+// t220 -- Cpp2RustUnmapped_mlir_OpTrait_detail_MultiResultTraitBase_mlir_scf_IfOp__mlir_OpTrait_VariadicResults_, 6 occurrences.  DEF `ops::mlir_scf_IfOp` present.
+using t220 = mlir::OpTrait::detail::MultiResultTraitBase<mlir::scf::IfOp, mlir::OpTrait::VariadicResults>;
+// t221 -- Cpp2RustUnmapped_mlir_OpTrait_detail_MultiResultTraitBase_mlir_sentient_IfOp__mlir_OpTrait_VariadicResults_, 4 occurrences.  DEF `ops::mlir_sentient_IfOp` present.
+using t221 = mlir::OpTrait::detail::MultiResultTraitBase<mlir::sentient::IfOp, mlir::OpTrait::VariadicResults>;
+// t222 -- Cpp2RustUnmapped_mlir_OpTrait_detail_MultiResultTraitBase_mlir_sentient_ForOp__mlir_OpTrait_VariadicResults_, 4 occurrences.  DEF `ops::mlir_sentient_ForOp` present.
+using t222 = mlir::OpTrait::detail::MultiResultTraitBase<mlir::sentient::ForOp, mlir::OpTrait::VariadicResults>;
+// t223 -- Cpp2RustUnmapped_mlir_OpTrait_detail_MultiResultTraitBase_mlir_uniform_UniformizeRegionsOp__mlir_OpTrait_VariadicResults_, 3 occurrences.  DEF `ops::mlir_uniform_UniformizeRegionsOp` present.
+using t223 = mlir::OpTrait::detail::MultiResultTraitBase<mlir::uniform::UniformizeRegionsOp, mlir::OpTrait::VariadicResults>;
+// t224 -- Cpp2RustUnmapped_mlir_OpTrait_detail_MultiResultTraitBase_mlir_sentient_MacOp__mlir_OpTrait_VariadicResults_, 2 occurrences.  DEF `ops::mlir_sentient_MacOp` present.
+using t224 = mlir::OpTrait::detail::MultiResultTraitBase<mlir::sentient::MacOp, mlir::OpTrait::VariadicResults>;
+// t225 -- Cpp2RustUnmapped_mlir_OpTrait_detail_MultiResultTraitBase_mlir_func_CallOp__mlir_OpTrait_VariadicResults_, 1 occurrence.  DEF `ops::mlir_func_CallOp` present.
+using t225 = mlir::OpTrait::detail::MultiResultTraitBase<mlir::func::CallOp, mlir::OpTrait::VariadicResults>;
+// t226 -- Cpp2RustUnmapped_mlir_OpTrait_SingleBlock_mlir_affine_AffineForOp_, 14 occurrences.  DEF `ops::mlir_affine_AffineForOp` present.
+using t226 = mlir::OpTrait::SingleBlock<mlir::affine::AffineForOp>;
+// t227 -- Cpp2RustUnmapped_mlir_OpTrait_SingleBlock_mlir_sentient_IfOp_, 13 occurrences.  DEF `ops::mlir_sentient_IfOp` present.
+using t227 = mlir::OpTrait::SingleBlock<mlir::sentient::IfOp>;
+// t228 -- Cpp2RustUnmapped_mlir_OpTrait_SingleBlock_mlir_scf_ForOp_, 13 occurrences.  DEF `ops::mlir_scf_ForOp` present.
+using t228 = mlir::OpTrait::SingleBlock<mlir::scf::ForOp>;
+// t229 -- Cpp2RustUnmapped_mlir_OpTrait_SingleBlock_mlir_sentient_ForOp_, 11 occurrences.  DEF `ops::mlir_sentient_ForOp` present.
+using t229 = mlir::OpTrait::SingleBlock<mlir::sentient::ForOp>;
+// t230 -- Cpp2RustUnmapped_mlir_OpTrait_SingleBlock_mlir_dataflow_ProgramUnitOp_, 8 occurrences.  DEF `ops::mlir_dataflow_ProgramUnitOp` present.
+using t230 = mlir::OpTrait::SingleBlock<mlir::dataflow::ProgramUnitOp>;
+// t231 -- Cpp2RustUnmapped_mlir_OpTrait_SingleBlock_mlir_agen_CompositeStoreOp_, 6 occurrences.  DEF `ops::mlir_agen_CompositeStoreOp` present.
+using t231 = mlir::OpTrait::SingleBlock<mlir::agen::CompositeStoreOp>;
+// t232 -- Cpp2RustUnmapped_mlir_OpTrait_SingleBlock_mlir_ModuleOp_, 4 occurrences.  DEF `ops::mlir_ModuleOp` present.
+using t232 = mlir::OpTrait::SingleBlock<mlir::ModuleOp>;
+// t233 -- Cpp2RustUnmapped_mlir_OpTrait_SingleBlock_mlir_agen_CompositeLoadOp_, 3 occurrences.  DEF `ops::mlir_agen_CompositeLoadOp` present.
+using t233 = mlir::OpTrait::SingleBlock<mlir::agen::CompositeLoadOp>;
+// t234 -- Cpp2RustUnmapped_mlir_OpTrait_detail_MultiOperandTraitBase_mlir_sentient_YieldOp__mlir_OpTrait_VariadicOperands_, 2 occurrences.  DEF `ops::mlir_sentient_YieldOp` present.
+using t234 = mlir::OpTrait::detail::MultiOperandTraitBase<mlir::sentient::YieldOp, mlir::OpTrait::VariadicOperands>;
+// t235 -- Cpp2RustUnmapped_mlir_OpTrait_detail_MultiOperandTraitBase_mlir_UnrealizedConversionCastOp__mlir_OpTrait_VariadicOperands_, 2 occurrences.  DEF `ops::mlir_UnrealizedConversionCastOp` present.
+using t235 = mlir::OpTrait::detail::MultiOperandTraitBase<mlir::UnrealizedConversionCastOp, mlir::OpTrait::VariadicOperands>;

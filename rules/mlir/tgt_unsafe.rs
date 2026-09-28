@@ -2233,3 +2233,133 @@ fn t216() -> dataflowir_gen::fmt::OpInst {
     )
 }
 
+
+// ============================================================================================
+// t217-t235 -- the nineteen `mlir::OpTrait` trait bases of the three families
+// (`detail::MultiResultTraitBase`, `SingleBlock`, `detail::MultiOperandTraitBase`) ->
+// `fmt::OpInst`.  Each body is the t161/t162 body with the CONCRETE OP'S OWN `DEF`, because the
+// trait base of an op IS that op -- no new representation is introduced and nothing is claimed
+// beyond what t161 already claims.  Every corpus occurrence is a CAST TARGET and no member is
+// ever read, so these expressions exist only to type-check their type keys; t25's prohibition
+// (no equality, no identity, no member) carries to all nineteen.
+// ⛔ Each op's `DEF` was verified to EXIST in dataflow_ods.rs before its key was written -- a key
+// naming an absent DEF records fine, passes the load smoke test, and fails at rustc.  The three
+// `mlir::ktdf` spellings have NO generated DEF (whole-dialect gap) and are deliberately unkeyed
+// and stay loud; see src.cpp at t217 for the measurement and for the four `NOperands`-arity
+// spellings left out for a separate reason.
+// ⚠️ Plain `fn`, not `unsafe fn`: the t37-t39 / t166 / t167-t216 convention for a TYPE rule.
+// ============================================================================================
+fn t217() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_dataflow_GetUnitOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t218() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_scf_ForOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t219() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t220() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_scf_IfOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t221() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_sentient_IfOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t222() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_sentient_ForOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t223() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_uniform_UniformizeRegionsOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t224() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_sentient_MacOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t225() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_func_CallOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t226() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_affine_AffineForOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t227() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_sentient_IfOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t228() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_scf_ForOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t229() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_sentient_ForOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t230() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_dataflow_ProgramUnitOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t231() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_agen_CompositeStoreOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t232() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_ModuleOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t233() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_agen_CompositeLoadOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t234() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_sentient_YieldOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t235() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
