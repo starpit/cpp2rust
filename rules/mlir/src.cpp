@@ -750,11 +750,55 @@ class IROperandBase {};
 // Each is declared here ONLY so its key can be spelled; the model is argued at
 // its `using tN =` below.
 // ---------------------------------------------------------------------------
-// `mlir::Builder` is declared INCOMPLETE on purpose, because that is EXACTLY how
-// the corpus reaches it: all 102 TUs resolve to ONE site, the bare forward
-// declaration `class Builder;` at mlir/IR/AffineMap.h:37:7, reached while the
-// converter emits an AffineMap signature.  No TU names Builder itself.
-class Builder;
+// `mlir::Location` / `mlir::FileLineColLoc` -- mlir/IR/Location.h:76 and :174.
+// Declared here ONLY so the keys below can be spelled; the model is argued at
+// each `using tN =`.  `FileLineColLoc` is a C++-only VIEW over a
+// `FileLineColRange` of exactly one line and one column, which is why it is a
+// SEPARATE type here and not a synonym for Location.
+class Location {};
+
+class FileLineColLoc {
+public:
+  // `unsigned getLine() const` / `unsigned getColumn() const` (Location.h:180).
+  // ⛔ `getFilename()` IS DELIBERATELY NOT DECLARED -- see the absence note at
+  // f124/t155: in C++ it returns `mlir::StringAttr`, and the Rust model returns
+  // `&str`, so the key's RETURN types do not correspond and I will not guess a
+  // StringAttr route for it.
+  unsigned getLine() const;
+  unsigned getColumn() const;
+};
+
+// `mlir::Builder` is declared INCOMPLETE apart from ONE member, and the exception
+// is argued at f124: `getUnknownLoc()` is declared by `Builder` in the real header
+// (mlir/IR/Builders.h), NOT by `OpBuilder`, so an `OpBuilder` receiver keys as
+// `mlir::Builder::getUnknownLoc()` -- the inherited-member rule means declaring it
+// on OpBuilder would produce a DEAD key.  Everything t59's note says about why no
+// OTHER Builder member is declared still holds: all 102 TUs reach the type through
+// the bare forward declaration at mlir/IR/AffineMap.h:37:7 and no TU names Builder
+// itself.
+//
+// ⚠️ f124's REACHABILITY IS UNPROVEN, 2026-09-28.  The key READS BACK as FOUND, and
+// a FOUND readback proves RECORDED, never REACHED.  Two attempts to get a converted
+// result both failed for reasons unrelated to the key: `Splat.cpp` (a
+// `rewriter.getUnknownLoc()` site at :137) TIMED OUT at 200 s under `--verbose`,
+// and `EnsureDeviceDeclaration.cpp` (122 lines, `builder.getUnknownLoc()` at :93)
+// aborts EARLIER on `std::unique_ptr<llvm::MemoryBuffer>`, so the call site is never
+// visited -- zero `getUnknownLoc` lines in a 98088-line verbose log.  The
+// declaring-class reasoning above is sound and matches the measured `llvm::FailureOr`
+// lesson (six keys FOUND, all six DEAD), but that lesson is PRECISELY why reasoning
+// cannot settle this: if the receiver keys as `OpBuilder` after all, f124 is a dead
+// key.  ⭐ TO SETTLE IT IN ONE PROBE: restate `class Builder { Location
+// getUnknownLoc(); }; class OpBuilder : public Builder {};` in a `CC2_INC` include
+// dir -- NEVER in the main file, which would make it `IsUserDefinedDecl` -- call it
+// through an `OpBuilder` lvalue, and require the readback
+// `search expr mlir::Location mlir::Builder::getUnknownLoc(), result: <body>`.
+// Do NOT hang the four cheap `as_file_line_col` / `is_strict_file_line_col` /
+// `find_file_line_col*` follow-ons off t155 until t155 likewise shows a CONVERTED
+// RESULT; t154 is the only one of the five proven reached (2 TUs, below).
+class Builder {
+public:
+  Location getUnknownLoc();
+};
 
 // `mlir::ModuleOp` -- BuiltinOps.h.inc:199, reached as the RETURN type of
 // `runOnOperation`.  An OP HANDLE (a pointer-sized wrapper over Operation*).
@@ -2623,3 +2667,76 @@ mlir::func::CallOp f121() { return mlir::func::CallOp(); }
 // `compute_ops_[0]`, and `SmallVector<LinalgOp> v;` constructs no element.  This
 // is t151's and t27's precedent, both committed without a constructor.
 using t153 = mlir::linalg::LinalgOp;
+
+// ---------------------------------------------------------------------------
+// PASS 2026-09-28: the `mlir::Location` row, keyed against the model that landed
+// in dataflowir-gen as dt_src `1e03497` (`src/ir.rs:607-800`, re-exported at the
+// crate root by `lib.rs:72-73`).  `ir.rs` is HAND-WRITTEN BY DESIGN -- its own
+// module doc says so -- and is the sanctioned home for the MLIR builtins the `.td`
+// does not describe, the same place `Value`, `Ty`, `Attr`, `AffineExpr` and
+// `IntegerSet` live (which is why t83/t85 were FORCED by it).  So these keys do
+// not cross the do-not-port-MLIR boundary.
+// ---------------------------------------------------------------------------
+
+// t154 -- `mlir::Location` -> `dataflowir_gen::ir::Location` (ir.rs:681).  Arity 0.
+// NOT a widening and NOT an opaque unit: the model is the CLOSED hierarchy of
+// `Builtin_LocationAttr` defs as a tree (Unknown / FileLineColRange / Name / Fused
+// / CallSite), so this is the first mlir type in this module that maps onto a
+// structure rather than onto `OpInst`/`Ty::Opaque`.
+// ⛔ THERE IS NO NULL VARIANT and none is invented here: `mlir::Location` is
+// documented as "a non-nullable wrapper around a LocationAttr" (Location.h:76),
+// and every in-band candidate collides with reachable corpus data -- `Unknown` is
+// CONSTRUCTED at six sites via `builder.getUnknownLoc()`, and the `-1,-1` that
+// `dcc/src/Utils/Utils.cpp:44-47` passes becomes a real `u32::MAX` line.
+// NO DEFAULT-CONSTRUCTOR KEY, and this was MEASURED rather than assumed: `grep -rn
+// 'Location [a-zA-Z_]*;'` over dcc/dbo/dataflow-scheduler/dxp is ZERO HITS, so no
+// site can ask for `mlir_Location::new()`.  What IS needed instead is the FACTORY,
+// f124 -- see there.
+using t154 = mlir::Location;
+
+// t155 -- `mlir::FileLineColLoc` -> `dataflowir_gen::ir::FileLineColLoc`
+// (ir.rs:621).  Arity 0.  A SEPARATE type from t154 on purpose: in C++ it is a
+// VIEW over a `FileLineColRange` whose range is degenerate (`class FileLineColLoc
+// : public FileLineColRange`, Location.h:174), so `dyn_cast<FileLineColLoc>` is
+// NOT "is this a file location" -- a model that let the cast succeed for
+// `"f":10:8 to 12:18` would hand back a line the C++ never yields.
+// NO DEFAULT-CONSTRUCTOR KEY, same measurement as t154 (`FileLineColLoc [a-z_]*;`
+// is ZERO HITS): every corpus value comes from `dcc::utils::getLocation(op)`,
+// which is the PROJECT's own function and is ported, not keyed.
+using t155 = mlir::FileLineColLoc;
+
+// f122 -- `FileLineColLoc::getLine()` -> `a0.line()`.  ⭐ THIS IS THE KEY THE ROW
+// EXISTS FOR: the nine TUs that read location structure all go through
+// `dcc::utils::getLocation(op).getLine()` (Liveness.cpp:939,944,
+// CFGSSentientLevelConditionalTree.cpp:159, RedundantDefinitionEliminationTree.cpp
+// :197, AddressPinningAndToggle.cpp:1479,2525, LoopMerging.cpp:293,294,
+// VectorRegisterInitialization.cpp:116, ScalarCopyInsertionForSymbols.cpp:532,550,
+// SinkScalarCopy.cpp:103, Utils.cpp:227,230, LoopMaskTree.cpp:113).
+// `unsigned` -> `u32`, exact.
+unsigned f122(const mlir::FileLineColLoc &a0) { return a0.getLine(); }
+
+// f123 -- `FileLineColLoc::getColumn()` -> `a0.column()`.  Same shape as f122;
+// read at AddressPinningAndToggle.cpp:2525, which prints `line:column`.
+unsigned f123(const mlir::FileLineColLoc &a0) { return a0.getColumn(); }
+
+// f124 -- `Builder::getUnknownLoc()` -> `Location::Unknown`.  ⭐ THE CONSTRUCTOR
+// KEY FOR t154, AND IT IS A FACTORY RATHER THAN A DEFAULT CTOR, which is the whole
+// point: `mlir::Location` has no meaningful default construction, so the
+// rc=0-then-E0433 trap cannot be closed by a `void T::T()` key here -- there is no
+// such expression in the corpus to close.  The expression the corpus DOES write is
+// `builder.getUnknownLoc()`, at six sites (Deuniform.cpp:238,241,
+// LoopRolling.cpp:831, OldRegisterInitialization.cpp:929,932,941,
+// SetSendDestinationRE.cpp:157, MultiDimLoopPeeling.cpp:640, BurstUtils.cpp:139,
+// Transformer.cpp:203,207,214, SCFToSentient.cpp:205, StandardToSentient.cpp:215+,
+// TransformLoopToLegalizeForSentientLowering.cpp:107, LitAutoTestGen.cpp:1144).
+// ⭐ IT IS KEYED ON `Builder`, NOT `OpBuilder`, DELIBERATELY: `getUnknownLoc` is
+// declared by `Builder` in mlir/IR/Builders.h and INHERITED by `OpBuilder`, and a
+// rule file CANNOT relocate an inherited member's key (measured on
+// `llvm::FailureOr`: six keys FOUND, all six DEAD).  So this ONE key serves both
+// the `Builder` and the `OpBuilder` receivers the brief lists.
+// The receiver is t59, which maps to the OPAQUE UNIT `()` -- and that is exactly
+// right for this member and for no other: an unknown location carries no
+// information from the builder, so nothing is lost by having no builder state.
+// Every OTHER Builder member (`getIndexType()`, `getI32IntegerAttr(...)`) remains
+// UNKEYED and still aborts loudly.
+mlir::Location f124(mlir::Builder &a0) { return a0.getUnknownLoc(); }

@@ -1409,3 +1409,65 @@ fn t153() -> dataflowir_gen::fmt::OpInst {
         <dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as dataflowir_gen::MlirOp>::DEF,
     )
 }
+
+// ---------------------------------------------------------------------------
+// PASS 2026-09-28: the `mlir::Location` row.  Model: dt_src `1e03497`,
+// `cpp2rust-port/dataflowir-gen/src/ir.rs:607-800`, re-exported at the crate root
+// (`lib.rs:72-73`), so `dataflowir_gen::Location` resolves too; the fully-qualified
+// `ir::` path is used here to match every other key in this file.
+// ---------------------------------------------------------------------------
+
+// t154 `mlir::Location` -> `ir::Location` (ir.rs:681).  The CLOSED hierarchy of
+//   `Builtin_LocationAttr` defs as a tree, NOT an opaque unit and NOT a widening.
+//   ⛔ THE `init` IS `Location::Unknown` AND IT IS NOT A NULL SENTINEL.  The model
+//   has no null variant on purpose (`mlir::Location` is documented non-nullable,
+//   Location.h:76) and `Unknown` is REAL REACHABLE DATA -- six corpus sites build
+//   it through `builder.getUnknownLoc()` and f124 maps exactly that.  So this
+//   expression is here ONLY to type-check the type key; it is not reachable as a
+//   default construction, because NO corpus site default-constructs a Location
+//   (measured: `grep -rn 'Location [a-zA-Z_]*;'` over dcc/dbo/dataflow-scheduler/
+//   dxp is zero hits) and NO default-constructor key is provided, so a site that
+//   wrote one would abort loudly rather than silently get `Unknown`.
+fn t154() -> dataflowir_gen::ir::Location {
+    dataflowir_gen::ir::Location::Unknown
+}
+
+// t155 `mlir::FileLineColLoc` -> `ir::FileLineColLoc` (ir.rs:621).  A SEPARATE type
+//   from t154 because in C++ it is a VIEW over a degenerate `FileLineColRange`
+//   (Location.h:174), so the cast that produces one is a RANGE-IS-ONE-LINE test,
+//   not a kind test.
+//   ⛔ THE `init` IS A TYPE-CHECK PLACEHOLDER, for the same reason as t154's and
+//   with the same measurement behind it (`FileLineColLoc [a-zA-Z_]*;` is zero hits
+//   in the corpus).  Every real value comes from `dcc::utils::getLocation(op)`,
+//   which is the PROJECT's own function -- ported, not keyed.  The empty filename
+//   is NOT claimed as a sentinel: nothing reads this value.
+fn t155() -> dataflowir_gen::ir::FileLineColLoc {
+    dataflowir_gen::ir::FileLineColLoc::get("", 0, 0)
+}
+
+// f122 `FileLineColLoc::getLine()` -> `a0.line()` (ir.rs:644).  ⭐ THE KEY THE ROW
+//   EXISTS FOR -- the nine structure-reading TUs all reach it through
+//   `dcc::utils::getLocation(op).getLine()`.  `unsigned` -> `u32`, exact, and the
+//   model's own doc comment records that `-1` at Utils.cpp:46 converts to
+//   `4294967295`, so a u32 is the faithful width and not a narrowing.
+fn f122(a0: &dataflowir_gen::ir::FileLineColLoc) -> u32 {
+    a0.line()
+}
+
+// f123 `FileLineColLoc::getColumn()` -> `a0.column()` (ir.rs:648).  Same shape.
+fn f123(a0: &dataflowir_gen::ir::FileLineColLoc) -> u32 {
+    a0.column()
+}
+
+// f124 `Builder::getUnknownLoc()` -> `Location::Unknown`.  ⭐ THE CONSTRUCTOR KEY
+//   FOR t154, IN ITS ONLY AVAILABLE FORM: `mlir::Location` has no meaningful
+//   default ctor, so the usual `void T::T()` key has nothing to bind to; the
+//   expression the corpus actually writes is `builder.getUnknownLoc()`.  Keyed on
+//   `Builder` (which DECLARES it) and not `OpBuilder` (which INHERITS it), because
+//   a rule cannot relocate an inherited member's key.
+//   `a0` is t59's OPAQUE UNIT `()`, and that is faithful for THIS member alone: an
+//   unknown location carries nothing from the builder.  No other Builder member is
+//   keyed, so `getIndexType()` and friends still abort loudly.
+fn f124(a0: &()) -> dataflowir_gen::ir::Location {
+    dataflowir_gen::ir::Location::Unknown
+}
