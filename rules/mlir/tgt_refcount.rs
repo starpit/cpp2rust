@@ -3194,3 +3194,30 @@ fn f531(
         Err(_) => false,
     }
 }
+
+// f540 / f541 -- `MutableOperandRange::size()` / `::slice()`.  See src.cpp at f540
+// and tgt_unsafe.rs at f540.  Identical arithmetic in this model; only the owner
+// handle's type differs (`Ptr` rather than `*mut`), and neither body derefs it.
+fn f540(a0: (libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>, u32, u32)) -> u32 {
+    a0.2
+}
+
+fn f541(
+    a0: (libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>, u32, u32),
+    a1: u32,
+    a2: u32,
+    a3: Option<(u32, (::std::string::String, dataflowir_gen::ir::Attr))>,
+) -> (libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>, u32, u32) {
+    let __segment: Option<(u32, (::std::string::String, dataflowir_gen::ir::Attr))> = a3;
+    drop(__segment);
+    // ⛔ THE RECEIVER IS BORROWED IN THE BODY, NOT MOVED, AND THAT IS NOT COSMETIC.
+    // `let __view = a0;` MOVES the triple.  In the unsafe model the triple is `Copy`
+    // so it is harmless, but in the refcount model `libcc2rs::Ptr` is NOT `Copy`
+    // (rc.rs:166 has no `derive(Copy)`), and the two witness sites slice the SAME
+    // receiver twice -- `all_opnds.slice(0,1)` then `all_opnds.slice(1,1)`
+    // (RegisterTypeAssignment.cpp:626-627) -- so a move is E0382 on the second one, at
+    // rc=0 and with no placeholder token.  Both models borrow, so the two bodies stay
+    // identical apart from the handle type.
+    let __view: &(libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>, u32, u32) = &a0;
+    (__view.0.clone(), __view.1 + a1, a2)
+}

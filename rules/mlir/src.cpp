@@ -603,6 +603,18 @@ public:
                       llvm::ArrayRef<std::pair<unsigned, NamedAttribute>>
                           operandSegments);
   MutableOperandRange(Operation *owner);
+
+  // ⭐ f540 / f541 -- THE TWO NON-RESIZING MEMBERS, keyed because they are now
+  // REACHED.  See f540's paragraph at the tail of this file for the witness, and
+  // for the per-member reason `assign`/`append`/`erase`/`clear`/`operator[]`/
+  // `getAsOperandRange` are STILL out.
+  // ⚠ `slice` MUST be declared with all THREE parameters even though every call
+  // site passes two: the recorder writes the DEFAULT ARGUMENT OUT at the call site
+  // (as a bare `None`), so a 2-parameter declaration is a MISS, not an overload.
+  unsigned size() const;
+  MutableOperandRange
+  slice(unsigned subStart, unsigned subLen,
+        std::optional<std::pair<unsigned, NamedAttribute>> segment) const;
 };
 
 // mlir/include/mlir/IR/Dialect.h -- the registered dialect record.
@@ -6991,4 +7003,169 @@ llvm::LogicalResult f530(mlir::DialectBytecodeReader &a0, mlir::BoolAttr &a1) {
 }
 llvm::LogicalResult f531(mlir::DialectBytecodeReader &a0, mlir::ArrayAttr &a1) {
   return a0.readOptionalAttribute(a1);
+}
+
+// ---------------------------------------------------------------------------
+// f540 / f541 -- `MutableOperandRange::size()` and `::slice()`, THE TWO MEMBERS
+// THAT ARE NOW REACHED AND ARE NON-RESIZING.
+//
+// ⭐ WHAT CHANGED SINCE t520's PER-MEMBER REFUSAL.  t520's paragraph left every
+// member out on the measured ground that "NONE of them is reached by ANY bucket-A
+// file", and it NAMED the two callers it believed were not in the bucket-A set:
+// `dcc/src/Transform/Sentient/AddressPinningAndToggle.cpp` and
+// `.../RegisterTypeAssignment.cpp`.  BOTH OF THEM ARE BUCKET A TODAY (measured
+// 2026-09-28 with the `f5264330` pin against a tree cut at `23525507`):
+//     AddressPinningAndToggle.cpp   A  rc=1  10247 emitted lines
+//     RegisterTypeAssignment.cpp    A  rc=1   7916 emitted lines
+// -- so the "DEAD KEY" objection is retired for the members those two reach.
+// ⚠️ THE rc=1 IS NOT AN ABORT AND IT IS NOT THESE MEMBERS.  It is `ERROR: failed to
+// run rustfmt`, because the EMITTED RUST DOES NOT PARSE at exactly two sites per
+// file, all four of them a CONVERTER bug and not a rules gap: a C++ conditional
+// operator whose result feeds a pointer coercion is emitted as an `if`/`else`
+// BLOCK expression used as the left operand of `as` WITHOUT PARENTHESES --
+//     mlir_MutableOperandRange :: new_1 ( { if c { &mut (*X) } else { &mut (*Y) }
+//                                          as *mut () } , )
+//     error: expected expression, found `as`
+//   at AddressPinningAndToggle.cpp.rs:7973 (cols 575 and 1051, from C++ :1055-1056
+//   and :1088-1089) and RegisterTypeAssignment.cpp.rs:7300 / :7304 (from C++ :406).
+// rustc itself prints the fix ("parentheses are required to parse this as an
+// expression").  ⛔ SO `assign` WAS NEVER THE GATE ON THESE TWO TUs, and no rule
+// key can move it: the parenthesisation is the emitter's.  NOTE ALSO that the
+// conditional's branches are `MutableOperandRange` PRVALUES being passed BY VALUE,
+// i.e. a COPY construction, and the converter selected the ONE-argument key f421
+// (`new_1`, `MutableOperandRange(Operation *)`) for it and coerced the argument
+// with `as *mut ()`.  That is a second, independent converter-side question about
+// this row and it is recorded here rather than guessed at.
+//
+// ⭐ THE WITNESS IS AN EMITTED `.rs`, NOT A READBACK.  Before these two keys,
+// `RegisterTypeAssignment.cpp.rs` carries the member calls TEXTUALLY -- which is
+// exactly the silent hazard t520's paragraph predicted, at rc=1 with no
+// placeholder token:
+//     all_opnds . slice  ( 0_u32 , 1_u32 , None , )      <- C++ :626
+//     all_opnds . slice  ( 1_u32 , 1_u32 , None , )      <- C++ :627
+//     operand . size  ( )                                <- C++ :408
+// ⚠️ AND THE THIRD ARGUMENT CONFIRMS THE DEFAULTED-ARGUMENT TRAP FIRST-HAND: the
+// C++ calls are 2-argument (`all_opnds.slice(0, 1)`), and the recorder WRITES THE
+// DEFAULT OUT at the call site as `None`.  So `slice` MUST be declared with all
+// three parameters or the key is a MISS -- the same shape as f420's dropped `= {}`
+// and as the f144 / `RegionRange` precedent.
+// ⚠️ THREE-PATTERN COUNTING WAS REQUIRED TO SEE THEM AT ALL, and a FOURTH pattern
+// was: the emitter puts a SPACE BEFORE THE DOT, so BOTH the ident-anchored
+// `[A-Za-z_0-9]\. *slice` AND the `[)]\.` form return **ZERO**.  Only a bare or
+// `[^A-Za-z_0-9)] *\.` pattern finds them.
+//
+// ⛔ WHY THESE TWO AND NOT THE OTHERS -- the soundness line is RESIZING.
+// t520's representation drops the `operandSegments` list, which is sound only while
+// nothing changes the operand COUNT.  `size` reads `length`; `slice` returns
+// `(owner, start + subStart, subLen)`.  Neither touches the count, and neither
+// resolves the flat ODS `start` index into a NAMED operand group, so neither can
+// trip the `BTreeMap`-is-alphabetical hazard either -- `slice` only does ARITHMETIC
+// on the flat index, and it keeps the SAME owner pointer, so the sub-range is still
+// a write-through view of the same op.
+// ⛔ STILL OUT, and the reason is per-member:
+//   * `assign(Value)` / `assign(ValueRange)` -- REACHED (14 sites in
+//     AddressPinningAndToggle.cpp: 10 on the `mutable_addr_`/`immutable_addr_`
+//     members, emitted as the overload-mangled `assign_dataflowir_genirValue`, plus
+//     4 on `getSrcImmutableAddrMutable()` / `getInp1Mutable()` temporaries), so
+//     "dead key" no longer applies.  IT IS OUT ON SOUNDNESS: MLIR's
+//     `assign(Value)` is a plain `setOperand(start, v)` ONLY when `length == 1`;
+//     otherwise it calls `setOperands(start, length, v)` and `updateLength(1)`,
+//     i.e. it RESIZES, and `length` is a RUNTIME value this rule cannot test.  A
+//     key would therefore resize the op's operand list at rc=0 without updating the
+//     segment attribute -- the exact silent corruption t520 warned about.
+//     ⭐ WIDEN THE REPRESENTATION TO CARRY `operandSegments` FIRST.  Left out is
+//     LOUD: the textual `x.assign_dataflowir_genirValue(v)` has no such method on a
+//     Rust tuple (E0599).
+//   * `append` / `erase` / `clear` -- resizing by definition; same blocker, and not
+//     reached by either of these two TUs.
+//   * `operator[]` returns `OpOperand &`, a handle at ONE operand slot that this
+//     model has no spelling for; not reached by either TU.
+//   * `getAsOperandRange` -- not reached by either TU.
+//
+// ============================================================================
+// ⛔⛔ THE WIDENING THIS ROW WAS ASKED FOR IS THE WRONG FIX, AND THE REASON IS
+// MEASURED IN `dataflowir-gen`, NOT REASONED FROM MLIR.
+//
+// The instruction was: carry `operandSegments` in the representation so
+// `updateLength` becomes expressible and the resizing mutators unblock.  I went to
+// check what `updateLength` would have to WRITE in the target, and there is nothing
+// to write:
+//
+//   grep -rn 'operandSegment|operand_segment|SegmentSize' dataflowir-gen/src/
+//     -> 10 hits, ALL of them in `custom.rs`, and EVERY ONE is an
+//        ELIDED-ATTRIBUTE list, e.g. custom.rs:390
+//            &["src_map", "dst_map", "operandSegmentSizes"]
+//        i.e. the name appears only so a custom printer can LEAVE IT OUT of the
+//        attr-dict.  `fmt.rs` -- which owns `OpInst` and the printer -- never
+//        mentions it at all.
+//
+// ⭐ SO IN THIS MODEL THE SEGMENT SIZES ARE NOT AN ATTRIBUTE: they ARE the `Vec`
+// LENGTHS in `OpInst::operands: BTreeMap<String, Vec<Value>>`.  `ordered_operands`
+// (fmt.rs:835) is the ONLY thing that turns the map into a flat operand list, and it
+// does so by walking `def.arguments` and taking `operands.get(a.name)` -- it reads no
+// attribute.  A resizing mutator that edits the right `Vec` has therefore ALREADY
+// updated the group size; `updateLength`'s attribute write has NO target-side effect,
+// and `MutableOperandRange::operandSegments` has no target-side READER.
+//
+// ⛔ AND CARRYING IT WOULD ACTIVELY COST SOMETHING.  `OperandSegment` is
+// `pair<unsigned, NamedAttribute>`, so the widened member is a
+// `Vec<(u32, (String, ir::Attr))>` -- which is NOT `Copy` IN EITHER MODEL.  t520's
+// triple being `Copy` is load-bearing three times over in the keys already landed:
+// f540's by-value receiver, f541's two-slices-of-one-receiver witness
+// (`RegisterTypeAssignment.cpp:626-627`), and the NRVO/move-constructor ask that t520
+// deliberately leaves unkeyed *because* the `Copy` tuple already satisfies it.  All
+// three become E0382/E0505 at rc=0, and the move-ctor ask starts fabricating again.
+// So the widening would break three landed things to add a field nothing reads.
+//
+// ⭐⭐ WHAT `assign(Value)` ACTUALLY NEEDS, NAMED PRECISELY -- and it is NOT a
+// representation change, it is a FLAT-INDEX SETTER THAT WALKS ODS ORDER:
+//
+//     dataflowir_gen::fmt::OpInst::set_operands_flat(
+//         &mut self, start: u32, length: u32, vs: &[ir::Value]) -> bool
+//
+//   replacing the `length` operands at FLAT ODS positions `[start, start+length)`
+//   with `vs`, where "flat ODS position" means the index into the sequence
+//   `ordered_operands()` produces -- `def.arguments` in DECLARATION order, skipping
+//   `is_attribute_arg(a.ty)`, keeping only names present in `self.operands`.  Returns
+//   false (and changes nothing) when the range is out of bounds, or when
+//   `length == 0` and `start` lands on a GROUP BOUNDARY, where the insertion is
+//   genuinely ambiguous between the two adjacent variadic groups and MLIR's own
+//   `setOperands` resolves it by an index the printed model does not carry.
+//   ⭐ THIS MUST LIVE IN `dataflowir-gen`, NOT IN A RULE BODY.  A rule body CAN
+//   spell the walk -- `def.arguments`/`TdFieldDef{ty,name,variadic,optional}` and
+//   `fmt::is_attribute_arg` are all `pub` -- but then the ODS-order invariant is
+//   duplicated in a rules file instead of sitting next to `ordered_operands`, which
+//   is the function it has to agree with EXACTLY or the mutator addresses the wrong
+//   group SILENTLY.  ⛔ `slice`/f541 is safe today only because it does pure
+//   arithmetic on the flat index and never resolves it to a name.
+//
+// ⛔ AND `assign` IS STILL OUT OF THIS SLOT even with that method, because the
+// deliverable for a mutator is the ALIASING RUN (compile + execute, write through the
+// view, read back out of the enclosing `fmt::Block`, copy-model control staying
+// stale), not the key.  Landing the key without that run is precisely the
+// write-to-a-copy silent loss this family is guarded against.  Left out is LOUD:
+// `x.assign_dataflowir_genirValue(v)` is E0599 on a Rust tuple.
+// ============================================================================
+//
+// ⭐ KEYED AGAINST THE EMITTED CALL, WHICH IS THE GROUND TRUTH t520 USED TOO.  The
+// receivers are spelled `const &` (both members are `const` in ValueRange.h), which
+// matches the f122 / `FileLineColLoc::getLine` precedent for a by-reference read.
+// ⛔ THE RECEIVER IS BY VALUE, AND THAT WAS MEASURED, NOT CHOSEN BY ANALOGY.  The
+// f122 / `FileLineColLoc::getLine` precedent spells a read receiver `const &`, and
+// here that is WRONG: the recorder renders a `borrow` placeholder as a `&` PREFIX ON
+// THE WHOLE RECEIVER EXPRESSION, so a body of `a0.2` emitted `&(operand ).2` -- i.e.
+// `&u32`, which then fails `== 1_u32` with E0277 at rc=0 and NO placeholder token.
+// t520's target is a `Copy` triple, so by value is both correct and free.
+unsigned f540(mlir::MutableOperandRange a0) { return a0.size(); }
+
+// f541 -- `slice(subStart, subLen, segment)`.  The third parameter is
+// `std::optional<OperandSegment>` with `= {}`, spelled out in full because the
+// alias is canonicalised away in the ask and because the default is written at the
+// call site (see the paragraph above).  It is BOUND AND DROPPED in the target
+// bodies, exactly like f420's `a3`, so the C++ argument expression is still
+// evaluated and a rule body never silently deletes one.
+mlir::MutableOperandRange
+f541(mlir::MutableOperandRange a0, unsigned a1, unsigned a2,
+     std::optional<std::pair<unsigned, mlir::NamedAttribute>> a3) {
+  return a0.slice(a1, a2, a3);
 }

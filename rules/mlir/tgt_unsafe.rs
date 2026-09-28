@@ -3335,3 +3335,40 @@ unsafe fn f531(
         Err(_) => false,
     }
 }
+
+// f540 / f541 -- `MutableOperandRange::size()` / `::slice()`.  See src.cpp at f540
+// for the witness (both callers are bucket A now), for why these two and not the
+// resizing members, and for the converter-side `as`-parenthesisation bug that is
+// the ACTUAL gate on those two TUs.
+unsafe fn f540(a0: (*mut dataflowir_gen::fmt::OpInst, u32, u32)) -> u32 {
+    a0.2
+}
+
+// f541 -- `(owner, start + subStart, subLen)`.  The owner pointer is CARRIED
+// THROUGH unchanged, so the sub-range is still a write-through view of the same op.
+// ⛔ `a1` is added to the FLAT ODS index and is NEVER resolved to a named operand
+// group, which is why this body does not need the `(*owner).def.arguments` walk
+// t520 requires of any member that does.
+// ⛔ THE ANNOTATION ON `__segment` IS LOAD-BEARING for the same measured reason as
+// f420's: the parameter is DEFAULTED and the recorder writes the default out at the
+// call site as a bare `None`, so an unannotated `let __segment = a3;` is E0282 at
+// rc=0 with no placeholder token.
+unsafe fn f541(
+    a0: (*mut dataflowir_gen::fmt::OpInst, u32, u32),
+    a1: u32,
+    a2: u32,
+    a3: Option<(u32, (::std::string::String, dataflowir_gen::ir::Attr))>,
+) -> (*mut dataflowir_gen::fmt::OpInst, u32, u32) {
+    let __segment: Option<(u32, (::std::string::String, dataflowir_gen::ir::Attr))> = a3;
+    drop(__segment);
+    // ⛔ THE RECEIVER IS BORROWED IN THE BODY, NOT MOVED, AND THAT IS NOT COSMETIC.
+    // `let __view = a0;` MOVES the triple.  In the unsafe model the triple is `Copy`
+    // so it is harmless, but in the refcount model `libcc2rs::Ptr` is NOT `Copy`
+    // (rc.rs:166 has no `derive(Copy)`), and the two witness sites slice the SAME
+    // receiver twice -- `all_opnds.slice(0,1)` then `all_opnds.slice(1,1)`
+    // (RegisterTypeAssignment.cpp:626-627) -- so a move is E0382 on the second one, at
+    // rc=0 and with no placeholder token.  Both models borrow, so the two bodies stay
+    // identical apart from the handle type.
+    let __view: &(*mut dataflowir_gen::fmt::OpInst, u32, u32) = &a0;
+    (__view.0, __view.1 + a1, a2)
+}
