@@ -1271,6 +1271,90 @@ std::optional<std::string> tryDerivePointerType(const std::string &cpp_type) {
   return (is_const ? "*const " : "*mut ") + mapTypeStringRecursive(pointee);
 }
 
+// A TOP-LEVEL `const ` IS DECORATION WITH NO RUST SPELLING AT ALL.
+// THE PROOF THAT NOTHING STRIPS IT TODAY is addBuiltinTypes (:639): it registers
+// `AddTypeRule("const " + cxx, ...)` as a LITERAL DUPLICATE beside every scalar,
+// which is only necessary because a `const ` spelling never reaches the
+// unqualified key. A rule-authored key gets no such twin, so every rule-mapped
+// type was UNREACHABLE under a `const` spelling even though the type is modelled.
+//
+// MEASURED: `mlir::Value` is mapped (rules/mlir t4 -> `ir::Value`), yet
+//   LLVM ERROR: unsupported unmapped type `const mlir::Value` has no model in
+//   types_
+// terminated dcc/src/Transform/Sentient/ScalarCopyInsertionForSymbols.cpp,
+// reached as `std::optional<const mlir::Value>`. A scan of the census logs'
+// TERMINATING aborts found 5 distinct `const ...` spellings across 6 TUs
+// (`const mlir::Value` x2, `const std::string`, `const PrimaryDimTypes`,
+// `const StringKey<DsKey>`, `const std::pair<std::vector<PcfgLccrCond2>, long>`)
+// and EVERY ONE of them is this shape -- a top-level const, no decoration.
+//
+// THE DERIVED TYPE IS THE UNQUALIFIED ONE, UNCHANGED, AND THAT IS DELIBERATE.
+// In Rust immutability is a property of the BINDING (`let` vs `let mut`) and of
+// the reference (`&T` vs `&mut T`), never of the value type: there is no `const
+// i32` distinct from `i32`. So a `const X` VALUE and an `X` value are the same
+// Rust type and the honest derivation is "map the unqualified spelling and return
+// it verbatim". The two shapes where the const IS observable in Rust are `const X
+// &` and `const X *`, and those are NOT ours: tryDeriveReferenceType and
+// tryDerivePointerType above already read the same leading `const ` and turn it
+// into `*const` rather than `*mut`. This function must therefore never see them.
+//
+// Two ways to get that wrong, each of which cost a measured bug in the pointer
+// case (c9b6ffc):
+//  * `const X *` is a pointer-to-CONST, not a const pointer -- the const binds to
+//    the pointee, so stripping it here would hand `*mut X` to the pointer derive
+//    and SILENTLY DROP the const. We bail whenever a `*`, `&` or `[` remains at
+//    the TOP level.
+//  * the scan must be DEPTH-AWARE, so a `const`/`*` inside template arguments
+//    cannot fool it: `const std::vector<const X *>` IS a const vector and must
+//    strip (the inner `*` is at depth 1), while `std::vector<const X *>` does not
+//    begin with `const ` at all and is never a candidate.
+// Ordered AFTER the types_ search, so every `const T` a rule models explicitly
+// still wins -- including addBuiltinTypes' deliberate `const `+scalar twins, which
+// keep resolving to themselves and are untouched by this.
+std::optional<std::string> tryDeriveTopLevelConstType(const std::string &cpp_type) {
+  auto trim = [](std::string s) {
+    while (!s.empty() && isspace(static_cast<unsigned char>(s.front()))) {
+      s.erase(s.begin());
+    }
+    while (!s.empty() && isspace(static_cast<unsigned char>(s.back()))) {
+      s.pop_back();
+    }
+    return s;
+  };
+
+  std::string s = trim(cpp_type);
+  const std::string kConstPrefix = "const ";
+  if (s.compare(0, kConstPrefix.size(), kConstPrefix) != 0) {
+    return std::nullopt;
+  }
+  std::string unqualified = trim(s.substr(kConstPrefix.size()));
+  if (unqualified.empty()) {
+    return std::nullopt;
+  }
+
+  // Any top-level `*`/`&`/`[` means the const we just stripped was NOT ours: it
+  // binds to a pointee or referent and the pointer/reference derive owns it.
+  // Depth counting is what keeps `std::vector<const X *>` out of the decision.
+  {
+    int depth = 0;
+    for (char c : unqualified) {
+      if (c == '<' || c == '(' || c == '[') {
+        if (c == '[' && depth == 0) {
+          return std::nullopt;
+        }
+        ++depth;
+      } else if (c == '>' || c == ')' || c == ']') {
+        --depth;
+      } else if ((c == '*' || c == '&') && depth == 0) {
+        return std::nullopt;
+      }
+    }
+  }
+
+  PushMapContext ctx(cpp_type, map_ctx_.outer_type);
+  return mapTypeStringRecursive(unqualified);
+}
+
 std::string mapTypeStringRecursive(const std::string &cpp_type) {
   auto [rule, subs] = search(types_, cpp_type, GetTypeMapKey(cpp_type));
   if (!rule) {
@@ -1287,6 +1371,12 @@ std::string mapTypeStringRecursive(const std::string &cpp_type) {
     }
     // Same reasoning, and the last shape in the family: a trailing `*`.
     if (auto derived = tryDerivePointerType(cpp_type)) {
+      return *derived;
+    }
+    // And the one member of the family that was missing: a LEADING `const ` with
+    // nothing decorated left of it. Last in the family so the three decoration
+    // derives above keep first refusal on `const X *` / `const X &`.
+    if (auto derived = tryDeriveTopLevelConstType(cpp_type)) {
       return *derived;
     }
     if (survey::Enabled()) {
