@@ -2034,6 +2034,20 @@ bool Converter::VisitIfStmt(clang::IfStmt *stmt) {
     stmt->setInit(init);
     return false;
   }
+  // `if (auto x = e)`: clang puts the VarDecl in getConditionVariableDeclStmt()
+  // and leaves getInit() NULL, while getCond() is the contextual-bool cast over
+  // a DeclRefExpr to `x`. Without hoisting the declaration we would faithfully
+  // render a reference to a name that was never bound. Mirror the
+  // init-statement hoist above: the enclosing brace makes the variable's scope
+  // the whole if-statement (then AND else branches) and evaluates it once.
+  if (auto *cond_var = stmt->getConditionVariableDeclStmt()) {
+    PushBrace scope(*this);
+    Convert(cond_var);
+    stmt->setConditionVariableDeclStmt(nullptr);
+    Convert(stmt);
+    stmt->setConditionVariableDeclStmt(cond_var);
+    return false;
+  }
   StrCat(keyword::kIf);
   if (auto *cond = clang::dyn_cast<clang::ConstantExpr>(stmt->getCond());
       cond && stmt->isConstexpr()) {
