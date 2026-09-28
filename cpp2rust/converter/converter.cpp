@@ -691,10 +691,24 @@ bool Converter::NeedsMut(const clang::VarDecl *decl, clang::QualType type,
   auto *method_or_null =
       curr_function_ ? clang::dyn_cast<clang::CXXMethodDecl>(curr_function_)
                      : nullptr;
+  // The virtual-method suppression is about PARAMETERS, not locals: a virtual
+  // method's signature is also emitted without a body (trait method), and `mut`
+  // on a parameter pattern there is E0642 ("patterns aren't allowed in
+  // functions without bodies"). It was suppressing `mut` on every LOCAL in the
+  // body too, which is a compile-level defect emitted at rc=0 with no
+  // placeholder token: measured on dbo/src/Transforms/PlacePrograms.cpp, whose
+  // `runOnOperation() override` declares
+  //   let in_order: Option<Vec<mlir_dbo_ProgramInOrder>> = ...;
+  // and then reaches it through the non-const `optional::operator*` rule, which
+  // lowers to `.as_mut().expect(...)` and so takes `&mut self` -- E0596. The
+  // `as_mut()` is CORRECT (one of the two uses builds a `MutableArrayRef`), so
+  // the missing `mut` is the bug, not the lowering.
+  const bool virtual_method_parm = method_or_null != nullptr &&
+                                   method_or_null->isVirtual() &&
+                                   clang::isa<clang::ParmVarDecl>(decl);
   return ((hoisted_decls_.contains(decl) ||
            (!type.isConstQualified() && !type->isReferenceType())) &&
-          ((method_or_null == nullptr) || !method_or_null->isVirtual()) &&
-          !IsGlobalVar(decl) && name != "_");
+          !virtual_method_parm && !IsGlobalVar(decl) && name != "_");
 }
 
 bool Converter::ConvertVarDeclSkipInit(clang::VarDecl *decl) {
