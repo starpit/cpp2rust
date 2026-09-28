@@ -228,6 +228,16 @@ fn f60<T1: ByteRepr>(a0: Ptr<Vec<T1>>, a1: Ptr<T1>) -> Ptr<T1> {
     a0.decay()
 }
 
+// f62 -- `std::vector<T1, T2>::empty() const`.  Byte-identical to the tgt_unsafe.rs body on
+// purpose: the emitted text is `<receiver>.is_empty()`, the receiver is a vector VALUE (not a
+// refcount handle), and the body never mentions the element type, so no `Ptr<>`/`Value<>`
+// wrapping can differ between the two models.  Written out rather than left to the
+// unsafe-body fallback so the refcount model's choice here is explicit and not implicit.
+// (f62 is a FUNCTION key, so this does not touch the `note: exactly 15` TYPE-key list.)
+fn f62<T1>(a0: Vec<T1>) -> bool {
+    a0.is_empty()
+}
+
 fn f65<T1>(a0: Ptr<T1>) -> Ptr<T1> {
     a0
 }
