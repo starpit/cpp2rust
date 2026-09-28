@@ -3481,3 +3481,27 @@ fn f753(a0: libcc2rs::Ptr<dataflowir_gen::AsmPrinter>, a1: dataflowir_gen::ir::T
     });
     __p
 }
+
+// ===========================================================================
+// t950-t956 / f850-f871 -- THE ASM-PARSER READER HALF IS *** UNSAFE-ONLY ***.
+//
+// ⛔ MEASURED, NOT ASSUMED: `dataflowir_gen::AsmParser` has NO `impl libcc2rs::ByteRepr`,
+// so `libcc2rs::Ptr::<AsmParser>::with_mut` does not exist and the refcount bodies fail
+// with 21 x `E0277: the trait bound dataflowir_gen::AsmParser: ByteRepr is not satisfied`
+// (rc.rs:507 `required by a bound in Ptr::<T>::with_mut`; the note lists AsmPrinter among
+// the 90 types that DO implement it, which is exactly the asymmetry).
+//
+// So these keys live ONLY in tgt_unsafe.rs, which is the UNCONDITIONAL base layer: the
+// refcount model therefore resolves them through the union and uses the unsafe body.
+// ⚠️ THAT IS A REAL WEAKNESS AND IT IS RECORDED RATHER THAN HIDDEN -- see check-ir.sh's
+// `rc_only_types` NOTE, which measures 15 pre-existing keys with the same shape across 7
+// modules (array, brotli, fstream, mlir, raw_ostream, smallvector, vector) in a GREEN
+// tree, so it is not a load failure.
+//
+// ⭐ THE FIX IS ONE LINE AND IT IS NOT MINE TO WRITE (dataflowir-gen was just committed
+// and is off limits this slot): add, beside `impl ByteRepr for AsmPrinter`,
+//     impl ByteRepr for AsmParser {}
+// in the same file and `impl` position, and the whole block below can be mirrored here
+// verbatim with `with_mut`.  The test that proves it: construct
+// `Ptr::new(AsmParser::new("%a"))`, call `with_mut(|p| p.parse_operand(&mut s))` and
+// assert `s == "%a"` -- i.e. that a Ptr-held parser both borrows mutably AND advances.

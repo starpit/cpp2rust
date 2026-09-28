@@ -3662,3 +3662,163 @@ unsafe fn f753(a0: *mut dataflowir_gen::AsmPrinter, a1: dataflowir_gen::ir::Ty) 
     dataflowir_gen::AsmPrinter::print_type(&mut *__p, &a1);
     __p
 }
+
+// ===========================================================================
+// t950-t956 + f850-f871 -- THE ASM-PARSER READER HALF (slot `parserkeys`).
+// Model: `dataflowir_gen::AsmParser` (dt_src c81086e, dataflowir-gen/src/asm.rs:605).
+// ⭐ THE CONTRACT: `true` == success, and any method returning `false` HAS CONSUMED
+// NOTHING.  rules/support t4 models `llvm::ParseResult` as `bool` the same way round,
+// so every body below is a bare forward and nothing has to be inverted.  See src.cpp
+// for the operand family's refusal (t84 maps `UnresolvedOperand` to `()`, so there is
+// no place to put a name and no name to look up) and for the six other omissions.
+
+// t950 -- `mlir::OpAsmParser::Argument` -> `()`.  THE BUCKET GATE: the first abort of
+// 4 TUs, which emit ZERO lines today.  An opaque unit for t84's exact reason -- every
+// corpus use declares, forwards and collects it, and the two sites that DO read a field
+// fail at rustc with `E0609` rather than silently.  See src.cpp for why a faithful
+// struct is not expressible (a field access is a MemberExpr, unkeyable, and no Rust
+// struct can have a field spelled `type`).
+unsafe fn t950() -> () {
+    ()
+}
+
+// t951-t956 -- `mlir::AsmParser`, `mlir::OpAsmParser` and `mlir::DialectAsmParser`,
+// by value and by reference.  ONE model for all three: the reader is the reader, and
+// the derived spellings add no state (t590/t591 made the identical call on the
+// printer side for `DialectAsmPrinter`).  `AsmParser::new("")` is the honest zero
+// value -- an EMPTY buffer, on which every method correctly returns `false`.  ⛔ It
+// must not be a buffer with content: that would make a default-constructed parser
+// accept tokens nobody supplied.
+unsafe fn t951() -> dataflowir_gen::AsmParser {
+    dataflowir_gen::AsmParser::new("")
+}
+unsafe fn t952() -> *mut dataflowir_gen::AsmParser {
+    ::core::ptr::null_mut()
+}
+unsafe fn t953() -> dataflowir_gen::AsmParser {
+    dataflowir_gen::AsmParser::new("")
+}
+unsafe fn t954() -> *mut dataflowir_gen::AsmParser {
+    ::core::ptr::null_mut()
+}
+unsafe fn t955() -> dataflowir_gen::AsmParser {
+    dataflowir_gen::AsmParser::new("")
+}
+unsafe fn t956() -> *mut dataflowir_gen::AsmParser {
+    ::core::ptr::null_mut()
+}
+
+// f850 -- the constructor for t950.  f62's shape.
+unsafe fn f850() -> () {
+    ()
+}
+
+// f851 -- `parseArrow()`. ⭐ NOT `parse_punct('-')`: `->` is TWO chars, and `parse_punct('-')`
+// would consume the `-` and leave the `>`.
+unsafe fn f851(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_arrow(&mut *a0)
+}
+
+// f852 -- `parseOptionalArrow()`. Absent is not an error and consumes nothing.
+unsafe fn f852(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_optional_arrow(&mut *a0)
+}
+
+// f853 -- `parseColon()`, 9 sites.
+unsafe fn f853(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_punct(&mut *a0, ':')
+}
+
+// f854 -- `parseOptionalColon()`.
+unsafe fn f854(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_optional_punct(&mut *a0, ':')
+}
+
+// f855 -- `parseComma()`.
+unsafe fn f855(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_punct(&mut *a0, ',')
+}
+
+// f856 -- `parseOptionalComma()`.
+unsafe fn f856(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_optional_punct(&mut *a0, ',')
+}
+
+// f857 -- `parseEqual()`.
+unsafe fn f857(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_punct(&mut *a0, '=')
+}
+
+// f858 -- `parseOptionalEqual()`.
+unsafe fn f858(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_optional_punct(&mut *a0, '=')
+}
+
+// f859 -- `parseLess()`.
+unsafe fn f859(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_punct(&mut *a0, '<')
+}
+
+// f860 -- `parseOptionalLess()`.
+unsafe fn f860(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_optional_punct(&mut *a0, '<')
+}
+
+// f861 -- `parseGreater()`.
+unsafe fn f861(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_punct(&mut *a0, '>')
+}
+
+// f862 -- `parseOptionalGreater()`.
+unsafe fn f862(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_optional_punct(&mut *a0, '>')
+}
+
+// f863 -- `parseLParen()`.
+unsafe fn f863(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_punct(&mut *a0, '(')
+}
+
+// f864 -- `parseOptionalLParen()`.
+unsafe fn f864(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_optional_punct(&mut *a0, '(')
+}
+
+// f865 -- `parseRParen()`.
+unsafe fn f865(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_punct(&mut *a0, ')')
+}
+
+// f866 -- `parseOptionalRParen()`.
+unsafe fn f866(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_optional_punct(&mut *a0, ')')
+}
+
+// f867 -- `parseLSquare()`.
+unsafe fn f867(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_punct(&mut *a0, '[')
+}
+
+// f868 -- `parseOptionalLSquare()`.
+unsafe fn f868(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_optional_punct(&mut *a0, '[')
+}
+
+// f869 -- `parseRSquare()`.
+unsafe fn f869(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_punct(&mut *a0, ']')
+}
+
+// f870 -- `parseOptionalRSquare()`.
+unsafe fn f870(a0: *mut dataflowir_gen::AsmParser) -> bool {
+    dataflowir_gen::AsmParser::parse_optional_punct(&mut *a0, ']')
+}
+
+// f871 -- `parseType(mlir::Type &)`.  t5 maps `mlir::Type` to `ir::Ty` and a `T &`
+// parameter to `&mut <mapped>`, so the decoded type is written through.
+// ⚠️ On a FUNCTIONAL type this reads `(i32, i32)` and leaves ` -> i32` unconsumed
+// (`ir::Ty` has no function variant) -- loud and documented in the crate, not a
+// silent acceptance introduced here.
+unsafe fn f871(a0: *mut dataflowir_gen::AsmParser, a1: &mut dataflowir_gen::ir::Ty) -> bool {
+    dataflowir_gen::AsmParser::parse_type(&mut *a0, a1)
+}

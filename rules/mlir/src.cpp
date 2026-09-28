@@ -2900,6 +2900,13 @@ public:
   struct UnresolvedOperand {
     UnresolvedOperand();
   };
+  // t950 -- `struct Argument` (OpImplementation.h:1693), ADDED HERE rather than in a
+  // second `class OpAsmParser` declaration: a redeclaration is `error: redefinition`
+  // and aborts the whole module regen (the `class RewriterBase` note at t541 records
+  // the same trap).  Members omitted for the reason argued at `using t950 =`.
+  struct Argument {
+    Argument();
+  };
 };
 
 } // namespace mlir
@@ -8006,3 +8013,205 @@ mlir::AsmPrinter &f752(mlir::AsmPrinter &a0, mlir::Type a1) {
 mlir::OpAsmPrinter &f753(mlir::OpAsmPrinter &a0, mlir::Type a1) {
   return mlir::operator<<(a0, a1);
 }
+
+// ===========================================================================
+// t950-t956 + f850-f871 -- THE ASM-PARSER READER HALF (slot `parserkeys`).
+//
+// `dataflowir_gen::{AsmParser, Delimiter}` (dt_src c81086e, dataflowir-gen/src/asm.rs)
+// is the model.  Before that commit this whole row was UNKEYABLE for a hard reason
+// -- rule-preprocessor/src/syntactic.rs:114 iterates ONLY `ast::Fn` items named
+// `t*`/`f*`, so an `enum`/`struct`/`impl` written into a rules overlay is SILENTLY
+// DROPPED and every type a rule names must already exist in the crate.
+//
+// ⭐ THE CONTRACT THE CRATE GUARANTEES AND EVERY BODY BELOW PRESERVES: `true` means
+// success and any method returning `false` HAS CONSUMED NOTHING.  The emitted Rust
+// for a ported `FooOp::parse` is a chain of `if !(p.parse_x(..)) { return !true; }`,
+// so a method answering `true` on input it did not read would make the generated
+// parser SILENTLY ACCEPT MALFORMED TEXT -- strictly worse than the loud unresolved
+// key it replaces.  rules/support t4 models `llvm::ParseResult` as `bool` with
+// true == success, which lines up exactly.
+//
+// ⛔⛔ THE OPERAND FAMILY IS *** NOT *** KEYED HERE, AND THE REASON IS `t84`.
+// 122 of the 194 measured member sites are `resolveOperands` (61), `parseOperandList`
+// (30), `parseOperand` (28) and `parseOptionalOperand` (3).  All four carry
+// `OpAsmParser::UnresolvedOperand`, and `using t84` (src.cpp:2908) ALREADY maps that
+// type to `()` -- "map the type so the CONTAINER becomes expressible, map no member".
+// The crate's reader was written against the opposite model: `parse_operand(out: &mut
+// String)` writes the printed spelling `%arg0` and `resolve_operands(&[String], &Ty,
+// &mut Vec<Value>)` looks that spelling up in its SSA environment.  Against `t84`'s
+// `()` the parameters arrive as `&mut ()` and `Vec<()>`: there is NO PLACE to put the
+// name and NO NAME to look up, so the only writable bodies would be one that discards
+// the token (a parser that accepts anything) or one that returns `false` unconditionally
+// (a parser that accepts nothing).  Hard rule: neither is admissible, so the family
+// stays loud.  ⭐ THE FIX IS A t84 REMODEL, NOT A NEW KEY: `UnresolvedOperand -> String`
+// (f62 -> `String::new()`), which makes `SmallVector<UnresolvedOperand,N>` a
+// `Vec<String>` and `ArrayRef<UnresolvedOperand>` exactly the `&[String]` the crate
+// asks for.  t84's own comment already commits to this -- "the moment a TU reads one
+// of them, this key must be REPLACED by a real three-field struct rather than
+// extended".  It is a change to an EXISTING key that 11 files depend on, so it needs
+// its own before/after and is deliberately not smuggled in here.
+//
+// ⛔ ALSO OUT, each for a measured reason and each still failing LOUDLY:
+//  * `emitError(SMLoc, const Twine &)` (16+9 sites) -- returns `InFlightDiagnostic`,
+//    but `AsmParser::emit_error` returns `bool` (it IS the `failure()` shape).  A key
+//    would have to manufacture a `libcc2rs::InFlightDiagnostic` (t70) from a bool, and
+//    every corpus site spells the argument `parser.getNameLoc()`, an OpAsmParser member
+//    with no model -- so the sites would not resolve even with the key.
+//  * `getCurrentLocation()` (31 sites) -- `llvm::SMLoc -> usize` needs an `llvm::SMLoc`
+//    type key, which is `llvm::SourceMgr`'s row, not this one.
+//  * `parseKeyword` (both forms), `parseString`, `parseInteger` -- all three are INLINE
+//    non-virtual wrappers in OpImplementation.h (:928, :702, :754) over a virtual the
+//    converter reaches instead; the inlined-body trap.  Not guessed at without a
+//    -verbose ask.
+//  * `parseAttribute`, `parseOptionalAttrDict`, `parseColonTypeList` (a full attribute
+//    grammar), `parseRegion`, `parseSuccessor`, `parseArgumentList` (a block-argument
+//    SSA scope the model has no shape for), `resolveOperands`' 4-arg `SMLoc` overload
+//    (the crate declares ONLY the 3-arg form so a 4-arg site fails at rustc).
+//  * `AsmParser::Delimiter` -- an ENUM, so it is emitted as a PLACEHOLDER rather than
+//    aborting, and an enumerator needs its own constant keys.  `dataflowir_gen::Delimiter`
+//    exists and matches variant-for-variant; it is a clean follow-up.
+//
+// ⛔ NO BASE RELATION IS DECLARED and that is deliberate.  The converter performs the
+// upcast on the REAL MLIR hierarchy (`class OpAsmParser : public AsmParser`,
+// OpImplementation.h:1516) and records the key against the DECLARING class -- it
+// already writes `Cpp2RustUnmapped_mlir_AsmParser` for all 88 tagged member sites.  So
+// the shim needs only a class NAMED `mlir::AsmParser` carrying the members; spelling the
+// inheritance here would additionally risk the `AsmPrinter`/`OpAsmPrinter` mistake
+// argued at src.cpp:3833 in the other direction.
+namespace mlir {
+
+// `class AsmParser` -- OpImplementation.h:578-1495.  Every member below is a PURE
+// VIRTUAL declared on the BASE, which is what makes one key set cover `OpAsmParser`
+// and `DialectAsmParser` too.
+class AsmParser {
+public:
+  llvm::ParseResult parseArrow();           // :618
+  llvm::ParseResult parseOptionalArrow();   // :621
+  llvm::ParseResult parseColon();           // :636
+  llvm::ParseResult parseOptionalColon();   // :639
+  llvm::ParseResult parseComma();           // :642
+  llvm::ParseResult parseOptionalComma();   // :645
+  llvm::ParseResult parseEqual();           // :648
+  llvm::ParseResult parseOptionalEqual();   // :651
+  llvm::ParseResult parseLess();            // :654
+  llvm::ParseResult parseOptionalLess();    // :657
+  llvm::ParseResult parseGreater();         // :660
+  llvm::ParseResult parseOptionalGreater(); // :663
+  llvm::ParseResult parseLParen();          // :716
+  llvm::ParseResult parseOptionalLParen();  // :719
+  llvm::ParseResult parseRParen();          // :722
+  llvm::ParseResult parseOptionalRParen();  // :725
+  llvm::ParseResult parseLSquare();         // :728
+  llvm::ParseResult parseOptionalLSquare(); // :731
+  llvm::ParseResult parseRSquare();         // :734
+  llvm::ParseResult parseOptionalRSquare(); // :737
+  llvm::ParseResult parseType(Type &result); // :1256
+};
+
+// `class DialectAsmParser` -- DialectImplementation.h:56.  Declared EMPTY: it inherits
+// the whole surface above, and the 5 sites in the corpus are all the `parser:`
+// parameter of an ODS `Dialect::parseAttribute`, whose body needs the attribute grammar
+// that is refused above.  The TYPE key alone clears a real ABORT ("system type has no
+// rule: `mlir::DialectAsmParser`", measured as a gap in Agen.cpp).
+class DialectAsmParser {};
+
+} // namespace mlir
+
+// t950 -- `mlir::OpAsmParser::Argument` -> `()`.
+//
+// ⭐⭐ THIS IS A BUCKET GATE, NOT A PLACEHOLDER COUNT.  Measured with
+// pin/cpp2rust (md5 94afe6c0) against ir.v35+HEAD:
+//   Agen.cpp -> B  LLVM ERROR: unsupported unmapped type `mlir::OpAsmParser::Argument`
+//   has no model in types_, while mapping `llvm::ArrayRef<mlir::OpAsmParser::Argument>`
+// and the 403-TU sweep makes it the FIRST ABORT of 4 TUs.  Those TUs emit ZERO lines
+// today, so they contribute nothing to any site census -- clearing it converts whole
+// TUs, which is worth more than any number of placeholder sites.
+//
+// THE MODEL IS `()` FOR EXACTLY t84's REASON, and the arithmetic is the same one t84
+// did.  C++ is `struct Argument { UnresolvedOperand ssaName; Type type; DictionaryAttr
+// attrs; std::optional<Location> sourceLoc; }` (OpImplementation.h:1693).  Every corpus
+// use is declare-then-forward:
+//     OpAsmParser::Argument iv;                     // declared
+//     parser.parseArgument(iv, true)                // filled  -- UNMAPPED, stays loud
+//     SmallVector<OpAsmParser::Argument, 1> args;   // collected
+//     parser.parseRegion(*body, args)               // consumed -- UNMAPPED, stays loud
+// so the type is needed to make the CONTAINER expressible and nothing more.
+//
+// ⛔ WHAT IS LOST, stated rather than glossed: TWO sites DO touch a field --
+// Agen.cpp:1065 `inductionVariable.type = inductionVar_type;` and
+// KTDFArchOps.cpp:266 `parser.resolveOperand(arg.ssaName, arg.type, ...)`.  Against `()`
+// those are `E0609: no field `type` on type `()`` at rustc.  That is LOUD and it is the
+// best available answer, because a faithful struct is NOT EXPRESSIBLE HERE: a field
+// access is a MemberExpr, not a call, so no `fN` key can rename it, and a Rust struct
+// cannot have a field literally spelled `type` (the converter emits `.type`, and
+// `r#type` is a different token).  So the honest position is the coordinator's own
+// formulation -- the TYPE is modellable even though its FIELDS and its PARSING are not.
+// ⛔ AND IT CANNOT MAKE A PARSE SILENTLY SUCCEED: `parseArgument`/`parseArgumentList`
+// are not keyed and stay camelCase, which the snake_case model does not have.
+using t950 = mlir::OpAsmParser::Argument;
+
+// t951 / t952 -- `mlir::AsmParser` and `mlir::AsmParser &`.  11 type positions.
+// The `&` form is the one every site actually holds (t460/t461 and rules/raw_ostream t2
+// are the precedent for keying the pair).
+using t951 = mlir::AsmParser;
+using t952 = mlir::AsmParser &;
+
+// t953 / t954 -- `mlir::OpAsmParser` and `mlir::OpAsmParser &`.  51 of the 67 type
+// positions are ONE line, `pub unsafe fn parse(parser: *mut
+// Cpp2RustUnmapped_mlir_OpAsmParser, result: *mut ()) -> bool {`, whose BODIES are
+// already fully translated and were waiting only on a receiver type.  Recorded ask,
+// verbatim from the Agen.cpp survey: `searched as: mlir::OpAsmParser; from decl (NOT a
+// key -- canonicalised, defaulted args kept): mlir::OpAsmParser` -- identical, so there
+// is no defaulted-argument dead duplicate to dodge.
+using t953 = mlir::OpAsmParser;
+using t954 = mlir::OpAsmParser &;
+
+// t955 / t956 -- `mlir::DialectAsmParser` and `& `.  5 sites.  Same ask shape:
+// `searched as: mlir::DialectAsmParser; from decl ...: mlir::DialectAsmParser`.
+using t955 = mlir::DialectAsmParser;
+using t956 = mlir::DialectAsmParser &;
+
+// f850 -- THE CONSTRUCTOR FOR t950.  A type key without one is rc=0 then `E0433: cannot
+// find module or crate mlir_OpAsmParser_Argument`, measured eight times in this tree;
+// the `-verbose` tell is `search expr void T::T(), result: None`.  `Argument` is an
+// aggregate, so the implicit default constructor is the only form a translated program
+// can reach -- f62's shape exactly.
+mlir::OpAsmParser::Argument f850() { return mlir::OpAsmParser::Argument(); }
+
+// f851-f870 -- THE PUNCTUATION AND TYPE SURFACE ON THE BASE.  26 sites for the
+// single-char required family, plus the optional forms and `parseType`.
+// ⭐ `parseArrow` IS **NOT** `parse_punct('-')` AND THAT IS THE ONE CORRECTION THAT
+// MATTERS: `->` is two characters, so `parse_punct('-')` would consume the `-` and
+// leave the `>` in the buffer -- a half-consumed token that then makes the NEXT check
+// fail for the wrong reason.  The crate has `parse_arrow`, and a mutation test proves
+// the distinction.
+llvm::ParseResult f851(mlir::AsmParser &a0) { return a0.parseArrow(); }
+llvm::ParseResult f852(mlir::AsmParser &a0) { return a0.parseOptionalArrow(); }
+llvm::ParseResult f853(mlir::AsmParser &a0) { return a0.parseColon(); }
+llvm::ParseResult f854(mlir::AsmParser &a0) { return a0.parseOptionalColon(); }
+llvm::ParseResult f855(mlir::AsmParser &a0) { return a0.parseComma(); }
+llvm::ParseResult f856(mlir::AsmParser &a0) { return a0.parseOptionalComma(); }
+llvm::ParseResult f857(mlir::AsmParser &a0) { return a0.parseEqual(); }
+llvm::ParseResult f858(mlir::AsmParser &a0) { return a0.parseOptionalEqual(); }
+llvm::ParseResult f859(mlir::AsmParser &a0) { return a0.parseLess(); }
+llvm::ParseResult f860(mlir::AsmParser &a0) { return a0.parseOptionalLess(); }
+llvm::ParseResult f861(mlir::AsmParser &a0) { return a0.parseGreater(); }
+llvm::ParseResult f862(mlir::AsmParser &a0) { return a0.parseOptionalGreater(); }
+llvm::ParseResult f863(mlir::AsmParser &a0) { return a0.parseLParen(); }
+llvm::ParseResult f864(mlir::AsmParser &a0) { return a0.parseOptionalLParen(); }
+llvm::ParseResult f865(mlir::AsmParser &a0) { return a0.parseRParen(); }
+llvm::ParseResult f866(mlir::AsmParser &a0) { return a0.parseOptionalRParen(); }
+llvm::ParseResult f867(mlir::AsmParser &a0) { return a0.parseLSquare(); }
+llvm::ParseResult f868(mlir::AsmParser &a0) { return a0.parseOptionalLSquare(); }
+llvm::ParseResult f869(mlir::AsmParser &a0) { return a0.parseRSquare(); }
+llvm::ParseResult f870(mlir::AsmParser &a0) { return a0.parseOptionalRSquare(); }
+
+// f871 -- `parseType(Type &result)`, the ONE virtual in the type family (:1256); the
+// `parseType(TypeT &)` at :1268 is an inline wrapper over it.  `mlir::Type` is t5 ->
+// `ir::Ty`, and a `T &` parameter maps to `&mut <mapped>` (f145/f480's shape), so the
+// decoded type is written through to the caller's storage.
+// ⚠️ DOCUMENTED, NOT A BUG OF THIS KEY: on a FUNCTIONAL type `parse_type` reads
+// `(i32, i32)` and leaves ` -> i32` in the buffer, because `ir::Ty` has no function
+// variant.  That is loud (the next token check fails) and it is the crate's recorded
+// limit, not a silent acceptance.
+llvm::ParseResult f871(mlir::AsmParser &a0, mlir::Type &a1) { return a0.parseType(a1); }
