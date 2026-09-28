@@ -101,13 +101,36 @@ class StringRef;
 class Twine;
 } // namespace llvm
 
+namespace llvm {
+// Forward declarations only, so that `mlir::Region::getBlocks()`'s RETURN TYPE
+// (`llvm::iplist<mlir::Block> &`, Region.h:44-45) can be SPELLED on the class
+// below.  Real LLVM declares both as `template <typename T, class... Options>`;
+// the empty pack prints nothing, so a single-parameter declaration renders the
+// identical spelling `llvm::simple_ilist<mlir::Block>` that the queue records
+// (g074 `searched as:`) -- and unlike a defaulted parameter a pack cannot be
+// dropped by `SuppressDefaultTemplateArgs`.  The keys and the two member
+// deductions are at the BOTTOM of this file (t560/t561, f460/f461); they cannot
+// live here because `llvm::ilist_iterator` is not declared until t243.
+template <typename T> class simple_ilist;
+template <typename T> class iplist;
+} // namespace llvm
+
 namespace mlir {
 
 class Operation;
 
 class Block {};
 
-class Region {};
+// ⚠️ `getBlocks()` IS DECLARED HERE AND NOT LATER, because a C++ class cannot be
+// reopened -- see f460 at the bottom of this file for the whole deduction.
+// mlir/IR/Region.h:45 `BlockListType &getBlocks() { return blocks; }`, with
+// `using BlockListType = llvm::iplist<Block>;` at :44.  There is NO const
+// overload in Region.h, so this one declaration is the entire `getBlocks`
+// surface and the corpus's non-const asks can only resolve to it.
+class Region {
+public:
+  llvm::iplist<Block> &getBlocks();
+};
 
 // `Value`, `Type` and `Attribute` are HANDLES in real MLIR -- each wraps one
 // pointer into the uniquer/the defining op, and each is DEFAULT-CONSTRUCTIBLE to
@@ -5390,7 +5413,12 @@ template <class T, bool EnableSentinelTracking, bool IsSentinelTrackingExplicit,
           class TagT, bool HasIteratorBits, class ParentTy>
 struct node_options;
 } // namespace ilist_detail
-template <class OptionsT, bool IsReverse, bool IsConst> class ilist_iterator;
+// ⚠️ DEFINED (empty) rather than forward-declared ONLY so that f461 can RETURN
+// one BY VALUE: a function definition needs a COMPLETE return type, and
+// `simple_ilist<mlir::Block>::begin()` returns the iterator by value.  The
+// printed SPELLING is unchanged, so t243-t246 match exactly as before -- an empty
+// body adds no member and maps nothing.
+template <class OptionsT, bool IsReverse, bool IsConst> class ilist_iterator {};
 } // namespace llvm
 
 // t243 -- Cpp2RustUnmapped_llvm_ilist_iterator_..._mlir_Operation_..._false_false_, 24 rows.
@@ -6282,3 +6310,137 @@ using t542 = mlir::PatternRewriter;
 
 // t543 -- 18 asks; recorded key `mlir::IRRewriter`.
 using t543 = mlir::IRRewriter;
+
+// ===========================================================================
+// t560 / t561 / f460 / f461 -- the `llvm::simple_ilist<mlir::Block>` ROW.
+// FOUR SLOTS BOTTOMED OUT ON THIS AND IT IS LANDED AS ONE ATOMIC SET.
+//
+// THE ROW.  Freshest sweep: `llvm::simple_ilist<mlir::Block>` 64 ASKS / 16
+// EMITTED PLACEHOLDER SITES (asks run ~5x sites; both numbers reported).
+// `llvm::iplist<mlir::Block>` 32 asks / 9 emitted placeholder sites.  Queue row
+// g074 gives the type spelling verbatim:
+//     searched as: llvm::simple_ilist<mlir::Block>
+//     from decl (NOT a key -- canonicalised, defaulted args kept):
+//                 llvm::simple_ilist<mlir::Block>
+// -- identical, so there is no defaulted-argument dead duplicate to dodge.
+//
+// ONE SHAPE, 16 SITES, e.g. KTDFLowToDFIR/DataTransferLowering.cpp (8 of them)
+// and dsc-based-utils/DSC2ToDataflowIR/V3/SNTransferLowering.cpp:
+//     (*(unsafe { ((*(unsafe { (*(unsafe { ...::getRegion(self) })).getBlocks() }))
+//         as Cpp2RustUnmapped_llvm_simple_ilist_mlir_Block_).begin() })).getArgument(0)
+// i.e. region -> block list -> FIRST BLOCK -> block argument 0.
+//
+// ⛔⛔ WHY THE TYPE KEY ALONE IS FORBIDDEN, AND WHY THIS IS ALL-OR-NOTHING.
+// An UNMAPPED MEMBER DOES NOT ABORT -- the converter emits it TEXTUALLY, rc=0,
+// with NO placeholder token, invisible to every census and to
+// `pin/no-placeholders.sh`.  So a lone `t560` would swap a LOUD placeholder for
+// a SILENT call to `Vec::<fmt::Block>::getBlocks()`, which does not exist: that
+// is the `OperationState -> ()` bargain, and it is why this row was refused
+// twice.  Hence t560 + t561 + f460 + f461 together, or none.
+//
+// THE MODEL, AND IT IS NOT NEW.  `fmt::Region { pub blocks: Vec<Block> }`
+// (dataflowir-gen fmt.rs:513), so the block list IS a `Vec<fmt::Block>` and both
+// container spellings map to it.  `llvm::iplist<T>` derives from
+// `iplist_impl<simple_ilist<T>>` which derives from `simple_ilist<T>`
+// (ilist.h:110/:327), so they are the SAME container at two points of the
+// hierarchy -- the t37-t39 / t166 "the base IS the range" discipline, one body
+// for both keys.  This is why the emitted text casts to
+// `simple_ilist<mlir::Block>` before `.begin()`: `begin()` is declared on the
+// BASE (simple_ilist.h:118), so the converter upcasts first, and the `begin`
+// deduction below therefore keys the BASE receiver, not `iplist`.
+//
+// SWALLOW-SAFETY, argued for the buckets rather than assumed.  `GetTypeMapKey`
+// truncates at the first `<`, giving buckets `llvm::simple_ilist` and
+// `llvm::iplist`.  `grep -rn 'simple_ilist|llvm::iplist' rules/*/src.cpp` finds
+// NO other module naming either (there is no `rules/ilist`), so each bucket
+// holds exactly ONE candidate -- mine.  Both are FULLY CONCRETE: no `T<digits>`
+// appears in either spelling, so `matchTemplate`'s placeholder capture
+// (`findNextLiteralSameDepth`) NEVER RUNS and the same-depth-comma swallow is
+// ruled out by construction, the t243-t246 / t250-t251 argument.
+//
+// ⛔ REPORT-ONLY, DELIBERATELY NOT KEYED HERE:
+// `llvm::iplist_impl<llvm::simple_ilist<mlir::Block>, llvm::ilist_traits<mlir::Block>>`
+// (queue g1470, 1 TU) and the `mlir::Operation` twins (g1481, g108).  The
+// Operation-element spellings need `Vec<fmt::OpInst>` and a separate member
+// census; `iplist_impl` needs `llvm::ilist_traits` declared and carries 1 TU.
+// Neither is on the path of these 16 sites, and mixing them in would put a
+// third, differently-argued type into the measurement.
+
+// f460 -- `llvm::iplist<mlir::Block> & mlir::Region::getBlocks()`.
+// ⭐ THE RECEIVER IS ALREADY MAPPED: t3 `mlir::Region -> fmt::Region`, and the
+// dataflowir-gen witness already declares `getRegion(&mut self) -> *mut
+// fmt::Region`, so the whole chain up to this call is live TODAY -- this member
+// is the only missing link, and it is missing SILENTLY.
+// THE FORM IS f150-f157's: a free function whose FIRST parameter is the
+// receiver, body calling nothing but the member.
+// ⚠️ `get_blocks_mut` (fmt.rs:557) IS THE CORRECT HALF, not `get_blocks`
+// (:549): the receiver in every emitted site is a `*mut fmt::Region`
+// dereference, i.e. a mutable lvalue, and C++ `getBlocks()` is non-const and
+// returns a MUTABLE reference.  ⚠️ AND `get_blocks_mut` IS snake_case ON
+// PURPOSE: a camelCase target name would let the *other*, still-unmapped C++
+// members of this class resolve BY ACCIDENT against dataflowir-gen and destroy
+// the diagnostic.  Renaming is this key's job.
+// ⛔ `take_block_list()` is NOT what this body wants: it leaves the region
+// EMPTY.  `getBlocks()` is a pure accessor, so the aliasing `&mut` borrow is the
+// faithful body and the `Rc` bridge stays unused here.
+llvm::iplist<mlir::Block> &f460(mlir::Region &r) { return r.getBlocks(); }
+
+namespace llvm {
+// ⚠️ EXPLICIT SPECIALISATION, not a member on the primary template, so that
+// `begin()`'s return type is WRITTEN OUT and cannot be rendered through a
+// dependent `typename ...::iterator` that would never match the recorded key.
+// simple_ilist.h:95 `using iterator = ilist_select_iterator_type<OptionsT,
+// false, false>` and :118 `iterator begin()`, which at `T = mlir::Block`
+// resolves to EXACTLY t245's spelling -- the key `begin()` must match.
+// simple_ilist.h:119 `const_iterator begin() const` is the OTHER overload and is
+// deliberately NOT declared: the corpus receiver is a mutable lvalue, and
+// declaring only one overload makes a const ask FAIL LOUDLY instead of silently
+// binding to the wrong iterator constness (t246's IsReverse=true rbegin/rend
+// half is likewise absent because nothing asks for it).
+template <> class simple_ilist<mlir::Block> {
+public:
+  ilist_iterator<ilist_detail::node_options<mlir::Block, false, false, void,
+                                            false, void>,
+                 false, false>
+  begin();
+};
+} // namespace llvm
+
+// f461 -- `llvm::simple_ilist<mlir::Block>::begin()`, returning t245.
+// ⭐⭐ THE ALIASING REQUIREMENT, WHICH IS WHAT KILLED THIS ROW TWICE.  The next
+// thing all 16 sites do is DEREFERENCE the result and call `getArgument(0)`, so
+// `begin()` must hand back an iterator that ALIASES the live block list.  Every
+// ALLOCATING `Ptr` constructor is therefore wrong: `Ptr::null()` would deref
+// null, and `Ptr::alloc(a0[0].clone())` fabricates a COPY so any mutation
+// through the iterator is lost.  ⭐ The settled precedent is rules/vector's f13
+// (`std::vector<T1>::begin()`), whose refcount formal IS `Ptr<T1>` and whose
+// body is the bare `a0`: the converter hands a rule a BORROW of the owner's
+// `Value<Vec<T>>` (`PtrKind::StackVec(Rc::downgrade(owner))`, rc.rs:1047 --
+// the same provenance `Ptr::borrow_vec` names at rc.rs:281), so NOTHING IS
+// ALLOCATED and writes land in the owner.  libcc2rs' own test asserts that
+// provenance (`assert!(matches!(begin.kind, PtrKind::StackVec(_)))`,
+// rc.rs:1340).  The unsafe half is rules/vector f13's `a0.as_mut_ptr()`, an
+// interior pointer into the same buffer.
+// ⚠️ `delete()` on a borrow-provenance `Ptr` panics `"ub: invalid delete"` BY
+// DESIGN, which is correct: deleting a block through this iterator is UB in C++
+// too.
+// ⛔ NO `operator++`, `operator*`, `end()`, `empty()` OR ANY OTHER MEMBER IS
+// KEYED, the t243-t246 discipline.  `getArgument(0)` on the RESULT is a
+// `fmt::Block` member and resolves in dataflowir-gen, not here.
+llvm::ilist_iterator<
+    llvm::ilist_detail::node_options<mlir::Block, false, false, void, false,
+                                     void>,
+    false, false>
+f461(llvm::simple_ilist<mlir::Block> &l) {
+  return l.begin();
+}
+
+// t560 -- `llvm::simple_ilist<mlir::Block>`, queue g074, 41 TUs / 64 asks /
+// 16 emitted placeholder sites.  THE receiver of f461 and the cast target in
+// every one of the 16 sites.
+using t560 = llvm::simple_ilist<mlir::Block>;
+
+// t561 -- `llvm::iplist<mlir::Block>`, 32 asks / 9 emitted placeholder sites.
+// NOT optional: it is the RETURN type f460 is spelled with, so without it f460
+// cannot resolve at all.  Same body as t560 -- the same container.
+using t561 = llvm::iplist<mlir::Block>;

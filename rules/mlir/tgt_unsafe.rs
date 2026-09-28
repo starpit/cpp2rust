@@ -2877,3 +2877,36 @@ fn t542() -> dataflowir_gen::OpBuilder {
 fn t543() -> dataflowir_gen::OpBuilder {
     dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
 }
+
+// ===========================================================================
+// t560 / t561 / f460 / f461 -- the `llvm::simple_ilist<mlir::Block>` row (64
+// asks / 16 emitted placeholder sites) and `llvm::iplist<mlir::Block>` (32 asks
+// / 9 sites).  See src.cpp for the shape of all 16 sites, the all-or-nothing
+// argument, and the bucket/swallow safety.  `fmt::Region { pub blocks:
+// Vec<Block> }` (fmt.rs:513), and `iplist<T>` derives from `simple_ilist<T>`, so
+// both keys are the SAME container and get the SAME body.  ⭐ IDENTICAL to the
+// refcount model here: the container is an owning `Vec` in both, and only the
+// ITERATOR representation differs (t245).
+fn t560() -> Vec<dataflowir_gen::fmt::Block> {
+    Vec::new()
+}
+
+fn t561() -> Vec<dataflowir_gen::fmt::Block> {
+    Vec::new()
+}
+
+// f460 -- `mlir::Region::getBlocks()` -> `fmt::Region::get_blocks_mut()`
+// (fmt.rs:557).  ⚠️ `a0` named EXACTLY ONCE, method call only.
+unsafe fn f460(a0: &mut dataflowir_gen::fmt::Region) -> &mut Vec<dataflowir_gen::fmt::Block> {
+    a0.get_blocks_mut()
+}
+
+// f461 -- `llvm::simple_ilist<mlir::Block>::begin()` -> t245's
+// `*mut fmt::Block`.  ⭐ AN INTERIOR POINTER INTO THE LIVE BUFFER, not a copy:
+// rules/vector f13's body verbatim (`a0.as_mut_ptr()`), so the 16 sites'
+// `(*it).getArgument(0)` reads the first block in place.  t245's `null_mut()`
+// init is the no-position default and would trap here, which is why begin() must
+// have its own body.
+unsafe fn f461(a0: &mut Vec<dataflowir_gen::fmt::Block>) -> *mut dataflowir_gen::fmt::Block {
+    a0.as_mut_ptr()
+}

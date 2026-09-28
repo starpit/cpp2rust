@@ -2765,3 +2765,42 @@ fn t542() -> dataflowir_gen::OpBuilder {
 fn t543() -> dataflowir_gen::OpBuilder {
     dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
 }
+
+// ===========================================================================
+// t560 / t561 / f460 / f461 -- the `llvm::simple_ilist<mlir::Block>` row (64
+// asks / 16 emitted placeholder sites) and `llvm::iplist<mlir::Block>` (32 asks
+// / 9 sites).  See src.cpp for the shape of all 16 sites, the all-or-nothing
+// argument (an unmapped MEMBER is emitted TEXTUALLY and never aborts), and the
+// bucket/swallow safety.  `fmt::Region { pub blocks: Vec<Block> }` (fmt.rs:513),
+// so the block list IS a `Vec<fmt::Block>`; `iplist<T>` derives from
+// `simple_ilist<T>` so BOTH keys get the SAME body -- the t37-t39/t166 "the base
+// IS the range" discipline.
+fn t560() -> Vec<dataflowir_gen::fmt::Block> {
+    Vec::new()
+}
+
+fn t561() -> Vec<dataflowir_gen::fmt::Block> {
+    Vec::new()
+}
+
+// f460 -- `mlir::Region::getBlocks()` -> `fmt::Region::get_blocks_mut()`
+// (fmt.rs:557).  The MUT half, because the C++ member is non-const and returns a
+// mutable reference, and every emitted receiver is a `*mut fmt::Region` deref.
+// snake_case is the point: it stops the class's OTHER unmapped members from
+// resolving by accident.  ⚠️ `a0` is named EXACTLY ONCE and carries nothing but a
+// method call, because a `&mut` formal's `aN` re-expands to the bare lvalue.
+fn f460(a0: &mut dataflowir_gen::fmt::Region) -> &mut Vec<dataflowir_gen::fmt::Block> {
+    a0.get_blocks_mut()
+}
+
+// f461 -- `llvm::simple_ilist<mlir::Block>::begin()` -> t245's `Ptr<fmt::Block>`.
+// ⭐ IT ALIASES, IT DOES NOT COPY -- the whole reason this row died twice.  The
+// formal and body are rules/vector f13's verbatim: the converter passes a BORROW
+// of the owner's `Value<Vec<T>>` (`PtrKind::StackVec(Rc::downgrade(owner))`,
+// rc.rs:1047; the provenance `Ptr::borrow_vec` names at rc.rs:281), so returning
+// `a0` unchanged allocates NOTHING and the 16 sites' `(*it).getArgument(0)` reads
+// the live first block.  `Ptr::null()` (t245's init) would deref null here and
+// `Ptr::alloc(..clone())` would fabricate a copy; neither is admissible.
+fn f461(a0: libcc2rs::Ptr<dataflowir_gen::fmt::Block>) -> libcc2rs::Ptr<dataflowir_gen::fmt::Block> {
+    a0
+}
