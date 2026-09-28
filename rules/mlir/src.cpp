@@ -3034,3 +3034,47 @@ llvm::raw_ostream &f127(llvm::raw_ostream &a0, mlir::Attribute a1) {
 llvm::raw_ostream &f128(llvm::raw_ostream &a0, const mlir::Location &a1) {
   return operator<<(a0, a1);
 }
+
+// ---------------------------------------------------------------------------
+// ⛔ REFUSED 2026-09-28: THE ENTIRE `mlir::OpAsmPrinter` / `mlir::AsmPrinter`
+// `<<` FAMILY -- 301 sites over 8 TUs, of which the single largest key in the
+// whole corpus, `mlir::OpAsmPrinter & operator shl(mlir::OpAsmPrinter &,
+// const char (&)[_])`, is 170.  Recorded so the next slot does not re-derive it.
+//
+// WHAT `OpAsmPrinter` IS IN THE MODEL: NOTHING.  There is no sink, writer or
+// stream type anywhere in dataflowir-gen.  Its printer is a PROJECTION of
+// `let assemblyFormat` (fmt.rs:1), and it produces a VALUE, not a sequence of
+// writes: `fmt::OpInst::print()` (fmt.rs:716) and `print_in()` (fmt.rs:725)
+// return `Result<String, PrintError>`.  The only state the printer carries is
+// `fmt::PrintCtx` (fmt.rs:372) -- a `Copy` struct of `{ indent: usize,
+// default_dialect: &str }`.  You cannot write a byte into it.
+//
+// AND THE SHAPES DISAGREE, which is the real reason.  The model's counterpart of
+// a tablegen custom `print()` body is `custom.rs:66`
+// `print_custom(op: &OpInst, ctx: &PrintCtx) -> Option<Result<String, PrintError>>`
+// -- a PURE FUNCTION OF THE OP returning the printed text.  The C++ is the
+// opposite shape: a void member that mutates a sink passed in from MLIR's
+// `OperationPrinter`.  There is no `a0` for a rule to bind, so even the
+// char-array overload -- the one operand this file could print faithfully --
+// would first need a `tN` inventing a sink that the model does not have.
+// `rules/raw_ostream`'s `std::fs::File` is not that sink: a raw_ostream IS a
+// file descriptor, whereas an OpAsmPrinter carries the SSA-name map, the alias
+// state, the indent and the default-dialect stack, and its other members
+// (`printOptionalAttrDict`, `printOperand`, `printRegion`, `getStream`) have no
+// counterpart at all.  A `String` target would make `p << "lit"` type-check
+// while leaving every one of those loud-or-silent.
+//
+// THE ROW IS ALSO ON THE WRONG SIDE OF THE MLIR BOUNDARY, and this is
+// measurable: of the 170 DISTINCT source locations of the char-array key,
+// 149 (88%) are in ONE generated file,
+// `toolchain/gen-inc/ddc/ddl/Dialect/DdlOps.cpp.inc`, i.e. the
+// assemblyFormat-generated printer that `fmt.rs` already is a projection of.
+// Only 12 are in hand-written project sources (6 `ddc/ddl/Dialect/DdlOps.cpp`,
+// 4 `KTDF/KTDFOps.cpp`, 2 `Symbol/Symbol.cpp`).  Modelling a sink here would
+// port MLIR's asm printer a second time.
+//
+// The other operand overloads (`mlir::Value` 27, `const mlir::OperandRange &`
+// 28, `mlir::ValueTypeRange<...>` 4, `mlir::Type` 4) are refused for exactly the
+// reasons already recorded for the `llvm::raw_ostream` family above; nothing
+// about an OpAsmPrinter receiver changes them.
+// ---------------------------------------------------------------------------
