@@ -1526,3 +1526,42 @@ fn f125() -> dataflowir_gen::fmt::OpInst {
         <dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as dataflowir_gen::MlirOp>::DEF,
     )
 }
+
+// ---------------------------------------------------------------------------
+// f126-f128 -- the free `llvm::raw_ostream <<` family.  See src.cpp for the three
+// searched spellings, the 20-site ceiling, and the FOUR refusals of this family
+// that must stay refused (Value / Operation / OpState / OperationName).
+//
+// Shape follows rules/raw_ostream's own insertion bodies: `raw_ostream &` is
+// `*mut std::fs::File`, the text goes out through the fully qualified
+// `::std::io::Write::write_all` so the inlined body does not depend on `Write`
+// being in scope in the translated crate, the write error is DROPPED (raw_ostream
+// records it on the stream rather than reporting it at the call), and the receiver
+// is RETURNED so `o << a << b` and `return o << x;` both have a value.
+//
+// `to_string` is spelled through `::std::string::ToString` for the same reason.
+// ---------------------------------------------------------------------------
+
+unsafe fn f126(a0: *mut std::fs::File, a1: dataflowir_gen::ir::Ty) -> *mut std::fs::File {
+    let __o = a0;
+    let __b = ::std::string::ToString::to_string(&a1).into_bytes();
+    let _ = ::std::io::Write::write_all(&mut *__o, &__b);
+    __o
+}
+
+unsafe fn f127(a0: *mut std::fs::File, a1: dataflowir_gen::ir::Attr) -> *mut std::fs::File {
+    let __o = a0;
+    let __b = ::std::string::ToString::to_string(&a1).into_bytes();
+    let _ = ::std::io::Write::write_all(&mut *__o, &__b);
+    __o
+}
+
+unsafe fn f128(
+    a0: *mut std::fs::File,
+    a1: &dataflowir_gen::ir::Location,
+) -> *mut std::fs::File {
+    let __o = a0;
+    let __b = ::std::string::ToString::to_string(a1).into_bytes();
+    let _ = ::std::io::Write::write_all(&mut *__o, &__b);
+    __o
+}

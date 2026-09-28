@@ -2953,3 +2953,84 @@ mlir::Location f124(mlir::Builder &a0) { return a0.getUnknownLoc(); }
 //     not something to land in this module on a guess.  t156 alone clears the
 //     types_ abort; the producer bodies remain unported and loud.
 using t156 = mlir::SideEffects::EffectInstance<mlir::MemoryEffects::Effect>;
+
+// ---------------------------------------------------------------------------
+// PASS 2026-09-28: THE FREE `llvm::raw_ostream <<` FAMILY, three keys.
+//
+// The `unsupported CXXOperatorCallExpr:` diagnostic (a718367) names the exact
+// spellings the mapper searched for, over the 98 bucket-A census TUs:
+//     llvm::raw_ostream & operator shl(llvm::raw_ostream &, mlir::Type)             16
+//     llvm::raw_ostream & operator shl(llvm::raw_ostream &, mlir::Attribute)         3
+//     llvm::raw_ostream & operator shl(llvm::raw_ostream &, const mlir::Location &)  1
+// The 16 are only FOUR distinct source locations
+// (dcc/src/Transform/Sentient/LexicalOrdering.cpp:132,133,152,153), each reported
+// by four different logs; the ceiling of this row is 20 sites, not 498.
+//
+// WHY THE DECLARATIONS ARE AT GLOBAL SCOPE, UNQUALIFIED.  A free two-parameter
+// operator records UNQUALIFIED in this tree.  The precedent is the one existing
+// free two-parameter key in the baseline, `std::byte operator shr(std::byte,
+// unsigned int)`: rules/cstddef/src.cpp:10 writes `operator>>(a0, a1)` at global
+// scope, the real function lives in namespace std, and NO `std::` is recorded.
+// The real MLIR operators are in namespace mlir (mlir/IR/Types.h:145,
+// Attributes.h:107, Location.h:110) and record the same way.
+//
+// `llvm::raw_ostream` is INCOMPLETE here on purpose: a reference parameter and a
+// reference return need no definition, and reaching real LLVM headers is not
+// possible from cpp-rule-preprocessor's fixed flag set (see the header of this
+// file).  `llvm::raw_ostream &` is already mapped tree-wide by rules/raw_ostream's
+// t2, so the receiver type needs nothing from this module.
+//
+// ⛔ THE OTHER FOUR KEYS OF THIS FAMILY ARE REFUSED, and must stay refused.
+// Each was settled against the MLIR header, and each would print something
+// structurally different from the C++:
+//   * `mlir::Value` (8 sites) -- Value.h:246 is `{ value.print(os); return os; }`
+//     and `Value::print` (Value.h:223) prints the DEFINING OPERATION's full
+//     printed form, not the SSA name.  `ir::Value` is `{ name, ty }` and has NO
+//     Display impl at all, so any body would print `%7` where C++ prints a whole
+//     op line.  Silent wrongness.
+//   * `const mlir::Operation &` (17) and `mlir::OpState` (8) -- Operation.h:1100
+//     and OpDefinition.h:315 are both
+//     `op.print(os, OpPrintingFlags().useLocalScope())`.  `fmt::OpInst` has no
+//     Display, and this file already refuses the flags themselves (see the
+//     OpPrintingFlags note above): dataflowir-gen has ONE printer and it is NOT
+//     configurable.
+//   * `mlir::OperationName` (8) -- OperationSupport.h:507 is `info.print(os)`,
+//     the full registered `dialect.mnemonic`.  t18's model is
+//     `Option<&'static TdOpDef>` and TdOpDef's fields (td.rs:446-457) carry no
+//     full-name field and no dialect prefix.
+// Nor is the deliberate `mlir::OpState ==` refusal above reopened here.
+// ---------------------------------------------------------------------------
+
+namespace llvm {
+// Incomplete on purpose -- see above.  rules/raw_ostream owns this type.
+class raw_ostream;
+} // namespace llvm
+
+llvm::raw_ostream &operator<<(llvm::raw_ostream &os, mlir::Type t);
+llvm::raw_ostream &operator<<(llvm::raw_ostream &os, mlir::Attribute a);
+llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const mlir::Location &l);
+
+// f126 -- `mlir::Type` BY VALUE (Types.h:145 takes `Type type`), 16 counts /
+// 4 distinct sites.  The rendered text is `ir::Ty`'s Display (ir.rs:50), which is
+// exactly the argument f25 makes for the InFlightDiagnostic `mlir::Type &` key in
+// this same module: Display IS `mlir::Type::print`'s builtin-type syntax, and
+// `Ty::Opaque` exists precisely so a dialect type round-trips by its own spelling.
+llvm::raw_ostream &f126(llvm::raw_ostream &a0, mlir::Type a1) {
+  return operator<<(a0, a1);
+}
+
+// f127 -- `mlir::Attribute` BY VALUE (Attributes.h:107), 3 sites in 3 TUs.
+// f36's argument, unchanged: `ir::Attr`'s Display (ir.rs:521) is MLIR's attribute
+// syntax.
+llvm::raw_ostream &f127(llvm::raw_ostream &a0, mlir::Attribute a1) {
+  return operator<<(a0, a1);
+}
+
+// f128 -- `const mlir::Location &` (Location.h:110), 1 site.  `Location`'s Display
+// (ir.rs:798) is documented as "The BARE location spelling, as `LocationAttr`'s
+// printer produces it" -- which is what the C++ reaches, because Location.h:110 is
+// `loc.print(os)` on the LocationAttr, NOT the `loc(...)` trailing-location syntax
+// of an enclosing op.
+llvm::raw_ostream &f128(llvm::raw_ostream &a0, const mlir::Location &a1) {
+  return operator<<(a0, a1);
+}

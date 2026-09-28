@@ -1421,3 +1421,42 @@ fn f125() -> dataflowir_gen::fmt::OpInst {
         <dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as dataflowir_gen::MlirOp>::DEF,
     )
 }
+
+// ---------------------------------------------------------------------------
+// f126-f128 -- the free `llvm::raw_ostream <<` family; see src.cpp and
+// tgt_unsafe.rs.  Overlay differences only: `raw_ostream &` is
+// `libcc2rs::Ptr<std::fs::File>` rather than a raw pointer, and libcc2rs impls
+// `write_all` directly on `Ptr<T: std::io::Write + ByteRepr>` (std::fs::File is
+// ByteRepr), so no `with_mut` closure is needed -- exactly as
+// rules/raw_ostream/tgt_refcount.rs does it.  The receiver is still RETURNED.
+// ---------------------------------------------------------------------------
+
+fn f126(
+    a0: libcc2rs::Ptr<std::fs::File>,
+    a1: dataflowir_gen::ir::Ty,
+) -> libcc2rs::Ptr<std::fs::File> {
+    let __o = a0;
+    let __b = ::std::string::ToString::to_string(&a1).into_bytes();
+    let _ = __o.write_all(&__b);
+    __o
+}
+
+fn f127(
+    a0: libcc2rs::Ptr<std::fs::File>,
+    a1: dataflowir_gen::ir::Attr,
+) -> libcc2rs::Ptr<std::fs::File> {
+    let __o = a0;
+    let __b = ::std::string::ToString::to_string(&a1).into_bytes();
+    let _ = __o.write_all(&__b);
+    __o
+}
+
+fn f128(
+    a0: libcc2rs::Ptr<std::fs::File>,
+    a1: &dataflowir_gen::ir::Location,
+) -> libcc2rs::Ptr<std::fs::File> {
+    let __o = a0;
+    let __b = ::std::string::ToString::to_string(a1).into_bytes();
+    let _ = __o.write_all(&__b);
+    __o
+}
