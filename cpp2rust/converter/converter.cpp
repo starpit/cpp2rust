@@ -2032,6 +2032,60 @@ static bool IsByValueRangeInit(const clang::Expr *init) {
   return e->isPRValue();
 }
 
+// A re-evaluation-free LVALUE range init: one that `Convert()` may legitimately
+// emit TWICE (once for the `.len()` bound, once for the element pointer),
+// because evaluating it has no side effect and names the SAME object both
+// times.
+//
+// WHY THIS EXISTS, measured. Before this, the only accepted lvalue shape was a
+// bare `DeclRefExpr`, and that -- not the container type -- is what refused the
+// three corpus sites that gate the port goal:
+//   dsc/dsc2.h:1013   `for (auto& [node, refCount] : allocUsers_)`
+//                     allocUsers_ is declared at dsc/dsc2.h:1007 as
+//                     `std::vector<std::pair<const ScheduleNode*, int>>`
+//   dsc/pcfg.h:347/352/687/692
+//                     `for (auto& [_, condAddr] : srcStartCondAndVal)`
+//                     declared at dsc/pcfg.h:363 as
+//                     `std::vector<std::pair<PcfgLccrCond, FoldManager<int64_t>>>`
+// Both ranges ARE `std::vector`. Both are *implicit member accesses* --
+// `this->allocUsers_` -- so the node is a MemberExpr, is an lvalue (hence not
+// hoistable by 6981701d's prvalue path), and is not a DeclRefExpr. Widening the
+// accepted lvalue shape to a member-access CHAIN rooted at `this` or at a
+// DeclRefExpr is therefore the whole fix; the container check is untouched.
+//
+// A data-member read off a re-evaluation-free base is as free as a DeclRefExpr,
+// and the non-decomposing vector for-range already emits exactly such an lvalue
+// twice today (`self.intervals` in LiveRange.cpp), so this adds no hazard that
+// is not already pervasive. Everything else is refused: a CALL (side effects, and
+// a value-returning call is the prvalue case the hoist already handles), a
+// subscript, an overloaded `operator[]`/`operator*`, a deref of a computed
+// pointer. Such an lvalue also cannot be hoisted -- binding it by value is a
+// MOVE in Rust, not a borrow, which is the E0507 that narrowed 6981701d to
+// prvalues only -- so refusing is the only correct answer for it.
+static bool IsReEvaluationFreeLValue(const clang::Expr *init) {
+  const clang::Expr *e = init->IgnoreParenImpCasts();
+  // Bounded walk down the member chain; the bound is belt-and-braces, a member
+  // chain is finite by construction.
+  for (unsigned depth = 0; depth < 32; ++depth) {
+    if (llvm::isa<clang::DeclRefExpr>(e) || llvm::isa<clang::CXXThisExpr>(e)) {
+      return true;
+    }
+    const auto *me = llvm::dyn_cast<clang::MemberExpr>(e);
+    if (me == nullptr) {
+      return false;
+    }
+    // DATA members only. A MemberExpr naming a method is part of a call, and a
+    // static data member is reached as a DeclRefExpr, not here.
+    if (!llvm::isa<clang::FieldDecl>(me->getMemberDecl())) {
+      return false;
+    }
+    // For `a.b` the base is the object lvalue; for `p->b` it is the pointer
+    // expression. Reading either twice is free when the base itself is.
+    e = me->getBase()->IgnoreParenImpCasts();
+  }
+  return false;
+}
+
 // A structured binding over a `std::vector<std::pair<A, B>>` element. The
 // holder is already a RAW POINTER to the element (ConvertLoopVariable emits
 // `.as_mut_ptr().add(i)` for the `pair &` the DecompositionDecl is), and
@@ -2097,8 +2151,7 @@ bool Converter::IsHoistFreeDecompositionRange(clang::CXXForRangeStmt *stmt) {
     return false;
   }
   // The two re-evaluation-free shapes, and only those.
-  if (!llvm::isa<clang::DeclRefExpr>(init->IgnoreParenImpCasts()) &&
-      !IsByValueRangeInit(init)) {
+  if (!IsReEvaluationFreeLValue(init) && !IsByValueRangeInit(init)) {
     return false;
   }
   // Maps go down VisitCXXForRangeStmtMap; strings are `len()-1`-indexed chars
