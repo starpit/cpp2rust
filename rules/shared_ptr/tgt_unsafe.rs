@@ -20,11 +20,25 @@ unsafe fn f4<T1>() -> Option<Rc<T1>> {
 }
 
 unsafe fn f5<T1>(a0: &mut Option<Rc<T1>>, a1: &mut Option<Rc<T1>>) {
-    *a0 = a1.take()
+    match a1.take() {
+        Some(v) => {
+            a0.replace(v);
+        }
+        None => {
+            a0.take();
+        }
+    }
 }
 
 unsafe fn f6<T1>(a0: &mut Option<Rc<T1>>, a1: &Option<Rc<T1>>) {
-    *a0 = a1.clone()
+    match a1.clone() {
+        Some(v) => {
+            a0.replace(v);
+        }
+        None => {
+            a0.take();
+        }
+    }
 }
 
 unsafe fn f7<T1>(a0: &Option<Rc<T1>>) -> bool {
@@ -46,7 +60,7 @@ unsafe fn f10<T1>(a0: &Option<Rc<T1>>) -> *mut T1 {
 }
 
 unsafe fn f11<T1>(a0: &mut Option<Rc<T1>>) {
-    *a0 = None
+    a0.take();
 }
 
 unsafe fn f16<T1>(a0: &mut Option<Rc<T1>>) -> Option<Rc<T1>> {

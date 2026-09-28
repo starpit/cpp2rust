@@ -235,7 +235,9 @@ unsafe fn f54<T1: Default + Clone>(a0: &mut Vec<T1>, a1: usize, a2: T1) {
 }
 
 unsafe fn f55<T1: Clone>(a0: &mut Vec<T1>, a1: &mut Vec<T1>) {
-    *a0 = std::mem::take(&mut *a1)
+    let __src = std::mem::take(&mut *a1);
+    a0.clear();
+    a0.extend(__src);
 }
 
 unsafe fn f56<T1>(a0: &mut Vec<Vec<T1>>) -> *mut Vec<T1> {
@@ -247,7 +249,9 @@ unsafe fn f57<T1>(a0: Vec<T1>) -> *const T1 {
 }
 
 unsafe fn f58<T1: Clone>(a0: &mut Vec<T1>, a1: Vec<T1>) {
-    *a0 = a1.clone()
+    let __src = a1.clone();
+    a0.clear();
+    a0.extend(__src);
 }
 
 unsafe fn f59<T1>(a0: &mut Vec<T1>) {
@@ -459,7 +463,9 @@ unsafe fn f102<T1: Default + Clone>(a0: &mut Vec<T1>, a1: usize, a2: T1) {
 }
 
 unsafe fn f103<T1: Clone>(a0: &mut Vec<T1>, a1: &mut Vec<T1>) {
-    *a0 = std::mem::take(&mut *a1)
+    let __src = std::mem::take(&mut *a1);
+    a0.clear();
+    a0.extend(__src);
 }
 
 unsafe fn f104<T1>(a0: Vec<T1>) -> *const T1 {
@@ -467,7 +473,9 @@ unsafe fn f104<T1>(a0: Vec<T1>) -> *const T1 {
 }
 
 unsafe fn f105<T1: Clone>(a0: &mut Vec<T1>, a1: Vec<T1>) {
-    *a0 = a1.clone()
+    let __src = a1.clone();
+    a0.clear();
+    a0.extend(__src);
 }
 
 unsafe fn f106<T1>(a0: &mut Vec<T1>) {
@@ -491,7 +499,9 @@ unsafe fn f110<T1: Clone>(a0: Vec<T1>) -> Vec<T1> {
 }
 
 unsafe fn f111<T1: Clone>(a0: &mut Vec<Vec<T1>>, a1: &mut Vec<Vec<T1>>) {
-    *a0 = std::mem::take(&mut *a1)
+    let __src = std::mem::take(&mut *a1);
+    a0.clear();
+    a0.extend(__src);
 }
 
 unsafe fn f112<T1>(a0: &mut Vec<T1>, init: T1) {

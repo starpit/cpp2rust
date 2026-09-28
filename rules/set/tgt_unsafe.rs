@@ -48,12 +48,16 @@ unsafe fn f10<T1>(a0: &mut std::collections::BTreeSet<T1>) -> std::collections::
     std::mem::take(&mut *a0)
 }
 
-unsafe fn f11<T1: Clone>(a0: &mut std::collections::BTreeSet<T1>, a1: std::collections::BTreeSet<T1>) {
-    *a0 = a1.clone()
+unsafe fn f11<T1: Clone + Ord>(a0: &mut std::collections::BTreeSet<T1>, a1: std::collections::BTreeSet<T1>) {
+    let __src = a1.clone();
+    a0.clear();
+    a0.extend(__src);
 }
 
-unsafe fn f12<T1>(a0: &mut std::collections::BTreeSet<T1>, a1: &mut std::collections::BTreeSet<T1>) {
-    *a0 = std::mem::take(&mut *a1)
+unsafe fn f12<T1: Ord>(a0: &mut std::collections::BTreeSet<T1>, a1: &mut std::collections::BTreeSet<T1>) {
+    let __src = std::mem::take(&mut *a1);
+    a0.clear();
+    a0.extend(__src);
 }
 
 fn t2<T1: Ord + Clone>() -> libcc2rs::UnsafeSetIterator<T1> {

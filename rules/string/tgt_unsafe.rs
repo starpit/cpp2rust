@@ -174,11 +174,15 @@ unsafe fn f28(a0: &mut Vec<libc::c_char>) -> Vec<libc::c_char> {
 }
 
 unsafe fn f29(a0: &mut Vec<libc::c_char>, a1: Vec<libc::c_char>) {
-    *a0 = a1.clone()
+    let __src = a1.clone();
+    a0.clear();
+    a0.extend(__src);
 }
 
 unsafe fn f30(a0: &mut Vec<libc::c_char>, a1: &mut Vec<libc::c_char>) {
-    *a0 = std::mem::take(&mut *a1)
+    let __src = std::mem::take(&mut *a1);
+    a0.clear();
+    a0.extend(__src);
 }
 
 unsafe fn f31(a0: Vec<libc::c_char>, a1: libc::c_char) -> Vec<libc::c_char> {

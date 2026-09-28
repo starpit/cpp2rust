@@ -1186,7 +1186,9 @@ fn f58<T1>(a0: &mut Vec<T1>, a1: usize, a2: T1) {
 }
 
 fn f59<T1>(a0: &mut Vec<T1>, a1: Vec<T1>) {
-    *a0 = a1
+    let __src = a1;
+    a0.clear();
+    a0.extend(__src);
 }
 
 fn f60<T1: Clone>(a0: &Vec<T1>) -> Vec<T1> {

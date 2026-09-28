@@ -66,7 +66,9 @@ unsafe fn f11(a0: Vec<libc::c_char>) -> Vec<libc::c_char> {
 }
 
 unsafe fn f12(a0: &mut Vec<libc::c_char>, a1: Vec<libc::c_char>) {
-    *a0 = a1.clone()
+    let __src = a1.clone();
+    a0.clear();
+    a0.extend(__src);
 }
 
 unsafe fn f13(a0: Vec<libc::c_char>, a1: Vec<libc::c_char>) -> bool {

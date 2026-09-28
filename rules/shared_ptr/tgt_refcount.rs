@@ -48,7 +48,7 @@ fn f10<T1>(a0: &Option<Value<T1>>) -> Ptr<T1> {
 }
 
 fn f11<T1>(a0: &mut Option<Value<T1>>) {
-    *a0 = None
+    a0.take();
 }
 
 fn f16<T1>(a0: &mut Option<Value<T1>>) -> Option<Value<T1>> {

@@ -24,14 +24,14 @@ unsafe fn f4<T1>(a0: *mut T1) -> Option<Box<T1>> {
 }
 unsafe fn f5<T1: Default>(a0: &mut Option<Box<T1>>, a1: *mut T1) {
     let _a0: *mut T1 = a1;
-    *a0 = if _a0.is_null() {
-        None
+    if _a0.is_null() {
+        a0.take();
     } else {
-        Some(Box::from_raw(_a0))
+        a0.replace(Box::from_raw(_a0));
     }
 }
 unsafe fn f6<T1>(a0: &mut Option<Box<T1>>, a1: *mut T1) {
-    *a0 = Some(Box::from_raw(a1))
+    a0.replace(Box::from_raw(a1));
 }
 unsafe fn f7<T1>(a0: &mut Option<Box<[T1]>>) -> *mut T1 {
     a0.as_deref_mut()
@@ -43,7 +43,7 @@ unsafe fn f8<T1>(init: T1) -> Option<Box<T1>> {
 }
 
 unsafe fn f9<T1>(a0: &mut Option<Box<[T1]>>) {
-    *a0 = None
+    a0.take();
 }
 
 unsafe fn f10<T1: Default>() -> Option<Box<T1>> {
@@ -63,11 +63,25 @@ unsafe fn f13<T1>(a0: &mut Option<Box<[T1]>>) -> Option<Box<[T1]>> {
 }
 
 unsafe fn f14<T1>(a0: &mut Option<Box<T1>>, a1: &mut Option<Box<T1>>) {
-    *a0 = a1.take()
+    match a1.take() {
+        Some(v) => {
+            a0.replace(v);
+        }
+        None => {
+            a0.take();
+        }
+    }
 }
 
 unsafe fn f15<T1>(a0: &mut Option<Box<[T1]>>, a1: &mut Option<Box<[T1]>>) {
-    *a0 = a1.take()
+    match a1.take() {
+        Some(v) => {
+            a0.replace(v);
+        }
+        None => {
+            a0.take();
+        }
+    }
 }
 
 // f16-f19 -- null tests.  The nullptr_t operand is `()` (the converter emits the

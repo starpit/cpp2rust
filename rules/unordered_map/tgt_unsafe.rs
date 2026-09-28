@@ -60,7 +60,9 @@ unsafe fn f13<T1: Clone + Eq + Hash, T2: Clone>(
     a0: &mut HashMap<T1, Box<T2>>,
     a1: HashMap<T1, Box<T2>>,
 ) {
-    *a0 = a1.clone()
+    let __src = a1.clone();
+    a0.clear();
+    a0.extend(__src);
 }
 
 unsafe fn f14<T1>() -> HashSet<T1> {
