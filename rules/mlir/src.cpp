@@ -525,6 +525,14 @@ namespace scf {
 // `mlir::Operation`/`OpState` map, `fmt::OpInst`, and carries the SAME
 // prohibition: no equality, for the handle-vs-value reason given on OpState.
 class ForOp {};
+
+// mlir/include/mlir/Dialect/SCF/IR/SCF.h -- `scf::IfOp`, an ODS-generated op
+// class exactly like `scf::ForOp` above, i.e. an `OpState` subclass wrapping one
+// `Operation *`.  Maps where ForOp maps, `fmt::OpInst`, and carries the SAME
+// prohibition: no equality, no member.  UNLIKE ForOp it DOES need a default
+// constructor -- see f129 and the grep recorded at t159.  Declared `{}` exactly
+// like func::CallOp (t152), whose IMPLICIT default constructor is what f121 keys.
+class IfOp {};
 } // namespace scf
 
 // mlir/include/mlir/Pass/Pass.h -- `class Pass`, an ABSTRACT BASE with the pure
@@ -2874,6 +2882,81 @@ mlir::func::FuncOp f125() { return mlir::func::FuncOp(); }
 // No destructor exists (neither `Op` nor `OpState` declares one, and there is no
 // `~AffineForOp`), so the handle model is permitted -- the OwningOpRef test.
 using t158 = mlir::affine::AffineForOp;
+
+// ---------------------------------------------------------------------------
+// t159 -- `mlir::scf::IfOp`.  Arity 0, so no `\b\d+\b` normalization and no
+// last-placeholder swallow hazard.  NEWLY EXPOSED BY t158: landing t158 cleared the
+// `affine::AffineForOp` type gate on `dsc-based-utils/DSC2ToDataflowIR/V3/
+// SNControlFlowLowering.cpp`, whose first abort then became
+//     LLVM ERROR: unsupported unmapped type `mlir::scf::IfOp` has no model in types_,
+//                 while mapping `std::vector<mlir::scf::IfOp>`
+// `std::vector` is already modelled, so the mapper RECURSES into the ELEMENT and the
+// element is the whole gap -- t151/t157/t158's situation exactly.  The key spelled
+// here is the BARE type taken verbatim from the abort text, not the container.
+// The `std::vector<scf::IfOp>` is `std::vector<mlir::scf::IfOp> cmp_list;`
+// (SNControlFlowLowering.cpp:73).
+//
+// THE MODEL IS t27's, ALREADY COMMITTED AND UNCHANGED.  `mlir::scf::ForOp` (t27) is
+// the SAME SHAPE -- an ODS-generated op class in the SAME header
+// (mlir/include/mlir/Dialect/SCF/IR/SCF.h), i.e. one `Operation *` through its
+// `OpState` base -- and it is already mapped to `dataflowir_gen::fmt::OpInst`.  So
+// this row adds NO new claim about the model; it spells a second key against the
+// representation t25/t27/t152/t153/t157/t158 already share.  No `repos/dt_src` edit
+// is needed or permitted: this stays on the sanctioned side of the
+// do-not-port-MLIR boundary.
+//
+// ⛔ t25's PROHIBITION APPLIES UNCHANGED: no `==`, no `!=`, no identity test -- a C++
+// op handle compares `Operation *` while an `OpInst` is an op's printed CONTENT (the
+// g045 refusal).
+//
+// ✅ A CONSTRUCTOR KEY *IS* LICENSED HERE, AND THAT IS THE ONE PLACE THIS ROW
+// DIFFERS FROM t158 -- check (1), run rather than assumed.
+// `grep -nE '(scf::)?IfOp[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*(;|=|\()'`
+// over the gating TU is FIVE default constructions, not zero:
+//     mlir::scf::IfOp scf_ifop_tmp;   SNControlFlowLowering.cpp:86, :204, :307
+//     mlir::scf::IfOp scf_ifop;       SNControlFlowLowering.cpp:179
+//     mlir::scf::IfOp if_op;          SNControlFlowLowering.cpp:1055
+// and one more outside it, `mlir::scf::IfOp ifop;`
+// (dsc-based-utils/PCFGToDataflowIR/PCFG2ToDataflowIR.cpp:1197).  (The sixth grep hit,
+// :180 `mlir::scf::IfOp scf_ifop_cmp_top = cmp_list[...]`, is COPY-initialization from
+// a vector element, not a default construction, and licenses nothing.)  So f129 is NOT
+// a dead key -- this is t152/f121's and t157/f125's situation, where a TU really
+// writes `func::CallOp found;` / `func::FuncOp curr_func_;`.  t158/t151/t153/t27
+// remain without a constructor precisely because their greps were ZERO.
+//
+// ⛔ NO MEMBER IS KEYED, AND THE MIS-SERVICE HAZARD WAS RE-CHECKED -- check (2).  The
+// gating TU DOES reach members, so this matters:
+//   `scf_ifop_tmp.getResults()[0]`          SNControlFlowLowering.cpp:155, :352
+//   `scf_ifop_tmp.getThenBodyBuilder()`     :159, :270, :359
+//   `scf_ifop_tmp.getElseBodyBuilder()`     :164, :366
+//   `scf_ifop_cmp_top.getResults()[0]`      :185, :190
+//   `scf_ifop.getThenBodyBuilder()`         :195
+//   `scf_ifop.getElseBodyBuilder()`         :197
+//   `mlir::scf::IfOp::create(...)`  a STATIC member on IfOp itself, :149, :186, :189,
+//                                  :259, :346
+//   `if_op.getLoc()`                        SNTransferLowering.cpp:1980
+// NONE of those is keyed and NONE can be mis-served: a key on a DERIVED class cannot
+// relocate an INHERITED member (measured on `llvm::FailureOr`: six keys FOUND, all six
+// DEAD), and the reverse direction is closed too because `grep -n 'OpState::' src.cpp`
+// keys NO OpState member at all -- its only hits are the FOUR comment lines that cite
+// this very grep, at t152, t157, t158 and here.  So every corpus read stays LOUD in the
+// mapper rather than returning a plausible lie.  ⛔ THE EXPECTED CONSEQUENCE, STATED UP
+// FRONT: the gating TU's first abort MOVES to one of those member calls, or the TU
+// reaches bucket A carrying `Cpp2RustUnmappedExpr_MemberExpr` for each.  IT DOES NOT
+// CLEAR.  An unmapped-TYPE gate clearing is not the compile frontier moving.
+//
+// No destructor exists (neither `Op` nor `OpState` declares one, and there is no
+// `~IfOp`), so the handle model is permitted -- the OwningOpRef test.
+using t159 = mlir::scf::IfOp;
+
+// f129 -- THE DEFAULT CONSTRUCTOR FOR t159, on t152/f121's and t157/f125's precedent
+// and for the same reason: the gating TU really writes `mlir::scf::IfOp scf_ifop;`
+// (five sites listed at t159, plus PCFG2ToDataflowIR.cpp:1197), so this is a key the
+// corpus REACHES rather than the dead ctor t158 deliberately omitted.  A
+// default-constructed ODS op handle is the NULL handle and `fmt::OpInst` has no null,
+// so the target is f121/f125's unreachable placeholder and says so there -- the value
+// cannot be read, because no IfOp member is mapped.
+mlir::scf::IfOp f129() { return mlir::scf::IfOp(); }
 
 // ---------------------------------------------------------------------------
 // PASS 2026-09-28: the `mlir::Location` row, keyed against the model that landed

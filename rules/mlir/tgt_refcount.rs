@@ -1483,3 +1483,39 @@ fn f128(
     let _ = __o.write_all(&__b);
     __o
 }
+
+// ---------------------------------------------------------------------------
+// t159 -- `mlir::scf::IfOp` -> `fmt::OpInst`.  An ODS-generated op class in the SAME
+// header as `scf::ForOp` (t27) and of the SAME shape: one `Operation *` through its
+// OpState base.  So this row adds NO new claim about the model -- t27 already maps
+// that representation to `fmt::OpInst`, and this is the second key against it.
+//
+// ⛔ t25's PROHIBITION APPLIES UNCHANGED: no `operator==`, no `operator!=`, no
+// identity test is mapped, and none may be added without a handle-identity model.  NO
+// MEMBER is mapped either -- every read the gating TU performs (`getResults`,
+// `getThenBodyBuilder`, `getElseBodyBuilder`, `getLoc`, `IfOp::create`) still aborts
+// loudly in the mapper rather than returning a plausible lie.  See src.cpp at t159 for
+// both greps, including the `OpState::` one.
+//
+// The `init` is t25's/t27's/t152's/t157's/t158's, and for their reason: a
+// default-constructed ODS op handle is the NULL handle, `fmt::OpInst` has no null, and
+// this expression exists only to type-check the type key.
+fn t159() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+// f129 -- the default constructor for t159, required because the gating TU writes
+// `mlir::scf::IfOp scf_ifop;` at five sites (SNControlFlowLowering.cpp:86, :179, :204,
+// :307, :1055) and PCFG2ToDataflowIR.cpp:1197 writes a sixth.  Byte-identical to
+// t159's init on purpose, exactly as f121 is to t152's and f125 is to t157's: t159
+// supplies the type's zero value while f129 is the expression a written
+// `mlir::scf::IfOp x;` lowers to.  It is the null handle in C++ and `fmt::OpInst`
+// cannot represent null, so this is a PLACEHOLDER -- the value is never read, because
+// no IfOp member is mapped.
+fn f129() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
