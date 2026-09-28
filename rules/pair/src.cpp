@@ -1,6 +1,7 @@
 // Copyright (c) 2022-present INESC-ID.
 // Distributed under the MIT license that can be found in the LICENSE file.
 
+#include <cstddef>
 #include <utility>
 
 template <typename T1, typename T2> using t1 = std::pair<T1, T2>;
@@ -75,3 +76,31 @@ std::pair<T1, T2> &f14(std::pair<T1, T2> &dst, std::pair<T1, T2> &&src) {
 // it aborts the preprocessor at cpp_rule_preprocessor.cpp:888.  The BODY is not
 // in question (std::pair compares first-then-second, which is exactly Rust tuple
 // PartialEq); only the key spelling is, and it needs a preprocessor-side answer.
+
+// f15 -- the CONSTRUCTOR SELECTED FOR A STRING-LITERAL FIRST ARGUMENT.  libc++
+// picks the perfect-forwarding `template<class _U1,class _U2> pair(_U1&&,_U2&&)`;
+// with `_U1 = const char (&)[N]` reference-collapsing makes the DECLARED
+// signature print as `pair(const char (&)[N], double *&)`, whose first parameter
+// ends in `]`, not `&`, so it cannot unify with f4/f5/f6/f7 (each of which needs
+// a trailing `&`).  Spelling copied from rules/vector's f40.  This is the key
+// behind 240 of dxp_standalone.cpp's placeholders.
+// The element type is pinned to `char` DELIBERATELY: the body has to turn the
+// array into this project's std::string representation (a NUL-TERMINATED
+// Vec<libc::c_char> / Vec<u8>), which is only meaningful for a char array.  A
+// generic `T3 const (&)[_]` would record ONE key for every element type and
+// answer wrongly for e.g. an int array.  MEASURED: the array extent normalises
+// to `[_]`, so `[4]` and `[3]` share this one key -- harmless, the extent is
+// unused in the body.
+template <typename T1, typename T2, std::size_t T3>
+std::pair<T1, T2> f15(char const (&a0)[T3], T2 &a1) {
+  return std::pair<T1, T2>(a0, a1);
+}
+
+// f16 -- same as f15 but with an RVALUE second argument, which is the form the
+// 240-entry NSDMI actually uses: `{"nin", &N_.in_}` passes a PRVALUE `double *`,
+// so the forwarding ctor deduces `_U2 = double *` and the declared signature ends
+// in `&&`, not `&`.  MEASURED: f15 alone still left `{"nout", &b}` falling back.
+template <typename T1, typename T2, std::size_t T3>
+std::pair<T1, T2> f16(char const (&a0)[T3], T2 &&a1) {
+  return std::pair<T1, T2>(a0, std::move(a1));
+}

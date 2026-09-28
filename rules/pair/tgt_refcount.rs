@@ -89,3 +89,33 @@ fn f14<T1: Default + ByteRepr, T2: Default + ByteRepr>(
 ) {
     a0.write(std::mem::take(&mut *a1))
 }
+
+fn f15<T1: TryFrom<Vec<u8>>, T2>(a0: Vec<u8>, a1: T2) -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(
+            <T1>::try_from({
+                let mut __b = a0.to_vec();
+                __b.push(0);
+                __b
+            })
+            .ok()
+            .expect("failed conversion"),
+        )),
+        Rc::new(RefCell::new(a1.try_into().ok().expect("failed conversion"))),
+    )
+}
+
+fn f16<T1: TryFrom<Vec<u8>>, T2>(a0: Vec<u8>, a1: T2) -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(
+            <T1>::try_from({
+                let mut __b = a0.to_vec();
+                __b.push(0);
+                __b
+            })
+            .ok()
+            .expect("failed conversion"),
+        )),
+        Rc::new(RefCell::new(a1.try_into().ok().expect("failed conversion"))),
+    )
+}

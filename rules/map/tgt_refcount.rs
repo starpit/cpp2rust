@@ -211,3 +211,13 @@ fn f34<T1: Ord + Clone + 'static, T2: 'static>(
 ) -> RefcountMapIter<T1, T2> {
     a0.postfix_inc()
 }
+
+fn f35<T1: Ord + Clone, T2>(
+    a0: Vec<(Value<T1>, Value<T2>)>,
+    a1: Option<T1>,
+) -> BTreeMap<T1, Value<T2>> {
+    a0.into_iter()
+        .rev()
+        .map(|(__k, __v)| (__k.borrow().clone(), __v))
+        .collect::<BTreeMap<T1, Value<T2>>>()
+}

@@ -176,3 +176,22 @@ typename std::map<T1, T2>::iterator
 f34(typename std::map<T1, T2>::iterator a0, int a1) {
   return a0.operator++(a1);
 }
+
+// f35 -- the INITIALIZER-LIST CONSTRUCTOR, i.e. the NSDMI form
+// `std::map<K,V> m = {{k, v}, ...}`.  MEASURED from the fallback readback:
+//   std_map_..._new_1({ vec![...] }, None,)
+// so (a) the braced init list already lowers to a `vec![...]`, and (b) the
+// COLLAPSED DEFAULTED COMPARATOR shows up as a literal `None` SECOND argument --
+// the key must therefore carry the comparator parameter and must NOT be shaped
+// as a 1-arg ctor.  `const std::initializer_list<...> &` spelling copied from
+// rules/vector's f36.
+// The body uses `.rev()` before `collect()` because `collect` is LAST-duplicate-
+// wins while std::map's init-list insert keeps the FIRST; reversing makes the two
+// agree.  `a0` occurs EXACTLY ONCE, which matters: a rule body is inlined as one
+// expression, so every `aN` occurrence re-evaluates that argument -- and the
+// motivating site (dsc/designSpaceConfig.h:358) has 240 elements.
+template <typename T1, typename T2>
+std::map<T1, T2> f35(const std::initializer_list<std::pair<const T1, T2>> &a0,
+                     const std::less<T1> &a1) {
+  return std::map<T1, T2>(a0, a1);
+}

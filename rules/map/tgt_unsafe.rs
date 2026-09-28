@@ -158,3 +158,10 @@ unsafe fn f34<T1: Ord + Clone, T2>(
 ) -> UnsafeMapIterator<T1, T2> {
     a0.postfix_inc()
 }
+
+unsafe fn f35<T1: Ord, T2>(a0: Vec<(T1, T2)>, a1: Option<T1>) -> BTreeMap<T1, Box<T2>> {
+    a0.into_iter()
+        .rev()
+        .map(|(__k, __v)| (__k, Box::new(__v)))
+        .collect::<BTreeMap<T1, Box<T2>>>()
+}

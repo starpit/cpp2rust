@@ -45,3 +45,25 @@ unsafe fn f13<T1: Clone, T2: Clone>(a0: &mut (T1, T2), a1: (T1, T2)) {
 unsafe fn f14<T1: Default, T2: Default>(a0: &mut (T1, T2), a1: &mut (T1, T2)) {
     *a0 = std::mem::take(&mut *a1)
 }
+
+unsafe fn f15<T1: From<Vec<libc::c_char>>, T2>(a0: Vec<libc::c_char>, a1: T2) -> (T1, T2) {
+    (
+        <T1>::from({
+            let __p = a0.as_ptr();
+            std::slice::from_raw_parts(__p, (0..).take_while(|&i| *__p.add(i) != 0).count() + 1)
+                .to_vec()
+        }),
+        a1.into(),
+    )
+}
+
+unsafe fn f16<T1: From<Vec<libc::c_char>>, T2>(a0: Vec<libc::c_char>, a1: T2) -> (T1, T2) {
+    (
+        <T1>::from({
+            let __p = a0.as_ptr();
+            std::slice::from_raw_parts(__p, (0..).take_while(|&i| *__p.add(i) != 0).count() + 1)
+                .to_vec()
+        }),
+        a1.into(),
+    )
+}
