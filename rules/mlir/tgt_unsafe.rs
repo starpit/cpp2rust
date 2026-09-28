@@ -1471,3 +1471,25 @@ fn f123(a0: &dataflowir_gen::ir::FileLineColLoc) -> u32 {
 fn f124(a0: &()) -> dataflowir_gen::ir::Location {
     dataflowir_gen::ir::Location::Unknown
 }
+
+// t156 `mlir::SideEffects::EffectInstance<mlir::MemoryEffects::Effect>` ->
+//   `dataflowir_gen::EffectInstance` (`ods_effects`, dt_src c7e551a).  ⭐ THE GATE
+//   for `dialects/VarExpr/VarExprOps.cpp`, whose abort is the ELEMENT type of the
+//   `SmallVectorImpl` every generated `getEffects` override takes.  The concrete
+//   instantiation is keyed because the corpus has exactly one (98 definitions, all
+//   `<mlir::MemoryEffects::Effect>`).  No constructor key: `EffectInstance` declares
+//   twelve constructors and none of them is a default constructor, so no site can
+//   ask for `mlir_SideEffects_EffectInstance::new()`.
+//   ⛔ The producer and consumer keys are OUT BY DECISION -- the per-operand
+//   `emplace_back` needs an `OpOperand *` a ported body cannot form, `hasEffect<T>()`
+//   loses its effect to a non-recorded explicit template argument, and
+//   `isMemoryEffectFree(Operation *)` asks a different question than
+//   `is_memory_effect_free(&[EffectInstance])`.  See src.cpp at t156.
+fn t156() -> dataflowir_gen::EffectInstance {
+    dataflowir_gen::EffectInstance::new(
+        dataflowir_gen::EffectKind::Read,
+        0,
+        false,
+        dataflowir_gen::ods_effects::DefaultResource::get(),
+    )
+}

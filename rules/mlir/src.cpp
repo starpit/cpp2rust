@@ -980,6 +980,21 @@ public:
   TypeID();
 };
 
+// ---------------------------------------------------------------------------
+// `mlir::SideEffects::EffectInstance<mlir::MemoryEffects::Effect>` -- one entry of
+// a `getEffects` list.  Declared here ONLY so t156's key can be spelled; the model
+// is argued at `using t156 =`.  `MemoryEffects::Effect` is left INCOMPLETE on
+// purpose: it is only ever a template ARGUMENT here, never a value, and no site in
+// the corpus names it as a type of its own.
+// ---------------------------------------------------------------------------
+namespace SideEffects {
+template <typename EffectT>
+class EffectInstance {};
+} // namespace SideEffects
+namespace MemoryEffects {
+class Effect;
+} // namespace MemoryEffects
+
 } // namespace mlir
 
 // ---- type rules, and nothing else ----------------------------------------
@@ -2761,3 +2776,99 @@ unsigned f123(const mlir::FileLineColLoc &a0) { return a0.getColumn(); }
 // Every OTHER Builder member (`getIndexType()`, `getI32IntegerAttr(...)`) remains
 // UNKEYED and still aborts loudly.
 mlir::Location f124(mlir::Builder &a0) { return a0.getUnknownLoc(); }
+
+// ---------------------------------------------------------------------------
+// PASS 2026-09-28: the `EffectInstance` row.  The MODEL landed in dataflowir-gen
+// as dt_src `c7e551a` (`pub mod ods_effects`, emitted by `build.rs:600-720`, with
+// `EffectKind` DERIVED from MLIR's own `Interfaces/SideEffectInterfaces.td` rather
+// than tabled, and re-exported at the crate root by `lib.rs:78`).  Only the TYPE
+// key is written here; the reasons the accessor/producer keys are NOT are recorded
+// below, because each is a DECISION and not an oversight.
+// ---------------------------------------------------------------------------
+
+// t156 -- `mlir::SideEffects::EffectInstance<mlir::MemoryEffects::Effect>` ->
+// `dataflowir_gen::EffectInstance` (= `ods_effects::EffectInstance`).  ⭐ THIS IS
+// THE GATE: `dialects/VarExpr/VarExprOps.cpp` dies at
+//   `LLVM ERROR: unsupported unmapped type
+//    mlir::SideEffects::EffectInstance<mlir::MemoryEffects::Effect> has no model in
+//    types_, while mapping llvm::SmallVectorImpl<...>`
+// i.e. the abort is the ELEMENT type of the SmallVectorImpl a `getEffects` override
+// takes by reference, reached before any member call.
+//
+// THE CONCRETE INSTANTIATION IS KEYED, NOT A PLACEHOLDER FAMILY, and deliberately:
+// the corpus has EXACTLY ONE instantiation (98 generated
+// `void <Op>::getEffects(SmallVectorImpl<EffectInstance<MemoryEffects::Effect>> &)`
+// definitions across 16 `*.cpp.inc` files, all with the same argument), and a
+// 1-placeholder key would bucket under `mlir::SideEffects::EffectInstance` and its
+// placeholder would swallow whatever follows to the final depth-0 `>`.
+//
+// WHY THE MODEL IS FAITHFUL HERE: the list is HETEROGENEOUS and the kind is
+// PER-INSTANCE.  `SentientOps.cpp.inc:10350 LoadAndStoreOp::getEffects` emplaces an
+// op-level `Write` AND a loop of per-operand `Read`s into the SAME
+// `SmallVectorImpl` -- five entries, kinds `[Write, Read, Read, Write, Write]`,
+// operand indices `[None, 2, 3, 5, 6]` -- so `EffectKind` sits on the instance and
+// not on the container, which is what `ods_effects` does.
+//
+// NO DEFAULT-CONSTRUCTOR KEY, and this one is settled by the header rather than by
+// a grep: `EffectInstance` (Interfaces/SideEffectInterfaces.h:139-199) declares
+// TWELVE constructors and NOT ONE of them is a default constructor, so no C++ site
+// can write `EffectInstance x;` and the rc=0-then-E0433 trap has nothing to bind
+// to here.
+//
+// ⛔ WHAT IS DELIBERATELY LEFT OUT, so it keeps failing loudly:
+//
+//  1. THE PER-OPERAND `emplace_back` ARITY -- 16x `Read::get(), &getOperation()->
+//     getOpOperand(idx), 0, false, DefaultResource::get()` and 14x the same with
+//     `Write::get()`.  The model's `new_on_operand` takes an INDEX; the C++ passes
+//     an `OpOperand *` formed from a LIVE `Operation`, which a ported body does not
+//     have.  There is no honest key for `&getOperation()->getOpOperand(idx)` and I
+//     will NOT invent an `OpOperand` model to make it typecheck, so this arity is
+//     OUT and the 30 sites that use it still abort.  Consequence, and it is why
+//     `Read::get()` is also unkeyed: `Read` appears ONLY in this arity, so a
+//     `Read::get()` key would be a DEAD key.  Same for `Free`, which no producer
+//     emplaces at all.
+//
+//  2. `hasEffect<Effect>()` -- THE TEMPLATE ARGUMENT COLLAPSES THE KEY, so ONE key
+//     would have to answer for all four queries.  It is declared
+//     `template <typename Effect> bool hasEffect()`, a member of
+//     `mlir::MemoryEffectOpInterface` (`SideEffectInterfaces.h.inc:80), WITH NO
+//     FUNCTION PARAMETERS -- the effect being asked about appears only as an
+//     EXPLICIT template argument, which is not part of the recorded signature.  So
+//     `hasEffect<MemoryEffects::Write>()`, `<Allocate>()`, `<Free>()` and
+//     `<Read>()` -- the four the consumer at
+//     `dr5/src/Passes/SPMDizer/SPMDizer.cpp:239-246` writes -- ALL record as the
+//     same `bool mlir::MemoryEffectOpInterface::hasEffect()`, and any single body
+//     would answer identically for effects the C++ distinguishes.  The only
+//     mechanism that could spell the argument is `regen-rule.sh:68`'s
+//     `explicit-template-args` marker, which changes how the WHOLE module records
+//     and has NO user today; rules/mlir is the most-depended-on module and is not
+//     the place to find out what that does.  So: OUT, and it needs that decision
+//     rather than a key.
+//
+//  3. `isMemoryEffectFree` -- THE ARGUMENTS DO NOT CORRESPOND.  C++ is
+//     `bool isMemoryEffectFree(Operation *op)` (SideEffectInterfaces.h:472); the
+//     model is `is_memory_effect_free(&[EffectInstance])`.  One takes an op and
+//     walks it (including nested regions for `HasRecursiveMemoryEffects`, and
+//     answering FALSE for an op carrying no interface at all); the other asks only
+//     "did this list come out empty".  That is a different question, not a
+//     narrowing, so there is no key -- same reason `getFilename()` is out at t155.
+//     The model function stays for the ported `getEffects` bodies to use once the
+//     producer arities exist.
+//
+//  4. THE OP-LEVEL `emplace_back` ARITY (22x `Write::get(), 0, false,
+//     DefaultResource::get()`, 1x `Allocate::get(), ...`) IS ALSO OUT, and this is
+//     the one I would most like to have written.  It cannot be keyed alone: the
+//     receiver is `llvm::SmallVectorImpl<T>::emplace_back(ArgTypes &&...)`, a
+//     VARIADIC FORWARDING template, so there is no in-place `EffectInstance(...)`
+//     constructor expression in the AST for a ctor key to match, and the argument
+//     `Write::get()` needs its own key -- which in turn needs a mapping for
+//     `mlir::MemoryEffects::Write *`, whose `get()` is declared by
+//     `mlir::SideEffects::Effect::Base<DerivedEffect, BaseEffect = Effect>`
+//     (SideEffectInterfaces.h:42) and therefore carries a DEFAULTED TEMPLATE
+//     ARGUMENT into the key, plus a derived-to-base pointer conversion
+//     (`DefaultResource *` -> `Resource *`) at the last parameter, which is exactly
+//     the shape that makes the converter emit a base cast between two spellings
+//     that are the same Rust type.  Three unmeasured hazards stacked in one key is
+//     not something to land in this module on a guess.  t156 alone clears the
+//     types_ abort; the producer bodies remain unported and loud.
+using t156 = mlir::SideEffects::EffectInstance<mlir::MemoryEffects::Effect>;

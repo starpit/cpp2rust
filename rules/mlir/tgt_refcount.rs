@@ -1371,3 +1371,20 @@ fn f123(a0: &dataflowir_gen::ir::FileLineColLoc) -> u32 {
 fn f124(a0: &()) -> dataflowir_gen::ir::Location {
     dataflowir_gen::ir::Location::Unknown
 }
+
+// t156 `mlir::SideEffects::EffectInstance<mlir::MemoryEffects::Effect>` ->
+//   `dataflowir_gen::EffectInstance`.  IDENTICAL to the unsafe target: the model is
+//   a plain `Copy` value struct of a `Copy` enum, an `Option<usize>`, an `i32`, a
+//   `bool` and a `&'static str`, so there is nothing for the refcount model to own
+//   differently.  It is restated here and not omitted because a module that HAS a
+//   `tgt_refcount.rs` MUST carry every TYPE key in it -- omitting one aborts at LOAD
+//   time (`translation_rule.cpp:233`) and under NDEBUG presents as rc=139 with no
+//   message (the `rules/iostream` `t1` defect, 68b29ef7).
+fn t156() -> dataflowir_gen::EffectInstance {
+    dataflowir_gen::EffectInstance::new(
+        dataflowir_gen::EffectKind::Read,
+        0,
+        false,
+        dataflowir_gen::ods_effects::DefaultResource::get(),
+    )
+}
