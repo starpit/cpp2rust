@@ -3221,3 +3221,31 @@ fn f541(
     let __view: &(libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>, u32, u32) = &a0;
     (__view.0.clone(), __view.1 + a1, a2)
 }
+
+// ===========================================================================
+// t700/t701 + f600/f601 -- `llvm::cl::initializer<bool>` / `<int>` and
+// `llvm::cl::init<Ty>`.  ⭐ IDENTICAL TO THE UNSAFE MODEL, and for a reason that
+// is worth stating rather than leaving to the reader: the two models differ only
+// where a REPRESENTATION differs (a raw `*mut` vs a `Ptr`, a `Vec<libc::c_char>`
+// vs a `Vec<u8>`), and `initializer<Ty>`'s payload here is a PRIMITIVE -- `bool`
+// and `i32` are the same type in both models, hold no pointer and need no
+// refcount.  t78 differs across the models only because its payload is a
+// `StringRef`; this row's is not.  The full argument is at `using t700 =` in
+// src.cpp.
+fn t700() -> bool {
+    false
+}
+
+fn t701() -> i32 {
+    0
+}
+
+// f600 -- `llvm::cl::init<bool>(const bool &)`.  IDENTITY, by value.
+fn f600(a0: &bool) -> bool {
+    *a0
+}
+
+// f601 -- `llvm::cl::init<int>(const int &)`.
+fn f601(a0: &i32) -> i32 {
+    *a0
+}

@@ -7169,3 +7169,91 @@ f541(mlir::MutableOperandRange a0, unsigned a1, unsigned a2,
      std::optional<std::pair<unsigned, mlir::NamedAttribute>> a3) {
   return a0.slice(a1, a2, a3);
 }
+
+
+// ===========================================================================
+// t700/t701 + f600/f601 -- `llvm::cl::initializer<Ty>` and `llvm::cl::init<Ty>`,
+// the `cl::init(x)` PAIR.  19 emitted placeholder sites for `<bool>` across 13
+// bucket-A files (`Cpp2RustUnmapped_llvm_cl_initializer_bool_`) plus 4 for
+// `<int>` in `dbo/src/Pipeline/Pipeline.cpp`.
+//
+// ⭐ THE PRECEDENT IS t78/f47, NOT the `cl::opt` REFUSAL.  `llvm::cl::desc` is the
+// same shape -- CommandLine.h:410-415, `struct desc { StringRef Desc;
+// desc(StringRef); void apply(Option &) const; }` -- and t78 maps it to its
+// PAYLOAD's model (`Vec<libc::c_char>` / `Vec<u8>`) with f47 as the one-argument
+// constructor key whose body is the identity.  `initializer` is byte-for-byte the
+// same design in the same header:
+//     template <class Ty> struct initializer {
+//       const Ty &Init;
+//       initializer(const Ty &Val) : Init(Val) {}
+//       template <class Opt> void apply(Opt &O) const { O.setInitialValue(Init); }
+//     };
+//     template <class Ty> initializer<Ty> init(const Ty &Val) {
+//       return initializer<Ty>(Val);
+//     }
+// so the faithful model is the payload itself and the faithful model of `init` is
+// the identity.  ⛔ NOT a unit and NOT a default: see the next paragraph.
+//
+// ⛔⛔ THE VALUE IS THE WHOLE POINT, AND THIS EXACT TYPE HAS A REFUSAL PRECEDENT.
+// `mlir::detail::PassOptions::Option<bool>` (t66, ~line 1228) was REFUSED because
+// its variadic constructor would have flipped `check_progir` from `init(true)` to
+// a defaulted `false` -- a change that COMPILES and silently contradicts the
+// program.  That is exactly the outcome these two keys are shaped to avoid: the
+// emitted site is
+//     let mut __tmp_2: Cpp2RustUnmapped_llvm_cl_initializer_bool_ =
+//         (unsafe { let mut _Val: bool = true; init_153(&mut _Val) });
+// (`dataflow-scheduler/lib/Transforms/TileSCFForLoops.cpp`, emitted line 4463),
+// i.e. the converter ALREADY materialises the literal `true` into `_Val` and
+// already passes it to the `cl::init` call.  t700 alone would map the TYPE and
+// leave `init_153` undefined; t700 + f600 map the type AND the function, so the
+// `true` flows into `__tmp_2` unchanged.  ⭐ NEITHER KEY CAN LOSE THE VALUE,
+// because neither has a body that can invent one -- f600 is `*a0`.
+//
+// ⛔ WHAT IS LOST, EXPLICITLY.  (1) `apply(Opt &O) const`, exactly as t78 drops
+// `desc::apply` -- and it is deliberately NOT declared here, so a site that calls
+// it FAILS LOUDLY (`E0599 no method named apply` on a `bool`) instead of resolving
+// by accident.  (2) The `const Ty &Init` REFERENCE becomes a VALUE.  That is a
+// repair, not a regression: the C++ holds a reference to a temporary that is only
+// valid for the full-expression, and the emitted Rust already creates a
+// short-lived local `_Val`, so a borrowing model would dangle.  `bool` and `int`
+// are Copy, so the copy is observationally identical for every corpus site.
+// (3) `apply`'s effect on the enclosing `Option` -- but the enclosing
+// `Cpp2RustUnmapped_mlir_Pass_Option_bool_` is STILL A PLACEHOLDER (t66's refusal
+// stands), so that half of the construct remains LOUD and is the control for this
+// row's count.
+//
+// ⚠️ ONE TEMPLATE PARAMETER, NO DEFAULTS -- the t66 discipline three paragraphs up.
+// Real CommandLine.h declares `initializer` and `init` with exactly one parameter
+// and no defaulted argument, so the `searched as:` spelling cannot drift.
+//
+// SWALLOW-SAFETY.  `GetTypeMapKey` truncates at the first `<`, so the bucket is
+// `llvm::cl::initializer` and holds exactly two candidates, t700 and t701, both
+// mine.  `matchTemplate`'s placeholder capture runs on a SINGLE argument that
+// contains no comma and no nested `<`, so the same-depth-comma swallow
+// (`findNextLiteralSameDepth`) cannot fire -- the t243-t246 / t560-t561 argument.
+// `bool` and `int` are distinct literals, so the two cannot alias each other.
+//
+// ⛔ THE OTHER TWO INSTANTIATIONS ARE DELIBERATELY LEFT OUT.
+// `Cpp2RustUnmapped_llvm_cl_initializer_chararr_arr_` (4 sites) is
+// `initializer<char[N]>`, whose N differs per site and whose payload model is the
+// StringRef family, not a scalar; `initializer<DCC::ProgIRFormat>` (1 site) is a
+// project enum with no keyed model. Both would need a payload decision this row
+// has not made, and a guess there is exactly the silent-value defect above.
+namespace llvm {
+namespace cl {
+template <class Ty> struct initializer {
+  initializer(const Ty &Val);
+};
+template <class Ty> initializer<Ty> init(const Ty &Val);
+} // namespace cl
+} // namespace llvm
+
+using t700 = llvm::cl::initializer<bool>;
+using t701 = llvm::cl::initializer<int>;
+
+// f600 / f601 -- `llvm::cl::init<Ty>(const Ty &)`, the FREE FUNCTION the emitted
+// sites call (`init_153` in the TileSCFForLoops listing above, which has NO
+// definition anywhere in the emitted file: five call sites, zero `fn init_153`).
+// The body names the parameter EXACTLY ONCE and calls nothing but `cl::init`.
+llvm::cl::initializer<bool> f600(const bool &v) { return llvm::cl::init(v); }
+llvm::cl::initializer<int> f601(const int &v) { return llvm::cl::init(v); }

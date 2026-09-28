@@ -3372,3 +3372,34 @@ unsafe fn f541(
     let __view: &(*mut dataflowir_gen::fmt::OpInst, u32, u32) = &a0;
     (__view.0, __view.1 + a1, a2)
 }
+
+// ===========================================================================
+// t700/t701 + f600/f601 -- `llvm::cl::initializer<bool>` / `<int>` and
+// `llvm::cl::init<Ty>`.  ⭐ THE PAYLOAD IS THE MODEL, exactly as t78/f47 model
+// `llvm::cl::desc` by its `StringRef` payload: `initializer<Ty>` is a one-field
+// carrier of a `Ty` plus an `apply` that this port does not map, so the honest
+// Rust type is `Ty` itself and `init` is the identity.  ⛔ THE VALUE MUST SURVIVE
+// -- `init(true)` silently becoming `false` is the `PassOptions::Option<bool>`
+// defect t66 was refused over -- and neither body below can invent a value.
+// The full argument, the four things that are lost, and the two instantiations
+// left out are at `using t700 =` in src.cpp.
+fn t700() -> bool {
+    false
+}
+
+fn t701() -> i32 {
+    0
+}
+
+// f600 -- `llvm::cl::init<bool>(const bool &)`.  IDENTITY, by value: `bool` is
+// Copy and the C++ `const Ty &Init` member outlives nothing, so the copy is
+// observationally identical and cannot dangle.  ⚠️ `a0` named EXACTLY ONCE.
+unsafe fn f600(a0: &bool) -> bool {
+    *a0
+}
+
+// f601 -- `llvm::cl::init<int>(const int &)`.  Same identity, `int` -> `i32` per
+// f30's `const int &` -> `&i32`.
+unsafe fn f601(a0: &i32) -> i32 {
+    *a0
+}
