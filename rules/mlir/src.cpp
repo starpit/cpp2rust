@@ -539,6 +539,28 @@ public:
 namespace ktdf {
 class TokenType {};
 class FifoSlotType {};
+// The four ODS-generated `mlir::ktdf` op classes named by t300-t304.  Each is
+// `Operation *` through its `OpState` base, declared for the t161 reason and nothing more.
+// ⭐ THE REFUSAL AT :4507 THAT KEPT THESE LOUD IS FALSIFIED, and its own test is the proof:
+// it recorded `grep -cE "struct mlir_ktdf_<Op>\b"` against
+// dataflowir-gen-654e676bccb4a05f/out/dataflow_ods.rs as **0 for all three** and concluded
+// `mlir::ktdf` was a WHOLE-DIALECT `.td` coverage gap.  Re-run 2026-09-28, that identical
+// grep returns **1 for all four**: `dataflow_ods.rs:4826` reads `pub struct
+// mlir_ktdf_PipelineOp;` followed by `impl MlirOp for mlir_ktdf_PipelineOp { const DEF:
+// &'static TdOpDef = &super::ods_more::TD_OPS_MORE[93]; }`, inside `pub mod ops` (:4608), and
+// the op is registered by name at :5190.  StageOp / PrivateOp / PrivateYieldOp are the same
+// shape.  The DEFs are carried by the `ods_more` / `TD_OPS_MORE` table, which POSTDATES that
+// refusal -- so the `.td` gap was real when it was written and is CLOSED now, and these
+// spellings are ordinary keyable cast targets rather than a coverage gap to preserve.
+// ⛔ The refusal's OTHER half STILL STANDS and is NOT touched here: the four
+// `MultiOperandTraitBase` spellings whose second argument is `NOperands<N>::Impl` /
+// `AtLeastNOperands<N>::Impl` stay LOUD, because the mangler ERASES the non-type `N`
+// (`..._NOperands____Impl_`) and a guessed arity is a different type that silently never
+// matches.  That reason is mechanical and unaffected by the ODS table growing.
+class PipelineOp {};
+class StageOp {};
+class PrivateOp {};
+class PrivateYieldOp {};
 } // namespace ktdf
 
 // `mlir::sdscbundle::InputArgType` -- the SIXTH concrete `TypedValue` element type
@@ -4615,6 +4637,52 @@ using t233 = mlir::OpTrait::SingleBlock<mlir::agen::CompositeLoadOp>;
 using t234 = mlir::OpTrait::detail::MultiOperandTraitBase<mlir::sentient::YieldOp, mlir::OpTrait::VariadicOperands>;
 // t235 -- Cpp2RustUnmapped_mlir_OpTrait_detail_MultiOperandTraitBase_mlir_UnrealizedConversionCastOp__mlir_OpTrait_VariadicOperands_, 2 occurrences.  DEF `ops::mlir_UnrealizedConversionCastOp` present.
 using t235 = mlir::OpTrait::detail::MultiOperandTraitBase<mlir::UnrealizedConversionCastOp, mlir::OpTrait::VariadicOperands>;
+
+// ---------------------------------------------------------------------------
+// t300-t304 -- THE FIVE `mlir::ktdf` SPELLINGS OF THE SAME THREE TRAIT BUCKETS, which the
+// block above deliberately left LOUD as a dataflowir-gen `.td` coverage gap.  That gap is
+// CLOSED (the falsification, with the generated lines, is recorded at the `namespace ktdf`
+// declarations above); these are the LAST survivors of this family.
+//
+// ⭐ MEASURED, not inferred.  Anchored `grep -oE '(^|[^A-Za-z0-9_])<name>'` over the 226-file
+// v30 sweep at fresh30/out (emitted 14:19:56-14:24:09, i.e. NEWER than the pin/ir.v30/mlir
+// module at 14:10:44 that produced it, so its silence is evidence) shows the three SHORT /
+// arity-0 family names at **0 occurrences in 0 files** -- t217-t235 are landed AND effective --
+// while exactly **8 instantiated survivors** remain, and every one is `mlir::ktdf`:
+//     Cpp2RustUnmapped_mlir_OpTrait_SingleBlock_mlir_ktdf_PipelineOp_      3   -> t300
+//     Cpp2RustUnmapped_mlir_OpTrait_SingleBlock_mlir_ktdf_StageOp_         1   -> t301
+//     Cpp2RustUnmapped_mlir_OpTrait_SingleBlock_mlir_ktdf_PrivateOp_       1   -> t302
+//     ..._MultiResultTraitBase_mlir_ktdf_PrivateOp__..._VariadicResults_   2   -> t303
+//     ..._MultiOperandTraitBase_mlir_ktdf_PrivateYieldOp__..._VariadicOperands_  1 -> t304
+// ⚠️ TWO OF THESE FIVE ARE NOT ON THE :4507 LEFT-OUT LIST AT ALL (`SingleBlock<PrivateOp>` and
+// `MultiResultTraitBase<PrivateOp, VariadicResults>`), so that list was never the complete
+// survivor set and the census had to be re-run against a corpus rather than trusted.
+//
+// ⛔ The 6 remaining corpus tokens that CONTAIN `SingleBlock` are a DIFFERENT DEFECT and are
+// NOT addressed here: they are the long `Cpp2RustUnmapped_mlir_Op_<Op>__<traitlist>_` names of
+// the separately-unkeyed `mlir::Op<...>` base (ktdf::lowering::ExecuteOnOp, ddl::*).  Counting
+// them with this family measures two defects at once, which is why every count above is
+// anchored on both sides.
+//
+// ⛔ ARITY-0, FULLY CONCRETE, one `using` per spelling -- the t166 / t37-t39 reason, and it is
+// load-bearing here: `GetTypeMapKey` truncates at the first `<` so arity is NOT in the key, and
+// `matchTemplate` captures to the next SAME-DEPTH literal with a comma NOT acting as a
+// delimiter, so a generic `MultiResultTraitBase<T1, T2>` would let `T1` swallow the whole
+// argument list.  Arity 0 rules the swallow out entirely.
+// ⛔ t25's PROHIBITION CARRIES: all five are CAST-TARGET (type) position ONLY and NO MEMBER OF
+// ANY OF THEM IS EVER READ anywhere in the sweep, so each needs a NAME and NO MEMBER RULES AT
+// ALL -- and NO `fN` either, because nothing ever constructs a trait base.  These are upcast
+// targets, which is exactly what makes them trivial.
+// t300 -- Cpp2RustUnmapped_mlir_OpTrait_SingleBlock_mlir_ktdf_PipelineOp_, 3 occurrences.  DEF `ops::mlir_ktdf_PipelineOp` present (dataflow_ods.rs:4826).
+using t300 = mlir::OpTrait::SingleBlock<mlir::ktdf::PipelineOp>;
+// t301 -- Cpp2RustUnmapped_mlir_OpTrait_SingleBlock_mlir_ktdf_StageOp_, 1 occurrence.  DEF `ops::mlir_ktdf_StageOp` present.
+using t301 = mlir::OpTrait::SingleBlock<mlir::ktdf::StageOp>;
+// t302 -- Cpp2RustUnmapped_mlir_OpTrait_SingleBlock_mlir_ktdf_PrivateOp_, 1 occurrence.  DEF `ops::mlir_ktdf_PrivateOp` present.
+using t302 = mlir::OpTrait::SingleBlock<mlir::ktdf::PrivateOp>;
+// t303 -- Cpp2RustUnmapped_mlir_OpTrait_detail_MultiResultTraitBase_mlir_ktdf_PrivateOp__mlir_OpTrait_VariadicResults_, 2 occurrences.  DEF `ops::mlir_ktdf_PrivateOp` present.
+using t303 = mlir::OpTrait::detail::MultiResultTraitBase<mlir::ktdf::PrivateOp, mlir::OpTrait::VariadicResults>;
+// t304 -- Cpp2RustUnmapped_mlir_OpTrait_detail_MultiOperandTraitBase_mlir_ktdf_PrivateYieldOp__mlir_OpTrait_VariadicOperands_, 1 occurrence.  DEF `ops::mlir_ktdf_PrivateYieldOp` present.
+using t304 = mlir::OpTrait::detail::MultiOperandTraitBase<mlir::ktdf::PrivateYieldOp, mlir::OpTrait::VariadicOperands>;
 
 // ---------------------------------------------------------------------------
 // t236-t242 -- `llvm::SmallSet` and `llvm::detail::DenseSetImpl`, the two

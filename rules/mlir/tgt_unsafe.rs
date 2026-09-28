@@ -2522,3 +2522,33 @@ unsafe fn f156(a0: libcc2rs::InFlightDiagnostic, a1: &u64) -> libcc2rs::InFlight
 unsafe fn f157(a0: libcc2rs::InFlightDiagnostic, a1: &Vec<libc::c_char>) -> libcc2rs::InFlightDiagnostic {
     libcc2rs::InFlightDiagnostic::shl_c_chars(a0, a1)
 }
+
+fn t300() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_ktdf_PipelineOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t301() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_ktdf_StageOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t302() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_ktdf_PrivateOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t303() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_ktdf_PrivateOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t304() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_ktdf_PrivateYieldOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
