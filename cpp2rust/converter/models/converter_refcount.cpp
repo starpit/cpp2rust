@@ -1962,6 +1962,22 @@ void ConverterRefCount::EmitByValueShadow(const std::string &loop_var_name,
 
 bool ConverterRefCount::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
   auto *loop_var = stmt->getLoopVariable();
+  // A decomposing loop variable is NOT lowered in this model: the unsafe map
+  // path synthesises an iterator name and emits `EmitMapDecompositionBindings`
+  // raw-pointer bindings (converter.cpp:2310-2337), which this model has no
+  // equivalent for -- its holder would be `Rc<RefCell<..>>` and the bindings
+  // unreachable without duplicating the access-mode expansion. That is a
+  // DELIBERATE refusal, but a DecompositionDecl has no name of its own, so
+  // falling through to GetNamedDeclAsString here reached the generic namer and
+  // died with `report_fatal_error("Unexpected unnamed construct")`
+  // (converter_lib.cpp:847) -- a refusal presenting as an internal error.
+  // Route it to the refusal that names the construct, its bindings and the
+  // source location instead.
+  if (auto *decomp =
+          llvm::dyn_cast<clang::DecompositionDecl>(stmt->getLoopVariable())) {
+    ReportUnsupportedStructuredBinding(decomp);
+    return false;
+  }
   auto loop_var_name = GetNamedDeclAsString(loop_var);
 
   StrCat("'loop_:");
@@ -3063,10 +3079,24 @@ void ConverterRefCount::ConvertCXXRecordMethods(clang::CXXRecordDecl *decl) {
                         });
 
   auto convert_method = [&](clang::CXXMethodDecl *method) {
-    if (IsMethodOnPtr(method)) {
-      ConvertMethodOnPtrTraitDecl(method);
-      ConvertMethodOnPtr(method);
+    if (!IsMethodOnPtr(method)) {
+      return;
     }
+    // Match the unsafe model's contract (converter.cpp:1363): a method that is
+    // declared but not defined in this TU is SKIPPED, not translated. Here that
+    // means emitting neither the trait declaration nor the impl entry -- a Rust
+    // trait must be complete and the sibling impl cannot supply the body
+    // (ConvertMethodOnPtr returns early for non-definitions), so the trait would
+    // need a default body and there is no C++ body to translate. Emitting an
+    // `unimplemented!()` default is banned (see converter.cpp:1440). Skipping
+    // makes refcount fail where unsafe already does -- rustc E0599 at the call
+    // site -- instead of aborting the whole translation. Pure virtuals are kept:
+    // they legitimately lower to a body-less trait method.
+    if (!method->isPureVirtual() && !method->getDefinition()) {
+      return;
+    }
+    ConvertMethodOnPtrTraitDecl(method);
+    ConvertMethodOnPtr(method);
   };
   for (auto *method : decl->methods()) {
     convert_method(method);
