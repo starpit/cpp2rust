@@ -50,6 +50,10 @@
 // printer renders it `std::string`, not `std::__1::basic_string<...>`: verified,
 // 55 recorded keys across the published IR tree spell it that way.
 #include <string>
+// For `std::vector`, which appears in f141's ArrayRef(const std::vector<T> &)
+// constructor key.  The readback spells it `const std::vector<llvm::StringRef> &`,
+// with the allocator argument default-suppressed on BOTH sides.
+#include <vector>
 
 namespace mlir {
 
@@ -1080,6 +1084,31 @@ public:
   // spelling would record a key no call site searches.  Needed by row g325,
   // whose site literally constructs one: `ArrayRef({num_ports, num_ports})`.
   ArrayRef(std::initializer_list<T> array);
+  // f139/f140/f141 -- THREE MORE OVERLOADS, each one PROVEN ABSENT by a
+  // `-verbose` readback (/home/agent/work/mlirslot/aref.vlog): the mapper asked
+  // for each of these spellings at an `ArrayRef<StringRef>` site and got
+  // `result: None`, while the init-list key above came back `Matching:`.  So the
+  // 6,332-site `llvm_ArrayRef_llvm_StringRef_::new_N` fabrication is a MISSING
+  // OVERLOAD problem, not a dead key.  ArrayRef.h:53 / :64 / :100.
+  ArrayRef();
+  ArrayRef(const T &element);
+  ArrayRef(const std::vector<T> &vec);
+  // ⛔ NOT DECLARED, deliberately -- the two remaining `result: None` spellings:
+  //   ArrayRef(const T *data, size_t length)        ArrayRef.h:74
+  //   ArrayRef(const SmallVectorImpl<T> &vec)       ArrayRef.h:84
+  // The first is raw-pointer -> OWNING `Vec`.  The view->owning-Vec collapse this
+  // module settled at src.cpp:245-249 was settled for VIEWS of storage the model
+  // already owns; RECONSTITUTING one from a bare pointer + length is a different
+  // thing.  The refcount model cannot express it AT ALL (`Ptr<T>` is a Weak-based
+  // struct, rc.rs:143 -- there is no `from_raw_parts` to reach), and the unsafe
+  // model only via `slice::from_raw_parts(...).to_vec()` plus a `Clone` bound, i.e.
+  // a body that is correct in one model and impossible in the other.  Left FAILING
+  // LOUDLY as `new_N`.
+  // The second names `llvm::SmallVectorImpl<T>`, which is rules/smallvector's
+  // type, not this module's (THE RECEIVER DECIDES THE MODULE --
+  // rules/smallvector/src.cpp:134-136 -- but the PARAMETER type has an owner too,
+  // and writing a key here would fix rules/mlir's model of somebody else's type).
+  // Re-routed, not refused on the merits.
 };
 
 // The FREE comparison operators on two ArrayRefs, ArrayRef.h (`template<typename
@@ -3711,3 +3740,50 @@ using t165 = mlir::FunctionType;
 // `init`, NOT a valid value.
 mlir::RankedTensorType f137() { return mlir::RankedTensorType(); }
 mlir::FunctionType f138() { return mlir::FunctionType(); }
+
+// ---- f139/f140/f141: three more ArrayRef constructor overloads --------------
+// WHY THESE THREE AND NOT THE OTHER TWO.  `llvm::ArrayRef<llvm::StringRef>` is the
+// single largest fabricated-`::new_N` receiver in the corpus -- 6,332 sites across
+// 207 emitted files (FABRICATED-NEWN.md §2) -- and it was reported as a DEAD KEY,
+// i.e. f55 present but never reached.  That verdict is OVERTURNED by measurement:
+// the `-verbose` readback in /home/agent/work/mlirslot/aref.vlog shows
+//     search expr void llvm::ArrayRef<llvm::StringRef>::ArrayRef(std::initializer_list<llvm::StringRef>), result:
+//     Matching: void llvm::ArrayRef<T1>::ArrayRef(std::initializer_list<T1>)
+// (same for `ArrayRef<int>` and `ArrayRef<mlir::Type>`), so f55 is LIVE.  The gap is
+// that FIVE OTHER OVERLOADS come back `result: None`.  Three of them are safe to
+// model against `Vec<T1>` and are written here; the other two are refused at the
+// class declaration above, with reasons.
+//
+// The `ArrayRef<T1>` -> `Vec<T1>` representation (t19) OWNS its buffer where C++
+// borrows, which is this module's settled position for the whole range family
+// (src.cpp:245-249).  Each body below is therefore a COPY, and each is the only
+// thing `Vec` can mean: an empty ArrayRef is an empty Vec, a one-element ArrayRef
+// is a one-element Vec, and an ArrayRef over a `std::vector` is that vector's
+// elements.  None of the three can observe the aliasing it loses, because
+// `llvm::ArrayRef` declares no mutating member at all (contrast
+// MutableArrayRef/MutableOperandRange, REFUSED at src.cpp:252-271 precisely
+// because they are write-through).
+
+// f139 -- `ArrayRef()` (ArrayRef.h:53), the default constructor.  Readback:
+//   search expr void llvm::ArrayRef<llvm::StringRef>::ArrayRef(), result:  None
+template <typename T1> llvm::ArrayRef<T1> f139() {
+  return llvm::ArrayRef<T1>();
+}
+
+// f140 -- `ArrayRef(const T &OneElt)` (ArrayRef.h:64).  Readback:
+//   search expr void llvm::ArrayRef<llvm::StringRef>::ArrayRef(const llvm::StringRef &), result:  None
+// Spelled `const T1 &` because that is the spelling the readback ASKED FOR -- the
+// f18/f19 lesson in reverse (rules/support f19 is the same shape: a `const T1 &`
+// src parameter against an `a0: &T1` target with a `T1: Clone` bound).
+template <typename T1> llvm::ArrayRef<T1> f140(const T1 &a0) {
+  return llvm::ArrayRef<T1>(a0);
+}
+
+// f141 -- `ArrayRef(const std::vector<T, A> &Vec)` (ArrayRef.h:100).  Readback:
+//   search expr void llvm::ArrayRef<llvm::StringRef>::ArrayRef(const std::vector<llvm::StringRef> &), result:  None
+// The allocator argument is default-suppressed in the searched spelling, so the
+// key is written WITHOUT it; `std::vector<T1>` -> `Vec<T1>` (rules/vector t1), so
+// the body is a copy of the whole vector.
+template <typename T1> llvm::ArrayRef<T1> f141(const std::vector<T1> &a0) {
+  return llvm::ArrayRef<T1>(a0);
+}

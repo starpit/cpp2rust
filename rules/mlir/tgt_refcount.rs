@@ -1680,3 +1680,34 @@ fn f137() -> dataflowir_gen::ir::Ty {
 fn f138() -> dataflowir_gen::ir::Ty {
     dataflowir_gen::ir::Ty::Opaque(String::new())
 }
+
+// f139/f140/f141 -- three more `llvm::ArrayRef<T1>` constructor overloads, each one
+// PROVEN ABSENT by the `-verbose` readback in /home/agent/work/mlirslot/aref.vlog
+// (`result: None`), against f55's init-list key which that same readback shows
+// `Matching:`.  t19 is `Vec<T1>`, an OWNING model of a borrowed view -- this
+// module's settled position (src.cpp:245-249) -- so each body is a COPY, and no
+// caller can observe the lost aliasing because `llvm::ArrayRef` declares no
+// mutating member.  See src.cpp at f139 for why the other two `None` spellings
+// (`(const T *, size_t)` and `(const SmallVectorImpl<T> &)`) are deliberately
+// left fabricating.
+fn f139<T1>() -> Vec<T1> {
+    Vec::new()
+}
+
+// f140 -- the one-element constructor.  `T1: Clone` and `a0.clone()` follow
+// rules/support f19 exactly: at `a0: &T1` the by-value probe step picks
+// `<T1 as Clone>::clone`, so this yields `T1`, not `&T1`.
+fn f140<T1: Clone>(a0: &T1) -> Vec<T1> {
+    // PATH FORM, not `a0.clone()`: the converter substitutes `&(*s)` for a `const &`
+    // argument and appends the method textually, so `a0.clone()` emitted
+    // `vec![&(*s).clone()]` -- `&((*s).clone())`, a reference to a temporary and the
+    // WRONG element type.  MEASURED, then fixed.  Same lesson as AGENT-COMMON's
+    // `Vec::len(&a0)` / `Ptr::decay(&a0)` note.
+    vec![Clone::clone(a0)]
+}
+
+// f141 -- from a `std::vector<T1>`, which rules/vector also models as `Vec<T1>`,
+// so the copy is `Vec::clone`.
+fn f141<T1: Clone>(a0: &Vec<T1>) -> Vec<T1> {
+    a0.clone()
+}
