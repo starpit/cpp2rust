@@ -68,6 +68,25 @@ bool user_tags_built_ = false;
 // ever looks up, whose sugared spelling is the very string it looked up.
 std::unordered_map<std::string, const clang::TagDecl *> sugared_tags_;
 
+// THE SAME WALK'S TWIN, AND THE ONLY BRIDGE FROM A LEAF STRING BACK TO A QualType.
+// `sugared_tags_` above cannot serve the preferred-name question for two independent
+// reasons: it filters on `IsUserDefinedDecl`, so a libc++ `std::basic_ofstream<char>`
+// is never inserted at all; and its value is a `TagDecl *`, while reading a
+// `PreferredNameAttr` needs a QualType (searchPreferredName, :~507, does
+// `getAsCXXRecordDecl()` and `hasSameUnqualifiedType`). So this index keeps the
+// QualType itself under the SAME as-written spelling key.
+//
+// Why that closes the gap the comment at :~1043 describes: that comment is right that
+// the LEAF holds neither a Decl nor a QualType -- but the walk that produced the leaf
+// string DID hold one, and it is exactly the string this index was keyed on. Both
+// sides come out of the same printer on the same sugar, so the match is by
+// construction, as for `sugared_tags_`.
+//
+// Restricted to ClassTemplateSpecializationDecl types: a PreferredNameAttr only ever
+// lives on a class template's pattern, so nothing else can answer, and the narrower
+// key set keeps the accumulating map small.
+std::unordered_map<std::string, clang::QualType> sugared_types_;
+
 void CollectSugaredTags(clang::QualType ty, int depth);
 
 clang::PrintingPolicy getPrintPolicy() {
@@ -1015,6 +1034,13 @@ void CollectSugaredTags(clang::QualType ty, int depth) {
       IsUserDefinedDecl(tag)) {
     sugared_tags_.emplace(ToString(unq), tag);
   }
+  // Twin index, deliberately WITHOUT the IsUserDefinedDecl filter -- the types it
+  // exists to answer for (libc++ _LIBCPP_PREFERRED_NAME families) are system types.
+  // Insert-if-absent, so the FIRST spelling seen wins, matching sugared_tags_.
+  if (llvm::isa_and_nonnull<clang::ClassTemplateSpecializationDecl>(tag) &&
+      sugared_types_.size() <= 4096) {
+    sugared_types_.emplace(ToString(unq), unq);
+  }
   if (const auto *tst = unq->getAs<clang::TemplateSpecializationType>()) {
     for (const auto &arg : tst->template_arguments()) {
       if (arg.getKind() == clang::TemplateArgument::Type) {
@@ -1668,6 +1694,31 @@ std::string mapTypeStringRecursive(const std::string &cpp_type) {
     if (auto derived = tryDeriveTopLevelConstType(cpp_type)) {
       return *derived;
     }
+    // FOURTH SEARCH ATTEMPT -- the BARE-STRING twin of searchPreferredName (:~507).
+    // That function is reachable only from `search(clang::QualType)`, so it could
+    // never fire here, and the comment at :~1043 says why: this leaf is a string.
+    // The bridge is `sugared_types_`, keyed on the very spelling the walk printed,
+    // which hands the QualType back so the attribute can be read after all.
+    // MEASURED: `external/g3log/g3log.cpp` aborts on the leaf
+    // `std::basic_ofstream<char>` inside `std::unique_ptr<std::basic_ofstream<char>>`
+    // -- the outer unique_ptr matched first and mapped its argument as a STRING.
+    //
+    // Ahead of the survey branch for the reason the derives are: a type we can
+    // resolve is not a gap, and recording it as one keeps a solved row on the queue.
+    // Introduces NO key and no new src spelling -- it only reaches an EXISTING
+    // committed key (`rules/fstream` t2 = `std::ofstream`) that the resolved spelling
+    // could not name. Blast radius is bounded by construction: everything that
+    // matches today returned at the top of this function.
+    if (auto it = sugared_types_.find(cpp_type); it != sugared_types_.end()) {
+      if (auto pref = searchPreferredName(it->second, cpp_type); pref.first) {
+        for (auto &ty : pref.second) {
+          if (ty) {
+            ty = mapTypeStringRecursive(*ty);
+          }
+        }
+        return instantiateTgt(pref.second, pref.first->type_info.type);
+      }
+    }
     if (survey::Enabled()) {
       // Keep the DETAIL exactly the bare spelling: it is the survey's grouping
       // key and the work queue's row label. The new context goes in the
@@ -1844,12 +1895,16 @@ PushASTContext::PushASTContext(clang::ASTContext &ctx) : prev_(ctx_) {
   user_tags_.clear();
   user_tags_built_ = false;
   sugared_tags_.clear();
+  // Holds QualTypes owned by that ASTContext -- MUST die with it, same as above.
+  sugared_types_.clear();
 }
 PushASTContext::~PushASTContext() {
   ctx_ = prev_;
   user_tags_.clear();
   user_tags_built_ = false;
   sugared_tags_.clear();
+  // Holds QualTypes owned by that ASTContext -- MUST die with it, same as above.
+  sugared_types_.clear();
 }
 
 bool Contains(clang::QualType qual_type) {
