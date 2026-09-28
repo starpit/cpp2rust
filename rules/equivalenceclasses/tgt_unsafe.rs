@@ -139,3 +139,49 @@ unsafe fn f8<T1: Ord + Clone>(
 unsafe fn f9<T1: Ord + Clone>(a0: &libcc2rs::EquivalenceClasses<T1>) -> bool {
     a0.is_empty()
 }
+
+// ============================================================================
+// OPERATOR KEY TARGETS ON member_iterator (t2 -> libcc2rs::MemberIter<T>).
+// Nothing is added to libcc2rs: every trait used below already exists.
+// STILL NO tgt_refcount.rs -- no body here contains raw-pointer text or
+// `as_pointer()`, every body is a single model-independent libcc2rs call, and
+// ir_unsafe.json is the unconditional base for BOTH models.  Adding a
+// byte-identical tgt_refcount.rs would only create a second place to forget a key,
+// which is the rules/iostream t1 load abort.
+
+// `MI1 == MI2` -- MemberIter's PartialEq (iterators.rs:1366) compares the CURRENT
+// ELEMENT, so an exhausted iterator and member_end() both read None and compare
+// equal (as two null Nodes do), while elements being unique in the forest makes
+// element equality the same predicate as C++ node-address equality.
+unsafe fn f10<T1: Clone + PartialEq>(
+    a0: &libcc2rs::MemberIter<T1>,
+    a1: &libcc2rs::MemberIter<T1>,
+) -> bool {
+    a0 == a1
+}
+
+unsafe fn f11<T1: Clone + PartialEq>(
+    a0: &libcc2rs::MemberIter<T1>,
+    a1: &libcc2rs::MemberIter<T1>,
+) -> bool {
+    a0 != a1
+}
+
+// prefix ++ -- PrefixInc (iterators.rs:1407), which delegates to next_member() and
+// asserts rather than walking off the end (C++ derefs a null Node there).
+unsafe fn f12<T1: Clone>(a0: &mut libcc2rs::MemberIter<T1>) -> libcc2rs::MemberIter<T1> {
+    libcc2rs::PrefixInc::prefix_inc(a0)
+}
+
+// postfix ++ yields the OLD position -- PostfixInc (iterators.rs:1413).
+// The C++ side's dummy `int` disambiguator has no target parameter, exactly as
+// rules/deque_iterator f8 omits it.
+unsafe fn f13<T1: Clone>(a0: &mut libcc2rs::MemberIter<T1>) -> libcc2rs::MemberIter<T1> {
+    libcc2rs::PostfixInc::postfix_inc(a0)
+}
+
+// `*MI` -- at() (iterators.rs:1393). Panics on the end iterator, matching C++'s
+// `assert(Node != nullptr && "Dereferencing end()!")`.
+unsafe fn f14<T1: Clone>(a0: &libcc2rs::MemberIter<T1>) -> T1 {
+    a0.at()
+}

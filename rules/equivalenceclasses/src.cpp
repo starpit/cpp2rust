@@ -86,7 +86,20 @@ public:
   //   `llvm::EquivalenceClasses<int>::member_iterator` (Record)
   // GraphColoring.hpp:71-73 names it in three PARAMETERS of doesEdgeExist, which
   // is why it cannot be an anonymous `impl Iterator` on the Rust side.
-  class member_iterator {};
+  class member_iterator {
+  public:
+    // Restated from EquivalenceClasses.h:171-200.  These are MEMBER operators (not
+    // hidden friends as on libc++'s deque iterator), so the rule bodies below use
+    // the MEMBER call form `it.operator==(rhs)`.  An infix `==`/`!=`/`++` in a rule
+    // body records NOTHING -- that is the readback-verified reason the previous slot
+    // left these rows -- and a qualified `llvm::operator==` aborts at
+    // cpp_rule_preprocessor.cpp:888.
+    bool operator==(const member_iterator &RHS) const;   // header:186
+    bool operator!=(const member_iterator &RHS) const;   // header:190
+    const ElemTy &operator*() const;                     // header:180
+    member_iterator &operator++();                       // header:193
+    member_iterator operator++(int);                     // header:198
+  };
 
   // MEMBERS THE CORPUS CALLS, restated from the header so this file typechecks and
   // so each signature STRING matches LLVM exactly.  See the f-key block below.
@@ -260,4 +273,76 @@ f8(llvm::EquivalenceClasses<T1> &ec, const T1 &v) {
 template <typename T1>
 bool f9(const llvm::EquivalenceClasses<T1> &ec) {
   return ec.empty();
+}
+
+// ============================================================================
+// OPERATOR KEYS ON member_iterator (t2) -- ADDED 2026-09-28.
+//
+// WHY THESE ARE VISIBLE WHERE f1-f9 WERE NOT.  f1-f9 closed calls to methods that
+// existed nowhere, emitted textually at rc=0 with NO placeholder token, so
+// pin/no-placeholders.sh stayed clean.  These rows are different: the converter
+// cannot emit an operator textually, so it emits
+// `Cpp2RustUnmappedExpr_CXXOperatorCallExpr`, and the witness
+// dcc/src/Transform/Sentient/Analyses/GraphColoring.cpp carries those placeholders.
+// The gate for this block is therefore the PLACEHOLDER COUNT FALLING, measured on
+// the emitted .rs before and after.
+//
+// NOTHING IS ADDED TO libcc2rs FOR THESE.  `MemberIter<T>` already carries
+// `PartialEq` (iterators.rs:1366, comparing the CURRENT ELEMENT, which is C++ node
+// identity because elements are unique in the forest), `PrefixInc`
+// (iterators.rs:1407) and `PostfixInc` (iterators.rs:1413), and `at()`
+// (iterators.rs:1393) is the `*MI` form.  All four return BY VALUE, which is the
+// property that makes a key safe here.
+//
+// ⛔ THESE ARE NOT the `I != E` / `++I` of the begin()/end() walks at :348 and :559.
+// Those run over LLVM's `iterator`, which is
+// `SmallVector<const ECValue *>::const_iterator` -- a RAW POINTER -- and are
+// refused below with their observer.  member_iterator is a real class and is the
+// only one of the two these keys can reach.
+
+// f10 -- EquivalenceClasses.h:186 `bool operator==(const member_iterator &) const`.
+// The `updated_leader == it_A` test at GraphColoring.cpp:679, by which the caller
+// learns which class survived unionSets.
+template <typename T1>
+bool f10(const typename llvm::EquivalenceClasses<T1>::member_iterator &it1,
+        const typename llvm::EquivalenceClasses<T1>::member_iterator &it2) {
+  return it1.operator==(it2);
+}
+
+// f11 -- EquivalenceClasses.h:190 `bool operator!=(const member_iterator &) const`.
+// The loop test of every `for (MI = EC.member_begin(..); MI != EC.member_end(); ++MI)`.
+template <typename T1>
+bool f11(const typename llvm::EquivalenceClasses<T1>::member_iterator &it1,
+        const typename llvm::EquivalenceClasses<T1>::member_iterator &it2) {
+  return it1.operator!=(it2);
+}
+
+// f12 -- EquivalenceClasses.h:193 `member_iterator &operator++()`.  C++ returns a
+// reference; the target returns the new state BY VALUE, exactly as
+// rules/deque_iterator f7 does for `std::deque<T>::iterator &`.
+template <typename T1>
+typename llvm::EquivalenceClasses<T1>::member_iterator &
+f12(typename llvm::EquivalenceClasses<T1>::member_iterator &it) {
+  return it.operator++();
+}
+
+// f13 -- EquivalenceClasses.h:198 `member_iterator operator++(int)`, postfix.
+// Yields the OLD position, which PostfixInc reproduces.
+template <typename T1>
+typename llvm::EquivalenceClasses<T1>::member_iterator
+f13(typename llvm::EquivalenceClasses<T1>::member_iterator a0, int a1) {
+  return a0.operator++(a1);
+}
+
+// f14 -- EquivalenceClasses.h:180 `const ElemTy &operator*() const`.  Keyed with the
+// ++/!= rows because a walk that cannot dereference is useless: GraphColoring uses
+// `*MI` AS A GRAPH NODE INDEX (:353-:360, and doesEdgeExist at
+// GraphColoring.cpp:87-90 derefs all three of its member_iterator parameters).
+// C++ hands out `const ElemTy &`; libcc2rs's `at()` returns T BY VALUE (a clone out
+// of the snapshot chain), which is the honest return here -- a reference into a
+// union-find forest is invalidated by unionSets, and a by-value return cannot
+// dangle under refcount.
+template <typename T1>
+T1 f14(const typename llvm::EquivalenceClasses<T1>::member_iterator &it) {
+  return it.operator*();
 }
