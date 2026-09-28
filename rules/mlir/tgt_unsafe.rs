@@ -2594,3 +2594,31 @@ fn t340() -> *mut ::libc::c_void {
 fn f240(a0: *mut ::libc::c_void) -> *mut ::libc::c_void {
     a0
 }
+
+// t440 -- `mlir::OpBuilder` -> `dataflowir_gen::OpBuilder` (build.rs:461, re-exported
+// at the crate root, lib.rs:74-77).  THE REAL MUTABLE IR BUILDER, not an opaque
+// stand-in: `create_op`, `insert_op`, `create_block`, the six `set_insertion_point*`
+// forms and a `region()`.  2,241 corpus sites.
+// ⛔ THE INIT VALUE IS NOT A SENTINEL AND NOT A NULL -- `OpBuilder::new` takes the
+// `BlockList` it will insert into, so the only honest init is a builder over a FRESH
+// single-entry-block list (`new_block_list_with_entry`, build.rs:94).  That is a real,
+// usable builder rather than a poisoned one; a `Default`-style null builder has no
+// representation in this model at all.
+fn t440() -> dataflowir_gen::OpBuilder {
+    dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
+}
+
+// t441 -- `mlir::ImplicitLocOpBuilder` -> `dataflowir_gen::ImplicitLocOpBuilder`
+// (build.rs:630).  474 corpus sites, the CHEAP TAIL of t440 rather than separate
+// work: in C++ it is `class ImplicitLocOpBuilder : public mlir::OpBuilder`
+// (Builders.h:630), OpBuilder plus one `Location`, and the Rust type is that same
+// shape with `Deref/DerefMut` to `OpBuilder`.
+// ⛔ `Location::Unknown` HERE IS THE SAME CHOICE t154 ALREADY MADE, not a new
+// sentinel: `mlir::Location` is non-nullable, so an init must name a real location
+// and `Unknown` is the only one that needs no file/line.
+fn t441() -> dataflowir_gen::ImplicitLocOpBuilder {
+    dataflowir_gen::ImplicitLocOpBuilder::new(
+        dataflowir_gen::ir::Location::Unknown,
+        dataflowir_gen::new_block_list_with_entry(),
+    )
+}
