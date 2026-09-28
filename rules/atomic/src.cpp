@@ -133,3 +133,39 @@ std::atomic<long> f20() { return std::atomic<long>(); }
 std::atomic<long> f21(long a0) { return std::atomic<long>(a0); }
 
 long f22(std::__atomic_base<long> &a0) { return a0.operator--(); }
+
+// g815 / g366: the SAME `<T, true>` partial specialisation as f19/f22, now for
+// `unsigned long`.
+//
+// ⛔ WHY BOTH t5 AND t12 ARE NEEDED AND NEITHER IS A DUPLICATE.  t5 above is
+// `std::__atomic_base<unsigned long, false>` -- the PRIMARY, where load/store/
+// exchange live, and whose only written spelling in the tree is the base clause
+// `__atomic_base<_Tp, false>`.  operator++ lives in the `<T, true>` partial
+// specialisation, named through the written base clause `__atomic_base<_Tp>`,
+// so the searched key elides the second argument.  The mapper matches by
+// STRING, so the two spellings are two different strings and t5 does NOT cover
+// this one -- the same split already recorded at t7/t8 for `int`, where the
+// elided spelling was proven necessary and the two-argument one was proven
+// necessary too.  Confirmed by the samples: g815/g366 both print
+// `std::__atomic_base<unsigned long>` with no second argument.
+typedef std::__atomic_base<unsigned long> t12;
+
+// PREFIX (g815, external/g3log/g3log.cpp:172 `++g_fatal_hook_recursive_counter`,
+// whose own comment reads "thread safe counter" -- i.e. the site is relying on
+// the atomicity, which is exactly why this is NOT lowered to `+= 1`).  Prefix
+// yields the NEW value, so `fetch_add(1)`'s OLD return is corrected by
+// `wrapping_add(1)`, identically to f19.
+unsigned long f23(std::__atomic_base<unsigned long> &a0) {
+  return a0.operator++();
+}
+
+// POSTFIX (g366, dcg dlOps.cpp:526 and dlOpsNew.cpp:844,
+// `std::to_string(gId++)`).  Postfix yields the OLD value, which IS
+// `fetch_add(1)`'s return -- so, unlike f19/f23, there is NO correction term,
+// and that missing `wrapping_add(1)` is the whole difference between the two
+// keys.  The `int` in the key `...::operator++(int)` is the dummy parameter that
+// distinguishes postfix from prefix; it is spelled as a literal 0 in MEMBER CALL
+// form, the only form that records a key (an infix `a0++` records nothing).
+unsigned long f24(std::__atomic_base<unsigned long> &a0) {
+  return a0.operator++(0);
+}

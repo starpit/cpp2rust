@@ -148,3 +148,15 @@ unsafe fn f22(a0: &mut Vec<libc::c_char>, a1: libc::c_char) {
 unsafe fn f23(a0: &mut Vec<libc::c_char>, a1: Vec<libc::c_char>) {
     a0.extend_from_slice(&a1[..a1.len() - 1]);
 }
+
+// g796 `SmallVectorImpl<T1>::operator!=` and g797 the free
+// `llvm::operator!=(const SmallVectorImpl<T1> &, ArrayRef<T1>)`.  Both are
+// element-wise, and ArrayRef is rules/mlir t19 -> Vec<T1>, so the second
+// operand of f25 arrives BY VALUE while f24's arrives as a reference.
+unsafe fn f24<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
+    a0 != a1
+}
+
+unsafe fn f25<T1: PartialEq>(a0: &Vec<T1>, a1: Vec<T1>) -> bool {
+    *a0 != a1
+}

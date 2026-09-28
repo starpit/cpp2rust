@@ -83,3 +83,27 @@ fn f22(a0: Ptr<std::sync::atomic::AtomicI64>) -> i64 {
             .wrapping_sub(1)
     })
 }
+
+// --- std::atomic<unsigned long>: PREFIX (f23) and POSTFIX (f24) ++ ----------
+//
+// PREFIX yields the NEW value, hence the wrapping_add(1) on fetch_add's OLD
+// return (f19's shape).  POSTFIX yields the OLD value, which fetch_add already
+// returns -- so f24 has NO correction term, and that is the only difference
+// between the two bodies.  The order is SeqCst because C++'s
+// `__atomic_base<T,true>::operator++` is defined as `fetch_add(1)` with the
+// default memory_order_seq_cst; a plain `+= 1` on a non-atomic integer would be
+// correct only single-threaded, and g3log.cpp:172's own comment ("thread safe
+// counter") names the observer that would break.
+
+fn f23(a0: Ptr<std::sync::atomic::AtomicU64>) -> u64 {
+    a0.with(|__a: &std::sync::atomic::AtomicU64| {
+        std::sync::atomic::AtomicU64::fetch_add(__a, 1, std::sync::atomic::Ordering::SeqCst)
+            .wrapping_add(1)
+    })
+}
+
+fn f24(a0: Ptr<std::sync::atomic::AtomicU64>) -> u64 {
+    a0.with(|__a: &std::sync::atomic::AtomicU64| {
+        std::sync::atomic::AtomicU64::fetch_add(__a, 1, std::sync::atomic::Ordering::SeqCst)
+    })
+}

@@ -204,3 +204,54 @@ llvm::raw_ostream &f17(llvm::raw_ostream &o, double v) {
 llvm::raw_ostream &f18(llvm::raw_ostream &o, const void *v) {
   return o.operator<<(v);
 }
+
+// ---------------------------------------------------------------------------
+// TWO ROWS EXAMINED 2026-09-28 AND DELIBERATELY NOT WRITTEN HERE.  Recorded so
+// the next slot does not re-derive them.  NEITHER changed a key, so this comment
+// leaves ir_src/ir_unsafe/ir_refcount byte-identical.
+//
+// g821 -- `llvm::raw_ostream & operator shl(llvm::raw_ostream &,
+//         mlir::AffineMap)`, 1 TU (AffineMinCanonicalization.cpp:120
+//         `LDBG(1) << "  Map: " << applyOp.getAffineMap()`).
+//   NOT STALE: grepped the whole rule tree, NO module declares an operator<< for
+//   mlir::AffineMap.  But it is NOT THIS MODULE'S ROW either.  The three sibling
+//   rows for mlir::Type / mlir::Attribute / mlir::Location were closed as
+//   satisfied by rules/mlir f126/f127/f128, which declare the FREE
+//   `operator<<(llvm::raw_ostream &, <mlir type>)` in rules/mlir against a
+//   deliberately INCOMPLETE `namespace llvm { class raw_ostream; }` whose own
+//   comment reads "rules/raw_ostream owns this type".  Writing the AffineMap
+//   overload here instead would need a second declaration of mlir::AffineMap,
+//   whose type rule is rules/mlir t8 -- a duplicate type rule for one spelling in
+//   two modules, i.e. load-order-dependent.  And the fidelity question is
+//   rules/mlir's to answer, not this module's: the rendered text has to be
+//   `AffineMap::print`'s, i.e. the Display of dataflowir-gen's
+//   `AffineMap { n_dims, n_symbols, results }` (ir.rs:313-315).  Row left OPEN with
+//   owner rules/mlir.
+//
+// g822 -- `llvm::raw_ostream & operator shl(llvm::raw_ostream &,
+//         const std::optional<long> &)`, 1 TU, 2 sites
+//         (CFGSimplificationSentientLevel.cpp:326 and :332, both printing
+//         `interval_marker_`).
+//   This one IS this module's row: the overload is
+//   llvm/Support/raw_ostream.h:846, a template inside `namespace llvm`, which is
+//   why the key prints UNQUALIFIED (the shift family prints the WRITTEN
+//   nested-name-specifier, empty for a function declared in its namespace's own
+//   body) -- matching the sample exactly.  Its body is
+//       if (O) OS << *O; else OS << std::nullopt;
+//   The engaged branch is f13's body verbatim.  ⛔ THE DISENGAGED BRANCH IS THE
+//   BLOCKER, AND IT IS A ONE-FACT BLOCK: it calls
+//   `operator<<(raw_ostream &, std::nullopt_t)` (raw_ostream.h:842), whose
+//   DEFINITION is in raw_ostream.cpp -- NOT shipped in this toolchain, which has
+//   headers only.  The exact text it writes is therefore UNKNOWN here, and it is
+//   observable: `interval_marker_` is empty on precisely the path these two debug
+//   lines exist to report, so guessing the literal would silently emit the wrong
+//   bytes for the disengaged case while the engaged case looked right.
+//   ⚠️ AND DO NOT TRUST THE OBVIOUS PROBE: `strings` IS NOT INSTALLED on this VM,
+//   so `strings libLLVMSupport.a | grep nullopt` returns "command not found" and
+//   an unwary reader records the empty result as absence.  `grep -a` over the
+//   archive does run, and finds only the four MANGLED SYMBOL names
+//   (`...11raw_ostreamESt9nullopt_t`) -- never the literal -- so the text lives in
+//   a `.L.str` this probe cannot attribute.  What WOULD settle it: `objdump -s -j
+//   .rodata` on that archive's raw_ostream.cpp.o, or a 3-line program linked
+//   against this LLVM that prints a disengaged `std::optional<long>`.
+//   Row BLOCKED as blocked:refused-unknown-nullopt-rendering.

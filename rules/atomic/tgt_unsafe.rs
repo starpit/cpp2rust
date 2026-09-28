@@ -138,3 +138,18 @@ unsafe fn f22(a0: *mut std::sync::atomic::AtomicI64) -> i64 {
             .wrapping_sub(1)
     }
 }
+
+fn t12() -> std::sync::atomic::AtomicU64 {
+    std::sync::atomic::AtomicU64::new(0)
+}
+
+unsafe fn f23(a0: *mut std::sync::atomic::AtomicU64) -> u64 {
+    unsafe {
+        std::sync::atomic::AtomicU64::fetch_add(&*a0, 1, std::sync::atomic::Ordering::SeqCst)
+            .wrapping_add(1)
+    }
+}
+
+unsafe fn f24(a0: *mut std::sync::atomic::AtomicU64) -> u64 {
+    unsafe { std::sync::atomic::AtomicU64::fetch_add(&*a0, 1, std::sync::atomic::Ordering::SeqCst) }
+}

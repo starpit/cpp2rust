@@ -92,12 +92,24 @@ public:
   void pop_back();
 };
 
+// Restated from llvm/ADT/ArrayRef.h, and ONLY as the parameter type of the free
+// `operator!=` below (g797).  ⛔ NO `t` RULE IS ADDED FOR IT: `llvm::ArrayRef<T1>`
+// already HAS one, rules/mlir t19 -> `Vec<T1>`, and a second type rule for the
+// same spelling in a second module is exactly the kind of duplicate that makes
+// which-module-wins depend on load order.  The class only has to be COMPLETE
+// (f25 takes one by value); its layout is never read by a rule.
+template <typename T> class ArrayRef {
+  const T *Data = nullptr;
+  unsigned long Length = 0;
+};
+
 template <typename T> class SmallVectorImpl : public SmallVectorTemplateBase<T> {
 public:
   void clear();
   void resize(std::size_t n);
   void reserve(std::size_t n);
   bool operator==(const SmallVectorImpl &RHS) const;
+  bool operator!=(const SmallVectorImpl &RHS) const;
 };
 
 template <typename T, unsigned N = 4>
@@ -158,6 +170,16 @@ public:
   // llvm/ADT/SmallString.h:99 -- SmallString &operator+=(char C)
   SmallString &operator+=(char C);
 };
+
+// g797: the FREE `operator!=`, `bool llvm::operator!=(const
+// llvm::SmallVectorImpl<mlir::Attribute> &, llvm::ArrayRef<mlir::Attribute>)`.
+// It is declared HERE, inside `namespace llvm`, and not at global scope, because
+// the key carries the `llvm::` qualifier -- unlike the shift family, whose keys
+// print the WRITTEN nested-name-specifier and so come out unqualified.  LLVM
+// declares it as `operator!=(const SmallVectorImpl<T> &, ArrayRef<T>)` because
+// SmallVectorImpl converts to ArrayRef but the reverse comparison needs the
+// mixed overload.
+template <typename T> bool operator!=(const SmallVectorImpl<T> &LHS, ArrayRef<T> RHS);
 
 } // namespace llvm
 
@@ -340,4 +362,28 @@ llvm::SmallString<T1> &f22(llvm::SmallString<T1> &a0, char a1) {
 template <unsigned T1>
 llvm::SmallString<T1> &f23(llvm::SmallString<T1> &a0, llvm::StringRef a1) {
   return a0.operator+=(a1);
+}
+
+// g796: the MEMBER `operator!=`, recorded as
+//   bool llvm::SmallVectorImpl<long>::operator!=(
+//       const llvm::SmallVectorImpl<long> &) const
+// -- the exact sibling of f20's `operator==`, so it is written in the same
+// MEMBER CALL form for the same reason (an infix `a0 != a1` records nothing).
+// LLVM defines it as `!(*this == RHS)`, i.e. element-wise inequality; the site
+// is DataTransferLowering.cpp:368 `src_time_dims.extents != dst_time_dims.extents`.
+template <typename T1>
+bool f24(const llvm::SmallVectorImpl<T1> &a0,
+         const llvm::SmallVectorImpl<T1> &a1) {
+  return a0.operator!=(a1);
+}
+
+// g797: the FREE `llvm::operator!=(const SmallVectorImpl<T1> &, ArrayRef<T1>)`,
+// called UNQUALIFIED so ADL finds it -- a class-qualified free spelling aborts
+// the preprocessor (see f22/f23 above).  The second operand's Rust model is NOT
+// invented here: `llvm::ArrayRef<T1>` is rules/mlir t19 -> `Vec<T1>` in BOTH
+// models, so the comparison is the same element-wise one f20/f24 use.  Site:
+// Planner.cpp:1076 `full_path_no_ls != endpoint_path`.
+template <typename T1>
+bool f25(const llvm::SmallVectorImpl<T1> &a0, llvm::ArrayRef<T1> a1) {
+  return operator!=(a0, a1);
 }

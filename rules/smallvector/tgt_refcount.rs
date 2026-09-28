@@ -73,3 +73,13 @@ fn f22(a0: &mut Vec<u8>, a1: u8) {
 fn f23(a0: &mut Vec<u8>, a1: Vec<u8>) {
     a0.extend_from_slice(&a1[..a1.len() - 1]);
 }
+
+// g796/g797.  Written EXPLICITLY for the same reason f20 is: an omitted target
+// does not drop the key, it silently falls back to the unsafe body.
+fn f24<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
+    a0 != a1
+}
+
+fn f25<T1: PartialEq>(a0: &Vec<T1>, a1: Vec<T1>) -> bool {
+    *a0 != a1
+}
