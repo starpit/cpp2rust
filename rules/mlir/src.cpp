@@ -3512,6 +3512,16 @@ llvm::raw_ostream &f128(llvm::raw_ostream &a0, const mlir::Location &a1) {
 }
 
 // ---------------------------------------------------------------------------
+// ⭐ SUPERSEDED 2026-09-28 by t460-t463 / f360-f366 BELOW.  The refusal that
+// follows is kept verbatim because its ONE load-bearing premise -- "there is no
+// sink, writer or stream type anywhere in dataflowir-gen" -- was TRUE when it was
+// written and is now FALSE: `dataflowir-gen` commit 8dee457 added `src/asm.rs`
+// `pub struct AsmPrinter`, re-exported at the crate root (lib.rs:86), and
+// `cc2.rs:44` `impl ByteRepr for AsmPrinter` is what lets a refcount rule body
+// hold a `Ptr<AsmPrinter>` at all.  READ THE REFUSAL ANYWAY: every clause of it
+// except that premise still constrains what may be keyed, and the ValueTypeRange
+// and parser halves are still refused below for reasons it gets right.
+//
 // ⛔ REFUSED 2026-09-28: THE ENTIRE `mlir::OpAsmPrinter` / `mlir::AsmPrinter`
 // `<<` FAMILY -- 301 sites over 8 TUs, of which the single largest key in the
 // whole corpus, `mlir::OpAsmPrinter & operator shl(mlir::OpAsmPrinter &,
@@ -3554,6 +3564,173 @@ llvm::raw_ostream &f128(llvm::raw_ostream &a0, const mlir::Location &a1) {
 // reasons already recorded for the `llvm::raw_ostream` family above; nothing
 // about an OpAsmPrinter receiver changes them.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// t460-t463 / f360-f366 -- THE MLIR PRINTER SINK AND ITS `<<` FAMILY.
+//
+// ⭐ WHAT CHANGED: `dataflowir_gen::AsmPrinter` (dataflowir-gen/src/asm.rs:105) is
+// the addressable sink the refusal above said did not exist.  It carries exactly
+// the four state items that refusal named as missing -- the text buffer (`out`),
+// the SSA-name map (`set_value_name`/`ssa_name`/`name_of`), the alias state
+// (`with_aliases`), the indent (`indent`/`set_indent`/`increase_indent`/
+// `decrease_indent`) -- plus `default_dialect` as a REAL STACK
+// (`push_default_dialect`/`pop_default_dialect`), which `fmt::PrintCtx`'s single
+// `&str` could not express.  `ctx()` projects a `fmt::PrintCtx` out of it, so the
+// pure printing path does the actual work and nothing is re-implemented.
+//
+// ⭐ AND THE SINK IS PROVEN NOT TO DROP THE BYTES, which is the one failure worse
+// than the placeholder: `dataflowir-gen/tests/asm.rs` carries
+// `a_known_op_through_the_sink_is_byte_identical_to_the_pure_printing_path`
+// (matching `matmul_demo` lines 55 and 1477 verbatim) plus an all-rows test --
+// 244 rows printed identically through the sink, 154 refused with the IDENTICAL
+// `PrintError`.  The job HERE is not to undo that at the key layer, so every
+// method named in a body below was checked to exist in `asm.rs`'s public surface.
+//
+// THE SHAPE, and why it is `rules/raw_ostream`'s and not a new invention.  These
+// keys are FREE functions, two arguments, receiver first -- `OpImplementation.h`'s
+//   template <typename AsmPrinterT, typename T>
+//   std::enable_if_t<...> operator<<(AsmPrinterT &p, const T &value)
+// at a concrete `AsmPrinterT`/`T`, exactly as `llvm::raw_ostream &operator<<(
+// llvm::raw_ostream &, ...)` is keyed at :3490-3492 and f126-f128.  So the
+// RECEIVER TYPE IS A SEPARATE TYPE KEY FROM THE REFERENCE TO IT, the t1/t2 split
+// rules/raw_ostream already makes (`using t1 = llvm::raw_ostream;` /
+// `using t2 = llvm::raw_ostream &;`), and the `&` key is the one the bodies bind:
+// `Ptr<AsmPrinter>` in the refcount model, `*mut AsmPrinter` in the unsafe one.
+// ⚠️ THE RETURN TYPE IS THE PRINTER BY REFERENCE, NOT A FRESH SINK -- `p << a << b`
+// chains, so each body must hand THE SAME sink back.  Every body below therefore
+// ends by returning its own `a0`, the f5-f18 invariant of rules/raw_ostream.
+//
+// ⭐ THE RECEIVERS ARE DECLARED AS TWO UNRELATED EMPTY CLASSES ON PURPOSE.  Real
+// MLIR has `class OpAsmPrinter : public AsmPrinter`, and if that inheritance were
+// spelled here the `AsmPrinter &` overloads would win overload resolution for an
+// `OpAsmPrinter` argument by derived-to-base conversion and the recorded key would
+// read `mlir::AsmPrinter &...` -- the WRONG key, silently, for 240 of the 331
+// sites.  Nothing in this file needs the base relation (there is no rule that
+// converts one to the other), so it is not written.
+//
+// ⚠️ `const char (&)[_]`: the extent below is written CONCRETELY (36) because
+// `normalizeTranslationRule` rewrites every `\b\d+\b` in a key to `_`, which is
+// what makes ONE key serve every literal length -- the f21 mechanism, unchanged.
+// A string-literal extent has no finite key set, so that erasure must stay.
+//
+// ⛔ THREE SPELLINGS ARE DELIBERATELY LEFT OUT, each so it keeps FAILING LOUDLY:
+//   * `mlir::ValueTypeRange<mlir::ResultRange>` (3 sites) and
+//     `mlir::ValueTypeRange<mlir::OperandRange>` (1).  `AsmPrinter::print_types`
+//     exists and would serve them, but the ARGUMENT TYPE HAS NO TYPE KEY: t251's
+//     own note (:5225) records that `ValueTypeRange` (TypeRange.h:120-165) is a
+//     DIFFERENT class from the `TypeRange` it keys and "is not keyed here",
+//     because unlike `TypeRange` it DECLARES `front()` -- a reference-returning
+//     accessor, which is precisely the thing the t14-t17 owning-`Vec` aliasing
+//     licence does not cover.  Keying the `<<` without the type would not even
+//     resolve; keying the type is a separate row that must re-derive that licence.
+//   * `llvm::raw_ostream << mlir::Value`.  ABSENT FROM THE MODEL ON PURPOSE and it
+//     must stay absent: `Value.h:246` is `value.print(os)`, the DEFINING
+//     OPERATION's full form, which `ir::Value` ({ name, ty }, no back-pointer)
+//     cannot reach.  A key here could only print the SSA name -- a plausible wrong
+//     answer.  ⚠️ Note this is the exact opposite of f363 below, and the
+//     difference is the receiver: `OpImplementation.h`'s
+//     `operator<<(AsmPrinterT &, Value)` body IS `p.printOperand(value)`, so on a
+//     PRINTER receiver the SSA name is the right answer and on a raw stream it is
+//     not.
+//   * `mlir::OpAsmParser` / `mlir::AsmParser` / `llvm::SourceMgr`, ~119 sites.  The
+//     parser half of `asm.rs` was left absent deliberately -- a parser needs a real
+//     lexer, a `SourceMgr` owning the buffer and location tracking, none of which is
+//     derivable from the `.td` rows -- so any key would name a function that does
+//     not exist.  Loud on purpose.
+//
+// ⛔ AND NO MEMBER IS KEYED, the t166 / t420-t422 discipline, for the reason the
+// `DialectBytecodeReader` refusal at the end of this file states: AN UNMAPPED
+// MEMBER DOES NOT ABORT.  `p.printOptionalAttrDict(...)`, `p.printRegion(...)`,
+// `p.getStream()` are emitted TEXTUALLY at rc=0 with no placeholder token.  That
+// is a pre-existing condition of these TUs, not something these keys introduce --
+// the `<<` sites are the ones that abort today -- and each of those members is its
+// own row with its own fidelity argument (`getStream()` in particular has NO
+// counterpart: `asm.rs` is not a stream).
+// ---------------------------------------------------------------------------
+
+namespace mlir {
+
+// mlir/IR/OpImplementation.h -- `class AsmPrinter` (:34) and
+// `class OpAsmPrinter : public AsmPrinter` (:400).  Restated as EMPTY and
+// UNRELATED; see the overload-resolution paragraph above for why the base
+// relation is omitted, and note `class StringRef {}` / `class StringLiteral {}`
+// at :1242 as the in-tree precedent for an inert declaration that maps nothing on
+// its own.
+class AsmPrinter {};
+class OpAsmPrinter {};
+
+OpAsmPrinter &operator<<(OpAsmPrinter &p, const char (&s)[36]);
+OpAsmPrinter &operator<<(OpAsmPrinter &p, const char &c);
+OpAsmPrinter &operator<<(OpAsmPrinter &p, const OperandRange &r);
+OpAsmPrinter &operator<<(OpAsmPrinter &p, Value v);
+
+AsmPrinter &operator<<(AsmPrinter &p, const char &c);
+AsmPrinter &operator<<(AsmPrinter &p, const llvm::StringRef &s);
+AsmPrinter &operator<<(AsmPrinter &p, const llvm::StringLiteral &s);
+
+} // namespace mlir
+
+// t460 -- `mlir::OpAsmPrinter`, the sink BY VALUE.  54 reported sites.
+using t460 = mlir::OpAsmPrinter;
+
+// t461 -- `mlir::OpAsmPrinter &`, the form every site actually holds, and the one
+// f360-f363 bind.  rules/raw_ostream t2 is the precedent.
+using t461 = mlir::OpAsmPrinter &;
+
+// t462 / t463 -- the same pair for `mlir::AsmPrinter`.  40 reported sites.
+using t462 = mlir::AsmPrinter;
+using t463 = mlir::AsmPrinter &;
+
+// f360 -- `mlir::OpAsmPrinter & operator shl(mlir::OpAsmPrinter &,
+// const char (&)[_])`, 155 sites, the largest single key in the corpus.
+// `AsmPrinter::print_str` appends VERBATIM -- no leading space, no bookkeeping --
+// which is what a `p << "lit"` in a hand-written ODS printer means.
+mlir::OpAsmPrinter &f360(mlir::OpAsmPrinter &a0, const char (&a1)[36]) {
+  return mlir::operator<<(a0, a1);
+}
+
+// f361 -- `const char &`, 34 sites.  `AsmPrinter::print_char`.
+mlir::OpAsmPrinter &f361(mlir::OpAsmPrinter &a0, const char &a1) {
+  return mlir::operator<<(a0, a1);
+}
+
+// f362 -- `const mlir::OperandRange &`, 26 sites.  `AsmPrinter::print_operands`
+// is `interleaveComma(values, os, [&](Value v) { printOperand(v); })`: comma-space
+// separated SSA names, NO brackets, which is what `printOperands` emits.  t14
+// already models `mlir::OperandRange` as an owning `Vec<ir::Value>` and this is a
+// READ-ONLY use of it, so the t14-t17 aliasing licence covers it unchanged.
+mlir::OpAsmPrinter &f362(mlir::OpAsmPrinter &a0, const mlir::OperandRange &a1) {
+  return mlir::operator<<(a0, a1);
+}
+
+// f363 -- `mlir::Value` BY VALUE (OpImplementation.h takes `Value value`), 25
+// sites.  ⭐ THIS PRINTS THE SSA NAME `%7` AND THAT IS CORRECT HERE: the header's
+// body is literally `p.printOperand(value)`.  See the refusal paragraph above for
+// why the raw_ostream spelling of the same argument is the opposite answer.
+mlir::OpAsmPrinter &f363(mlir::OpAsmPrinter &a0, mlir::Value a1) {
+  return mlir::operator<<(a0, a1);
+}
+
+// f364 -- `mlir::AsmPrinter & operator shl(mlir::AsmPrinter &, const char &)`,
+// 1 site.  f361's body on the base receiver; a DISTINCT KEY, not a duplicate,
+// because the receiver type is part of the signature the mapper prints.
+mlir::AsmPrinter &f364(mlir::AsmPrinter &a0, const char &a1) {
+  return mlir::operator<<(a0, a1);
+}
+
+// f365 -- `const llvm::StringRef &`, 1 site.  rules/stringref models a StringRef
+// as a NUL-TERMINATED Vec whose `size()` is `len()-1`, so the target body drops
+// the terminator -- the rules/raw_ostream f7 fix, whose absence once appended a
+// stray 0x00 to every chained insertion.
+mlir::AsmPrinter &f365(mlir::AsmPrinter &a0, const llvm::StringRef &a1) {
+  return mlir::operator<<(a0, a1);
+}
+
+// f366 -- `const llvm::StringLiteral &`, 1 site.  Same byte payload as f365
+// (rules/stringref t2 gives StringLiteral the same Vec), so the same body.
+mlir::AsmPrinter &f366(mlir::AsmPrinter &a0, const llvm::StringLiteral &a1) {
+  return mlir::operator<<(a0, a1);
+}
 
 // ---------------------------------------------------------------------------
 // t161 -- `mlir::arith::ConstantOp`.  Arity 0, so no `\b\d+\b` normalization and no
