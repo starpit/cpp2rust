@@ -92,3 +92,23 @@ unsafe fn f15<T1, T2, T3, T4, T5, T6, T7: Fn(T2, T3, T4, T5, T6) -> T1 + 'static
 fn t8<'a, T1>() -> Option<&'a (dyn Fn() -> T1 + 'a)> {
     None
 }
+
+fn t9<'a, T1, T2>() -> Option<&'a (dyn Fn(T2) -> T1 + 'a)> {
+    None
+}
+
+fn t10<'a, T1, T2, T3>() -> Option<&'a (dyn Fn(T2, T3) -> T1 + 'a)> {
+    None
+}
+
+fn t11<'a, T1, T2, T3, T4>() -> Option<&'a (dyn Fn(T2, T3, T4) -> T1 + 'a)> {
+    None
+}
+
+fn t12<'a, T1, T2, T3, T4, T5>() -> Option<&'a (dyn Fn(T2, T3, T4, T5) -> T1 + 'a)> {
+    None
+}
+
+fn t13<'a, T1, T2, T3, T4, T5, T6>() -> Option<&'a (dyn Fn(T2, T3, T4, T5, T6) -> T1 + 'a)> {
+    None
+}

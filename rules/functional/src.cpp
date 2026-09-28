@@ -161,3 +161,27 @@ public:
 } // namespace llvm
 
 template <typename T1> using t8 = llvm::function_ref<T1()>;
+
+// PER-ARITY SIBLINGS OF t8.  Same BORROW model, same reasoning; the only thing
+// that changes is the number of C++ call parameters.  Harvested off the bucket-A
+// rc=0 corpus: `llvm::function_ref<void (mlir::Value, llvm::StringRef)>` alone is
+// 41 anchored emissions, and 1/3/4/5-parameter spellings account for the rest
+// (`void (mlir::OpBuilder &, mlir::Location, mlir::Value[, mlir::ValueRange[, bool]])`,
+// `llvm::LogicalResult (dataflowir::gen::irTy, ...)`,
+// `std::unique_ptr<...> (const mlir::ktdf::arch::Device &)`).
+// ⛔ THE ARROW SPELLING IS LOAD-BEARING: a bare `llvm::function_ref<T1>` would bind
+// T1 to a C++ FUNCTION TYPE, which has no model in types_.  Same reason the
+// `std::function` keys t2..t7 above are spelled with arrows.
+// The BORROW (not `Box`) model and the non-`'static` lifetime are justified at t8;
+// the precondition was re-checked for these arities too -- every corpus occurrence
+// is a PARAMETER, so no `'a` ever reaches a field, alias or return position.
+
+template <typename T1, typename T2> using t9 = llvm::function_ref<T1(T2)>;
+
+template <typename T1, typename T2, typename T3> using t10 = llvm::function_ref<T1(T2, T3)>;
+
+template <typename T1, typename T2, typename T3, typename T4> using t11 = llvm::function_ref<T1(T2, T3, T4)>;
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5> using t12 = llvm::function_ref<T1(T2, T3, T4, T5)>;
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5, typename T6> using t13 = llvm::function_ref<T1(T2, T3, T4, T5, T6)>;
