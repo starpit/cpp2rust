@@ -2910,3 +2910,34 @@ unsafe fn f460(a0: &mut dataflowir_gen::fmt::Region) -> &mut Vec<dataflowir_gen:
 unsafe fn f461(a0: &mut Vec<dataflowir_gen::fmt::Block>) -> *mut dataflowir_gen::fmt::Block {
     a0.as_mut_ptr()
 }
+
+// ===========================================================================
+// f500 -- `mlir::BlockArgument mlir::Block::getArgument(unsigned)` (Block.h:139)
+// -> `fmt::Block::get_argument()`.  THE LAST LINK in the chain t560/t561/f460/f461
+// built: those took the corpus from `Cpp2RustUnmapped_llvm_simple_ilist_mlir_Block_`
+// to a real `*mut fmt::Block`, and then SIX `.getArgument(...)` calls on that pointer
+// were emitted TEXTUALLY -- rc=0, no placeholder token, `E0599` at rustc.  See
+// src.cpp for the six sites, all of them INLINED from Agen.td rather than written in
+// any `.cpp`.
+//
+// ⚠️ THE `clone()` IS THE C++ SIGNATURE, NOT A SHORTCUT, and it is the one thing to
+// get right here.  Block.h:139 returns `BlockArgument` BY VALUE, so the translated
+// expression is a value and the Rust return type must be `ir::Value` (t35's target
+// for `mlir::BlockArgument`, identical to t4's for `mlir::Value`).  The accessor in
+// dataflowir-gen deliberately returns `&Value` INTO THE LIVE `args` -- an accessor
+// that cloned internally would lose a write silently -- so the single `clone()` here
+// is where the by-value C++ return is honoured, at the boundary where C++ itself
+// copies the handle.  ⛔ WHAT IT COSTS, STATED: `BlockArgument` in MLIR is a handle
+// callers compare by IDENTITY, and `ir::Value { name, ty }` is compared by content,
+// so a site that replaced a block argument through this result would mutate a copy.
+// That is t35's pre-existing widening (`getArgNumber`/`getOwner` are unmapped for the
+// same reason), not a new loss, and all six corpus sites only READ.
+// ⚠️ `get_argument` (the `&` half) and not `get_argument_mut`: no site writes.
+// ⚠️ `a0` and `a1` are each named EXACTLY ONCE and `a0` carries nothing but a method
+// call, because a `&mut` formal's `aN` re-expands to the bare lvalue.
+// ⛔ OUT OF RANGE PANICS in the accessor rather than defaulting -- C++ `arguments[i]`
+// past the end is UB and there is no correct value; a fabricated `Value` would be the
+// `PassOptions::Option<bool>` mistake.
+unsafe fn f500(a0: &mut dataflowir_gen::fmt::Block, a1: u32) -> dataflowir_gen::ir::Value {
+    a0.get_argument(a1).clone()
+}

@@ -2804,3 +2804,31 @@ fn f460(a0: &mut dataflowir_gen::fmt::Region) -> &mut Vec<dataflowir_gen::fmt::B
 fn f461(a0: libcc2rs::Ptr<dataflowir_gen::fmt::Block>) -> libcc2rs::Ptr<dataflowir_gen::fmt::Block> {
     a0
 }
+
+// ===========================================================================
+// f500 -- `mlir::BlockArgument mlir::Block::getArgument(unsigned)` (Block.h:139)
+// -> `fmt::Block::get_argument()`.  THE LAST LINK in the chain t560/t561/f460/f461
+// built, and the one that was still SILENT: an unmapped MEMBER is emitted
+// TEXTUALLY, rc=0, with no placeholder token, so the six sites on
+// `DataTransferLowering.cpp` survived the placeholder going 8 -> 0.  See src.cpp for
+// the sites and the signature argument.
+//
+// ⭐ IDENTICAL TO THE UNSAFE MODEL HERE, and that is expected rather than sloppy:
+// the receiver is a C++ `mlir::Block &`, which is `&mut fmt::Block` in BOTH models
+// (f460's receiver is the same shape), and the result is a by-value `ir::Value` in
+// both.  Only the ITERATOR that PRODUCES the receiver differs between the models
+// (t245 / f461: `*mut fmt::Block` here, `libcc2rs::Ptr<fmt::Block>` there), and that
+// difference is already absorbed before this call.
+//
+// ⚠️ THE `clone()` IS THE C++ SIGNATURE: Block.h:139 returns `BlockArgument` BY
+// VALUE.  `fmt::Block::get_argument` returns `&Value` into the live `args` on purpose
+// -- an accessor that copied internally would silently drop a write -- so the copy
+// happens here, at the boundary where C++ copies the handle too.  ⛔ The widening it
+// costs is t35's pre-existing one (`ir::Value` is compared by content, an MLIR
+// `BlockArgument` by identity); all six sites only READ, so nothing is lost today,
+// and `getArgNumber`/`getOwner` stay unmapped and loud.
+// ⚠️ `a0`/`a1` each named EXACTLY ONCE; `a0` carries nothing but a method call.
+// ⛔ Out of range PANICS in the accessor rather than fabricating a `Value`.
+fn f500(a0: &mut dataflowir_gen::fmt::Block, a1: u32) -> dataflowir_gen::ir::Value {
+    a0.get_argument(a1).clone()
+}

@@ -119,7 +119,45 @@ namespace mlir {
 
 class Operation;
 
-class Block {};
+// ⚠️ FORWARD DECLARATION ONLY, and it has to be here rather than reusing the
+// definition at line ~580: `mlir::Block` must precede `BlockArgument` because the
+// `llvm::simple_ilist<mlir::Block>` / `iplist<mlir::Block>` declarations above name
+// Block, so Block's own member cannot see a COMPLETE BlockArgument.  An incomplete
+// return type is legal in a member DECLARATION; f500 at the bottom of this file, which
+// is where the value is actually returned, sits long past the definition.
+class BlockArgument;
+
+// ⚠️ `getArgument()` IS DECLARED HERE AND NOT LATER, for the same reason `getBlocks()`
+// is declared inside `Region` below -- a C++ class cannot be reopened.  See f500 at the
+// bottom of this file for the whole deduction.
+// mlir/IR/Block.h:139 `BlockArgument getArgument(unsigned i) { return arguments[i]; }`
+// -- verified against the harness's own toolchain header
+// (toolchain/llvm/LLVM-22.1.3-Linux-X64/include/mlir/IR/Block.h), NOT from memory.
+// ⭐ THREE PROPERTIES OF THAT SIGNATURE ARE LOAD-BEARING AND ALL THREE ARE COPIED
+// EXACTLY, because a key that differs from the recorded one in any of them is DEAD:
+//   * the return type is `BlockArgument`, NOT `mlir::Value`.  The corpus sites all
+//     return it as a `Value` (`Value getLoadInductionVar() { return
+//     ...->getArgument(0); }`), so `Value` is a tempting spelling and it is the wrong
+//     one -- it is the IMPLICIT CONVERSION at the return statement, not the member's
+//     type.  ⭐ IT COSTS NOTHING TO BE RIGHT HERE: t35 maps `mlir::BlockArgument` and
+//     t4 maps `mlir::Value` to the SAME `ir::Value`, so the emitted Rust type is
+//     identical either way and only the KEY MATCH differs.
+//   * it is NON-CONST, and Block.h declares NO const overload, so this one declaration
+//     is the entire `getArgument` surface and a const ask can only FAIL LOUDLY.
+//   * it returns BY VALUE.  `BlockArgument` is a handle, so C++ copies the handle and
+//     not the argument; the Rust side keeps the distinction honest by having
+//     `fmt::Block::get_argument` hand back a BORROW into the live `args` and letting
+//     this key's body do the one `clone()` the by-value signature demands.  See the
+//     fidelity note on f500.
+// ⛔ `getArguments()` (the whole `BlockArgListType` range) and `getNumArguments()` are
+// NOT declared, the t243-t246 discipline: they need a range model of their own, queue
+// g691 already owns the `getArguments()` row through `llvm::enumerate`, and declaring a
+// member with no `f` key behind it is a rule the preprocessor would carry with nothing
+// under it.
+class Block {
+public:
+  BlockArgument getArgument(unsigned i);
+};
 
 // ⚠️ `getBlocks()` IS DECLARED HERE AND NOT LATER, because a C++ class cannot be
 // reopened -- see f460 at the bottom of this file for the whole deduction.
@@ -6444,3 +6482,58 @@ using t560 = llvm::simple_ilist<mlir::Block>;
 // NOT optional: it is the RETURN type f460 is spelled with, so without it f460
 // cannot resolve at all.  Same body as t560 -- the same container.
 using t561 = llvm::iplist<mlir::Block>;
+
+// ===========================================================================
+// f500 -- `mlir::BlockArgument mlir::Block::getArgument(unsigned)`.  THE LAST
+// LINK IN THE CHAIN t560/t561/f460/f461 BUILT, and the one that was still
+// SILENT.
+//
+// ⛔⛔ WHY THIS ROW WAS INVISIBLE, WHICH IS THE ONLY REASON IT SURVIVED THE
+// PREVIOUS SLOT.  An UNMAPPED MEMBER DOES NOT ABORT: the converter emits the
+// call TEXTUALLY, rc=0, with NO `Cpp2RustUnmapped_` token, so it is invisible to
+// every placeholder census and to `pin/no-placeholders.sh`.  After f460/f461
+// landed, `DataTransferLowering.cpp` went from 8 placeholders to 0 and kept
+// SIX bare `.getArgument(...)` calls on a `*mut fmt::Block`, which are
+// `E0599: no method named getArgument` the moment the emitted file meets rustc.
+// ⭐ SO THE GATE FOR THIS KEY IS A TEXTUAL-CALL COUNT, NOT A PLACEHOLDER COUNT:
+// `\. *getArgument *[(]` must FALL and the Rust name must RISE by the same
+// amount.  (Anchored `grep -o` both ways: the bare token count is 10 on that
+// file and 4 of those are `getArgumentTypes`, a DIFFERENT unmapped member that
+// this key deliberately does not touch, so the exact-token count is 6 and the
+// receiver-anchored count is 6 -- they reconcile because every site here is
+// `.getArgument(` on its own line.)
+//
+// THE SITES ARE NOT IN ANY `.cpp`.  `grep getArgument DataTransferLowering.cpp`
+// is ZERO: all six come from ODS `extraClassDeclaration` bodies INLINED through
+// the generated header --
+// `dataflow-scheduler/external/dataflow-scheduler-dialects/include/
+//  dataflow-scheduler/Dialect/Agen/Agen.td` lines 391/462/653/749,
+// `return getRegion().getBlocks().begin()->getArgument(0);` -- plus two through
+// `mlir::ktdf::ParallelOp::getBody()`, whose emitted receiver is likewise a
+// `*mut fmt::Block` deref, so ONE key closes both shapes.
+//
+// THE RECEIVER IS ALREADY MAPPED: t2 `mlir::Block -> fmt::Block` (line ~1502),
+// and f461 already hands back `*mut fmt::Block` / `Ptr<fmt::Block>`.  This
+// member was the only missing link.
+//
+// THE FORM IS f150-f157's / f460's: a free function whose FIRST parameter is the
+// receiver, body calling NOTHING but the member.
+// ⚠️ `mlir::Block &` and not `const mlir::Block &`: Block.h:139 is non-const and
+// every emitted receiver is a `*mut fmt::Block` dereference, i.e. a mutable
+// lvalue.  The Rust formal is therefore `&mut fmt::Block` in both models, as
+// f460's is.
+//
+// SWALLOW-SAFETY.  `GetTypeMapKey` truncates at the first `<`; `mlir::Block` has
+// no `<` at all, so it is FULLY CONCRETE, `matchTemplate`'s placeholder capture
+// (`findNextLiteralSameDepth`) NEVER RUNS, and the same-depth-comma swallow is
+// ruled out by construction -- the t243-t246 / t560-t561 argument.  The bucket
+// `mlir::Block` holds exactly one candidate: t2, which is mine.
+//
+// ⚠️ AND THE TARGET NAME IS snake_case ON PURPOSE.  `fmt::Block` also has
+// `get_operations`/`get_operations_mut`/`find_op`, and `mlir::Block` has dozens
+// of members nobody has keyed (`getArguments`, `getNumArguments`,
+// `getTerminator`, `getParentOp`, ...).  A camelCase target name would let those
+// resolve BY ACCIDENT against dataflowir-gen and destroy the diagnostic that
+// found this row; `grep -rE "pub fn [a-z]+[A-Z]" dataflowir-gen/src/` is 0 and
+// must stay 0.  The renaming is this key's job.
+mlir::BlockArgument f500(mlir::Block &b, unsigned i) { return b.getArgument(i); }
