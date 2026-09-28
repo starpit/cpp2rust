@@ -22,6 +22,7 @@
 #include "converter/survey.h"
 #include "cpp2rust_lib.h"
 #include "logging.h"
+#include "tu_guard.h"
 
 namespace fs = std::filesystem;
 
@@ -253,6 +254,16 @@ int main(int argc, char *argv[]) {
   if (std::system(rustfmt_command.c_str()) != 0) {
     llvm::errs() << "ERROR: failed to run rustfmt\n";
     return EXIT_FAILURE;
+  }
+
+  // A --dir run that dropped TUs STILL WRITES its output (a partial crate is
+  // useful; silence is not) but must never look like a clean run. Distinct
+  // code 3 so a harness can tell "partial" from "failed to produce anything".
+  if (cpp2rust::tu_guard::DroppedCount() > 0) {
+    llvm::errs() << "cpp2rust: PARTIAL OUTPUT -- "
+                 << cpp2rust::tu_guard::DroppedCount()
+                 << " TU(s) dropped; wrote " << RsFile << " anyway\n";
+    return 3;
   }
 
   return EXIT_SUCCESS;

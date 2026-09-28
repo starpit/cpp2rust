@@ -3,6 +3,8 @@
 
 #include "converter/converter.h"
 
+#include "tu_guard.h"
+
 #include <clang/AST/APValue.h>
 #include <clang/AST/ParentMapContext.h>
 #include <clang/Basic/LangOptions.h>
@@ -103,7 +105,9 @@ void Converter::EmitOpaqueRecords(std::string &out) {
 bool Converter::VisitRecoveryExpr(clang::RecoveryExpr *expr) {
   llvm::errs() << "RecoveryExpr: ";
   expr->dump();
-  exit(1);
+  // Contained on the --dir path (see tu_guard.h); plain exit(1) on --file, so
+  // the single-TU behaviour is unchanged.
+  cpp2rust::tu_guard::BailOut("converter.cpp VisitRecoveryExpr");
   return false;
 }
 

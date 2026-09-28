@@ -16,6 +16,7 @@
 #include "converter/lex.h"
 #include "converter/mapper.h"
 #include "converter/survey.h"
+#include "tu_guard.h"
 
 namespace cpp2rust {
 std::map<std::string, ConverterRefCount::MethodsOnPtr>
@@ -1114,7 +1115,7 @@ void ConverterRefCount::ConvertPrintf(clang::CallExpr *expr) {
     llvm::errs() << "Unknown fprintf format: ";
     expr->getArg(1)->dump();
     llvm::errs() << '\n';
-    exit(1);
+    cpp2rust::tu_guard::BailOut("converter_refcount.cpp unknown fprintf format");
   }
   bool ends_newline = format.ends_with("\\n\"");
 
@@ -1125,7 +1126,7 @@ void ConverterRefCount::ConvertPrintf(clang::CallExpr *expr) {
     StrCat(ends_newline ? "eprintln!(" : "eprint!(");
   } else {
     llvm::errs() << "Unknown fprintf fd: " << fd << '\n';
-    exit(1);
+    cpp2rust::tu_guard::BailOut("converter_refcount.cpp unknown fprintf fd");
   }
   if (ends_newline) {
     format.replace(format.size() - 3, 2, "");
