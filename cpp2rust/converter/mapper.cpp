@@ -1519,11 +1519,22 @@ std::optional<std::string> tryDeriveArrayType(const std::string &cpp_type) {
     return std::nullopt;
   }
 
-  const std::string extent = trim(s.substr(open + 1, close - open - 1));
+  std::string extent = trim(s.substr(open + 1, close - open - 1));
   const std::string element =
       trim(trim(s.substr(0, open)) + s.substr(close + 1));
   if (element.empty()) {
     return std::nullopt;
+  }
+  // `_` IS AN ERASED LENGTH, NOT A LENGTH WE GOT WRONG. normalizeTranslationRule
+  // (below, :1587) rewrites `\b\d+\b` -> `_` when it builds a rules KEY, so a
+  // rules-setup context hands us `char[_]` where the source said `char[9]`. The
+  // length is gone and cannot be recovered here -- so treat it EXACTLY like the
+  // empty extent and emit the UNSIZED `[T]` form. That cannot be silently wrong
+  // about size: `[T]` is unsized, so any use that needs a size is a LOUD rustc
+  // error rather than a wrong-length array. (Contrast the `char[kSize]` case
+  // above, which still refuses: there we have no evidence a length was erased.)
+  if (extent == "_") {
+    extent.clear();
   }
   // A non-numeric extent has no length we can emit. Bail -> the loud abort.
   if (!extent.empty() &&

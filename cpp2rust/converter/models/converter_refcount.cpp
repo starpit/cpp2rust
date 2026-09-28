@@ -39,7 +39,7 @@ void ConverterRefCount::EmitFilePreamble() {
 extern crate libcc2rs;
 use libcc2rs::*;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Read, Write, Seek};
 use std::io::prelude::*;
 use std::os::fd::AsFd;
