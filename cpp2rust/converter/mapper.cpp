@@ -3,6 +3,7 @@
 
 #include "converter/mapper.h"
 
+#include <clang/AST/Attr.h>
 #include <clang/AST/ExprCXX.h>
 #include <clang/Basic/OperatorKinds.h>
 #include <clang/Basic/SourceManager.h>
@@ -475,6 +476,82 @@ TranslationRule::ExprRule *search(const clang::Expr *expr) {
   return rule;
 }
 
+// THIRD SEARCH ATTEMPT, REACHED ON THE MISS PATH ONLY.
+//
+// A libc++ class template annotated with `_LIBCPP_PREFERRED_NAME` (basic_string,
+// basic_ofstream, basic_ostringstream, ... -- see toolchain/libcxx/__fwd/*) prints as
+// its TYPEDEF ("std::ofstream") only once the specialization has been INSTANTIATED:
+// clang instantiates the PreferredNameAttr onto the ClassTemplateSpecializationDecl,
+// and until that happens `policy.UsePreferredNames` (getPrintPolicy, ~:81) has nothing
+// to fire on and the RESOLVED spelling `std::basic_ofstream<char>` is printed instead.
+// The RECORDER's src.cpp always includes the complete header, so every committed TYPE
+// key for these families is at the typedef spelling (`rules/fstream t2 = std::ofstream`,
+// `rules/string t1 = std::string`); a corpus TU that only ever sees `__fwd/fstream.h`
+// therefore searches a spelling no module can possibly hold, and aborts.
+//
+// MEASURED 2026-09-28, two probes differing ONLY in the include (probe-cX/tk):
+//   #include <fstream>          -> rc=0, no type search recorded at all (matched t2)
+//   #include <__fwd/fstream.h>  -> `searched as: std::basic_ofstream<char>` with the
+//                                  decl at __fwd/fstream.h:26:7 -- g353's abort verbatim
+// So the asymmetry is instantiation, not normalizeQualType and not the policy object.
+//
+// The mapper holds no Sema, so it cannot complete the type to make the flag fire; it
+// reads the attribute off the PRIMARY TEMPLATE's pattern, where it lives already and
+// un-instantiated, and filters by canonical type so that basic_ofstream<wchar_t> can
+// never pick up `std::ofstream` (the pattern carries BOTH attrs).
+//
+// Blast radius is zero by construction: anything that matches today has already
+// returned before this runs; it introduces no key and no new src spelling, so SWALLOW
+// exposure is unchanged; and it costs nothing on the hot path.
+std::pair<TranslationRule::TypeRule *, std::vector<std::optional<std::string>>>
+searchPreferredName(clang::QualType qual_type, const std::string &sugared) {
+  const auto *spec = llvm::dyn_cast_or_null<clang::ClassTemplateSpecializationDecl>(
+      qual_type->getAsCXXRecordDecl());
+  if (!spec || !spec->getSpecializedTemplate()) {
+    return {};
+  }
+  // MEASURED: the attribute is NOT on the template's FIRST declaration, which is what
+  // getTemplatedDecl() hands back. libc++ forward-declares the class template
+  // (__fwd/fstream.h:26) and only ANNOTATES a later REDECLARATION (:47), and
+  // specific_attrs looks at one Decl's own attribute list. Walking redecls() is
+  // therefore load-bearing: without it this function finds nothing and the abort is
+  // byte-identical to the BEFORE leg (that was this slot's first measurement).
+  for (const clang::Decl *tmpl : spec->getSpecializedTemplate()->redecls()) {
+    const auto *ctd = llvm::dyn_cast<clang::ClassTemplateDecl>(tmpl);
+    if (!ctd || !ctd->getTemplatedDecl()) {
+      continue;
+    }
+    for (const auto *attr :
+         ctd->getTemplatedDecl()->specific_attrs<clang::PreferredNameAttr>()) {
+      clang::QualType pref = attr->getTypedefType();
+      if (pref.isNull() || !ctx_->hasSameUnqualifiedType(pref, qual_type)) {
+        continue;
+      }
+      const auto *typedef_type = pref->getAs<clang::TypedefType>();
+      if (!typedef_type) {
+        continue;
+      }
+      std::string name;
+      {
+        llvm::raw_string_ostream os(name);
+        typedef_type->getDecl()->printQualifiedName(os, getPrintPolicy());
+      }
+      if (name.empty() || name == sugared) {
+        continue;
+      }
+      auto res = search(types_, name, GetTypeMapKey(name));
+      log() << "search type " << name << " (preferred name), result: "
+            << (res.first ? res.first->type_info.type : "None") << '\n';
+      if (res.first) {
+        // Keep DescribeLastTypeSearch (~:1717) telling the truth about what matched.
+        last_type_search_canonical_ = name;
+        return res;
+      }
+    }
+  }
+  return {};
+}
+
 std::pair<TranslationRule::TypeRule *, std::vector<std::optional<std::string>>>
 search(clang::QualType qual_type) {
   auto sugared = ToString(qual_type, ScalarSugar::kPreserve);
@@ -492,6 +569,9 @@ search(clang::QualType qual_type) {
   auto type = ToString(qual_type);
   if (type == sugared) {
     log() << "search type " << type << ", result: None\n";
+    if (auto pref = searchPreferredName(qual_type, sugared); pref.first) {
+      return pref;
+    }
     return {};
   }
   last_type_search_canonical_ = type;
@@ -499,6 +579,11 @@ search(clang::QualType qual_type) {
   log() << "search type " << type
         << ", result: " << (res.first ? res.first->type_info.type : "None")
         << '\n';
+  if (!res.first) {
+    if (auto pref = searchPreferredName(qual_type, sugared); pref.first) {
+      return pref;
+    }
+  }
   return res;
 }
 
