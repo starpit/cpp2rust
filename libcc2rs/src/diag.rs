@@ -6,10 +6,12 @@
 //! WHY THIS IS NOT AN OPAQUE UNIT.  The C++ type's whole purpose is a
 //! destructor with an OBSERVABLE EFFECT:
 //!
-//!     mlir/IR/Diagnostics.h:325-328
-//!         ~InFlightDiagnostic() { if (isInFlight()) report(); }
-//!     mlir/IR/Diagnostics.h:319-324
-//!         InFlightDiagnostic(InFlightDiagnostic &&rhs) ... { rhs.abandon(); }
+//! ```text
+//! mlir/IR/Diagnostics.h:325-328
+//!     ~InFlightDiagnostic() { if (isInFlight()) report(); }
+//! mlir/IR/Diagnostics.h:319-324
+//!     InFlightDiagnostic(InFlightDiagnostic &&rhs) ... { rhs.abandon(); }
+//! ```
 //!
 //! i.e. the accumulated message reaches the DiagnosticEngine WHEN THE VALUE
 //! DIES, and the explicit `rhs.abandon()` in the move constructor is what makes
@@ -25,9 +27,12 @@
 //! chain itself.  Every `shl_*` takes `self` BY VALUE and returns `Self` by
 //! value.  In Rust a by-value `self` is MOVED into the method and the returned
 //! value is a move OUT of it: a moved-from binding is statically dead and
-//! `Drop::drop` is NOT run for it.  So a chain
+//! `Drop::drop` is NOT run for it.  So a chain -- `shl_x`/`shl_y`/`shl_z` here
+//! standing for any of the `shl_*` methods --
 //!
-//!     shl_x(shl_y(shl_z(new(), a), b), c)
+//! ```text
+//! shl_x(shl_y(shl_z(new(), a), b), c)
+//! ```
 //!
 //! creates ONE live value that is threaded through, and its `drop` runs exactly
 //! once, at the end of the enclosing full expression -- which is precisely when
@@ -45,6 +50,21 @@
 /// The accumulating diagnostic.  `message` is what has been streamed so far;
 /// `live` is C++'s `isInFlight()` -- true until the message is reported or
 /// abandoned.
+///
+/// The by-value chain of the module doc, with the real method names.  The
+/// trailing `abandon()` is what keeps this example from writing to stderr; drop
+/// it and the accumulated message is reported exactly once instead.
+///
+/// ```
+/// let d = libcc2rs::InFlightDiagnostic::new()
+///     .shl_display("op ")
+///     .shl_display(7u32)
+///     .shl_display(" is invalid");
+/// assert_eq!(d.message(), "op 7 is invalid");
+/// assert!(d.is_in_flight());
+/// let d = d.abandon();
+/// assert!(!d.is_in_flight());
+/// ```
 pub struct InFlightDiagnostic {
     message: String,
     live: bool,
