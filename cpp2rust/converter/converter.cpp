@@ -780,6 +780,111 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
   if (bindings.size() != 2) {
     return false;
   }
+  // ---- MAP-ELEMENT branch, routed to the MAP-ACCESSOR lowering ----
+  // Measured shape (dsc/dims.cpp:731, dsc2.cpp:3707, dsc2.h:88, inside
+  // DataStructDims::pruneMaxSymbolicVolumes):
+  //     const auto &[symDims, volumeLimit] = *it;   // it = map.begin()
+  //   DecompositionDecl  'const std::pair<const std::set<PrimaryDimTypes>, int> &'
+  // The first binding is a `std::set`, i.e. a RecordType, so the scalars-only
+  // test on the tuple-index path below refuses it -- and it MUST keep refusing
+  // it: `let symDims = (*holder).0;` is a MOVE OUT OF A RAW-POINTER DEREF
+  // (E0507, the error measured at LiveRange.cpp:97). Relaxing that test would
+  // need `&(*holder).0` plus ptr-binding registration, i.e. it collapses into
+  // this lowering anyway. So handle the map case HERE, by the accessors:
+  //     let symDims = it.first();        // *const K
+  //     let volumeLimit = it.second();   // *mut V
+  // plus a ptr_bindings_ registration so VisitDeclRefExpr (:4529) derefs at
+  // every use. That binds the `std::set` BY RAW POINTER -- zero clone, zero
+  // move -- and the body's uses (`symDims.begin()/.end()`, `for (const auto
+  // &symDim : symDims)`) go through the same per-use deref the map range-for
+  // already relies on. It does NOT depend on the holder being const: nothing
+  // is copied, so there is no write to drop, and `second()` already hands back
+  // a `*mut V`.
+  //
+  // DISCRIMINATOR. `IsMapLikeRangeClass` (:2485) cannot be reused: it tests the
+  // RANGE class (`std::map`/`std::unordered_map`), and here there is no range --
+  // only an iterator, whose spelling is an INTERNAL standard-library name (see
+  // the measured note below). Nor can Mapper answer for it: the iterator type has
+  // NO rule at all (grep either spelling over the rules tree = zero hits),
+  // because the map for-range never asks -- it picks the Rust iterator name from
+  // the CONTAINER via MapRangeIteratorName(:2490). So the iterator is identified
+  // by its record name, AND by the map `value_type` signature
+  // `std::pair<const K, V>`: the const-qualified FIRST element is what separates
+  // a map/unordered_map node from a `std::set` node, whose iterator shares the
+  // same internal class template family.
+  if (const auto *deref = clang::dyn_cast<clang::CXXOperatorCallExpr>(
+          decl->getInit()->IgnoreParenImpCasts());
+      deref != nullptr &&
+      deref->getOperator() == clang::OverloadedOperatorKind::OO_Star &&
+      deref->getNumArgs() == 1) {
+    const std::string iter_class =
+        GetClassName(deref->getArg(0)->getType().getNonReferenceType());
+    // MEASURED, and an earlier plan got this wrong by reading an `-ast-dump`
+    // taken with generic flags instead of the per-TU flags from the compile DB:
+    // this toolchain parses dsc/dims.cpp against LIBC++, where the iterator is
+    // `std::__map_iterator`, NOT libstdc++'s `std::_Rb_tree_iterator`. Both
+    // families are listed so the predicate does not depend on which standard
+    // library a TU's flags select.
+    const bool map_iter = iter_class == "std::__map_iterator" ||
+                          iter_class == "std::__map_const_iterator" ||
+                          iter_class == "std::__hash_map_iterator" ||
+                          iter_class == "std::__hash_map_const_iterator" ||
+                          iter_class == "std::_Rb_tree_iterator" ||
+                          iter_class == "std::_Rb_tree_const_iterator" ||
+                          iter_class == "std::__detail::_Node_iterator" ||
+                          iter_class == "std::__detail::_Node_const_iterator";
+    auto value_type = decl->getType().getNonReferenceType();
+    bool map_value = false;
+    if (map_iter && GetClassName(value_type) == "std::pair") {
+      if (const auto *spec =
+              clang::dyn_cast_or_null<clang::ClassTemplateSpecializationDecl>(
+                  value_type->getAsCXXRecordDecl())) {
+        const auto &args = spec->getTemplateArgs();
+        map_value = args.size() == 2 &&
+                    args[0].getKind() == clang::TemplateArgument::Type &&
+                    args[0].getAsType().isConstQualified();
+      }
+    }
+    // Re-emitting the iterator expression once per accessor is only sound if it
+    // is side-effect-free, so the operand is restricted to a plain variable
+    // reference -- which is the measured shape. Anything else stays on the loud
+    // refusal path rather than being evaluated twice.
+    const auto *iter_ref = clang::dyn_cast<clang::DeclRefExpr>(
+        deref->getArg(0)->IgnoreParenImpCasts());
+    if (map_value && iter_ref != nullptr &&
+        clang::isa<clang::VarDecl>(iter_ref->getDecl())) {
+      // REFCOUNT IS REFUSED here for the same reason as on the tuple path
+      // below: that model wraps every local in `Rc<RefCell<..>>`, so the
+      // per-use deref these bindings need is not what it would emit. Gate
+      // BEFORE any emission, and register ptr_bindings_ only after we have
+      // committed to emitting, so the refcount model never inherits derefs for
+      // bindings it did not emit.
+      if (keyword_unsafe_ == nullptr || *keyword_unsafe_ == '\0') {
+        return false;
+      }
+      std::string iter_text;
+      {
+        Buffer buf(*this);
+        Convert(const_cast<clang::Expr *>(
+            static_cast<const clang::Expr *>(iter_ref)));
+        iter_text = std::move(buf).str();
+      }
+      if (!EmitMapDecompositionBindings(decl, iter_text)) {
+        return false;
+      }
+      // NOT scoped. ScopedPtrBindings (converter.h:1081) is an RAII guard whose
+      // lifetime is a for-range BODY conversion; a standalone DeclStmt has its
+      // uses in the REST of the enclosing CompoundStmt, outside VisitDeclStmt's
+      // dynamic extent, so there is no region to hang a guard on. A plain
+      // insert is correct instead: a BindingDecl* is unique per source site, and
+      // pointer-ness is a property of the lowering we just emitted, not of a
+      // scope.
+      for (const auto *binding : bindings) {
+        ptr_bindings_.insert(binding);
+      }
+      return true;
+    }
+  }
   auto type = decl->getType();
   // A CONST LVALUE REFERENCE holder is accepted, a mutable or rvalue one is
   // not. Measured shape (5 of 18 first-abort-sampled TUs, all of them the SAME
