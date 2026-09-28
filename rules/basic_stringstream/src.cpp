@@ -53,6 +53,48 @@
 // std::basic_string(const char *) first, which is why one key covers both
 // spellings; that was measured on the pointer form above.
 //
+// f3 CARRIES A KNOWN, MEASURED DEFECT THAT IS UNREACHABLE IN THE CORPUS --
+// 2026-09-28.  `std::stringstream ss(s)` opens `in|out` WITHOUT `ate`, so the
+// PUT POSITION IS 0 and a subsequent insertion OVERWRITES from the front.  A
+// Vec<u8> has no room for a put position, so the model APPENDS.  Measured with
+// /home/agent/work/ssput/ssput.cpp (seed "abcXY", insert the SHORTER "12", print
+// `.str()`), which cannot confuse the two behaviours:
+//     C++    : 12cXY        (overwrite)
+//     unsafe : abcXY12      MISMATCH (append)
+// So f3 is correct for construct-then-`.str()` and construct-then-extract, and
+// silently wrong for construct-then-INSERT.
+//
+// IT IS NOT FIXED, AND THE REASON IS A CORPUS MEASUREMENT, NOT AN OPINION.  Over
+// all of dt_src outside cpp2rust-port there are 36 `stringstream <v>(<arg>)`
+// sites with a non-empty argument (the 38-line grep also catches two function
+// DECLARATIONS returning a stringstream, dxp/dxp.h:205 and
+// deeprt/deeprt.h:227, which construct nothing):
+//     grep -rnE '\b(std::)?stringstream\s+[A-Za-z_][A-Za-z0-9_]*\s*\(' \
+//       --include=*.cpp --include=*.h --include=*.hpp . | grep -v cpp2rust-port \
+//       | grep -vE '\(\s*\)'
+// NOT ONE of the 36 is ever inserted into.  Checked three ways: no `<v> <<`
+// within 60 lines of the ctor; no `<v> <<` ANYWHERE in the same file; and the
+// only two by-reference escapes (sgr/sengraph.cpp:1149 and :1167 passing
+// `stream` to `Tensor::read<size_t>`) land in pure READ functions
+// (sgr/sengraph.cpp, sgr/sengraphTensor.h, sgr/symTensorShape.{h,cpp},
+// sys-arch-spec/progir/progir.cpp) that contain NO `<<` on the parameter at all.
+// Every real shape in the corpus is construct-then-EXTRACT: `ss >> parsed`
+// (util/dtgetenv.hpp:127-134, the biggest consumer at 17 TUs) or the
+// `std::getline(ss, tok, ',')` comma split (perfdsc/perfDscImportHelper.cpp:28,
+// sys-arch-spec/dscglobal/dscglobal.cpp:127, initpacket/initpacket.cpp:339,
+// dsc/superdsc.cpp:890, sgr/symTensorShape.cpp:48 and :67, 25 more).
+//
+// AND NOTE WHY "NARROW f3" IS NOT AVAILABLE AS A FIX: insertion into a
+// stringstream is NOT rule-driven at all.  This module ships FOUR keys -- t1, f1,
+// f2, f3 -- and ZERO insertion keys, because `ss << x` is lowered by the
+// converter's BUILT-IN ostream path (converter_lib.cpp:552 IsCallToOstream,
+// converter.cpp:2073 ConvertCallToOstream).  There is therefore no key whose
+// absence could gate the wrong case, and no key to refuse.  A correct fix must
+// change the MODEL to carry `(buffer, put_pos)`, which reshapes t1/f1/f2/f3
+// together and is a much larger row than this one.  DO NOT ADD AN INSERTION KEY
+// OR A `str(const std::string &)` SETTER TO THIS MODULE WITHOUT FIXING THE MODEL
+// FIRST -- doing so would make the append/overwrite divergence reachable.
+//
 // NOT COVERED, deliberately, each because it needs its own harvested key and
 // none has one: `str(const std::string &)` (a SETTER; it needs a `&mut`
 // receiver the rule ABI cannot express), the (openmode)-only constructor,

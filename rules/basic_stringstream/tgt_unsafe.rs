@@ -34,9 +34,16 @@ fn f2(a0: Vec<u8>) -> Vec<libc::c_char> {
 //
 // a1 is the DEFAULTED `openmode` argument, kept in the key and mentioned exactly
 // once because a target parameter cannot be named `_a1` (ir.rs:40 rejects it).
-// It is deliberately ignored: this model has no read cursor, so in|out|ate|trunc
-// are indistinguishable, and the state-touching members that would observe the
-// difference are left unmapped so they abort loudly.
+// It is deliberately ignored, and THAT IS NOT WITHOUT COST -- see the
+// "UNREACHABLE IN THE CORPUS" block in src.cpp.  Correction to what this comment
+// used to claim: in|out|ate are NOT indistinguishable.  `ate` means "put position
+// at end", i.e. append; plain in|out means put position 0, i.e. OVERWRITE from
+// the front.  A Vec<u8> can only append, so a corpus site doing
+// construct-from-string-then-insert would get `abcXY12` where C++ gives `12cXY`
+// (measured, /home/agent/work/ssput/ssput.cpp).  No corpus site does that -- the
+// grep is in src.cpp -- so the defect is unreachable and the model stands.  The
+// state-touching members that would observe the difference (seekp/tellp/seekg/
+// the str() setter) stay unmapped so they abort loudly.
 fn f3(a0: Vec<libc::c_char>, a1: libc::c_uint) -> Vec<u8> {
     let _ = a1;
     let __s = a0;
