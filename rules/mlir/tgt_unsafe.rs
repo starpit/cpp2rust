@@ -3447,3 +3447,37 @@ unsafe fn f560<T1>(
         Err(_) => false,
     }
 }
+
+// ---------------------------------------------------------------------------
+// t730 + f630 -- `mlir::IntegerType` and the 1-arg `Builder::getIntegerType`.
+// Full argument at `using t730 =` in src.cpp.
+//
+// t730 `mlir::IntegerType` -> `ir::Ty` (ir.rs:37).  ⭐ THE WIDTH SURVIVES, which
+//   is the whole reason this key is writable: `Ty::Int(u32)` (ir.rs:39) carries a
+//   width and prints `i{w}` (ir.rs:54), so this is the t42/t75 WIDENING ("an
+//   integer type" -> "a builtin type") and NOT a width erasure.
+//   ⛔ TWO LOSSES, both the same ones t42/t75 carry plus one of its own:
+//   (1) NO SIGNEDNESS.  Real `IntegerType` carries `SignednessSemantics`;
+//       `Ty::Int(u32)` has no such field.  This is why f630 keys ONLY the 1-arg
+//       overload and why `IntegerType::get` is unkeyed -- see src.cpp for the
+//       arity argument that makes the first safe and the second not.
+//   (2) NULL-HANDLE INIT, not a real empty integer type -- `Ty::Opaque("")` is
+//       t5's empty-spelling null sentinel, exactly as t42/t73/t75 do it.  ⛔ It is
+//       deliberately NOT `Ty::Int(0)`: a default-constructed `mlir::IntegerType`
+//       is a NULL HANDLE, not the `i0` type, and `Int(0)` would print `i0` and
+//       compare equal to a real zero-width type.
+//   (3) NO ACCESSOR mapped (`getWidth()`/`isSigned()`/`isSignless()` all still
+//       abort), which follows from (1).
+fn t730() -> dataflowir_gen::ir::Ty {
+    dataflowir_gen::ir::Ty::Opaque(::std::string::String::new())
+}
+
+// f630 -- `Builder::getIntegerType(unsigned width)`, the 1-arg overload only.
+// `build.rs:546` is `pub fn get_integer_type(&self, width: u32) -> Ty` and
+// `build.rs:62` documents this exact correspondence.  Receiver is
+// `&dataflowir_gen::OpBuilder`, same as f402/f404, because the declaration sits on
+// the `Builder` base and both t440/t441 receivers resolve through it.  `a1` is
+// forwarded UNCHANGED so two widths cannot collapse (f402's lesson).
+fn f630(a0: &dataflowir_gen::OpBuilder, a1: u32) -> dataflowir_gen::ir::Ty {
+    a0.get_integer_type(a1)
+}

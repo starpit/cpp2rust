@@ -3293,3 +3293,26 @@ fn f560<T1>(
         Err(_) => false,
     }
 }
+
+// ---------------------------------------------------------------------------
+// t730 + f630 -- `mlir::IntegerType` and the 1-arg `Builder::getIntegerType`.
+// Full argument at `using t730 =` in src.cpp.
+//
+// t730 `mlir::IntegerType` -> `ir::Ty` (ir.rs:37).  ⭐ THE WIDTH SURVIVES:
+//   `Ty::Int(u32)` (ir.rs:39) carries a width and prints `i{w}` (ir.rs:54), so
+//   this is the t42/t75 WIDENING and NOT a width erasure.
+//   ⛔ Losses: (1) NO SIGNEDNESS (`Ty::Int` has no such field) -- hence f630 keys
+//   only the 1-arg overload and `IntegerType::get` stays unkeyed; (2) NULL-HANDLE
+//   init rather than a real empty integer type, deliberately NOT `Ty::Int(0)`,
+//   which would print `i0`; (3) NO accessor mapped.
+fn t730() -> dataflowir_gen::ir::Ty {
+    dataflowir_gen::ir::Ty::Opaque(String::new())
+}
+
+// f630 -- `Builder::getIntegerType(unsigned width)`, the 1-arg overload only.
+// `build.rs:546 pub fn get_integer_type(&self, width: u32) -> Ty`.  `a0` is
+// BORROWED, not moved: the refcount model's receiver is not `Copy`, and a moved
+// receiver is E0382 at rc=0 with no placeholder token to show it.
+fn f630(a0: &dataflowir_gen::OpBuilder, a1: u32) -> dataflowir_gen::ir::Ty {
+    a0.get_integer_type(a1)
+}

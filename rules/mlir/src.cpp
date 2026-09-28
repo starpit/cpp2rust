@@ -1172,13 +1172,27 @@ public:
   // its `: public Builder` base at :1019 for this reason; before this row it had
   // no base at all, which is why the member census found these 148 unmapped.)
   //
-  // ⛔ `getIntegerType` IS DELIBERATELY ABSENT.  The model has
-  // `get_integer_type(width: u32) -> ir::Ty`, but C++ returns
-  // `mlir::IntegerType`, which is declared at :790 with NO `using tN =` -- it is
-  // UNMAPPED.  A key would have to claim a target type the module does not
-  // define.  1 site, LEFT LOUD.  Its two-argument sibling
-  // `getIntegerType(width, isSigned)` is absent from the model on purpose
-  // (`ir::Ty` cannot carry signedness, so `si32` would print `i32`).
+  // ⭐ UPDATE 2026-09-28 (slot mlirH): `getIntegerType` IS NO LONGER ABSENT -- the
+  // ONE-ARGUMENT overload is now keyed as f630, because the reason it was left out
+  // has been REMOVED, not worked around.  The recorded reason was "C++ returns
+  // `mlir::IntegerType`, which has NO `using tN =` -- UNMAPPED, so a key would have
+  // to claim a target type the module does not define".  `mlir::IntegerType` now
+  // HAS a type key: `t730 -> dataflowir_gen::ir::Ty`, argued at `using t730 =` at
+  // the tail of this file.  So the return type is defined and the key is spellable.
+  //
+  // ⛔ THE TWO-ARGUMENT SIBLING `getIntegerType(width, isSigned)` STAYS OUT, and
+  // the reason is now MEASURED rather than assumed.  `ir::Ty::Int(u32)` (ir.rs:39)
+  // carries a WIDTH and NOTHING ELSE -- it prints `i{w}` (ir.rs:54) -- so it cannot
+  // carry signedness, and `getIntegerType(8, /*signed*/ true)` would print `i8`
+  // where the C++ means `si8`.  That is a silent wrong value, which is strictly
+  // worse than the loud abort.  The corpus DOES write it: 9 sites, e.g.
+  // `dr5/src/Translators/Common/Types.cpp:35,37,39,41` (`true`) and `:51` /
+  // `dr5/src/BitcodeLibraries/BitcodeFuncDefs.cpp:213` (`false`).  ⭐ THE ARITY IS
+  // WHAT MAKES THIS A CLEAN SPLIT: signed and signless sites differ in PARAMETER
+  // COUNT, so the 1-arg key cannot match a 2-arg site and the 9 signed sites keep
+  // failing loudly.  This is the discriminator that `mlir::IntegerType::get` does
+  // NOT have -- see the note at `using t730 =` for why that static factory is out.
+  IntegerType getIntegerType(unsigned width);
   NamedAttribute getNamedAttr(llvm::StringRef name, Attribute val);
   DictionaryAttr getDictionaryAttr(llvm::ArrayRef<NamedAttribute> value);
   BoolAttr getBoolAttr(bool value);
@@ -7406,4 +7420,86 @@ template <typename T1>
 llvm::LogicalResult f560(mlir::DialectBytecodeReader &a0,
                         mlir::detail::DenseArrayAttrImpl<T1> &a1) {
   return a0.readAttribute(a1);
+}
+
+// ---------------------------------------------------------------------------
+// PASS 2026-09-28 (slot mlirH): `mlir::IntegerType`, THE TYPE KEY THAT UNBLOCKS
+// THE `getIntegerType` FAMILY.  t730 + f630.
+//
+// t730 -- `mlir::IntegerType` -> `dataflowir_gen::ir::Ty`.  The class shell has
+// been declared since the `TypedValue` row (see `class IntegerType {};` above,
+// grep it -- it is in the block of MLIR types declared ONLY so the concrete
+// `TypedValue<...>` keys could be spelled) but it had NO `using tN =`, so it was
+// unmapped as a type in its own right.  8 placeholder sites in the fresh36 sweep.
+//
+// ⭐ WHY THE WIDTH IS NOT LOST, WHICH IS THE ONLY QUESTION THAT MATTERS HERE.
+// `ir::Ty` is NOT width-erased: `ir.rs:37-39` is `pub enum Ty { Index, Int(u32),
+// Float(u32), ... }` and `ir.rs:54` prints `Ty::Int(w) => write!(f, "i{w}")`.  So
+// an `IntegerType` of width 32 round-trips as `Ty::Int(32)` and prints `i32`.
+// This is a WIDENING (from "an integer type" to "a builtin type"), exactly the
+// t42 `mlir::TensorType` / t75 `mlir::VectorType` widening, NOT an erasure.
+//
+// ⛔ WHAT THE WIDENING COSTS, STATED: `ir::Ty` HAS NO SIGNEDNESS FIELD.  Real
+// `mlir::IntegerType` carries `SignednessSemantics` (signless/signed/unsigned) as
+// well as a width, and `Ty::Int(u32)` carries only the width.  So nothing that
+// reads or sets signedness is mapped, and every such site must keep aborting --
+// which is why f630 keys ONLY the 1-argument `getIntegerType` and why
+// `mlir::IntegerType::get` is NOT keyed at all; both are argued below.
+//
+// ⭐ IT DOES NOT DISTURB `t53 = mlir::detail::TypedValue<mlir::IntegerType>`, and
+// this is PRECEDENT, not a hope.  `mlir::VectorType` is the worked case: `t47 =
+// mlir::detail::TypedValue<mlir::VectorType>` and `t75 = mlir::VectorType`
+// coexist, and the note at `using t75 =` says it in as many words -- "`using t75`
+// registers a rule for the TYPE ITSELF and does not change t47".  The hazard the
+// `TypedValue` block warns about is a GENERIC `TypedValue<T1>` key, which forces
+// the converter to map the template ARGUMENT and regresses to `mapper.cpp:722`;
+// t53 is CONCRETE, so the argument is part of the key SPELLING and is not mapped
+// through.  t730 is the same addition t75 already made safely.
+using t730 = mlir::IntegerType;
+
+// ⛔ `mlir::IntegerType::get(MLIRContext *, unsigned, SignednessSemantics)` IS
+// DELIBERATELY NOT KEYED, AND THIS IS THE INTERESTING HALF OF THE ROW.  It is the
+// producer at 7 of the 8 placeholder sites -- the emitted witness is
+// `fresh36/out/dialects__ExPlan__ExPlanOps.cpp.rs:1050`,
+//     let mut intType: Cpp2RustUnmapped_mlir_IntegerType =
+//         (unsafe { mlir_IntegerType::get(context, 32_u32, None) });
+// -- so keying it is what would make those bodies compile.  It is out because THE
+// DEFAULTED THIRD ARGUMENT IS WRITTEN OUT AT THE CALL SITE.  Note the `None` above:
+// the recorder emits the defaulted `SignednessSemantics signedness = Signless`
+// argument, so the recorded key has arity 3 for EVERY site, signed or signless
+// alike.  ⭐ THAT DESTROYS THE DISCRIMINATOR f630 RELIES ON: unlike
+// `Builder::getIntegerType`, where signed sites are 2-arg and signless sites are
+// 1-arg and the key simply cannot match the wrong one, here a single 3-arg key
+// would have to answer for both, and its body cannot branch on `SignednessSemantics`
+// because that enum HAS NO MODEL (which is exactly why the converter printed
+// `None` rather than a value).  A body returning `ir::Ty::Int(a1)` would therefore
+// be silently right for the 24 signless sites and silently WRONG for any signed
+// one.  All 24 `IntegerType::get` sites in the corpus today ARE signless
+// (`ddc/ddl/ddl_conversion.cpp:2911`, `dcc/src/Transform/Dataflow/
+// EnumerateCollectionUnit.cpp:53,108`, `dataflow-scheduler/external/
+// dataflow-scheduler-dialects/lib/Dialect/KTDFArch/KTDFArchAttributes.cpp:38,49`,
+// ...), so the key would pass TODAY -- and that is precisely the defect this
+// module refuses: correct by accident of the current corpus, silently wrong the
+// first time someone writes the signed form, with no loud failure to catch it.
+// t730 alone already removes the placeholder and gives the variable its right
+// type; the producer stays loud.  Keying it needs a `SignednessSemantics` model,
+// which is a `dataflowir-gen` decision and not a rules row.
+
+// f630 -- `mlir::IntegerType mlir::Builder::getIntegerType(unsigned width)`, the
+// ONE-ARGUMENT overload.  DECLARED ON `Builder`, NOT `OpBuilder`, for the reason
+// the f400-f406 row established and measured: every corpus site is
+// `builder.getX(...)` / `odsBuilder.getX(...)`, real MLIR resolves all of them
+// through `class OpBuilder : public Builder`, and a key on the DECLARING class is
+// what the recorder writes.  Same placement as `getBoolAttr`/`getIntegerAttr`, so
+// one declaration covers both the t440 `OpBuilder` and t441
+// `ImplicitLocOpBuilder` receivers.
+//
+// The body is the model's own documented mapping, not a new claim:
+// `dataflowir-gen/src/build.rs:62` writes the correspondence out as a comment --
+// `builder.getIntegerType(w) -> b.get_integer_type(w) -> Ty` -- and
+// `build.rs:546` is `pub fn get_integer_type(&self, width: u32) -> Ty`.  `a1` is
+// forwarded UNCHANGED so two different widths cannot collapse, which is f402's
+// `get_bool_attr` lesson applied to a width instead of a bool.
+mlir::IntegerType f630(mlir::OpBuilder &a0, unsigned a1) {
+  return a0.getIntegerType(a1);
 }
