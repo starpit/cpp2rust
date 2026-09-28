@@ -560,3 +560,23 @@ unsafe fn f121<T1>(a0: &mut *mut T1, a1: i64) -> *mut T1 {
 unsafe fn f122<T1>(a0: *mut T1, a1: i64) -> *mut T1 {
     a0.offset(-(a1 as isize))
 }
+
+// f123..f126 -- relational comparison of two `std::vector<T1>::iterator`.  In the
+// unsafe model the iterator IS the raw element pointer, so this is the raw-pointer
+// comparison C++ performs.  Defined only for two iterators into the same vector,
+// which is also all C++ defines.
+unsafe fn f123<T1>(a0: *mut T1, a1: *mut T1) -> bool {
+    a0 >= a1
+}
+
+unsafe fn f124<T1>(a0: *mut T1, a1: *mut T1) -> bool {
+    a0 <= a1
+}
+
+unsafe fn f125<T1>(a0: *mut T1, a1: *mut T1) -> bool {
+    a0 < a1
+}
+
+unsafe fn f126<T1>(a0: *mut T1, a1: *mut T1) -> bool {
+    a0 > a1
+}

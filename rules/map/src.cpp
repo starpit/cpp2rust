@@ -153,6 +153,20 @@ bool f30(const std::map<T1, T2> &a, const std::map<T1, T2> &b) {
   return operator!=(a, b);
 }
 
+// g850 -- `operator>=` on two std::map<std::string, double>.
+// DECISION: C++ `operator>=` on std::map is a LEXICOGRAPHIC compare over the
+// SORTED sequence of key-value pairs.  Both models spell the receiver as a
+// `BTreeMap<T1, _>`, whose own `Ord` is likewise lexicographic over its sorted
+// (key, value) pairs -- and the value wrappers compare BY CONTENT
+// (`Box<T2>: Ord if T2: Ord`, `Rc<RefCell<T2>>: Ord if T2: Ord`), not by
+// address -- so the ordering IS reproduced and a plain `a0 >= a1` is exact.
+// (Had the model been a HashMap or a Vec this would have had to be refused:
+// no order at all, or an insertion-dependent one.)
+template <typename T1, typename T2>
+bool f36(const std::map<T1, T2> &a, const std::map<T1, T2> &b) {
+  return operator>=(a, b);
+}
+
 template <typename T1, typename T2>
 typename std::map<T1, T2>::const_iterator &
 f31(typename std::map<T1, T2>::const_iterator &it) {

@@ -663,3 +663,52 @@ typename std::vector<T1>::iterator
 f122(typename std::vector<T1>::iterator it, std::ptrdiff_t n) {
   return it.operator-(n);
 }
+
+// g849 -- RELATIONAL comparison on `std::vector<X>::iterator`, which libc++ spells
+// `std::__wrap_iter<X *>` and which is ALREADY mapped here as t2 (and t6).  NO NEW
+// TYPE KEY, so there is no swallow surface to argue: this row adds only a
+// free-function operator.
+//
+// The row's "searched as" spelling, character-for-character:
+//   bool std::operator>=(const std::__wrap_iter<int *> &, const std::__wrap_iter<int *> &)
+// libc++ declares these as NON-MEMBER templates on `__wrap_iter`, so this must be
+// written in FREE-FUNCTION form -- found by ADL exactly as f115/f116 find
+// `operator==` on `std::vector`.  A member spelling (`a.operator>=(b)`) does not
+// resolve and would record nothing, silently.  The recorded parameter types come
+// from the CALLEE (`const __wrap_iter<T1 *> &`), not from the by-value spelling
+// written here.
+//
+// The three other relations are written too: they are the same one-line mechanism,
+// they share the receiver, and `it < last` / `it > first` are the overwhelmingly
+// more common source shapes, so covering only `>=` would leave the same receiver
+// aborting on the next TU.
+//
+// SEMANTICS: a `__wrap_iter<X *>` comparison IS a raw-pointer comparison, and C++
+// only defines the ordering for two iterators into the SAME container -- so the
+// unsafe model compares the pointers directly and the refcount model compares the
+// two handles' offsets.  `get_offset()` is the same accessor f121/f122 and the
+// `operator-` distance rule (f36/f88) already use for exactly this reason: a
+// refcount `Ptr` is not ordered as a machine address, only as a position.
+template <typename T1>
+bool f123(typename std::vector<T1>::iterator a,
+          typename std::vector<T1>::iterator b) {
+  return operator>=(a, b);
+}
+
+template <typename T1>
+bool f124(typename std::vector<T1>::iterator a,
+          typename std::vector<T1>::iterator b) {
+  return operator<=(a, b);
+}
+
+template <typename T1>
+bool f125(typename std::vector<T1>::iterator a,
+          typename std::vector<T1>::iterator b) {
+  return operator<(a, b);
+}
+
+template <typename T1>
+bool f126(typename std::vector<T1>::iterator a,
+          typename std::vector<T1>::iterator b) {
+  return operator>(a, b);
+}

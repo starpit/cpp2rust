@@ -173,3 +173,10 @@ unsafe fn f35<T1: Ord, T2>(a0: Vec<(T1, T2)>, a1: Option<T1>) -> BTreeMap<T1, Bo
 fn t4<T1, T2, T3>() -> BTreeMap<T1, Box<T2>> {
     BTreeMap::new()
 }
+
+unsafe fn f36<T1: Ord, T2: Ord>(
+    a0: &BTreeMap<T1, Box<T2>>,
+    a1: &BTreeMap<T1, Box<T2>>,
+) -> bool {
+    a0 >= a1
+}

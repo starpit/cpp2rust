@@ -415,3 +415,25 @@ fn f121<T1>(a0: &mut Ptr<T1>, a1: i64) -> Ptr<T1> {
 fn f122<T1>(a0: Ptr<T1>, a1: i64) -> Ptr<T1> {
     a0.offset(-(a1 as isize))
 }
+
+// f123..f126 -- relational comparison of two `std::vector<T1>::iterator`.  A refcount
+// `Ptr` is NOT a machine address, so it must not be ordered as one; the meaningful
+// order is the POSITION inside the container, which is exactly what `get_offset()`
+// returns and what f36/f88 (iterator distance) and f121/f122 already use.  C++ only
+// defines this ordering for two iterators into the same vector, so comparing offsets
+// is faithful there and no worse anywhere else.
+fn f123<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
+    a0.get_offset() >= a1.get_offset()
+}
+
+fn f124<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
+    a0.get_offset() <= a1.get_offset()
+}
+
+fn f125<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
+    a0.get_offset() < a1.get_offset()
+}
+
+fn f126<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
+    a0.get_offset() > a1.get_offset()
+}

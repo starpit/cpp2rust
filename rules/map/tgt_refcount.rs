@@ -225,3 +225,10 @@ fn f35<T1: Ord + Clone, T2>(
 fn t4<T1, T2, T3>() -> BTreeMap<T1, Value<T2>> {
     BTreeMap::new()
 }
+
+fn f36<T1: Ord, T2: Ord>(
+    a0: &BTreeMap<T1, Value<T2>>,
+    a1: &BTreeMap<T1, Value<T2>>,
+) -> bool {
+    a0 >= a1
+}

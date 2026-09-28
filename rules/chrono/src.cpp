@@ -16,6 +16,48 @@
 //    10^6 and STILL COMPILING.  That is the collapsed-template-argument trap in
 //    its ratio flavour, and silent wrongness is the worst outcome available, so
 //    the key is NOT written.
+//    ⛔ THE COLLAPSE IS STRUCTURAL IN THE CONVERTER, NOT COSMETIC IN THE ROW
+//    TEXT, so it cannot be worked around from here.  MEASURED 2026-09-28:
+//    `Mapper::ToString` (cpp2rust/converter/mapper.cpp:2223) ends every type
+//    spelling -- the RULES KEY side and the SEARCH side alike, it is one
+//    function -- with `normalizeTranslationRule` (:1830), whose sole rewrite is
+//        {std::regex(R"(\b\d+\b)"), "_"}   // "Ignore constant template parameters"
+//    i.e. EVERY integer literal becomes `_`.  mapper.cpp:1641 says so in the
+//    tree's own words: "normalizeTranslationRule ... rewrites `\b\d+\b` -> `_`
+//    when it builds a rules KEY".  Therefore there is NO C++ spelling I can
+//    write here whose recorded key is anything but the one collapsed string:
+//        nanoseconds = duration<long long, ratio<1, 1000000000>>  -> ratio<_, _>
+//        seconds     = duration<long long, ratio<1, 1>>           -> ratio<_, _>
+//    are the SAME KEY.  ⭐ AND THIS IS PROVEN BY READBACK, not just by reading
+//    the converter: t1 and t2 are WRITTEN below as `std::ratio<1, 1000000000>`,
+//    and `ir/<tree>/chrono/ir_src.json` records them as
+//        std::chrono::time_point<std::chrono::steady_clock, std::chrono::duration<long long, std::ratio<_, _>>>
+//        std::chrono::time_point<std::chrono::system_clock, std::chrono::duration<long long, std::ratio<_, _>>>
+//    -- the digits I typed are GONE from the recorded key.  So the erasure is on
+//    the RULE side too, and a duration key demonstrably cannot carry its Period.
+//    (This is also why t1/t2 are safe: an Instant/SystemTime has no unit to get
+//    wrong, so for them the erasure is harmless rather than fatal.)
+//    Contrast the t2/t3 default-suppression split below,
+//    which WAS a printing difference and so was fixable by writing both
+//    spellings; this one is not, because both sides normalize identically.
+//    ⭐ THE OBSERVER, and it is decisive rather than hypothetical --
+//    `external/g3log/time.cpp:43-48`, `g3::internal::to_string`, the reach site
+//    behind the g284x `g3::internal...` rows:
+//        auto duration     = ts.time_since_epoch();                        // ns
+//        auto sec_duration = duration_cast<seconds>(duration);             // s
+//        duration -= sec_duration;                                         // g818
+//        auto ns = duration_cast<nanoseconds>(duration).count();           // ns
+//    THREE different Period values inside FOUR lines, all three landing on the
+//    one key -- and line 3 MIXES them: C++ resolves `ns -= s` through
+//    common_type and subtracts 1'000'000'000 ns per second.  A single collapsed
+//    body cannot know that factor, so it would subtract 1, i.e. be wrong by 10^9
+//    while compiling.  And the error is immediately OBSERVED as text: this
+//    function exists only to format the sub-second fraction of a timestamp
+//    ("1 ms --> 001"), so the corruption is printed in the fraction field of
+//    EVERY g3log line.  That is the whole refusal in one call site: the same key
+//    must serve seconds and nanoseconds in the same expression.
+//    The fix belongs in the converter's key normalization (carry non-type
+//    template arguments instead of erasing them), NOT in rules/chrono.
 //  * `duration_cast<Unit>(d)` -- its only distinguishing argument is an explicit
 //    template argument, so it records as ONE key for milliseconds / microseconds /
 //    seconds / nanoseconds alike.  Same refusal, same reason.
