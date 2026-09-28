@@ -3403,3 +3403,81 @@ fn f651(a0: &dataflowir_gen::ir::Ty) -> i64 {
         _ => panic!("ub: cannot get element count of dynamic shaped type"),
     }
 }
+
+// t770 `mlir::detail::SymbolOpInterfaceTrait<mlir::func::FuncOp>` -> `fmt::OpInst`.
+//   See tgt_unsafe.rs.  Byte-identical to the unsafe target for t157's reason: an
+//   `fmt::OpInst` is a VALUE in both targets, so there is no reference shape to differ on.
+fn t770() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+// f670 `SymbolOpInterfaceTrait<func::FuncOp>::getName()` -> THE SYMBOL NAME
+//   (`attrs["sym_name"]`).  See tgt_unsafe.rs for the header chain, the NUL-terminated
+//   `Vec<libc::c_char>` StringRef model and why the missing-attribute arm panics.
+//   ⭐ `a0` is BORROWED, not moved: in refcount a receiver must never be moved out of
+//   (`libcc2rs::Ptr` is not `Copy`), and a read-only accessor has no reason to.
+fn f670(a0: &dataflowir_gen::fmt::OpInst) -> Vec<libc::c_char> {
+    match a0.attrs.get("sym_name") {
+        Some(dataflowir_gen::ir::Attr::Str(s)) => {
+            let mut __v: Vec<libc::c_char> = s.bytes().map(|b| b as libc::c_char).collect();
+            __v.push(0);
+            __v
+        }
+        _ => panic!("ub: getName() on an operation carrying no sym_name attribute"),
+    }
+}
+
+// f750-f753 -- the four missing members of the t460-t463 printer `<<` family.
+// src.cpp carries the aggregated site table, the receiver/non-inheritance reason
+// these are distinct keys rather than duplicates, and the ten sites left out.
+// Writes go through `with_mut` (the rules/raw_ostream f4 spelling) and every body
+// returns its own `a0` so `p << a << b` chains.
+
+// f750 -- `mlir::AsmPrinter &` + `const char (&)[_]`, 23 sites.  f360's body on the
+// base receiver: a char array reaches this model as `&[u8]` INCLUDING the literal's
+// NUL terminator, so the bytes are cut at the first NUL -- `print_str` appends
+// verbatim and would otherwise plant a 0x00 mid-text.
+fn f750(a0: libcc2rs::Ptr<dataflowir_gen::AsmPrinter>, a1: &[u8]) -> libcc2rs::Ptr<dataflowir_gen::AsmPrinter> {
+    let __p = a0;
+    let __n = a1.iter().position(|&c| c == 0u8).unwrap_or(a1.len());
+    let __s = String::from_utf8_lossy(&a1[..__n]).into_owned();
+    __p.with_mut(|__q: &mut dataflowir_gen::AsmPrinter| {
+        __q.print_str(&__s);
+    });
+    __p
+}
+
+// f751 -- `mlir::AsmPrinter &` + `const long &`, 3 sites.  f29's `&i64` spelling;
+// `print_i64` is `v.to_string()`, i.e. plain decimal, which is what MLIR's
+// `getStream() << value` produces.
+fn f751(a0: libcc2rs::Ptr<dataflowir_gen::AsmPrinter>, a1: &i64) -> libcc2rs::Ptr<dataflowir_gen::AsmPrinter> {
+    let __p = a0;
+    let __v = *a1;
+    __p.with_mut(|__q: &mut dataflowir_gen::AsmPrinter| {
+        __q.print_i64(__v);
+    });
+    __p
+}
+
+// f752 -- `mlir::AsmPrinter &` + `mlir::Type` by value, 2 sites.  t5 is
+// `dataflowir_gen::ir::Ty`; `print_type` takes it by reference, so the by-value
+// parameter is borrowed in place and nothing is cloned.
+fn f752(a0: libcc2rs::Ptr<dataflowir_gen::AsmPrinter>, a1: dataflowir_gen::ir::Ty) -> libcc2rs::Ptr<dataflowir_gen::AsmPrinter> {
+    let __p = a0;
+    __p.with_mut(|__q: &mut dataflowir_gen::AsmPrinter| {
+        __q.print_type(&a1);
+    });
+    __p
+}
+
+// f753 -- `mlir::OpAsmPrinter &` + `mlir::Type` by value, 17 sites.  f752's body on
+// the derived receiver; both receivers are the same `AsmPrinter` sink in this model.
+fn f753(a0: libcc2rs::Ptr<dataflowir_gen::AsmPrinter>, a1: dataflowir_gen::ir::Ty) -> libcc2rs::Ptr<dataflowir_gen::AsmPrinter> {
+    let __p = a0;
+    __p.with_mut(|__q: &mut dataflowir_gen::AsmPrinter| {
+        __q.print_type(&a1);
+    });
+    __p
+}

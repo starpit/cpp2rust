@@ -35,3 +35,31 @@ fn t5<T1: Default>() -> T1 {
 fn t6<T1: Default, T2>() -> T1 {
     Default::default()
 }
+
+// t770 `llvm::cl::list_storage<T1, bool>` -> `Vec<T1>`, 4 sites / 1 file.
+//   CommandLine.h:1610-1613: the `<DataType, bool>` partial specialisation IS a
+//   `std::vector<DataType>` with a thin API over it (the header says so itself), and its
+//   `Default` / `DefaultAssigned` fields are the same unobservable cl::init bookkeeping
+//   that t2's `opt_storage` carries.  ⭐ The converter has ALREADY emitted the owning
+//   field as `pub tileSizes: Vec<i64>` and already serves `tileSizes[i]` and the range-for
+//   over it from its own `Vec` handling, so this is the model in the file, not a new claim.
+//   See src.cpp for the site census and for why the cl::opt sibling refusals do not apply.
+fn t770<T1>() -> Vec<T1> {
+    Vec::new()
+}
+
+// f670 `list_storage<T1, bool>::size() const` -> THE VECTOR LENGTH.
+//   CommandLine.h:1627 is `return Storage.size();`.  ⛔ NO `- 1` here, unlike
+//   rules/stringref's `f7`: that model is a NUL-TERMINATED `Vec<libc::c_char>` and this one
+//   is a plain element vector with no terminator, so `len()` IS the count.  `size_type` is
+//   `std::vector<long>::size_type`, i.e. `unsigned long` -> `u64`.
+fn f670<T1>(a0: &Vec<T1>) -> u64 {
+    a0.len() as u64
+}
+
+// f671 `list_storage<T1, bool>::empty() const` -> `is_empty()`.
+//   CommandLine.h:1629 is `return Storage.empty();`.  Again no terminator to discount, so
+//   this is `is_empty()` and not rules/stringref's `f5` (`len() <= 1`).
+fn f671<T1>(a0: &Vec<T1>) -> bool {
+    a0.is_empty()
+}

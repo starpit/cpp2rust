@@ -77,9 +77,40 @@ fn f10<T1>(a0: Ptr<T1>, a1: i64) -> Ptr<T1> {
 // Sequenced into separate statements: two mentions of a `&mut` param in ONE
 // expression panic at runtime with `RefCell already borrowed`.  Same shape as
 // rules/vector f121.
+//
+// ⛔⛔ AND THE STORE IS `drop(core::mem::replace(a0, ..))`, NOT `*a0 = ..`,
+// 2026-09-28 -- same swallowed-deref class as rules/mlir (0a14e018).
+// `*a0 = __p.clone();` WAS HERE AND IT EMITTED RUST THAT DOES NOT COMPILE.  A
+// placeholder whose rule parameter is `&mut T` and which sits in a NON-RECEIVER
+// position is emitted as `&mut <place>` -- converter.cpp:8030-8038,
+// `needs_lvalue() && needs_mut_borrow()` returns `"&mut " + place`, gated on
+// `needs_explicit_mut_borrow = !is_method_call_receiver && ParamIsMutRef(..)`.
+// The rule's leading `*` is SWALLOWED by the preprocessor, so this emitted
+// `&mut <iter-lvalue> = ..;` -- `error[E0070]: invalid left-hand side of
+// assignment`.
+// ⭐ THE CLASS rc=0 CANNOT SEE: E0070 is raised in HIR lowering / type-check, not
+// in the parser.  `rustfmt` -- the only Rust parser in this pipeline -- parses
+// `&mut x = v` at rc=0 and re-emits it verbatim, so the TU reports clean.
+// ⭐ THE FIX RELIES ON THE SAME RENDERING: bare `a0` records the IDENTICAL
+// `{arg 0, access: "borrow_mut"}`, so `replace(a0, ..)` emits
+// `replace(&mut <place>, ..)`, exactly what `core::mem::replace` wants.
+// ⚠️ DO NOT "restore" the `*`: both `replace(&mut *a0, ..)` and
+// `replace(*a0, ..)` make rule-preprocessor ABORT with
+// `semantic.rs:260: unresolved access="unknown"` -- a deref or re-borrow of a
+// placeholder inside a CALL ARGUMENT has no access classification.
+// ⚠️ TYPE CHECK, because this differs from the mlir sites, where `a1` was a plain
+// `ir::Attr` enum: `libcc2rs::Ptr<T>` is NOT `Copy`.  That does not matter --
+// `core::mem::replace` requires only `Sized`, which `Ptr<T>` satisfies for every
+// `T` (libcc2rs/src/rc.rs:166, a two-field struct of `usize` + `PtrKind<T>`), and
+// `impl<T> Clone for Ptr<T>` at rc.rs:180 is unconditional, so no generic bound
+// has to be added to `T1`.  Dropping the replaced `Ptr<T1>` releases exactly the
+// refcount the old `*a0 = ..` assignment released, so this is refcount-neutral.
+// ⚠️ `a0.offset(..)` above is a METHOD-CALL RECEIVER and is CORRECT as written:
+// for a receiver the converter suppresses the explicit borrow and lets Rust's
+// autoref supply it, so no deref may be written there either.
 fn f11<T1>(a0: &mut Ptr<T1>, a1: i64) -> Ptr<T1> {
     let __p: Ptr<T1> = a0.offset(a1 as isize);
-    *a0 = __p.clone();
+    drop(core::mem::replace(a0, __p.clone()));
     __p
 }
 
@@ -107,8 +138,10 @@ fn f17<T1>(a0: Ptr<T1>, a1: i64) -> Ptr<T1> {
     a0.offset(a1 as isize)
 }
 
+// f18 -- the `const_iterator` twin of f11; see the comment block at f11 for why
+// the store is `drop(core::mem::replace(a0, ..))` and not `*a0 = ..`.
 fn f18<T1>(a0: &mut Ptr<T1>, a1: i64) -> Ptr<T1> {
     let __p: Ptr<T1> = a0.offset(a1 as isize);
-    *a0 = __p.clone();
+    drop(core::mem::replace(a0, __p.clone()));
     __p
 }

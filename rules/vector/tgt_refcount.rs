@@ -416,9 +416,34 @@ fn f120<T1>(a0: Ptr<T1>) -> Ptr<T1> {
 // The two mentions of a0 must be in SEPARATE statements: in refcount an iterator
 // lvalue is a Value<Ptr<T1>>, so a single expression using a0 twice inlines to a
 // borrow() inside a borrow_mut() and panics "RefCell already borrowed" (MEASURED).
+// ⛔⛔ AND THE STORE IS `drop(core::mem::replace(a0, ..))`, NOT `*a0 = ..`,
+// 2026-09-28 -- same swallowed-deref class as rules/mlir (0a14e018).
+// `*a0 = __p.clone();` WAS HERE AND IT EMITTED RUST THAT DOES NOT COMPILE.  A
+// placeholder whose rule parameter is `&mut T` and which sits in a NON-RECEIVER
+// position is emitted as `&mut <place>` -- converter.cpp:8030-8038,
+// `needs_lvalue() && needs_mut_borrow()` returns `"&mut " + place`, gated on
+// `needs_explicit_mut_borrow = !is_method_call_receiver && ParamIsMutRef(..)`.
+// The rule's leading `*` is SWALLOWED by the preprocessor, so this emitted
+// `&mut <iter-lvalue> = ..;` -- `error[E0070]: invalid left-hand side of
+// assignment`.
+// ⭐ THE CLASS rc=0 CANNOT SEE: E0070 is raised in HIR lowering / type-check, not
+// in the parser.  `rustfmt` -- the only Rust parser in this pipeline -- parses
+// `&mut x = v` at rc=0 and re-emits it verbatim, so the TU reports clean.
+// ⭐ THE FIX RELIES ON THE SAME RENDERING: bare `a0` records the IDENTICAL
+// `{arg 0, access: "borrow_mut"}`, so this emits `replace(&mut <place>, ..)`.
+// ⚠️ DO NOT "restore" the `*`: both `replace(&mut *a0, ..)` and
+// `replace(*a0, ..)` make rule-preprocessor ABORT with
+// `semantic.rs:260: unresolved access="unknown"` -- a deref or re-borrow of a
+// placeholder inside a CALL ARGUMENT has no access classification.
+// ⚠️ TYPE CHECK, because this differs from the mlir sites, where `a1` was a plain
+// `ir::Attr` enum: `libcc2rs::Ptr<T>` is NOT `Copy`.  That does not matter --
+// `core::mem::replace` requires only `Sized`, which `Ptr<T>` satisfies for every
+// `T` (libcc2rs/src/rc.rs:166), and `impl<T> Clone for Ptr<T>` at rc.rs:180 is
+// unconditional, so no generic bound has to be added to `T1`.  Dropping the
+// replaced `Ptr<T1>` releases exactly the refcount the old assignment released.
 fn f121<T1>(a0: &mut Ptr<T1>, a1: i64) -> Ptr<T1> {
     let __p: Ptr<T1> = a0.offset(a1 as isize);
-    *a0 = __p.clone();
+    drop(core::mem::replace(a0, __p.clone()));
     __p
 }
 

@@ -552,9 +552,44 @@ unsafe fn f120<T1>(a0: &mut Vec<T1>) -> *mut T1 {
 // f121 -- `it += n` MUTATES the receiver and returns it; f34 (prefix ++) is the
 // same shape.  f122 -- `it - n` is pure and moves BACKWARD, so the offset is
 // negated; a body using `+n` would silently read from the wrong end.
+// ⛔⛔ f121 IS SEQUENCED THROUGH `__p` AND STORES VIA
+// `drop(core::mem::replace(a0, ..))`, NOT `*a0 = (*a0).offset(..)`, 2026-09-28.
+// Same swallowed-deref class as rules/mlir (0a14e018), and this site swallowed on
+// BOTH SIDES of the assignment.
+// A placeholder whose rule parameter is `&mut T` and which sits in a NON-RECEIVER
+// position is emitted as `&mut <place>` -- converter.cpp:8030-8038,
+// `needs_lvalue() && needs_mut_borrow()` returns `"&mut " + place`, gated on
+// `needs_explicit_mut_borrow = !is_method_call_receiver && ParamIsMutRef(..)`.
+// The rule's leading `*` is SWALLOWED by the preprocessor, never emitted, so the
+// assignment target emitted `&mut <iter-lvalue> = ..;` --
+// `error[E0070]: invalid left-hand side of assignment`.
+// ⭐ THE CLASS rc=0 CANNOT SEE: E0070 is raised in HIR lowering / type-check, not
+// in the parser.  `rustfmt` -- the only Rust parser in this pipeline -- parses
+// `&mut x = v` at rc=0 and re-emits it verbatim, so the TU reports clean.
+// ⚠️ The `(*a0)` RECEIVER also recorded `access: "borrow_mut"` (ir_unsafe.json),
+// emitting `(&mut place).offset(..)`, which compiles only by autoderef; the twin
+// site rules/deque_iterator f18 recorded `"move"` from character-identical source.
+// So the deref is removed there too: `a0.offset(..)` is a METHOD-CALL RECEIVER,
+// and for a receiver the converter suppresses the explicit borrow and lets Rust's
+// autoref supply it.  That is the spelling f120/f122 and the refcount overlay
+// already use.
+// ⭐ THE FIX RELIES ON THE SWALLOW, DELIBERATELY: bare `a0` in the `replace`
+// argument records the IDENTICAL `{arg 0, access: "borrow_mut"}`, so it emits
+// `replace(&mut <place>, __p)` -- exactly what `core::mem::replace` wants.
+// ⚠️ DO NOT "restore" the `*`: both `replace(&mut *a0, __p)` and
+// `replace(*a0, __p)` make rule-preprocessor ABORT with
+// `semantic.rs:260: unresolved access="unknown"` -- a deref or re-borrow of a
+// placeholder inside a CALL ARGUMENT has no access classification.
+// ⚠️ Sequencing through `__p` also keeps this overlay on the SAME shape as the
+// refcount one, where it is load-bearing for the "RefCell already borrowed"
+// reason documented on the refcount f121 below.
+// `*mut T1` is `Copy`, so `replace` is trivially well-typed and the `drop` is a
+// no-op, kept for correspondence with the C++ assignment.  Returning `__p` is
+// identical to the old trailing `*a0`: the return type is `*mut T1` BY VALUE.
 unsafe fn f121<T1>(a0: &mut *mut T1, a1: i64) -> *mut T1 {
-    *a0 = (*a0).offset(a1 as isize);
-    *a0
+    let __p: *mut T1 = a0.offset(a1 as isize);
+    drop(core::mem::replace(a0, __p));
+    __p
 }
 
 unsafe fn f122<T1>(a0: *mut T1, a1: i64) -> *mut T1 {

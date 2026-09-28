@@ -7744,3 +7744,265 @@ long f650(const mlir::detail::ShapedTypeTrait<mlir::MemRefType> &a0) {
 long f651(const mlir::detail::ShapedTypeTrait<mlir::VectorType> &a0) {
   return a0.getNumElements();
 }
+
+// ===========================================================================
+// t770 / f670 -- `mlir::detail::SymbolOpInterfaceTrait<mlir::func::FuncOp>`, 6 asks /
+// 4 emitted cast sites / 2 files (fresh37), AND THE SYMBOL-NAME-VS-OP-NAME QUESTION
+// THAT THE PREVIOUS SLOT LEFT OPEN, SETTLED FROM THE HEADER THE CONVERTER PARSES WITH.
+//
+// ⭐⭐ IT IS THE SYMBOL NAME, NOT THE OP NAME.  SymbolInterfaces.h.inc:383-385, INSIDE
+// `struct SymbolOpInterfaceTrait` (which spans :262-:390):
+//     /// Convenience version of `getNameAttr` that returns a StringRef.
+//     ::mlir::StringRef getName() { return getNameAttr().getValue(); }
+// and :265-267, in the SAME struct:
+//     ::mlir::StringAttr getNameAttr() {
+//       return mlir::SymbolTable::getSymbolName(this->getOperation());
+//     }
+// `SymbolTable::getSymbolName` reads the `sym_name` ATTRIBUTE off the operation, so
+// `getName()` IS `attrs["sym_name"]` -- e.g. `"my_kernel"`.  It is NOT
+// `Operation::getName()`, which is the op's MNEMONIC (`"func.func"`).  The two are
+// different strings and substituting one for the other is silently wrong, which is
+// exactly why this had to be settled before a key could be written.
+// ⭐ CROSS-CHECKED AGAINST THE TWO C++ CALL SITES, which read as the symbol name and
+// would read absurdly as the mnemonic:
+//     KTDFToKTDFLow.cpp:96   LDBG(1) << "Running " << PASS_NAME << " on " << func.getName();
+//     KTDFToKTDFLow.cpp:314  LDBG(1) << "Lowering complete for " << func.getName() << "";
+//
+// ⛔⛔ AND THE ACCESSOR THE PREVIOUS SLOT NAMED IS THE WRONG ONE -- recorded so the next
+// slot does not re-derive it.  It reported "`dataflowir_gen` already has `get_name()`
+// (ir.rs:635)".  ir.rs:629-637 is
+//     impl NamedAttribute { /// `NamedAttribute::getName()`.
+//                           pub fn get_name(&self) -> &str { &self.name } }
+// i.e. `mlir::NamedAttribute::getName()` -- THE KEY OF ONE DICTIONARY ENTRY.  That is
+// NEITHER the symbol name NOR the op name, and it is the ONLY hit for
+// `grep -rn 'fn get_name\|fn get_sym_name\|fn symbol_name\|getSymbolName'` over the
+// whole crate, so there is no symbol-name accessor in dataflowir-gen at all.
+// ⭐ NO dataflowir-gen EDIT IS NEEDED ANYWAY, WHICH IS WHY THIS LANDS: `fmt::OpInst::attrs`
+// is a **pub** field (fmt.rs:443, `pub attrs: AttrDict`; `pub type AttrDict =
+// BTreeMap<String, Attr>` at ir.rs:651), and the crate's OWN func.func printer reads
+// exactly `op.attrs.get("sym_name")` (custom.rs:751-753, which errors
+// `Missing("$sym_name")` when it is absent).  f670 reads the same entry the same way, so
+// the accessor is COMPOSED FROM PUBLIC API -- not invented here, and not added upstream.
+//
+// ⭐ THE MEMBER IS DECLARED IN THE TRAIT, so this is NOT the "a key on a derived class
+// cannot relocate an INHERITED member" trap: `getName` is at :384 INSIDE
+// `SymbolOpInterfaceTrait`, and the converter's own recorded decl location agrees --
+// `... at .../mlir/IR/SymbolInterfaces.h.inc:262:10`, the struct itself.
+//
+// ⭐ THIS COMPLETES THE t750/t751 CORRECTION AT :7627, which said of this very spelling:
+// "ALSO emitted as a cast receiver -- see the report; it is left out here only because its
+// member needs a symbol-name accessor this slot did not establish."  Established above.
+//
+// ⛔ ALL FOUR EMITTED SITES READ `getName` AND NOTHING ELSE, which is what makes the TYPE
+// key complete rather than the "trade loud placeholders for silent textual calls" bargain
+// that t400's block and the t560/t561 header forbid -- AN UNMAPPED MEMBER DOES NOT ABORT,
+// it is emitted TEXTUALLY at rc=0 with no placeholder token.  Censused over all 58
+// emitting `.rs` at fresh37/out:
+//   grep -rohE 'Cpp2RustUnmapped_mlir_detail_SymbolOpInterfaceTrait_mlir_func_FuncOp_[^A-Za-z0-9_][^a-zA-Z]*[.] *[A-Za-z_]+' \
+//     | sed 's/.*\. *//' | sort | uniq -c        ->   4 getName
+// and NO other member name occurs on this receiver.  ⛔ SIXTEEN OTHER MEMBERS OF THE TRAIT
+// ARE LEFT UNDECLARED so a site that reads one FAILS LOUDLY instead of resolving by
+// accident: `getNameAttr`, `setName`, `getVisibility`, `isNested`, `isPrivate`, `isPublic`,
+// `setVisibility`, `setNested`, `setPrivate`, `setPublic`, `getSymbolUses`,
+// `symbolKnownUseEmpty`, `replaceAllSymbolUses`, `isOptionalSymbol`,
+// `canDiscardOnUseEmpty`, `isDeclaration`.  None is read on this receiver in the corpus.
+//
+// ⭐ THE MODEL IS FORCED, NOT CHOSEN.  A DerivedToBase cast does not change the object, so
+// the CRTP trait base of `func::FuncOp` maps to exactly what `func::FuncOp` maps to:
+// t157 `mlir::func::FuncOp -> fmt::OpInst`.  Identical argument to t750/t751 and t400; no
+// new model claim is made here.
+//
+// ⭐ THE RETURN TYPE IS THE CORPUS' OWN StringRef MODEL, `Vec<libc::c_char>`,
+// NUL-TERMINATED -- rules/stringref `fn t1() -> Vec<libc::c_char> { vec![0] }` and its `f7`
+// (`size()`) is `len() - 1`, i.e. the Vec carries the terminator.
+// ⭐⭐ THE ALREADY-EMITTED SITES CONFIRM THAT INDEPENDENTLY, which is the strongest evidence
+// in this row.  Every one of the four is
+//     let __b: Vec<u8> = (...getName()).iter()
+//                          .take((...getName()).len().saturating_sub(1))
+//                          .map(|&c| c as u8).collect();
+// -- `.iter()`, `.len()`, the `.saturating_sub(1)` that DROPS THE TERMINATOR, and
+// `c as u8` on an `i8` element are all exactly what a NUL-terminated `Vec<libc::c_char>`
+// supports, and they are ALREADY IN THE FILE.  This key makes the text that is already
+// emitted COMPILE; it does not ask the emitter to produce anything different.
+//
+// ⛔ SWALLOW-SAFETY.  `GetTypeMapKey` truncates at the first `<`, so the bucket is
+// `mlir::detail::SymbolOpInterfaceTrait`, which ALREADY HOLDS t400
+// (`<mlir::ktdf_arch::DeviceOp>`) -- so this is not a previously-empty bucket and t400's
+// own "sole candidate in an empty bucket, where search()'s longer-src tie-break cannot
+// protect it" concern does not arise.  BOTH keys are FULLY CONCRETE -- no `T<digits>`
+// appears in either spelling -- so `matchTemplate`'s placeholder capture
+// (`findNextLiteralSameDepth`) NEVER RUNS and the same-depth-comma swallow is ruled out by
+// construction (the t243-t246 / t480-t482 / t750-t751 argument).  `mlir::func::FuncOp` and
+// `mlir::ktdf_arch::DeviceOp` are distinct literals, so the two cannot alias each other.
+// ⚠️ AN EXPLICIT SPECIALISATION, not a member added to the primary template: the primary
+// `template <typename ConcreteType> class SymbolOpInterfaceTrait {};` at :5192 MUST STAY
+// MEMBERLESS because t400 rides on it and t400 maps no member.  Specialising for
+// `<mlir::func::FuncOp>` leaves t400 bit-for-bit untouched -- the t750/t751 discipline
+// exactly.  It also means the return type is written out per instantiation and cannot be
+// rendered through a dependent name that would never match the recorded key (f461's
+// `simple_ilist<mlir::Block>` shape).
+// ⚠️ ONE TEMPLATE PARAMETER, NO DEFAULTS (SymbolInterfaces.h.inc:261-262 is
+// `template <typename ConcreteOp> struct SymbolOpInterfaceTrait`), so there is no trailing
+// defaulted argument for the recorder to drop and the recorded key cannot drift.
+// ===========================================================================
+namespace mlir {
+namespace detail {
+// SymbolInterfaces.h.inc:262-390.  The PRIMARY template is already declared memberless at
+// :5192 for t400; THIS IS THE `mlir::func::FuncOp` EXPLICIT SPECIALISATION, carrying the
+// ONE member the emitting corpus reads off this receiver.  `getName` is NON-const in the
+// header (:384 -- it calls the non-const `getNameAttr()`), so f670 takes a non-const
+// reference, unlike f650/f651 whose C++ members are `const`.
+template <> class SymbolOpInterfaceTrait<mlir::func::FuncOp> {
+public:
+  llvm::StringRef getName();
+};
+} // namespace detail
+} // namespace mlir
+
+// t770 -- `mlir::detail::SymbolOpInterfaceTrait<mlir::func::FuncOp>`, 4 emitted cast sites
+// in 2 files: KTDFToKTDFLow.cpp (emitted 17084, 17898) and
+// LogicalMemoryViewBuilder.cpp (emitted 15812, 15818).
+using t770 = mlir::detail::SymbolOpInterfaceTrait<mlir::func::FuncOp>;
+
+// f670 -- `llvm::StringRef mlir::detail::SymbolOpInterfaceTrait<mlir::func::FuncOp>::getName()`.
+// THE SYMBOL NAME (`attrs["sym_name"]`), per the header chain quoted above -- never the
+// op mnemonic.
+llvm::StringRef f670(mlir::detail::SymbolOpInterfaceTrait<mlir::func::FuncOp> &a0) {
+  return a0.getName();
+}
+
+// ⭐⭐⭐ MEASURED CORRECTION TO THE SITE COUNT ABOVE, AND IT IS THE MOST IMPORTANT THING IN
+// THIS BLOCK.  The "4 emitted cast sites" figure is from the fresh37 census, whose binary
+// was the 602a787f pin.  AT THE CURRENT PIN (968ab2be, i.e. HEAD 8f467983) THE PLACEHOLDER
+// TOKEN IS ALREADY GONE AND THE DEFECT IS WORSE, NOT BETTER.  HEAD~1 is
+//     6f102175 converter: CK_UncheckedDerivedToBase -- a derived-to-base is never a Rust cast
+// so the converter no longer emits the cast that carried the placeholder.  The member call
+// now lands DIRECTLY ON THE DERIVED RECEIVER and is emitted SILENTLY AND TEXTUALLY as an
+// undefined method -- the "unmapped members do not abort" class, which has NO placeholder
+// token and is invisible to every bucket census and to no-placeholders.sh.  Measured, both
+// legs on the same snapshot binary, ir.v35 + this module at clean HEAD vs. with t770/f670:
+//     BEFORE  func.getName  4 (KTDFToKTDFLow) + 2 (LogicalMemoryViewBuilder) = 6
+//             attrs.get("sym_name")  0        Cpp2RustUnmapped_...SymbolOpInterfaceTrait...  0
+//     AFTER   func.getName  0 + 0             = 0
+//             attrs.get("sym_name")  4 + 2    = 6
+// -- i.e. the row is SIX undefined textual calls, exactly the six asks the census recorded
+// as placeholders, and this key closes all six.  The placeholder-token delta is 0 BECAUSE
+// THERE WAS NO TOKEN LEFT TO DELETE, not because the key is dead.
+// ⚠️ READ THIS BEFORE JUDGING ANY `mlir::detail::*Trait` OR BASE-CLASS ROW FROM A CENSUS:
+// after 6f102175 an entire class of LOUD placeholder became SILENT, so a bucket census
+// taken with a pre-6f102175 binary OVERSTATES the tokens and a census taken with a
+// post-6f102175 one MISSES the row completely.  The discriminator is the textual call
+// (`<recv>.<member>(` with no `Cpp2RustUnmapped_` anywhere), not the token.
+// ⚠️ AND THE BARE-NAME COUNT IS NOT THE DISCRIMINATOR, measured: `getName()` occurs 33
+// times in KTDFToKTDFLow and 29 in LogicalMemoryViewBuilder and is UNCHANGED across the
+// pair -- because 29/27 of those are unrelated `mlir_ktdp_*Op` ODS mnemonic accessors, and
+// in AFTER the remainder is f670's OWN PANIC MESSAGE text inlined into the emitted file
+// (the "residue can be your own rule text" trap).  Only the RECEIVER-ANCHORED
+// `func.getName` count, 6 -> 0, separates them.
+
+// ---------------------------------------------------------------------------
+// f750-f753 -- THE FOUR MISSING MEMBERS OF THE PRINTER `<<` FAMILY ALREADY
+// MODELLED AT t460-t463 / f360-f366 (:3888-3960).  45 of the 55 `operator shl`
+// sites on the 78-site CXXOperatorCallExpr frontier, aggregated straight out of
+// `ReportUnsupportedOperatorCall`'s own output in fresh36/out/*.log -- the
+// diagnostic prints the rule key verbatim, so these four spellings are COPIED,
+// not re-derived:
+//
+//   23 sites  mlir::AsmPrinter   & operator shl(mlir::AsmPrinter   &, const char (&)[_])
+//   17 sites  mlir::OpAsmPrinter & operator shl(mlir::OpAsmPrinter &, mlir::Type)
+//    3 sites  mlir::AsmPrinter   & operator shl(mlir::AsmPrinter   &, const long &)
+//    2 sites  mlir::AsmPrinter   & operator shl(mlir::AsmPrinter   &, mlir::Type)
+//
+// ⭐ EACH IS A PLAIN GAP IN A WORKING FAMILY, and each has a live sibling one line
+// apart to copy the shape from -- which is also the positive control: f360 is the
+// SAME argument on the OTHER receiver and fires today, so if f750 does not fire the
+// difference can only be the spelling.
+//
+// ⭐ WHY THE RECEIVER MAKES THESE DISTINCT KEYS AND NOT DUPLICATES.  :3838-3843
+// declares `AsmPrinter` and `OpAsmPrinter` as EMPTY AND UNRELATED on purpose: real
+// MLIR has `class OpAsmPrinter : public AsmPrinter`, and had the base relation been
+// spelled here the `AsmPrinter &` overloads would win by derived-to-base conversion
+// and the recorded key would read `mlir::AsmPrinter &...` for OpAsmPrinter sites.
+// Because they are unrelated, `const char (&)[_]` on the BASE receiver is a key the
+// existing f360 (DERIVED receiver) cannot cover -- exactly the f361/f364 pair that
+// already exists for `const char &`.  So f750 is f360's body on `AsmPrinter &` and
+// f753 is f752's body on `OpAsmPrinter &`; the duplication is the price of the
+// deliberate non-inheritance, and f364 is the in-tree precedent for paying it.
+//
+// ⭐ `const char (&)[_]`: extent written CONCRETELY (36) because
+// `normalizeTranslationRule` rewrites every `\b\d+\b` in a key to `_`, which is what
+// makes ONE key serve every literal length -- the f21/f360 mechanism, unchanged.
+//
+// ⭐ EVERY BODY PRINTS ITS ARGUMENT AND RETURNS ITS OWN `a0`.  The C++ returns the
+// printer BY REFERENCE so `p << a << b` chains (the f5-f18 / f360-f366 invariant),
+// and a printer key that returned the sink while DROPPING the operand would change
+// program output silently -- the one failure worse than the placeholder.  The sinks
+// used are `AsmPrinter::print_str`, `print_i64` and `print_type`, all three present
+// in `dataflowir-gen/src/asm.rs`'s public surface (:294, :312, :374); nothing is
+// invented and `dataflowir-gen/` is not touched.
+//
+// ⛔ TEN OF THE 55 SITES ARE STILL LEFT OUT, each with a measured reason:
+//   * `mlir::ValueTypeRange<mlir::ResultRange>` (6 sites) and
+//     `<mlir::OperandRange>` (2).  :3852-3859 already refuses these and the refusal
+//     is UNCHANGED: `AsmPrinter::print_types` would serve them, but the ARGUMENT has
+//     no type key -- t251's note (:5225) records `ValueTypeRange` (TypeRange.h:120-165)
+//     as a DIFFERENT class from the `TypeRange` it keys, and one that DECLARES
+//     `front()`, a reference-returning accessor the t14-t17 owning-`Vec` aliasing
+//     licence does not cover.  A `<<` key without the type key would not resolve;
+//     keying the type is a separate row.
+//   * `mlir::Diagnostic & operator shl(const char (&)[_])` (2 sites,
+//     KTDFOps.cpp:267 and :274).  This is a MEMBER on `mlir::Diagnostic`, a class
+//     with NO type key anywhere in this module -- only `mlir::InFlightDiagnostic`
+//     (t70, :2108) is modelled, and it is NOT a substitute: `libcc2rs::Diagnostic`
+//     does not exist (libcc2rs/src/diag.rs declares only `InFlightDiagnostic`,
+//     which PRINTS ON `Drop`), so mapping `Diagnostic` onto it would make every
+//     plain diagnostic payload emit a report when it went out of scope.  Modelling
+//     `mlir::Diagnostic` is its own row.
+// ---------------------------------------------------------------------------
+
+namespace mlir {
+
+// The receivers and `Type` are already declared at :3888-3889 / :198; these are
+// four more free `operator<<` overloads on them, the OpImplementation.h
+//   template <typename AsmPrinterT, typename T>
+//   std::enable_if_t<...> operator<<(AsmPrinterT &p, const T &value)
+// at four more concrete instantiations.
+AsmPrinter &operator<<(AsmPrinter &p, const char (&s)[36]);
+AsmPrinter &operator<<(AsmPrinter &p, const long &n);
+AsmPrinter &operator<<(AsmPrinter &p, Type t);
+OpAsmPrinter &operator<<(OpAsmPrinter &p, Type t);
+
+} // namespace mlir
+
+// f750 -- `mlir::AsmPrinter & operator shl(mlir::AsmPrinter &, const char (&)[_])`,
+// 23 sites, the largest row on the CXXOperatorCallExpr frontier.  f360's body on the
+// BASE receiver; `print_str` appends VERBATIM, which is what `p << "lit"` in a
+// hand-written ODS type printer means.
+mlir::AsmPrinter &f750(mlir::AsmPrinter &a0, const char (&a1)[36]) {
+  return mlir::operator<<(a0, a1);
+}
+
+// f751 -- `mlir::AsmPrinter & operator shl(mlir::AsmPrinter &, const long &)`,
+// 3 sites (KTDFTypes.cpp:69 reports as `int64_t`, KtdpTypes.cpp:101/:105 as `long`;
+// the mapper spells all three `const long &`).  MLIR routes an integral through
+// `getStream() << value`, i.e. plain decimal, which is `print_i64`.  f29 is the
+// in-tree precedent for `const long &` -> `&i64`.
+mlir::AsmPrinter &f751(mlir::AsmPrinter &a0, const long &a1) {
+  return mlir::operator<<(a0, a1);
+}
+
+// f752 -- `mlir::AsmPrinter & operator shl(mlir::AsmPrinter &, mlir::Type)`,
+// 2 sites.  `Type` is taken BY VALUE, exactly as OpImplementation.h declares it and
+// as f363 takes `mlir::Value`.  MLIR's body is `p.printType(type)`, so the sink is
+// `AsmPrinter::print_type` and t5 (`mlir::Type` -> `dataflowir_gen::ir::Ty`) is the
+// argument model.
+mlir::AsmPrinter &f752(mlir::AsmPrinter &a0, mlir::Type a1) {
+  return mlir::operator<<(a0, a1);
+}
+
+// f753 -- `mlir::OpAsmPrinter & operator shl(mlir::OpAsmPrinter &, mlir::Type)`,
+// 17 sites, the second-largest row.  f752's body on the DERIVED receiver; a DISTINCT
+// KEY for the non-inheritance reason above, the f361/f364 pair's precedent.
+mlir::OpAsmPrinter &f753(mlir::OpAsmPrinter &a0, mlir::Type a1) {
+  return mlir::operator<<(a0, a1);
+}

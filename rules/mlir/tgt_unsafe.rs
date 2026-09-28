@@ -3576,3 +3576,89 @@ fn f651(a0: &dataflowir_gen::ir::Ty) -> i64 {
         _ => panic!("ub: cannot get element count of dynamic shaped type"),
     }
 }
+
+// t770 `mlir::detail::SymbolOpInterfaceTrait<mlir::func::FuncOp>` -> `fmt::OpInst`,
+//   4 emitted cast sites / 2 files.  A DerivedToBase cast does not change the object,
+//   so the trait base of `func::FuncOp` is whatever `func::FuncOp` is: t157's
+//   `fmt::OpInst`.  The init is t157's/f125's, byte-identical and for their reason --
+//   a default-constructed op handle is the NULL handle, `fmt::OpInst` has no null, and
+//   this expression exists only to type-check the type key.  Nothing default-constructs
+//   this trait base in the corpus, so the value is never read.
+fn t770() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+// f670 `SymbolOpInterfaceTrait<func::FuncOp>::getName()` -> THE SYMBOL NAME.
+//   SymbolInterfaces.h.inc:383-385 is `return getNameAttr().getValue();` and :265-267 is
+//   `return mlir::SymbolTable::getSymbolName(this->getOperation());`, i.e. the `sym_name`
+//   ATTRIBUTE -- NOT `Operation::getName()`, which would be the mnemonic `"func.func"`.
+//   So this is `attrs["sym_name"]`, read exactly as the crate's own func.func printer
+//   reads it (`custom.rs:751`, `op.attrs.get("sym_name")`).
+//   RETURN SHAPE: the corpus StringRef model, a NUL-TERMINATED `Vec<libc::c_char>`
+//   (rules/stringref `t1` is `vec![0]`, its `f7` size() is `len() - 1`), so the
+//   terminator is pushed.  The four emitted sites already spell
+//   `.iter().take(len().saturating_sub(1)).map(|&c| c as u8)`, which is precisely this
+//   representation -- the key makes the text that is already emitted compile.
+//   ⛔ THE FALLBACK ARM IS THE C++ BEHAVIOUR, NOT A PLACEHOLDER: with no `sym_name`,
+//   `SymbolTable::getSymbolName` hands back a NULL `StringAttr` and `.getValue()` on one
+//   dereferences null in C++.  `dataflowir_gen`'s own printer errors `Missing("$sym_name")`
+//   in the same situation.  Returning an empty name would be silently wrong -- an empty
+//   symbol name is not a legal func.func -- so this panics, the f650 discipline.
+//   `a0` is named ONCE (f403's inlining constraint).
+fn f670(a0: &dataflowir_gen::fmt::OpInst) -> Vec<libc::c_char> {
+    match a0.attrs.get("sym_name") {
+        Some(dataflowir_gen::ir::Attr::Str(s)) => {
+            let mut __v: Vec<libc::c_char> = s.bytes().map(|b| b as libc::c_char).collect();
+            __v.push(0);
+            __v
+        }
+        _ => panic!("ub: getName() on an operation carrying no sym_name attribute"),
+    }
+}
+
+// f750-f753 -- the four missing members of the t460-t463 printer `<<` family.
+// src.cpp carries the aggregated site table, the receiver/non-inheritance reason
+// these are distinct keys rather than duplicates, and the ten sites left out.
+// Writes go through an explicit `&mut *p` reborrow, fully qualified as an inherent
+// associated function, for the f360-f366 reasons: the body is inlined into the
+// translated crate so nothing may depend on what is in scope there, and a bare
+// `(*p).method()` autoref trips the deny-by-default `dangerous_implicit_autorefs`.
+// Every body returns its own `a0` so `p << a << b` chains.
+
+// f750 -- `mlir::AsmPrinter &` + `const char (&)[_]`, 23 sites.  f360's body on the
+// base receiver: the converter materialises a string literal in this position as a
+// `c"..."` CStr, so the parameter is `&CStr` and `to_bytes()` already stops at the NUL.
+unsafe fn f750(a0: *mut dataflowir_gen::AsmPrinter, a1: &std::ffi::CStr) -> *mut dataflowir_gen::AsmPrinter {
+    let __p = a0;
+    let __s = String::from_utf8_lossy(a1.to_bytes()).into_owned();
+    dataflowir_gen::AsmPrinter::print_str(&mut *__p, &__s);
+    __p
+}
+
+// f751 -- `mlir::AsmPrinter &` + `const long &`, 3 sites.  f29's `&i64` spelling;
+// `print_i64` is plain decimal, which is what MLIR's `getStream() << value` produces.
+unsafe fn f751(a0: *mut dataflowir_gen::AsmPrinter, a1: &i64) -> *mut dataflowir_gen::AsmPrinter {
+    let __p = a0;
+    let __v = *a1;
+    dataflowir_gen::AsmPrinter::print_i64(&mut *__p, __v);
+    __p
+}
+
+// f752 -- `mlir::AsmPrinter &` + `mlir::Type` by value, 2 sites.  t5 is
+// `dataflowir_gen::ir::Ty`; `print_type` takes it by reference, so the by-value
+// parameter is borrowed in place and nothing is cloned.
+unsafe fn f752(a0: *mut dataflowir_gen::AsmPrinter, a1: dataflowir_gen::ir::Ty) -> *mut dataflowir_gen::AsmPrinter {
+    let __p = a0;
+    dataflowir_gen::AsmPrinter::print_type(&mut *__p, &a1);
+    __p
+}
+
+// f753 -- `mlir::OpAsmPrinter &` + `mlir::Type` by value, 17 sites.  f752's body on
+// the derived receiver; both receivers are the same `AsmPrinter` sink in this model.
+unsafe fn f753(a0: *mut dataflowir_gen::AsmPrinter, a1: dataflowir_gen::ir::Ty) -> *mut dataflowir_gen::AsmPrinter {
+    let __p = a0;
+    dataflowir_gen::AsmPrinter::print_type(&mut *__p, &a1);
+    __p
+}

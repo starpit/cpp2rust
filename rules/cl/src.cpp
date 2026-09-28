@@ -147,3 +147,143 @@ using t4 = llvm::cl::NumOccurrencesFlag;
 // drops only trailing defaults, keeps it.
 template <typename T1> using t5 = llvm::cl::opt<T1, true>;
 template <typename T1, typename T2> using t6 = llvm::cl::opt<T1, false, T2>;
+
+// ---------------------------------------------------------------------------
+// t770 / f670 / f671 -- `llvm::cl::list_storage<long, bool>`, 4 emitted sites / 1 file
+// (fresh37: dataflow-scheduler/lib/Transforms/TileSCFForLoops.cpp, emitted 4724, 4739,
+// 4758 `.size()` and 5014 `.empty()`).
+//
+// ⭐ THE VECTOR MODEL IS FORCED BY THE HEADER, NOT CHOSEN.  CommandLine.h:1610-1613 --
+//     template <class DataType> class list_storage<DataType, bool> {
+//       std::vector<DataType> Storage;
+//       std::vector<OptionValue<DataType>> Default;
+//       bool DefaultAssigned = false;
+// -- the `<DataType, bool>` PARTIAL SPECIALISATION is the INTERNAL-storage one and it IS a
+// `std::vector<DataType>` with a thin API over it (the header's own comment: "Originally
+// this code inherited from std::vector ... implements the minimum subset of the
+// std::vector API required for all the current clients").  `Default` and
+// `DefaultAssigned` are the cl::init bookkeeping, unobservable in a value model exactly as
+// `opt_storage`'s `Default` is unobservable in t2's.  So `list_storage<T, bool>` IS
+// `Vec<T>`, which is the same "a cl holder IS its value" model this module already rests
+// on -- no new claim.
+//
+// ⭐⭐ AND THE CONVERTER HAS ALREADY COMMITTED TO IT INDEPENDENTLY, which is what makes this
+// a completion rather than a guess.  In the SAME emitted file the field is
+//     4133:    pub tileSizes: Vec<i64>,
+// and the two OTHER things the C++ does to `tileSizes` are ALREADY emitted correctly
+// AGAINST A `Vec<i64>`, through the converter's own vector handling and not through any
+// `list_storage` rule:
+//     C++ :185/:187  tileSizes[i]            -> 4761/4777  self.tileSizes[(i)]
+//     C++ :196       for (int64_t t : tileSizes)
+//                                            -> 4791/4792  for .. in 0..(self.tileSizes.len())
+//                                                          self.tileSizes[tile_size].clone()
+// So `Vec<T1>` is not merely compatible with the field the converter chose, it is that
+// field.  A DIFFERENT model here would contradict text already in the file.
+//
+// ⛔ ONLY `size` AND `empty` ARE READ ON THIS RECEIVER, which is what makes the type key
+// complete rather than the "trade 4 loud placeholders for 4 census-INVISIBLE textual
+// calls" bargain -- AN UNMAPPED MEMBER DOES NOT ABORT, it is emitted textually at rc=0
+// with no placeholder token.  Censused over all 58 emitting `.rs` at fresh37/out:
+//   grep -rohE 'Cpp2RustUnmapped_llvm_cl_list_storage_long__bool_[^A-Za-z0-9_][^a-zA-Z]*[.] *[A-Za-z_]+' \
+//     | sed 's/.*\. *//' | sort | uniq -c    ->   1 empty / 2 size
+// (2 not 3 for `size` because ONE of the three is LINE-WRAPPED by rustfmt between the cast
+// and the `.size()` -- emitted 4738-4740 -- and a single-line regex cannot see across it.
+// Reconciled against the direct per-line grep, which finds all four: 4724, 4739, 4758
+// `size`, 5014 `empty`.  3 + 1 = 4 = the census site count.)  ⛔ THE OTHER TWENTY-ODD
+// MEMBERS OF THE SPECIALISATION ARE LEFT UNDECLARED so a site that reads one FAILS LOUDLY:
+// `begin`, `end`, `push_back`, `operator[]`, `clear`, `erase`, `insert`, `front`,
+// `addValue`, `getDefault`, `assignDefault`, `overwriteDefault`, `isDefaultAssigned`,
+// `operator std::vector<DataType> &`, `operator ArrayRef<DataType>`, `operator&`.  Note
+// that `operator[]` and `begin`/`end` ARE used by this very TU -- and, per the emitted
+// lines quoted above, the converter serves them from its own `Vec` handling WITHOUT ever
+// asking for a `list_storage` member, which is why leaving them undeclared costs nothing.
+//
+// ⛔ NOT A cl::opt SIBLING REFUSAL.  The measured refusals next door do not apply here and
+// each was re-checked rather than inherited:
+//   * `cl::OptionEnumValue` / `cl::ValuesClass` are refused because the corpus only ever
+//     CONSTRUCTS them and never reads a field, so a unit model would be UNFALSIFIABLE.
+//     The opposite holds here: both keyed members are READ, at 4 sites, and each returns a
+//     value the surrounding code branches on (`size() != nested_loops.size()`, `!empty()`).
+//   * `PassOptions::Option<T>` is refused because a VARIADIC constructor makes the
+//     compiled-in `init(...)` unreachable, measured to flip `init(true)` to `false`.  That
+//     is a CONSTRUCTION defect and this row keys NO CONSTRUCTOR -- no `fN` builds a
+//     `list_storage`, the 4 sites are all DerivedToBase cast receivers of a field that
+//     already exists.  ⚠️ The argv caveat in this module's header is UNCHANGED and still
+//     applies: a value model cannot observe argv, so `tileSizes` holds its compiled-in
+//     default.  Nothing in this row makes that better or worse.
+//   * `cl::initializer<T1>` was removed here because keying it forced the converter to map
+//     `char[_]`, which has no model and ABORTS.  This key's only template argument is
+//     `long` in the corpus and `Vec<T1>` imposes no requirement on it beyond what the
+//     already-emitted `Vec<i64>` field proves, so there is no analogous forced mapping.
+//
+// ⛔ SWALLOW-SAFETY.  `GetTypeMapKey` truncates at the first `<`, so the bucket is
+// `llvm::cl::list_storage`; `grep -rn 'list_storage' rules/*/src.cpp` finds it in NO other
+// module, so the bucket holds exactly t770.  The key has ONE placeholder, and
+// `matchTemplate`'s capture (`findNextLiteralSameDepth`) stops it at the LITERAL `, bool>`
+// tail -- and `list_storage` is 2-ary (CommandLine.h:1610), so there is no third argument
+// for T1 to swallow past a same-depth comma even in principle.  The `bool` is written
+// LITERALLY, the t2 (`opt_storage<T1, false, false>`) discipline in this file: t2 cost a
+// regen by writing `<T1, true, true>` when the census spelling was `<bool, false, false>`.
+// Here `bool` is a TYPE argument, so it records as the concrete type it is.
+// ⚠️ NO DEFAULTED ARGUMENTS on `list_storage` (unlike `opt`, whose 2nd and 3rd are
+// defaulted and drop out of the recorded spelling), so there is nothing for
+// SuppressDefaultTemplateArgs to remove and the recorded key cannot drift.
+// ⚠️ `int64_t` is `long` on this target, which is the spelling the recorded key carries;
+// `T1` wildcards it, so the key does not depend on that.
+
+namespace llvm {
+namespace cl {
+
+// Restated from llvm/Support/CommandLine.h:1610.  The PRIMARY template is 2-ary and is the
+// EXTERNAL-storage form; only the `<DataType, bool>` partial specialisation -- the internal
+// one that owns a `std::vector<DataType>` -- is declared with members, and only the two
+// members the emitting corpus reads.  Both are `const` in the header (:1627, :1629), so
+// f670/f671 take `const &` receivers (the f650 / `FileLineColLoc::getLine` precedent).
+template <class DataType, class StorageClass> class list_storage;
+
+template <class DataType> class list_storage<DataType, bool> {
+public:
+  unsigned long size() const;
+  bool empty() const;
+};
+
+} // namespace cl
+} // namespace llvm
+
+// t770 -- `llvm::cl::list_storage<long, bool>`, 4 sites / 1 file.
+template <typename T1> using t770 = llvm::cl::list_storage<T1, bool>;
+
+// f670 -- `unsigned long llvm::cl::list_storage<T1, bool>::size() const`.
+// CommandLine.h:1627 is `return Storage.size();`, i.e. the vector length.
+template <typename T1>
+unsigned long f670(const llvm::cl::list_storage<T1, bool> &a0) {
+  return a0.size();
+}
+
+// f671 -- `bool llvm::cl::list_storage<T1, bool>::empty() const`.
+// CommandLine.h:1629 is `return Storage.empty();`.
+template <typename T1> bool f671(const llvm::cl::list_storage<T1, bool> &a0) {
+  return a0.empty();
+}
+
+// ⭐⭐⭐ MEASURED CORRECTION TO THE SITE COUNT ABOVE -- the same finding as rules/mlir's
+// t770 block, and it applies to this row for the same reason.  The "4 emitted sites" figure
+// is from the fresh37 census, whose binary was the 602a787f pin.  AT THE CURRENT PIN
+// (968ab2be, HEAD 8f467983) THE PLACEHOLDER TOKEN IS ALREADY GONE AND THE DEFECT IS WORSE:
+// HEAD~1 is `6f102175 converter: CK_UncheckedDerivedToBase -- a derived-to-base is never a
+// Rust cast`, so the DerivedToBase cast that carried
+// `Cpp2RustUnmapped_llvm_cl_list_storage_long__bool_` is no longer emitted and `size()` /
+// `empty()` land DIRECTLY ON THE `Vec<i64>` FIELD, emitted SILENTLY AND TEXTUALLY as
+// undefined methods -- no token, invisible to every bucket census.  Measured, both legs on
+// the same snapshot binary, ir.v35 + this module at clean HEAD vs. with t770/f670/f671, in
+// dataflow-scheduler/lib/Transforms/TileSCFForLoops.cpp:
+//     BEFORE  self.tileSizes.size()   3 (emitted 4670, 4681, 4696)
+//             self.tileSizes.empty()  1 (emitted 4945)
+//             self.tileSizes.len() as u64  0     self.tileSizes.is_empty()  0
+//     AFTER   self.tileSizes.size()   0          self.tileSizes.empty()     0
+//             self.tileSizes.len() as u64  3     self.tileSizes.is_empty()  1
+// 3 + 1 = 4 = the census site count, all four closed.  ⭐ IN-FILE CONTROL, unchanged across
+// the pair: `Cpp2RustUnmapped_mlir_Pass_ListOption_long_` 1 -> 1 (emitted 4365), and the
+// `self.tileSizes[(i)]` / `for .. in 0..(self.tileSizes.len())` lines at 4697/4713/4727/4728
+// are byte-identical -- so nothing but the two keyed members moved, and the `Vec` model this
+// row asserts is demonstrably the one those untouched lines already rely on.

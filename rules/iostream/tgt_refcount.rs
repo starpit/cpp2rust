@@ -135,21 +135,60 @@ fn f8(a0: Ptr<libcc2rs::IStream>, a1: Ptr<Vec<u8>>) -> Ptr<libcc2rs::IStream> {
 // f9/f21 are the precedent). Inheriting the unsafe body would give E0308 three
 // times over.
 //
-// NO STAGING BUFFER IS NEEDED HERE and that is a real difference, not a
-// simplification: the refcount `std::string` is already a raw `Vec<u8>` with no
-// NUL terminator, which is precisely what `IStream::getline` writes, so
-// `istream_getline` can be called directly on the caller's own buffer. The
-// STICKY GUARD IS STILL CORRECT WITHOUT IT -- `IStream::getline` returns before
-// touching `out` on both failure paths, so the caller's string is left untouched
-// by construction rather than by a guarded copy-back.
+// ⛔⛔ THIS BODY WAS `libcc2rs::istream_getline(a0, a1, a2)` AND IT DROPPED THE
+// LAST BYTE OF EVERY FIELD.  MEASURED, by DIFFING THE PRINTED BYTES of the
+// translated program against the C++ program's own stdout (probe
+// /home/agent/work/iosfix/iosq.cpp, both models, pin 968ab2be):
+//
+//     C++ and unsafe:   tok[a]tok[]tok[bc]tok[d]   line[l1]line[l2]line[l3]
+//     refcount, BEFORE: tok[]tok[]tok[b]tok[]      line[l]line[l]line[l]
+//
+// ⭐ THE DELETED COMMENT'S PREMISE WAS FALSE, and it was falsifiable from THIS
+// FILE: it claimed "the refcount `std::string` is already a raw `Vec<u8>` with
+// no NUL terminator, which is precisely what `IStream::getline` writes".  But
+// `f8` TWENTY LINES ABOVE stages into `__b` and does `__b.push(0)` before
+// handing it over, and the converter's own `operator<<`-of-std::string emission
+// is `v.iter().take(v.len() - 1)` -- i.e. the refcount `std::string` IS
+// NUL-terminated and the print path unconditionally discards the final byte.
+// Writing the bare field therefore left a Vec of length n whose last character
+// was then thrown away.  ⛔ rc=0, ZERO placeholders, compiles clean in both
+// models, runs, exits 0 -- only the byte diff sees it.  That is exactly the
+// silent-wrongness class this module's manipulator refusal is written about,
+// and it had landed on the get side while the refusal guarded the put side.
+//
+// SECOND, INDEPENDENT BUG IN THE SAME LINE: `istream_getline` has NO STICKY
+// GUARD.  The old comment argued one was unnecessary because "`IStream::getline`
+// returns before touching `out` on both failure paths".  True of `getline`
+// itself -- and irrelevant, because the NUL now has to be appended by the
+// CALLER, so the write-back is no longer `getline`'s to skip.  Without the
+// `__stored` guard a sticky-failed read would write `[0]` into the caller's
+// string and ERASE it, which is precisely what f8's own comment warns about.
+// So f9/f10 now mirror f8 EXACTLY: staging buffer, `getline_reporting`, guard,
+// `push(0)`, single move-in.
 //
 // `Ptr` is a VALUE, so each `aN` is named exactly once and still handed on.
 fn f9(a0: Ptr<libcc2rs::IStream>, a1: Ptr<Vec<u8>>, a2: u8) -> Ptr<libcc2rs::IStream> {
-    libcc2rs::istream_getline(a0, a1, a2)
+    let __s = a0;
+    let __o = a1;
+    let mut __b: Vec<u8> = Vec::new();
+    let __stored = __s.with_mut_ref(|__st| __st.getline_reporting(&mut __b, a2).1);
+    if __stored {
+        __b.push(0);
+        __o.with_mut_ref(|__v| *__v = __b);
+    }
+    __s
 }
 
 fn f10(a0: Ptr<libcc2rs::IStream>, a1: Ptr<Vec<u8>>) -> Ptr<libcc2rs::IStream> {
-    libcc2rs::istream_getline(a0, a1, b'\n')
+    let __s = a0;
+    let __o = a1;
+    let mut __b: Vec<u8> = Vec::new();
+    let __stored = __s.with_mut_ref(|__st| __st.getline_reporting(&mut __b, b'\n').1);
+    if __stored {
+        __b.push(0);
+        __o.with_mut_ref(|__v| *__v = __b);
+    }
+    __s
 }
 
 // t5 -- std::ios_base::seekdir == int-promoted unscoped enum -> i32. Byte-identical to
