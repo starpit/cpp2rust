@@ -646,3 +646,57 @@ void f29(llvm::DenseMapBase<llvm::DenseMap<T1, T2>, T1, T2,
 template <typename T1> llvm::DenseSet<T1> f30(unsigned a0) {
   return llvm::DenseSet<T1>(a0);
 }
+
+
+// ---------------------------------------------------------------------------
+// t8 -- `llvm::DenseMapInfo<T1, T2>`, THE TWO-ARGUMENT ARITY OF THE SAME TRAITS
+// CLASS.  Added 2026-09-28 against a MEASURED first abort, and it is NOT a
+// reversal of the standing refusal above: exactly as with t6, only the TYPE is
+// keyed, and NO member (getEmptyKey / getTombstoneKey / getHashValue / isEqual)
+// is mapped, so any call to one still aborts LOUDLY.
+//
+// WHY A SECOND ARITY IS NEEDED, and it is a SWALLOW BUG IN t6, not a converter
+// defect.  MEASURED on dataflow-scheduler/external/ktir-mlir-frontend/lib/Ktdp/
+// KtdpOps.cpp (bucket B, 0 lines), verbatim first abort:
+//   LLVM ERROR: unsupported unmapped type `llvm::StringRef, void` has no model
+//   in types_, while mapping `llvm::DenseMapBase<llvm::DenseMap<llvm::StringRef,
+//   unsigned int>, llvm::StringRef, unsigned int, llvm::DenseMapInfo<llvm::
+//   StringRef, void>, llvm::detail::DenseMapPair<llvm::StringRef, unsigned int>>`
+// The searched spelling is the BARE COMMA-JOINED `llvm::StringRef, void`, which
+// looks like build.py's NOT_A_TYPE_PACK (a converter row).  IT IS NOT.  The
+// chain is entirely inside this module:
+//   * Real LLVM specialises the traits for StringRef as
+//     `template <> struct DenseMapInfo<StringRef, void>` (llvm/ADT/StringRef.h),
+//     SPELLING THE DEFAULTED `void` EXPLICITLY, so the printer emits TWO
+//     arguments.  For `unsigned` the specialisation is `DenseMapInfo<unsigned>`,
+//     which is why every previously measured row printed ONE argument.
+//   * t6's src is `llvm::DenseMapInfo<T1>`.  GetTypeMapKey (mapper.cpp:115)
+//     strips at `<`, so t6 and the instantiation share the bucket
+//     `llvm::DenseMapInfo`, and matchTemplate's placeholder capture runs to the
+//     next SAME-DEPTH literal `>` (findNextLiteralSameDepth, mapper.cpp:173) --
+//     so T1 CAPTURES `llvm::StringRef, void`, commas and all.  t6 is the SOLE
+//     candidate, so search() returns it and the mapper then maps the binding
+//     as if it were a type.  That is the swallow this project's gates warn
+//     about, caused by a SHORT src key, and the abort text is its symptom.
+// So it is keyable from rules/ -- at the TWO-ARGUMENT spelling.
+//
+// SWALLOW-SAFETY, per the gate.  Bucket `llvm::DenseMapInfo` holds only t6 and
+// t8.  (a) t8's src is LONGER than t6's, so search()'s tie-break
+// (mapper.cpp:433-437) gives t8 every instantiation it matches.  (b) t8 CANNOT
+// match a one-argument instantiation: matchTemplate must find a same-depth
+// literal `,` after T1, and `llvm::DenseMapInfo<unsigned int>` has none, so
+// every previously-working one-argument row still resolves to t6, unchanged.
+// (c) There is no THREE-argument arity to swallow: real `DenseMapInfo` has
+// exactly two template parameters (llvm/ADT/DenseMapInfo.h), so no longer
+// instantiation exists.  (d) No other type stem shares the bucket.
+//
+// T2 is deliberately unused in both targets, exactly as T1 is in t6.
+template <typename T1, typename T2> using t8 = llvm::DenseMapInfo<T1, T2>;
+
+// f31 -- t8's default constructor, for the reason f5 exists: a type key without
+// one gives rc=0 and then E0433 on `<mangled-type>::new()`.  Same bucket as f5
+// (`GetTypeMapKey` strips at the first `<`), longer src, so the same tie-break
+// keeps f5 for the one-argument arity.
+template <typename T1, typename T2> llvm::DenseMapInfo<T1, T2> f31() {
+  return llvm::DenseMapInfo<T1, T2>();
+}

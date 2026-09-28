@@ -292,3 +292,16 @@ unsafe fn f29<T1: std::hash::Hash + Eq + Clone, T2>(
 unsafe fn f30<T1>(a0: u32) -> std::collections::HashSet<T1> {
     std::collections::HashSet::with_capacity(a0 as usize)
 }
+
+
+// t8 -- the opaque unit for the TWO-ARGUMENT `llvm::DenseMapInfo<T1, T2>`.
+// Identical body to t6 for an identical reason: the TYPE is modelled so t3's
+// argument mapping can proceed, NO member is mapped, so every traits method
+// still aborts loudly.  T1 and T2 are deliberately unused.
+fn t8<T1, T2>() -> () {
+    ()
+}
+
+unsafe fn f31<T1, T2>() -> () {
+    ()
+}

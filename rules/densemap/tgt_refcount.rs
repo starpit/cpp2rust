@@ -292,3 +292,15 @@ fn f29<T1: std::hash::Hash + Eq + Clone + 'static, T2: 'static>(
 fn f30<T1>(a0: u32) -> std::collections::HashSet<T1> {
     std::collections::HashSet::with_capacity(a0 as usize)
 }
+
+
+// t8 -- the opaque unit for the two-argument `llvm::DenseMapInfo<T1, T2>`; see
+// tgt_unsafe.rs and the note in src.cpp.  Identical in both models: a stateless
+// traits class carries no ownership, so refcounting has nothing to express.
+fn t8<T1, T2>() -> () {
+    ()
+}
+
+fn f31<T1, T2>() -> () {
+    ()
+}
