@@ -1605,6 +1605,52 @@ using t62 = mlir::detail::IROperandBase;
 // port does not reproduce.  The unit is not a claim the bag is empty -- it is a
 // claim this port never READS one, enforced by there being NO member rule, so
 // every `state.addOperands(...)`/`addTypes(...)` still ABORTS LOUDLY.
+//
+// ⛔⛔ THE LAST SENTENCE ABOVE IS EMPIRICALLY FALSE, AND THAT IS WHY THE
+// CONSTRUCTOR KEY IS REFUSED.  MEASURED 2026-09-28 (pin/cpp2rust
+// md5 e2d09f4562c470f813b0fa142d373bfb, tree cloned from pin/ir.v22, witness TU
+// `dialects/ExPlan/ExPlanOps.cpp`, bucket A rc=0, 4,250 emitted lines; the
+// `-verbose` leg EXITED 0 at 90,747 log lines / 5,125 asks, so its silence is
+// admissible evidence -- log `/home/agent/work/mlirOpState0928/vb.rs.log`):
+//
+//   search expr void mlir::OperationState::OperationState(mlir::Location, llvm::StringRef), result:
+//   None                                                          (x15, ONE overload)
+//   search expr ... & mlir::OperationState::getOrAddProperties(), result: None   (x82)
+//   search expr ... mlir::OperationState::addTypes(...),          result: None   (x48)
+//   ... addOperands x44, addAttributes x24, useProperties x12, getContext x10
+//
+// An unmapped MEMBER on this receiver DOES NOT ABORT.  All 220 member asks MISS
+// and the converter emits them TEXTUALLY against the unit target -- from
+// before.rs:1711 and :1778, on a parameter declared `odsState: *mut ()`:
+//     (*(unsafe { (*odsState).getOrAddProperties() })).address = (address).clone();
+//     (unsafe { let _newTypes: *mut ... = &mut resultTypes; (*odsState).addTypes(_newTypes) });
+// 104 such lines in one 4,250-line TU.  That is loud at RUSTC time, not at
+// translate time, but it is not this module's key to fix and it is NOT a licence
+// to add the constructor.
+//
+// ⛔ WHY f143 IS REFUSED -- THE OBSERVER, NAMED.  The single reached overload is
+// `OperationState(Location location, StringRef name)`, i.e. the two fields that
+// ARE the op's identity.  The target type is `()`, so ANY body writable here must
+// DISCARD both arguments (both are modelled -- `mlir::Location` -> t?
+// `dataflowir_gen::ir::Location`, `llvm::StringRef` -> String -- so this is not a
+// missing-model refusal; it is a LOST-SEMANTICS refusal).  Those fields are read
+// DOWNSTREAM IN THE SAME EMITTED BODY: `__state__` is handed to
+// `(*builder).create_pconst(_state)` and the result is `dyn_cast_47`-ed to the
+// concrete Op type, so the NAME decides whether that cast can succeed, and the
+// LOCATION is the op's diagnostic anchor.  A `()`-returning key would therefore
+// build a NAMELESS, LOCATIONLESS op and COMPILE.
+//
+// ⭐ AND IT WOULD BE A NET REGRESSION, not a neutral one.  Today those 15 sites
+// call `mlir_OperationState::new_1` -- defined NOWHERE -- so they fail at compile
+// time.  f143 would replace 15 compile-time failures with 15 silent semantic
+// losses while `getOrAddProperties`/`addTypes` continue to fail anyway, so the TU
+// does not get closer to compiling and the class gets quieter.  Per the standing
+// rule: refuse rather than lose semantics.  ⭐ THE REAL FIX FOR THIS ROW IS NOT A
+// CONSTRUCTOR KEY -- it is either a REAL model for the construction bag (a struct
+// carrying name/location/operands/types, which t63's own paragraph above argues
+// `dataflowir-gen` does not have) or a converter-side change that makes an
+// unmapped member on an opaque-unit receiver ABORT instead of emitting.  Both are
+// out of this module's scope.  DO NOT WRITE f143 FOR THIS ROW.
 using t63 = mlir::OperationState;
 
 // t64: `mlir::PassManager` -> AN OPAQUE UNIT.  59 TUs (also CONFIRMED LIVE this
