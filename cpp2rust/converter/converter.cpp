@@ -2244,10 +2244,19 @@ bool Converter::VisitCXXForRangeStmt(clang::CXXForRangeStmt *stmt) {
   // VisitCXXForRangeStmtMap). Every other range shape still fails loudly.
   if (auto *decomp =
           llvm::dyn_cast<clang::DecompositionDecl>(stmt->getLoopVariable())) {
-    if (GetClassName(range_init_type) != "std::map" &&
+    if (!IsMapLikeRangeClass(GetClassName(range_init_type)) &&
         !IsHoistFreeDecompositionRange(stmt)) {
       ReportUnsupportedStructuredBinding(decomp);
       return false;
+    }
+    // A DECOMPOSING loop over std::unordered_map is routed to the map path
+    // (rules/unordered_map models the iterator as `UnsafeHashMapIterator`,
+    // which has the same `first()`/`second()` MapIterator surface as
+    // `UnsafeMapIterator`). Only the decomposing case is rerouted: a
+    // non-decomposing `for (auto &kv : unordered_map)` keeps going down the
+    // pre-existing (index-based) path, so no existing output changes.
+    if (GetClassName(range_init_type) == "std::unordered_map") {
+      return VisitCXXForRangeStmtMap(stmt);
     }
   }
 
@@ -2305,6 +2314,18 @@ bool Converter::EmitMapDecompositionBindings(
   return true;
 }
 
+// The two range classes whose iterator model exposes `first()`/`second()`, i.e.
+// the two the decomposing map lowering can address. Kept as one predicate so the
+// dispatch and the iterator-name choice cannot drift apart.
+bool Converter::IsMapLikeRangeClass(const std::string &class_name) {
+  return class_name == "std::map" || class_name == "std::unordered_map";
+}
+
+const char *Converter::MapRangeIteratorName(const std::string &class_name) {
+  return class_name == "std::unordered_map" ? "UnsafeHashMapIterator"
+                                           : "UnsafeMapIterator";
+}
+
 bool Converter::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
   auto *loop_var = stmt->getLoopVariable();
   auto *decomp = llvm::dyn_cast<clang::DecompositionDecl>(loop_var);
@@ -2323,7 +2344,9 @@ bool Converter::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
   StrCat("'loop_:");
   auto map_type = Mapper::Map(stmt->getRangeInit()->getType());
   StrCat(keyword::kFor, loop_var_name, keyword::kIn,
-         "UnsafeMapIterator::begin(&");
+         std::string(MapRangeIteratorName(
+             GetClassName(stmt->getRangeInit()->getType()))) +
+             "::begin(&");
   Convert(stmt->getRangeInit());
   StrCat(std::format(" as *const {})", map_type));
   {

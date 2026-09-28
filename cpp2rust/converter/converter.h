@@ -791,6 +791,8 @@ protected:
   // Emits `let <b0> = <iter>.first(); let <b1> = <iter>.second();`.
   // Returns false (emitting nothing) if the shape is not a 2-binding
   // decomposition, so the caller keeps the loud diagnostic.
+  static bool IsMapLikeRangeClass(const std::string &class_name);
+  static const char *MapRangeIteratorName(const std::string &class_name);
   bool EmitMapDecompositionBindings(const clang::DecompositionDecl *decl,
                                     const std::string &iter_name);
 
