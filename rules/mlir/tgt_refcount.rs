@@ -2459,3 +2459,27 @@ fn t400() -> dataflowir_gen::fmt::OpInst {
         <dataflowir_gen::ops::mlir_ktdf_arch_DeviceOp as dataflowir_gen::MlirOp>::DEF,
     )
 }
+
+// t420-t422: a NULL-HANDLE model for the three `mlir::memref` ODS op wrappers.  See src.cpp for
+// what the 8 sites do after the default-construct, why `Option<fmt::OpInst>` is rejected (the two
+// `mc` sites MUTATE THROUGH THE HANDLE: `mc.erase()`, `sel.getResult().setType(...)`), and why
+// this needs NO `fN` (`impl<T> Default for Ptr<T>`, rc.rs:148, with `#[default] PtrKind::Null`,
+// makes `Ptr::default()` EXACTLY `Ptr::null()` -- unlike f42/f137/f138, whose `ir::Ty`/`ir::Attr`
+// enum targets have no `Default` at all, which is the whole rc=0-then-E0433 trap).
+// The representation is BIT-FOR-BIT t36's (`mlir::Operation *`, :493), because an ODS op wrapper IS
+// an `Operation *` plus a static type assertion -- `OpState` holds exactly one `Operation *`.  The
+// init is the NULL POINTER: a default-constructed MLIR op wrapper is `state == nullptr`, so this is
+// the faithful default and a `dyn_cast` against it is the one that must FAIL.
+// ⚠️ NO MEMBER IS KEYED, the t166 / t243-t246 discipline: `getDest()` / `getResult()` / `erase()`
+// on these stay unmapped rather than get a body guessed against an unverified model.
+fn t420() -> libcc2rs::Ptr<dataflowir_gen::fmt::OpInst> {
+    libcc2rs::Ptr::<dataflowir_gen::fmt::OpInst>::null()
+}
+
+fn t421() -> libcc2rs::Ptr<dataflowir_gen::fmt::OpInst> {
+    libcc2rs::Ptr::<dataflowir_gen::fmt::OpInst>::null()
+}
+
+fn t422() -> libcc2rs::Ptr<dataflowir_gen::fmt::OpInst> {
+    libcc2rs::Ptr::<dataflowir_gen::fmt::OpInst>::null()
+}
