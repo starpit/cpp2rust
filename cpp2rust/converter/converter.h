@@ -856,6 +856,22 @@ protected:
   };
   MethodTarget method_target_ = MethodTarget::ValueImpl;
 
+  // True while emitting members INSIDE a `trait { ... }` body (see
+  // ConvertAbstractClass). Rust forbids a visibility qualifier on a trait item
+  // -- `pub unsafe fn ...` inside a trait is error[E0449] -- so every
+  // visibility emission must be suppressed there. `method_target_` does not
+  // answer this question in the unsafe model, which never pushes TraitDecl.
+  bool in_trait_body_ = false;
+
+  struct PushInTraitBody {
+    Converter &c;
+    bool prev;
+    PushInTraitBody(Converter &c, bool v) : c(c), prev(c.in_trait_body_) {
+      c.in_trait_body_ = v;
+    }
+    ~PushInTraitBody() { c.in_trait_body_ = prev; }
+  };
+
   struct PushMethodTarget {
     Converter &c;
     MethodTarget prev;

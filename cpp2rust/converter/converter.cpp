@@ -1503,7 +1503,13 @@ bool Converter::VisitCXXConstructorDecl(clang::CXXConstructorDecl *decl) {
     return false;
   }
 
-  ConvertFunctionQualifiers(decl);
+  // A visibility qualifier is not permitted on a trait item (error[E0449]), and
+  // ConvertAbstractClass routes this class's constructors THROUGH the trait
+  // body. Emitting `pub` there is unconditionally ill-formed, so suppress it;
+  // everywhere else (an inherent `impl`) the `pub` is load-bearing and kept.
+  if (!in_trait_body_) {
+    ConvertFunctionQualifiers(decl);
+  }
   StrCat(keyword_unsafe_, keyword::kFn, GetCtorName(decl));
   {
     PushParen paren(*this);
@@ -6310,6 +6316,7 @@ void Converter::ConvertAbstractClass(clang::CXXRecordDecl *decl) {
     return !method->isImplicit() &&
            !clang::isa<clang::CXXDestructorDecl>(method);
   };
+  PushInTraitBody push_trait(*this, true);
   ConvertCXXMethodDecls(decl, signature, predicate);
 }
 
