@@ -2657,31 +2657,6 @@ fn t482() -> std::collections::HashSet<Vec<u8>> {
     std::collections::HashSet::new()
 }
 
-// t540 -- `mlir::DenseArrayAttr` -> `dataflowir_gen::ir::Attr`.  Identical to the
-// unsafe overlay: `ir::Attr` is a plain value union with no pointer in it, so the
-// two models agree.  See src.cpp for the model and for why no member is keyed.
-fn t540() -> dataflowir_gen::ir::Attr {
-    dataflowir_gen::ir::Attr::Raw(::std::string::String::new())
-}
-
-// t541/t542/t543 -- `mlir::RewriterBase` / `mlir::PatternRewriter` /
-// `mlir::IRRewriter` -> `dataflowir_gen::OpBuilder`, the SAME type t440 lands
-// `mlir::OpBuilder` on (PatternMatch.h:368/780/799 make all three OpBuilders by
-// inheritance).  Identical to the unsafe overlay for t440's own reason: the builder
-// is modelled on an `Rc<RefCell<Vec<Block>>>` BlockList, i.e. this overlay's own
-// representation, so no `Ptr`/`StrongPtr` wrapper is needed at the TYPE level, and
-// `cc2.rs` already carries the `ByteRepr` marker for `OpBuilder`.
-// ⛔ NO rewrite verb is keyed -- see src.cpp.
-fn t541() -> dataflowir_gen::OpBuilder {
-    dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
-}
-
-fn t542() -> dataflowir_gen::OpBuilder {
-    dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
-}
-
-fn t543() -> dataflowir_gen::OpBuilder {
-    dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
 // f400-f406 -- the `mlir::Builder` attribute factory on a t440/t441 receiver.
 // 148 sites; argued in full at `f400` in src.cpp.  `getIntegerType` is LEFT OUT
 // (its C++ return type `mlir::IntegerType` is unmapped), so its 1 site stays loud.
@@ -2762,4 +2737,31 @@ fn f406(a0: &dataflowir_gen::OpBuilder, a1: Vec<Vec<u8>>) -> dataflowir_gen::ir:
             })
             .collect::<Vec<::std::string::String>>(),
     )
+}
+
+// t540 -- `mlir::DenseArrayAttr` -> `dataflowir_gen::ir::Attr`.  Identical to the
+// unsafe overlay: `ir::Attr` is a plain value union with no pointer in it, so the
+// two models agree.  See src.cpp for the model and for why no member is keyed.
+fn t540() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(::std::string::String::new())
+}
+
+// t541/t542/t543 -- `mlir::RewriterBase` / `mlir::PatternRewriter` /
+// `mlir::IRRewriter` -> `dataflowir_gen::OpBuilder`, the SAME type t440 lands
+// `mlir::OpBuilder` on (PatternMatch.h:368/780/799 make all three OpBuilders by
+// inheritance).  Identical to the unsafe overlay for t440's own reason: the builder
+// is modelled on an `Rc<RefCell<Vec<Block>>>` BlockList, i.e. this overlay's own
+// representation, so no `Ptr`/`StrongPtr` wrapper is needed at the TYPE level, and
+// `cc2.rs` already carries the `ByteRepr` marker for `OpBuilder`.
+// ⛔ NO rewrite verb is keyed -- see src.cpp.
+fn t541() -> dataflowir_gen::OpBuilder {
+    dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
+}
+
+fn t542() -> dataflowir_gen::OpBuilder {
+    dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
+}
+
+fn t543() -> dataflowir_gen::OpBuilder {
+    dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
 }
