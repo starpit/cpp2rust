@@ -2517,3 +2517,123 @@ fn t441() -> dataflowir_gen::ImplicitLocOpBuilder {
         dataflowir_gen::new_block_list_with_entry(),
     )
 }
+
+// t460-t463 / f360-f366 -- THE MLIR PRINTER SINK AND ITS `<<` FAMILY.  src.cpp
+// carries the model and the three spellings deliberately left out; tgt_unsafe.rs
+// carries the shared invariants.  What is DIFFERENT in this overlay:
+//
+// ⭐ `Ptr<AsmPrinter>` IS ONLY LEGAL BECAUSE `dataflowir-gen/src/cc2.rs:44` ADDS
+// `impl ByteRepr for AsmPrinter`.  `Ptr::with_mut` is bounded on `T: ByteRepr`
+// (libcc2rs/src/rc.rs:505-507) and `StrongPtr::deref` likewise, so without that
+// impl every body here fails with "the method exists but its trait bounds were not
+// satisfied" -- which is what kept this family unkeyable until 8dee457.
+// ⚠️ IT IS A MARKER AND CLAIMS NO LAYOUT: `ByteRepr`'s `byte_size`/`to_bytes`/
+// `from_bytes` are the trait's panicking defaults, so reinterpreting a printer as
+// bytes still aborts loudly rather than producing a plausible value.  That is the
+// intended direction -- an `AsmPrinter` owns a `String`, a `Vec<String>` and a
+// `BTreeMap`.
+//
+// The `&`-typed keys t461/t463 init to `Ptr::null()` for the t420-t422 reason: a
+// reference cannot be default-constructed from any well-formed C++, so the init is
+// unreachable, and the null handle is the faithful "no printer" value.
+//
+// ⚠️ Writes go through `with_mut`, the rules/raw_ostream f4 spelling, and every
+// body returns its own `a0` so `p << a << b` chains.
+fn t460() -> dataflowir_gen::AsmPrinter {
+    dataflowir_gen::AsmPrinter::new()
+}
+
+fn t461() -> libcc2rs::Ptr<dataflowir_gen::AsmPrinter> {
+    libcc2rs::Ptr::<dataflowir_gen::AsmPrinter>::null()
+}
+
+fn t462() -> dataflowir_gen::AsmPrinter {
+    dataflowir_gen::AsmPrinter::new()
+}
+
+fn t463() -> libcc2rs::Ptr<dataflowir_gen::AsmPrinter> {
+    libcc2rs::Ptr::<dataflowir_gen::AsmPrinter>::null()
+}
+
+// f360 -- `const char (&)[_]`, 155 sites.  A char array reaches this model as
+// `&[u8]` (the f21 spelling) and INCLUDES the literal's NUL terminator, so the
+// bytes are cut at the first NUL before printing -- `print_str` appends verbatim
+// and would otherwise plant a 0x00 in the middle of the round-trip text.
+fn f360(a0: libcc2rs::Ptr<dataflowir_gen::AsmPrinter>, a1: &[u8]) -> libcc2rs::Ptr<dataflowir_gen::AsmPrinter> {
+    let __p = a0;
+    let __n = a1.iter().position(|&c| c == 0u8).unwrap_or(a1.len());
+    let __s = String::from_utf8_lossy(&a1[..__n]).into_owned();
+    __p.with_mut(|__q: &mut dataflowir_gen::AsmPrinter| {
+        __q.print_str(&__s);
+    });
+    __p
+}
+
+// f361 -- `const char &`, 34 sites.
+fn f361(a0: libcc2rs::Ptr<dataflowir_gen::AsmPrinter>, a1: &u8) -> libcc2rs::Ptr<dataflowir_gen::AsmPrinter> {
+    let __p = a0;
+    let __c = *a1 as char;
+    __p.with_mut(|__q: &mut dataflowir_gen::AsmPrinter| {
+        __q.print_char(__c);
+    });
+    __p
+}
+
+// f362 -- `const mlir::OperandRange &`, 26 sites.  t14 is `Vec<ir::Value>`.
+fn f362(a0: libcc2rs::Ptr<dataflowir_gen::AsmPrinter>, a1: &Vec<dataflowir_gen::ir::Value>) -> libcc2rs::Ptr<dataflowir_gen::AsmPrinter> {
+    let __p = a0;
+    __p.with_mut(|__q: &mut dataflowir_gen::AsmPrinter| {
+        __q.print_operands(a1.iter());
+    });
+    __p
+}
+
+// f363 -- `mlir::Value` by value, 25 sites.  Prints the SSA NAME; see src.cpp.
+fn f363(a0: libcc2rs::Ptr<dataflowir_gen::AsmPrinter>, a1: dataflowir_gen::ir::Value) -> libcc2rs::Ptr<dataflowir_gen::AsmPrinter> {
+    let __p = a0;
+    __p.with_mut(|__q: &mut dataflowir_gen::AsmPrinter| {
+        __q.print_operand(&a1);
+    });
+    __p
+}
+
+// f364 -- `mlir::AsmPrinter &` + `const char &`, 1 site.  f361's body, distinct key.
+fn f364(a0: libcc2rs::Ptr<dataflowir_gen::AsmPrinter>, a1: &u8) -> libcc2rs::Ptr<dataflowir_gen::AsmPrinter> {
+    let __p = a0;
+    let __c = *a1 as char;
+    __p.with_mut(|__q: &mut dataflowir_gen::AsmPrinter| {
+        __q.print_char(__c);
+    });
+    __p
+}
+
+// f365 -- `const llvm::StringRef &`, 1 site.  The trailing NUL is not part of the
+// string (rules/stringref), so it is dropped -- the rules/raw_ostream f7 fix.
+fn f365(a0: libcc2rs::Ptr<dataflowir_gen::AsmPrinter>, a1: &Vec<u8>) -> libcc2rs::Ptr<dataflowir_gen::AsmPrinter> {
+    let __p = a0;
+    let __b: Vec<u8> = a1
+        .iter()
+        .copied()
+        .take(a1.len().saturating_sub(1))
+        .collect();
+    let __s = String::from_utf8_lossy(&__b).into_owned();
+    __p.with_mut(|__q: &mut dataflowir_gen::AsmPrinter| {
+        __q.print_str(&__s);
+    });
+    __p
+}
+
+// f366 -- `const llvm::StringLiteral &`, 1 site.  Same payload as f365.
+fn f366(a0: libcc2rs::Ptr<dataflowir_gen::AsmPrinter>, a1: &Vec<u8>) -> libcc2rs::Ptr<dataflowir_gen::AsmPrinter> {
+    let __p = a0;
+    let __b: Vec<u8> = a1
+        .iter()
+        .copied()
+        .take(a1.len().saturating_sub(1))
+        .collect();
+    let __s = String::from_utf8_lossy(&__b).into_owned();
+    __p.with_mut(|__q: &mut dataflowir_gen::AsmPrinter| {
+        __q.print_str(&__s);
+    });
+    __p
+}

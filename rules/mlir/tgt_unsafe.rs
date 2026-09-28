@@ -2645,3 +2645,106 @@ fn t441() -> dataflowir_gen::ImplicitLocOpBuilder {
         dataflowir_gen::new_block_list_with_entry(),
     )
 }
+
+// t460-t463 / f360-f366 -- THE MLIR PRINTER SINK AND ITS `<<` FAMILY.  src.cpp
+// carries the model, the overload-resolution reason the two receivers are declared
+// unrelated, and the three spellings deliberately left out.
+//
+// `dataflowir_gen::AsmPrinter` is re-exported at the crate root (lib.rs:86), so the
+// path below is the crate-root one and not `dataflowir_gen::asm::AsmPrinter`.
+// t460/t462 are the sink BY VALUE and t461/t463 the reference to it, the
+// rules/raw_ostream t1/t2 split; in this model a reference is a raw pointer.
+//
+// ⚠️ EVERY BODY RETURNS ITS OWN `a0`.  The C++ returns the printer BY REFERENCE so
+// `p << a << b` chains, and rules/raw_ostream f5-f18 is the same invariant.
+//
+// ⚠️ WRITES GO THROUGH AN EXPLICIT `&mut *p` REBORROW, fully qualified as an
+// inherent associated function, for the two reasons rules/raw_ostream spells
+// `::std::io::Write::write_all(&mut *__o, ..)`: the body is inlined into the
+// translated crate so nothing may depend on what is in scope there, and a bare
+// `(*p).method()` autoref trips the deny-by-default `dangerous_implicit_autorefs`.
+fn t460() -> dataflowir_gen::AsmPrinter {
+    dataflowir_gen::AsmPrinter::new()
+}
+
+fn t461() -> *mut dataflowir_gen::AsmPrinter {
+    ::std::ptr::null_mut()
+}
+
+fn t462() -> dataflowir_gen::AsmPrinter {
+    dataflowir_gen::AsmPrinter::new()
+}
+
+fn t463() -> *mut dataflowir_gen::AsmPrinter {
+    ::std::ptr::null_mut()
+}
+
+// f360 -- `const char (&)[_]`, 155 sites.  The converter materialises a string
+// literal in this position as a `c"..."` CStr (the f21 note above), so the
+// parameter is `&CStr` and `to_bytes()` already stops at the NUL.
+unsafe fn f360(a0: *mut dataflowir_gen::AsmPrinter, a1: &std::ffi::CStr) -> *mut dataflowir_gen::AsmPrinter {
+    let __p = a0;
+    let __s = String::from_utf8_lossy(a1.to_bytes()).into_owned();
+    dataflowir_gen::AsmPrinter::print_str(&mut *__p, &__s);
+    __p
+}
+
+// f361 -- `const char &`, 34 sites.
+unsafe fn f361(a0: *mut dataflowir_gen::AsmPrinter, a1: &::libc::c_char) -> *mut dataflowir_gen::AsmPrinter {
+    let __p = a0;
+    let __c = (*a1 as u8) as char;
+    dataflowir_gen::AsmPrinter::print_char(&mut *__p, __c);
+    __p
+}
+
+// f362 -- `const mlir::OperandRange &`, 26 sites.  t14 is `Vec<ir::Value>` and
+// `print_operands` takes `IntoIterator<Item = &Value>`, so the slice iterator is
+// the argument and nothing is cloned.
+unsafe fn f362(a0: *mut dataflowir_gen::AsmPrinter, a1: &Vec<dataflowir_gen::ir::Value>) -> *mut dataflowir_gen::AsmPrinter {
+    let __p = a0;
+    dataflowir_gen::AsmPrinter::print_operands(&mut *__p, a1.iter());
+    __p
+}
+
+// f363 -- `mlir::Value` by value, 25 sites.  Prints the SSA NAME; see src.cpp.
+unsafe fn f363(a0: *mut dataflowir_gen::AsmPrinter, a1: dataflowir_gen::ir::Value) -> *mut dataflowir_gen::AsmPrinter {
+    let __p = a0;
+    dataflowir_gen::AsmPrinter::print_operand(&mut *__p, &a1);
+    __p
+}
+
+// f364 -- `mlir::AsmPrinter &` + `const char &`, 1 site.  f361's body, distinct key.
+unsafe fn f364(a0: *mut dataflowir_gen::AsmPrinter, a1: &::libc::c_char) -> *mut dataflowir_gen::AsmPrinter {
+    let __p = a0;
+    let __c = (*a1 as u8) as char;
+    dataflowir_gen::AsmPrinter::print_char(&mut *__p, __c);
+    __p
+}
+
+// f365 -- `const llvm::StringRef &`, 1 site.  The trailing NUL is NOT part of the
+// string in this port (rules/stringref), so it is dropped exactly as
+// rules/raw_ostream f7 does.
+unsafe fn f365(a0: *mut dataflowir_gen::AsmPrinter, a1: &Vec<::libc::c_char>) -> *mut dataflowir_gen::AsmPrinter {
+    let __p = a0;
+    let __b: Vec<u8> = a1
+        .iter()
+        .take(a1.len().saturating_sub(1))
+        .map(|&c| c as u8)
+        .collect();
+    let __s = String::from_utf8_lossy(&__b).into_owned();
+    dataflowir_gen::AsmPrinter::print_str(&mut *__p, &__s);
+    __p
+}
+
+// f366 -- `const llvm::StringLiteral &`, 1 site.  Same payload as f365.
+unsafe fn f366(a0: *mut dataflowir_gen::AsmPrinter, a1: &Vec<::libc::c_char>) -> *mut dataflowir_gen::AsmPrinter {
+    let __p = a0;
+    let __b: Vec<u8> = a1
+        .iter()
+        .take(a1.len().saturating_sub(1))
+        .map(|&c| c as u8)
+        .collect();
+    let __s = String::from_utf8_lossy(&__b).into_owned();
+    dataflowir_gen::AsmPrinter::print_str(&mut *__p, &__s);
+    __p
+}
