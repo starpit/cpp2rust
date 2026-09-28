@@ -128,6 +128,17 @@ public:
   // int64_t).  Declared as a friend in LLVM, so it keys as a FREE function in
   // namespace llvm, not as a member.
   friend bool operator==(const DynamicAPInt &A, int64_t B);
+
+  // llvm/ADT/DynamicAPInt.h:201 -- friend bool operator!=(const DynamicAPInt &,
+  // int64_t).  ADDED 2026-09-28 for queue row g300, whose "searched as" spelling
+  // is `bool llvm::operator!=(const llvm::DynamicAPInt &, long)` -- i.e. exactly
+  // the friend/free form that f4's operator== already records, with `long`
+  // because that is what `int64_t` spells on this target.  The comment above
+  // listing `operator!=` among the deliberate omissions said "add it when a site
+  // appears"; g300 names SEVEN sites in 3 TUs (all `<DynamicAPInt> != 0`
+  // literal-zero tests in Agen/Utils.cpp and TransformPagedMemViewImpl.cpp), so
+  // this is that appearance and not speculation.
+  friend bool operator!=(const DynamicAPInt &A, int64_t B);
 };
 
 // Restated from llvm/ADT/APInt.h.  A DIFFERENT CLASS from DynamicAPInt above,
@@ -154,6 +165,12 @@ public:
   int64_t getSExtValue() const;
   // llvm/ADT/APInt.h:1080 -- `bool eq(const APInt &RHS) const { return (*this) == RHS; }`
   bool eq(const APInt &RHS) const;
+  // llvm/ADT/APInt.h:1085 -- `bool operator!=(const APInt &RHS) const
+  //                            { return !((*this) == RHS); }`
+  // ⚠️ A MEMBER, NOT A FRIEND -- unlike DynamicAPInt's comparisons above.  The
+  // g791 row's "searched as" spelling confirms it:
+  // `bool llvm::APInt::operator!=(const llvm::APInt &) const`.
+  bool operator!=(const APInt &RHS) const;
 };
 
 } // namespace llvm
@@ -224,6 +241,18 @@ int64_t f8(const llvm::APInt &x) { return x.getSExtValue(); }
 
 bool f9(const llvm::APInt &a, const llvm::APInt &b) { return a.eq(b); }
 
+// f11 -- g791, `bool llvm::APInt::operator!=(const llvm::APInt &) const`.  One
+// site: dcc/src/Transform/Sentient/LexicalOrdering.cpp:125 `if (v_a != v_b)`.
+// ⛔ THE TARGET MUST ROUTE THROUGH `eq`, NOT COMPARE VALUES.  C++
+// `APInt::operator!=` is `!((*this) == RHS)` and `operator==` ASSERTS equal bit
+// widths, so a bare `a.value != b.value` would answer across widths where the C++
+// program aborts -- the silent-wrongness class this whole t2 model exists to
+// remove.  `libcc2rs::APInt::eq` already reproduces that assertion, so the target
+// is its negation and nothing else.
+bool f11(const llvm::APInt &a, const llvm::APInt &b) {
+  return a.operator!=(b);
+}
+
 // The default constructor.  Present because a type rule maps the TYPE ONLY: the
 // converter looks the default ctor up as an ordinary expr rule and, on a miss,
 // emits `<mangled>::new()`, which does not exist -- rc=0 then E0433.
@@ -234,3 +263,8 @@ llvm::DynamicAPInt f2(int64_t v) { return llvm::DynamicAPInt(v); }
 int64_t f3(const llvm::DynamicAPInt &x) { return x.operator int64_t(); }
 
 bool f4(const llvm::DynamicAPInt &a, int64_t b) { return operator==(a, b); }
+
+// f10 -- g300, `bool llvm::operator!=(const llvm::DynamicAPInt &, long)`.  Written
+// in the same unqualified free-call form as f4 above, which is the spelling that
+// records the key in namespace `llvm` without an inline-namespace prefix.
+bool f10(const llvm::DynamicAPInt &a, int64_t b) { return operator!=(a, b); }

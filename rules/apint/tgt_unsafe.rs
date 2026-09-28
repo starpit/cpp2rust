@@ -28,6 +28,12 @@ unsafe fn f4(a0: i64, a1: i64) -> bool {
     a0 == a1
 }
 
+// f10 -- `llvm::operator!=(const DynamicAPInt &, long)`, g300.  The type IS i64
+// under this model, so the negation of f4 is the whole body.
+unsafe fn f10(a0: i64, a1: i64) -> bool {
+    a0 != a1
+}
+
 // ---------------------------------------------------------------------------
 // t2/f5-f9 -- `llvm::APInt`, A DIFFERENT CLASS FROM t1's `llvm::DynamicAPInt`.
 // src.cpp carries the full argument; in one paragraph: `APInt`'s bit width is an
@@ -77,4 +83,12 @@ unsafe fn f8(a0: &libcc2rs::APInt) -> i64 {
 // compare across widths would be the bug, so the assertion is reproduced.
 unsafe fn f9(a0: &libcc2rs::APInt, a1: &libcc2rs::APInt) -> bool {
     a0.eq(a1)
+}
+
+// `APInt::operator!=` is `!((*this) == RHS)` (APInt.h:1085), g791.
+// ⛔ NOT `a0.value != a1.value`, and NOT `a0 != a1`: derived `PartialEq` compares
+// `bit_width` too and answers `false` where C++ ASSERTS, so the only correct body
+// is the negation of `eq`, which carries the width assertion.
+unsafe fn f11(a0: &libcc2rs::APInt, a1: &libcc2rs::APInt) -> bool {
+    !a0.eq(a1)
 }
