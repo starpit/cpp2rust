@@ -7140,6 +7140,64 @@ void Converter::AddDefaultTraitForUnion(const clang::RecordDecl *decl) {
   StrCat("std::mem::zeroed()");
 }
 
+// The user-PROVIDED default constructor of `decl`, whether or not its BODY is
+// visible in this TU.  GetUserDefinedDefaultConstructor() (converter_lib.cpp
+// :629) additionally demands `hasBody()`, and that single predicate is what
+// splits the two behaviours measured on `dsc/designSpaceConfig.h`'s 240-entry
+// NSDMI `std::map<std::string,double*> paramNameToVal = {{"nin", &N_.in_}, ...}`
+// (:359-609):
+//   * `dsc/designSpaceConfig.cpp` DEFINES `DesignSpaceConfig::DesignSpaceConfig()`,
+//     so hasBody() is true, AddDefaultTrait takes the ctor arm, and the NSDMI is
+//     walked inside the emitted `fn new()` where a receiver is in scope.  That TU
+//     emits ZERO Cpp2RustUnmappedExpr_MemberExpr.
+//   * the 12 TUs that include only the HEADER see the in-class DECLARATION at
+//     :135 with no body, fall through to EmitDefaultStructLiteral, and walk the
+//     same NSDMI with curr_function_ == nullptr -- 240 sites each, 2,880 total,
+//     and 240x12 exactly because there is zero variance between them.
+// A declared-but-not-defined default constructor is still the constructor C++
+// runs for `T{}`, so delegating to it is the faithful lowering AND it is the
+// only emitted context in which `this` is spellable at all.
+static clang::CXXConstructorDecl *
+GetUserProvidedDefaultConstructorDecl(const clang::CXXRecordDecl *decl) {
+  for (auto *ctor : decl->ctors()) {
+    if (ctor->isUserProvided() && ctor->isDefaultConstructor()) {
+      return ctor;
+    }
+  }
+  return nullptr;
+}
+
+// True when some field's in-class initializer reads through `this`.  Such an
+// initializer CANNOT be emitted inside a struct literal: the literal is the
+// expression that PRODUCES the object, so no object and no binding exist yet,
+// and ConvertMemberExpr / VisitCXXThisExpr reach ReportThisWithoutEnclosingFunction.
+// Detecting `CXXThisExpr` anywhere in the initializer covers both entry points.
+static bool HasThisBearingFieldInit(const clang::RecordDecl *decl) {
+  auto mentions_this = [](const clang::Stmt *stmt) {
+    llvm::SmallVector<const clang::Stmt *, 16> work{stmt};
+    while (!work.empty()) {
+      const clang::Stmt *cur = work.pop_back_val();
+      if (cur == nullptr) {
+        continue;
+      }
+      if (clang::isa<clang::CXXThisExpr>(cur)) {
+        return true;
+      }
+      for (const clang::Stmt *child : cur->children()) {
+        work.push_back(child);
+      }
+    }
+    return false;
+  };
+  for (const auto *field : decl->fields()) {
+    if (const auto *init = field->getInClassInitializer();
+        init != nullptr && mentions_this(init)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void Converter::AddDefaultTrait(const clang::RecordDecl *decl) {
   if (decl->isUnion()) {
     AddDefaultTraitForUnion(decl);
@@ -7155,7 +7213,16 @@ void Converter::AddDefaultTrait(const clang::RecordDecl *decl) {
   PushBrace fn_brace(*this);
 
   if (auto *cxx = clang::dyn_cast<clang::CXXRecordDecl>(decl)) {
-    if (auto *default_ctor = GetUserDefinedDefaultConstructor(cxx)) {
+    // Widen the ctor arm to a body-less declaration ONLY for the classes the
+    // struct-literal arm provably cannot emit, so every other class keeps its
+    // current output byte-for-byte.  A `this`-bearing NSDMI with no user-provided
+    // default constructor anywhere has nothing to delegate to and deliberately
+    // keeps its placeholder: a loud E0425 beats inventing a receiver.
+    auto *default_ctor = GetUserDefinedDefaultConstructor(cxx);
+    if (default_ctor == nullptr && HasThisBearingFieldInit(decl)) {
+      default_ctor = GetUserProvidedDefaultConstructorDecl(cxx);
+    }
+    if (default_ctor != nullptr) {
       StrCat(keyword_unsafe_);
       PushBrace unsafe_brace(*this);
       Convert(MakeConstructExpr(ctx_, ctx_.getCanonicalTagType(decl),
