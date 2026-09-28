@@ -437,3 +437,46 @@ fn f125<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
 fn f126<T1>(a0: Ptr<T1>, a1: Ptr<T1>) -> bool {
     a0.get_offset() > a1.get_offset()
 }
+
+// f127..f136 -- pointer-mono siblings of f43/f44/f57/f41/f24/f95/f96/f104/f93/f83.
+// Bodies COPIED verbatim from the originals, at element type `Ptr<T1>` (the refcount
+// model's spelling of `T1 *`, exactly as t8 does).  No new representation.
+fn f127<T1>(a0: Ptr<Ptr<T1>>) -> Ptr<Ptr<T1>> {
+    a0
+}
+
+fn f128<T1>(a0: Ptr<Ptr<T1>>) -> Ptr<Ptr<T1>> {
+    a0.to_end()
+}
+
+fn f129<T1>(a0: Ptr<Ptr<T1>>) -> Ptr<Ptr<T1>> {
+    a0.to_end()
+}
+
+fn f130<T1>(a0: Ptr<Ptr<T1>>) -> Ptr<Ptr<T1>> {
+    a0
+}
+
+fn f131<T1>(a0: Ptr<Ptr<T1>>) -> Ptr<Ptr<T1>> {
+    a0
+}
+
+fn f132<T1>(a0: Ptr<Ptr<T1>>) -> Ptr<Ptr<T1>> {
+    a0
+}
+
+fn f133<T1>(a0: Ptr<Ptr<T1>>) -> Ptr<Ptr<T1>> {
+    a0.to_end()
+}
+
+fn f134<T1>(a0: Ptr<Ptr<T1>>) -> Ptr<Ptr<T1>> {
+    a0.to_end()
+}
+
+fn f135<T1>(a0: Ptr<Ptr<T1>>) -> Ptr<Ptr<T1>> {
+    a0
+}
+
+fn f136<T1>(a0: Ptr<Ptr<T1>>) -> Ptr<Ptr<T1>> {
+    a0
+}

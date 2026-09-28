@@ -712,3 +712,100 @@ bool f126(typename std::vector<T1>::iterator a,
           typename std::vector<T1>::iterator b) {
   return operator>(a, b);
 }
+
+// ============================================================================
+// POINTER-MONO SIBLINGS FOR THE `const T1 *` EXPRESSION KEYS (f127..f136).
+//
+// ⛔ THE DEFECT: a key whose RECORDED src contains `const T1 *` can never match a
+// corpus site that instantiates that `T1` with a POINTER type.  clang prints the
+// const_iterator of `std::vector<X *>` as `std::__wrap_iter<X *const *>` -- const to
+// the RIGHT of the star -- and `matchTemplate` is purely TEXTUAL, so the key's literal
+// `, const ` / `<const ` segment has nothing to match.  The key records fine, loads
+// fine, and NEVER FIRES.  `t8` above already fixed this for the TYPE spelling; these
+// fix it for the OPERATIONS, which t8 does not shield.
+//
+// Each sibling is written the PAIR-MONO way: the starred form is NEVER typed by hand,
+// it is spelled through `typename std::vector<T1 *>::const_iterator` /
+// `::const_pointer` and clang prints the star form for us.  Bodies are COPIED from the
+// original key, so the REPRESENTATION IS UNCHANGED -- that is what makes this cheap.
+//
+// SWALLOW-SAFETY, argued on the LITERALS (not on the length tie-break, which
+// mapper.cpp:430-437 uses `>` and so CANNOT protect a sole candidate):
+//   (a) The ORIGINAL cannot steal the pointer spelling.  Its recorded src carries the
+//       literal `<const ` before the placeholder (e.g. `std::__wrap_iter<const T1 *>`).
+//       The pointer-element row is `std::__wrap_iter<X *const *>`, which has no `const`
+//       immediately after `<`.  So for that row the SIBLING IS THE SOLE CANDIDATE and
+//       no tie-break is involved.
+//   (b) The SIBLING cannot steal the original's non-pointer spellings.  Its literals
+//       demand the EXTRA STAR: ` *const *>` after the placeholder.  Against
+//       `std::__wrap_iter<const int *>` there is no ` *const *` anywhere, so the match
+//       fails outright.  The original keeps every row it owns today.
+// Same argument shape as t8's, and as rules/deque_iterator's t3/t4 (4c7c7c97).
+// ============================================================================
+
+// f127 -- f43 at element type `T1 *`.  `begin() const`.
+template <typename T1>
+typename std::vector<T1 *>::const_iterator f127(const std::vector<T1 *> &o) {
+  return o.begin();
+}
+
+// f128 -- f44 at element type `T1 *`.  `end() const`.
+template <typename T1>
+typename std::vector<T1 *>::const_iterator f128(const std::vector<T1 *> &o) {
+  return o.end();
+}
+
+// f129 -- f57 at element type `T1 *`.  `cend() const`.
+template <typename T1>
+typename std::vector<T1 *>::const_iterator f129(const std::vector<T1 *> &o) {
+  return o.cend();
+}
+
+// f130 -- f41 at element type `T1 *`.  `data() const`.  The return type is spelled
+// through `::const_pointer` so that `T1 *const *` is clang's word, not mine.
+template <typename T1>
+typename std::vector<T1 *>::const_pointer f130(const std::vector<T1 *> &o) {
+  return o.data();
+}
+
+// f131 -- f24 at element type `T1 *`.  iterator -> const_iterator conversion ctor.
+template <typename T1>
+typename std::vector<T1 *>::const_iterator
+f131(const typename std::vector<T1 *>::iterator &it) {
+  return typename std::vector<T1 *>::const_iterator(it);
+}
+
+// f132 -- f95 at element type `T1 *`.  `begin() const`, explicit-allocator spelling.
+template <typename T1, typename T2 = std::allocator<T1 *>>
+typename std::vector<T1 *, T2>::const_iterator
+f132(const std::vector<T1 *, T2> &o) {
+  return o.begin();
+}
+
+// f133 -- f96 at element type `T1 *`.  `end() const`, explicit-allocator spelling.
+template <typename T1, typename T2 = std::allocator<T1 *>>
+typename std::vector<T1 *, T2>::const_iterator
+f133(const std::vector<T1 *, T2> &o) {
+  return o.end();
+}
+
+// f134 -- f104 at element type `T1 *`.  `cend() const`, explicit-allocator spelling.
+template <typename T1, typename T2 = std::allocator<T1 *>>
+typename std::vector<T1 *, T2>::const_iterator
+f134(const std::vector<T1 *, T2> &o) {
+  return o.cend();
+}
+
+// f135 -- f93 at element type `T1 *`.  `data() const`, explicit-allocator spelling.
+template <typename T1, typename T2 = std::allocator<T1 *>>
+typename std::vector<T1 *, T2>::const_pointer
+f135(const std::vector<T1 *, T2> &o) {
+  return o.data();
+}
+
+// f136 -- f83 at element type `T1 *`.  iterator -> const_iterator, explicit allocator.
+template <typename T1, typename T2 = std::allocator<T1 *>>
+typename std::vector<T1 *, T2>::const_iterator
+f136(const typename std::vector<T1 *, T2>::iterator &it) {
+  return typename std::vector<T1 *, T2>::const_iterator(it);
+}

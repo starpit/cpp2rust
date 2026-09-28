@@ -580,3 +580,46 @@ unsafe fn f125<T1>(a0: *mut T1, a1: *mut T1) -> bool {
 unsafe fn f126<T1>(a0: *mut T1, a1: *mut T1) -> bool {
     a0 > a1
 }
+
+// f127..f136 -- pointer-mono siblings of f43/f44/f57/f41/f24/f95/f96/f104/f93/f83.
+// Bodies COPIED verbatim from the originals, at element type `*mut T1` (the unsafe
+// model's spelling of `T1 *`, exactly as t8 does).  No new representation.
+unsafe fn f127<T1>(a0: Vec<*mut T1>) -> *const *mut T1 {
+    a0.as_ptr()
+}
+
+unsafe fn f128<T1>(a0: Vec<*mut T1>) -> *const *mut T1 {
+    a0.as_ptr().add(a0.len())
+}
+
+unsafe fn f129<T1>(a0: Vec<*mut T1>) -> *const *mut T1 {
+    a0.as_ptr().add(a0.len())
+}
+
+unsafe fn f130<T1>(a0: &mut Vec<*mut T1>) -> *const *mut T1 {
+    a0.as_ptr()
+}
+
+unsafe fn f131<T1>(a0: *const *mut T1) -> *const *mut T1 {
+    a0
+}
+
+unsafe fn f132<T1>(a0: Vec<*mut T1>) -> *const *mut T1 {
+    a0.as_ptr()
+}
+
+unsafe fn f133<T1>(a0: Vec<*mut T1>) -> *const *mut T1 {
+    a0.as_ptr().add(a0.len())
+}
+
+unsafe fn f134<T1>(a0: Vec<*mut T1>) -> *const *mut T1 {
+    a0.as_ptr().add(a0.len())
+}
+
+unsafe fn f135<T1>(a0: &mut Vec<*mut T1>) -> *const *mut T1 {
+    a0.as_ptr()
+}
+
+unsafe fn f136<T1>(a0: *const *mut T1) -> *const *mut T1 {
+    a0
+}
