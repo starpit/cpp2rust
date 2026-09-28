@@ -497,8 +497,32 @@ bool Converter::VisitPointerType(clang::PointerType *type) {
 
   auto pointee_type = type->getPointeeType();
   StrCat(pointee_type.isConstQualified() ? "*const" : "*mut");
+  // A POINTER TO AN ABSTRACT RECORD MUST NAME THE TRAIT, AND THAT ANSWER MUST
+  // NOT DEPEND ON EMISSION ORDER. `abstract_structs_` is populated by
+  // `ConvertAbstractClass` (:6460), so a pointer type converted BEFORE its
+  // pointee's class is converted sees an EMPTY set and falls through to the
+  // bare record name. MEASURED on LoopUnroll.cpp: of the eight
+  // `InheritWithClone<Base, Derived>::clone` out-of-line definitions returning
+  // an abstract `Base *`, seven emitted `*mut dyn dsc2_ScheduleNode__Virtual`
+  // and the one instantiated FIRST (`<ScheduleNode, BlockNode>`, dsc2.h:526,
+  // inside `ScheduleNode`'s own derived-class chain) emitted the bare
+  // `*mut dsc2_ScheduleNode` -- E0053 against a trait signature that came from
+  // the mapper's order-free `isAbstract()` path
+  // (`AddRuleForUserDefinedType`).
+  //
+  // So ask the definition directly, under exactly the condition `ConvertClass`
+  // (:1317) emits the trait under: user-defined, convertible, abstract. This
+  // is NOT a third mechanism -- `isAbstract()` is already the authority both
+  // here and in the mapper; the set is kept as a floor so nothing that names a
+  // trait today stops naming one.
+  const auto *pointee_record = llvm::dyn_cast_or_null<clang::CXXRecordDecl>(
+      pointee_type->isRecordType() ? pointee_type->getAsRecordDecl() : nullptr);
+  const clang::CXXRecordDecl *pointee_def =
+      pointee_record != nullptr ? pointee_record->getDefinition() : nullptr;
   if (pointee_type->isRecordType() &&
-      abstract_structs_.contains(GetID(pointee_type->getAsRecordDecl()))) {
+      (abstract_structs_.contains(GetID(pointee_type->getAsRecordDecl())) ||
+       (pointee_def != nullptr && IsUserDefinedDecl(pointee_def) &&
+        IsConvertibleCXXRecordDecl(pointee_def) && pointee_def->isAbstract()))) {
     // The trait is named `<Record>__Virtual`, which the recursive type visit
     // below cannot produce: it would emit the bare record name, and appending
     // the suffix with a trailing `StrCat` yields `dyn Name __Virtual` (token
