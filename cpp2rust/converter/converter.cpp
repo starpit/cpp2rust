@@ -4577,6 +4577,46 @@ bool Converter::VisitImplicitCastExpr(clang::ImplicitCastExpr *expr) {
   // the target mapped to a different Rust type -- the `(id as TypeID)()` shape.
   case clang::CastKind::CK_UserDefinedConversion:
   case clang::CastKind::CK_DerivedToBase:
+  // `CK_UncheckedDerivedToBase` is the SAME conversion as `CK_DerivedToBase`
+  // with the null check elided, and clang emits it for EVERY implicit object
+  // argument, i.e. for every call of an inherited member. It was absent from
+  // this switch -- one grep for `DerivedToBase` over the whole converter
+  // returned exactly one hit -- so it landed in `default:`, which synthesised a
+  // spurious `as T` on a non-primitive. A derived-to-base conversion is never a
+  // Rust cast.
+  //
+  // THREE MEASURED SHAPES, 2026-09-28, all of them from this one missing case
+  // (45 sites over 5 bucket-A TUs, `as Vec<` alone going 45 -> 0):
+  //  1. Base mapped to a DIFFERENT Rust type. Probe from
+  //     dcc/.../Analyses/AddressPinningScheme.h (`using AddrTy = int64_t;
+  //     AddrListTy pinned_addrs_`, `pinned_addrs_.size()` in a const method):
+  //         Vec::len(&(self.pinned_addrs_ as Vec<u32>))
+  //     -> rustc `error[E0605]: non-primitive cast: Vec<i64> as Vec<u32>`.
+  //     The target is `Vec<u32>` while the field is `Vec<i64>` because the base
+  //     `SmallVectorImpl<T>` is mapped with `T` unsubstituted -- which is also
+  //     why `IsCastRedundantInRust` did not suppress it, and why the shape is
+  //     INVISIBLE whenever the element type happens to be `unsigned`.
+  //  2. Base UNMAPPED, so the cast target was a fabricated
+  //     `Cpp2RustUnmapped_*` name -- `mlir::OpTrait::OneTypedResult<..>::Impl`,
+  //     `mlir::IROperand<OpOperand, Value>`, `llvm::SmallPtrSetImplBase`,
+  //     `std::ios`. rustc `error[E0425]: cannot find type ...`, and these were
+  //     REACHED: AddressPinningAndToggle.cpp 1988 -> 1942 errors,
+  //     RegisterTypeAssignment.cpp 1725 -> 1710, dxp_standalone.cpp 268 -> 264,
+  //     every single delta a removal of exactly this cast.
+  //  3. Base mapped to the SAME Rust type, e.g. `(self.next_ as
+  //     Vec<Option<Box<dsc2_ScheduleNode>>>).is_empty()` and
+  //     `(*(self.loopNode as *mut SenPcfgNode)).name`. Here `as` is a trivial
+  //     COERCION cast, so the value form is a MOVE out of `&self` (E0507) and
+  //     the pointer form is an unsound reinterpretation that COMPILES.
+  //
+  // ⚠️ WHAT THIS DOES **NOT** FIX, stated because shape 3 looks fixed and is
+  // not: when the base subobject's own FIELD is then read, dropping the cast
+  // leaves `(*self.loopNode).name` -- and the emitted `SenPcfgMvloopNode`
+  // (dsc/pcfg.h:149, `: public SenPcfgNode`) carries NONE of the base's fields,
+  // so there is no `name` to project to and no spelling for one. That site was
+  // silently reading the wrong bytes before and is a loud E0609 now; the base
+  // projection itself is a separate, unfixed row (ABSTRACT-BASE-DESIGN.md).
+  case clang::CastKind::CK_UncheckedDerivedToBase:
     Convert(sub_expr);
     break;
   case clang::CastKind::CK_IntegralToBoolean:
@@ -5443,6 +5483,53 @@ void Converter::ReportUnsupportedOperatorCall(
   assert(0 && "unsupported CXXOperatorCallExpr\n");
 }
 
+// True when `type` is a `std::pair` whose every element is a type for which
+// Rust's derived tuple `PartialEq` is EXACTLY C++'s `std::pair::operator==`,
+// i.e. a builtin scalar, an enum, or a pointer. `std::pair<A, B>::operator==`
+// is specified as `a.first == b.first && a.second == b.second`, and the Rust
+// model of `std::pair` is a tuple `(A, B)`, whose `PartialEq` is the same
+// lexicographic-conjunction over the same fields -- so for scalar elements the
+// two agree bit for bit (integers compare by value, pointers by address,
+// floats with the same IEEE NaN behaviour).
+//
+// ⚠️ DELIBERATELY NOT WIDENED past scalars. The moment an element has a
+// user-provided `operator==` with non-structural semantics (a case-insensitive
+// string, an interned handle, an epsilon float compare), a derived Rust `==`
+// would be SILENTLY WRONG output rather than a compile error. Those keep
+// falling through to ReportUnsupportedOperatorCall, which is the correct
+// trade: an operator that fails loudly beats one that compares the wrong way.
+static bool IsScalarElementStdPair(clang::QualType type) {
+  auto *record = type.getNonReferenceType()
+                     .getUnqualifiedType()
+                     ->getAsCXXRecordDecl();
+  if (!record || record->getQualifiedNameAsString() != "std::pair") {
+    return false;
+  }
+  const auto *spec =
+      clang::dyn_cast<clang::ClassTemplateSpecializationDecl>(record);
+  if (!spec) {
+    return false;
+  }
+  const auto &args = spec->getTemplateArgs();
+  if (args.size() != 2) {
+    return false;
+  }
+  for (unsigned i = 0; i < args.size(); ++i) {
+    if (args[i].getKind() != clang::TemplateArgument::Type) {
+      return false;
+    }
+    auto element = args[i].getAsType();
+    // `bool`/enum/integer/float/pointer only. Anything with a record type --
+    // including a nested `std::pair` -- is refused, because its `operator==`
+    // may not be structural.
+    if (!element->isIntegralOrEnumerationType() &&
+        !element->isFloatingType() && !element->isPointerType()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool Converter::ConvertCXXOperatorCallExpr(clang::CXXOperatorCallExpr *expr) {
   switch (expr->getOperator()) {
   case clang::OverloadedOperatorKind::OO_Equal:
@@ -5503,6 +5590,29 @@ bool Converter::ConvertCXXOperatorCallExpr(clang::CXXOperatorCallExpr *expr) {
       }
     }
     computed_expr_type_ = ComputedExprType::FreshValue;
+    break;
+  case clang::OverloadedOperatorKind::OO_EqualEqual:
+  case clang::OverloadedOperatorKind::OO_ExclaimEqual:
+    // `std::pair` compared with the libstdc++/libc++ free `operator==`. The
+    // callee lives in a system header, so IsUserOperatorCall() is false and
+    // ConvertCallExpr() routes here; no rule key matched either, so before this
+    // arm existed every one of these fell into `default:` and became a
+    // `Cpp2RustUnmappedExpr_CXXOperatorCallExpr`. The Rust model of the operand
+    // is a tuple, for which `==` is native and structurally identical -- see
+    // IsScalarElementStdPair for exactly how far that identity is trusted.
+    if (expr->getNumArgs() == 2 &&
+        IsScalarElementStdPair(expr->getArg(0)->getType()) &&
+        IsScalarElementStdPair(expr->getArg(1)->getType())) {
+      StrCat(std::format(
+          "(({}) {} ({}))", ConvertRValue(expr->getArg(0)),
+          expr->getOperator() == clang::OverloadedOperatorKind::OO_EqualEqual
+              ? "=="
+              : "!=",
+          ConvertRValue(expr->getArg(1))));
+      computed_expr_type_ = ComputedExprType::FreshValue;
+      break;
+    }
+    ReportUnsupportedOperatorCall(expr);
     break;
   default:
     ReportUnsupportedOperatorCall(expr);
