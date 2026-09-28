@@ -2496,3 +2496,24 @@ fn t421() -> libcc2rs::Ptr<dataflowir_gen::fmt::OpInst> {
 fn t422() -> libcc2rs::Ptr<dataflowir_gen::fmt::OpInst> {
     libcc2rs::Ptr::<dataflowir_gen::fmt::OpInst>::null()
 }
+
+// t440 -- `mlir::OpBuilder` -> `dataflowir_gen::OpBuilder` (build.rs:461).  See
+// tgt_unsafe.rs for the full reasoning; the two overlays agree because the builder is
+// modelled on an `Rc<RefCell<Vec<Block>>>` BlockList, i.e. the refcount overlay's own
+// representation, so no `Ptr`/`StrongPtr` wrapper is needed at the TYPE level.
+// ⭐ `cc2.rs` already carries the `ByteRepr` markers for `OpBuilder` /
+// `ImplicitLocOpBuilder` / `OpHandle` / `OpArgs`, which is what lets a refcount rule
+// hold `Ptr<OpBuilder>` for the C++ `OpBuilder &` parameters -- that bound is a
+// prerequisite for this key and it is already in place.
+fn t440() -> dataflowir_gen::OpBuilder {
+    dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
+}
+
+// t441 -- `mlir::ImplicitLocOpBuilder` -> `dataflowir_gen::ImplicitLocOpBuilder`
+// (build.rs:630).  Identical to the unsafe overlay, for the same reason.
+fn t441() -> dataflowir_gen::ImplicitLocOpBuilder {
+    dataflowir_gen::ImplicitLocOpBuilder::new(
+        dataflowir_gen::ir::Location::Unknown,
+        dataflowir_gen::new_block_list_with_entry(),
+    )
+}

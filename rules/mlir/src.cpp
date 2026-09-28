@@ -5637,3 +5637,129 @@ mlir::OpaqueProperties f240(void *a0) { return mlir::OpaqueProperties(a0); }
 // stand-in.  So both rows stay LOUD, deliberately, and this is a
 // `dataflowir-gen` capability question (bytecode (de)serialisation) rather than a
 // rules row.  ⚠️ Re-test it with the two greps above before reopening.
+
+// ---------------------------------------------------------------------------
+// t440 / t441 -- `mlir::OpBuilder` and `mlir::ImplicitLocOpBuilder`.
+//
+// ⭐ THE SETTLED `OpBuilder` REFUSAL IS VOID as of `dataflowir-gen` commit 7065e77,
+// which built the mutable IR builder the refusal was written for: `src/build.rs`,
+// re-exported at the crate root (`src/lib.rs:74-77`, verified by reading that
+// `pub use build::{ ... ImplicitLocOpBuilder, OpArgs, OpBuilder, OpHandle }`).  The
+// refusal's reason was "there is no builder in the model at all"; there is one now,
+// so the reason no longer holds.
+//
+// ⭐ THE SITES, counted MYSELF over the 58 bucket-A `.rs` of fresh30/out
+// (tree-wide `Cpp2RustUnmapped` control = 7,127):
+//     grep -o 'Cpp2RustUnmapped_mlir_OpBuilder'             2241
+//     grep -o 'Cpp2RustUnmapped_mlir_ImplicitLocOpBuilder'   474
+//                                                        ---- 2715  = 38% of 7,127
+// ⛔ A CIRCULATED "1,646 / 1,172 / 474" IS WRONG AND THE ERROR IS INSTRUCTIVE.  The
+// 1,172 comes from `grep -o 'Cpp2RustUnmapped_mlir_[A-Za-z_0-9]*OpBuilder[A-Za-z_0-9]*'`
+// -- the GREEDY `[A-Za-z_0-9]*` before `OpBuilder` swallows the run, so a
+// `create_pmutCpp2RustUnmapped_mlir_OpBuilder_...` site is consumed by a match that
+// STARTS elsewhere and the token is counted once instead of once per occurrence.
+// That is the same family as the documented "leading context char undercounts"
+// trap, and it undercounted by 1,069.  The decomposition-by-subtraction it invites
+// is ALSO wrong here, and for a reason worth stating: the long spellings
+// (`..._OpBuilder_dataflowir_genirLocation_i64` and 432 siblings) are NOT
+// alternative spellings of the type -- they are the SAME placeholder token embedded
+// inside a synthesised method name, e.g.
+//     mlir_arith_ConstantIndexOp::create_pmutCpp2RustUnmapped_mlir_OpBuilder_dataflowir_genirLocation_i64
+// so subtracting them REMOVES real sites.  Verified by the identity
+//     2241 + 474 == 2715 == (greedy-token census total, `grep -oh 'Cpp2RustUnmapped_[A-Za-z_0-9]*' | grep -ci opbuilder`)
+// which is the arithmetic check that the anchored counts are complete.
+//
+// ⭐ `ImplicitLocOpBuilder` IS THE CHEAP TAIL, NOT SEPARATE WORK.  It is
+// `class ImplicitLocOpBuilder : public mlir::OpBuilder` (Builders.h:630) -- one
+// extra `Location` field -- and `build.rs:630` models it exactly that way
+// (`struct ImplicitLocOpBuilder` with `Deref/DerefMut to OpBuilder`).
+//
+// ⭐ THE MEMBER CENSUS, BOTH READS, because a `-verbose` log and the emitted corpus
+// see different things and only the corpus sees an unmapped MEMBER:
+//   (1) `-verbose` on dialects/Init/InitOps.cpp with the harness's own `--cxxflags`
+//       (verif/dxpflags.py).  Converter RC=0 -- echoed from inside the backgrounded
+//       command, not read off a wrapper's status (trap 6c) -- log 100,825 lines,
+//       emitted 4,596 lines == the non-verbose leg's 4,596, so the log is NOT
+//       truncated (traps 5 / 6c).  `grep -o 'searched as: [^;]*OpBuilder[^;]*'`:
+//           262  searched as: mlir::OpBuilder
+//            90  searched as: mlir::ImplicitLocOpBuilder
+//       and NOTHING else -- 352 TYPE asks, ZERO member asks.
+//   (2) the emitted corpus, anchored over all 58 files.  `<recv>::[A-Za-z_0-9]*` on
+//       the placeholder receiver returns ZERO for both types (no `::` member is
+//       reached at all), so every member call is through a VARIABLE.  The variables
+//       declared with these types are, by count of declaration sites,
+//       `_builder` 395, `_odsBuilder` 136, `_arg0` 102, `_loop_builder` 4, `_ip` 1,
+//       and in parameter position `builder` 512 / `odsBuilder` 135.  Censusing
+//       `<var>[.][A-Za-z_0-9]*` over those:
+//           builder.setInsertionPointToStart      3
+//           builder.setInsertionPointAfter        1
+//           odsBuilder.getNamedAttr              79
+//           odsBuilder.getDictionaryAttr         51
+//           odsBuilder.getBoolAttr                6
+//           odsBuilder.getStringAttr              4
+//           odsBuilder.getStrArrayAttr            4
+//           odsBuilder.getI64ArrayAttr            2
+//           odsBuilder.getIntegerType             1
+//           odsBuilder.getIntegerAttr             1
+//       (`_builder`/`_odsBuilder`/`_arg0` are the converter's own temporaries and
+//       are only ASSIGNED and PASSED, never dotted -- zero member hits each.)
+//
+// ⛔ SO THE TYPE KEYS ARE WRITTEN AND THE MEMBERS ARE NOT, DELIBERATELY, and this is
+// the unmapped-MEMBER rule applied rather than an omission.  An unmapped member does
+// NOT abort: the converter emits the call TEXTUALLY, at rc=0, with no placeholder
+// token, invisible to every census and to pin/no-placeholders.sh.  So a member may
+// only be keyed if the name EXISTS on the Rust type.  Checked each against
+// `build.rs`'s public surface:
+//   * `getNamedAttr` / `getDictionaryAttr` / `getBoolAttr` / `getStringAttr` /
+//     `getStrArrayAttr` / `getI64ArrayAttr` / `getIntegerType` / `getIntegerAttr`
+//     -- 148 sites, ALL LEFT OUT.  These are `mlir::Builder` members (the BASE of
+//     OpBuilder, Builders.h:53-220), i.e. the attribute/type FACTORY half, and
+//     `build.rs` models only the INSERTION half.  Keying them would name functions
+//     that do not exist, trading 148 loud failures for 148 silent ones.  ⭐ They are
+//     a separate row on `mlir::Builder`, and the right fix is a `dataflowir-gen`
+//     attribute factory, not a rules key.
+//   * `setInsertionPointToStart` / `setInsertionPointAfter` -- 4 sites.  The names
+//     DO exist (`build.rs:519` `set_insertion_point_to_start(&mut self, block: usize)`,
+//     `build.rs:541` `set_insertion_point_after(&mut self, h: &OpHandle) -> bool`),
+//     but the C++ parameters are `mlir::Block *` and `mlir::Operation *` while the
+//     Rust ones are a `usize` block INDEX and an `&OpHandle`.  There is no
+//     pointer->index mapping available to a rule body (the index is owned by the
+//     `BlockList` the builder was constructed over), so a key here would have to
+//     fabricate one.  LEFT OUT so all 4 stay loud.
+//   * `createOrFold` -- DELIBERATELY ABSENT from the new model (folding calls each
+//     op's own `fold()`, C++ that no `.td` describes), so a key for it would name a
+//     function that does not exist.  LEFT OUT; `grep -c 'createOrFold'` over the
+//     corpus confirms the corpus does not ask for it either.
+//
+// ⚠️ WHAT THIS ROW DOES *NOT* FIX -- stated so the next slot does not read a 2,715
+// placeholder drop as "the builder now compiles".  20 corpus sites are the
+// FABRICATED-CONSTRUCTOR spelling `mlir_OpBuilder::new_1` (16) and
+// `mlir_OpBuilder::new_2` (4) -- bare, no `Cpp2RustUnmapped_` prefix, so invisible
+// to the placeholder census.  Real `OpBuilder` has ~8 constructor overloads and the
+// `new_1`/`new_2` INDICES cannot be mapped onto them from the emitted text alone;
+// guessing would be writing a rule against no evidence.  NO `f` KEY IS WRITTEN, so
+// those 20 stay a loud `E0433: cannot find mlir_OpBuilder`.  That is the t340/f240
+// shape left half-done ON PURPOSE, and it is the next slot's row: dump the
+// ctor signature the converter asks for, then key it.
+//
+// ⭐ ARITY 0, FULLY CONCRETE -- the t166 / t37-t39 / t320 / t340 precedent.
+// `GetTypeMapKey` truncates at the first `<`, so no template argument enters the
+// key and `matchTemplate`'s same-depth capture (the swallow bug) never runs.
+namespace mlir {
+
+// ⛔ NO CONSTRUCTOR IS DECLARED HERE, and that is deliberate: a declared ctor with
+// no `f` key is a rule the preprocessor would carry with nothing behind it, and the
+// 20 `mlir_OpBuilder::new_1`/`new_2` sites must stay LOUD (see above).  The stub
+// exists only to make the TYPE NAME resolvable, exactly as `class Block {}` does.
+// ⛔ `OpBuilder` IS *NOT* REDECLARED HERE -- it is ALREADY declared at line 1019,
+// where a 2026-09-27 slot had to declare it COMPLETE purely to hold the nested
+// `OpBuilder::Listener`, with the standing note "OpBuilder itself is NOT mapped".
+// That note is what t440 changes; the declaration is reused verbatim.  Declaring it
+// a second time is `error: redefinition of 'OpBuilder'` and aborts the whole module
+// regen -- measured, not guessed.
+class ImplicitLocOpBuilder : public OpBuilder {};
+
+} // namespace mlir
+
+using t440 = mlir::OpBuilder;
+using t441 = mlir::ImplicitLocOpBuilder;
