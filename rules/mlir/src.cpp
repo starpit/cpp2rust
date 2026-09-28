@@ -3826,6 +3826,67 @@ public:
 using t164 = mlir::RankedTensorType;
 using t165 = mlir::FunctionType;
 
+// t166: the FOURTH concrete instantiation of the range CRTP base, at
+// `DerivedT = mlir::ValueRange` -- queue row g090 (29 TUs).  t37/t38/t39 above
+// already key this base at OperandRange / ResultRange / RegionRange; the
+// ValueRange instantiation was simply missing, and it is the one the diagnostics
+// print verbatim.  SPELLING READ OFF THE ABORT, not copied from a sibling:
+//   system type has no rule: `llvm::detail::indexed_accessor_range_base<
+//     mlir::ValueRange, llvm::PointerUnion<const mlir::Value *, mlir::OpOperand *,
+//     mlir::detail::OpResultImpl *>, mlir::Value, mlir::Value, mlir::Value>`
+// (ValueRange.h:390 is the base-specifier; STLExtras.h:1214 is the decl the
+// converter canonicalises from).  Note the PointerT is the THREE-arm
+// `PointerUnion`, one arm SHORTER than mlir::TypeRange's four-arm union -- see the
+// g111 note below.
+//
+// MODEL: exactly t16's (`mlir::ValueRange` -> Vec<ir::Value>, src.cpp:1372),
+// reached through the base-class spelling.  Nothing new is claimed and no new
+// representation is invented, which is the same discipline t37-t39 were written
+// under.  The return is BY VALUE, so the refcount model cannot dangle (contrast
+// the refused reference-returning accessors `string_view::front()` /
+// `SMLoc::getPointer()`).
+//
+// ⛔ STILL NO GENERIC RULE.  The t37-t39 prohibition applies unchanged: a generic
+// `indexed_accessor_range_base<T1, T2, T3, T4, T5>` would have to pick ONE element
+// representation for four different element types, and it would force the converter
+// to map `mlir::OpOperand *` / `mlir::detail::OpResultImpl *` / the `PointerUnion`,
+// turning a countable mangled name into a hard mapper.cpp:722 abort (the t26/t29
+// generic-MLIR-type regression).
+//
+// SWALLOW-SAFETY.  `GetTypeMapKey` (mapper.cpp:115) truncates at the first `<`, so
+// this key lands in the bucket `llvm::detail::indexed_accessor_range_base`, shared
+// with t37, t38 and t39 -- and ONLY those.  All four spellings are FULLY CONCRETE:
+// there is no `T<digits>` placeholder anywhere in any of them, so `matchTemplate`'s
+// placeholder capture (`findNextLiteralSameDepth`, :173) -- the mechanism that made
+// `DenseMapInfo<T1>` swallow `llvm::StringRef, void` and `__wrap_iter<T1 *>` swallow
+// `DtInfo *const` -- NEVER RUNS on this bucket.  Placeholder arity 0 rules a swallow
+// out by construction, which is why the nested comma-bearing `PointerUnion<...>`
+// argument is harmless here: it is matched literally, not captured.  The four
+// candidates are also pairwise distinguished by their FIRST template argument
+// (OperandRange / ResultRange / RegionRange / ValueRange), so a literal match selects
+// exactly one and `search()`'s longer-src tie-break (mapper.cpp:430-437) is never
+// needed -- which matters, because that tie-break cannot protect when a short key is
+// the sole candidate (how the DenseMapInfo case bit).  No defaulted template argument
+// is spelled either (`indexed_accessor_range_base` has five parameters and all five
+// are written), so `SuppressDefaultTemplateArgs` cannot turn this into a dead
+// duplicate the way `DenseMapInfo<T1, void>` was.
+//
+// ⚠️ ONE KEY CANNOT ALSO COVER QUEUE ROW g111 (`mlir::TypeRange`, 16 TUs).  Measured
+// from the same abort logs, that row's full spelling is
+//   llvm::detail::indexed_accessor_range_base<mlir::TypeRange,
+//     llvm::PointerUnion<const mlir::Value *, const mlir::Type *, mlir::OpOperand *,
+//     mlir::detail::OpResultImpl *>, mlir::Type, mlir::Type, mlir::Type>
+// -- a DIFFERENT DerivedT, a FOUR-arm PointerUnion, and an element type of
+// `mlir::Type` rather than `mlir::Value`.  Its model would be a Vec of `ir::Ty`, not
+// `ir::Value`, so sharing a key would give one of the two rows the wrong element type.
+// It is left for g111, which additionally has to decide `mlir::TypeRange` itself --
+// that type is NOT mapped anywhere in this module today.
+using t166 = llvm::detail::indexed_accessor_range_base<
+    mlir::ValueRange,
+    llvm::PointerUnion<const mlir::Value *, mlir::OpOperand *,
+                       mlir::detail::OpResultImpl *>,
+    mlir::Value, mlir::Value, mlir::Value>;
+
 // f137 / f138 -- the default constructors for t164 / t165, one per type key.  The f40-f45
 // reason verbatim: a `using tN =` maps the TYPE ONLY, the converter looks `void <T>::<T>()` up
 // as an ORDINARY EXPR RULE, and on a miss emits `<mangled type>::new()`, which does not exist

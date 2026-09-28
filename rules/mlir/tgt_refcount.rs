@@ -1755,3 +1755,13 @@ fn f144(a0: Vec<dataflowir_gen::ir::Value>) -> Vec<dataflowir_gen::ir::Value> {
 fn f145(a0: &mut Vec<dataflowir_gen::ir::Value>) -> Vec<dataflowir_gen::ir::Value> {
     Clone::clone(&*a0)
 }
+
+// t166 -- the range CRTP base at its FOURTH concrete instantiation,
+// `DerivedT = mlir::ValueRange` (queue row g090).  Body IDENTICAL to t16
+// (`mlir::ValueRange`) and to t37, because the base IS the range: no new
+// representation is introduced.  Returned BY VALUE, so nothing can dangle under
+// the refcount model.  See src.cpp for the full spelling read off the abort, the
+// swallow-safety argument, and why g111 (`mlir::TypeRange`) needs its own key.
+fn t166() -> Vec<dataflowir_gen::ir::Value> {
+    Default::default()
+}
