@@ -125,11 +125,59 @@ public:
   operator LogicalResult() const;
 };
 
+// llvm/Support/LogicalResult.h:119 --
+//   class [[nodiscard]] ParseResult : public LogicalResult {
+//   public:
+//     ParseResult(LogicalResult Result = success()) : LogicalResult(Result) {}
+//     constexpr explicit operator bool() const { return failed(); }
+//   };
+//
+// It holds NO state of its own: the one data member is LogicalResult's
+// inherited `bool IsSuccess`, which t1 above already models as `bool`.  So
+// t4 -> bool is the same honest scalar model, not a new one.
+//
+// WHY THE SEARCHED SPELLING IS `llvm::ParseResult` AND NOT `mlir::ParseResult`:
+// exactly the mechanism lines 8-11 above document for LogicalResult --
+// mlir/Support/LogicalResult.h:21 and mlir/Support/LLVM.h:163 are both
+// `using llvm::ParseResult;`, so every `mlir::ParseResult` site in the corpus
+// reports the `llvm::` key.
+//
+// ⛔ ONLY TWO MEMBERS ARE ParseResult's OWN -- the converting constructor and
+// `operator bool`.  `succeeded()`/`failed()` are INHERITED from LogicalResult,
+// and a key on a DERIVED class CANNOT relocate an INHERITED member: that is
+// precisely why the six `llvm::FailureOr` reader keys described below were all
+// DEAD.  No `succeeded`/`failed` key is written here; those sites key as
+// `llvm::LogicalResult::succeeded/failed` and f1/f2 already answer them.
+//
+// ⭐ `operator bool` IS INVERTED.  It returns `failed()`, i.e. `!IsSuccess`,
+// NOT `succeeded()`.  Under the true-means-success model of t1/t4 the body must
+// therefore be `!a0`.  A body of `a0` renders the corpus's dominant shape
+// `if (parser.parseFoo()) return failure();` with the branch INVERTED and still
+// type-checks and still compiles -- silent wrongness of the worst kind.  There
+// are hundreds of such sites (dcc/src/Dialect/Sentient/SentientOps.cpp alone has
+// :868, :873, :886, :929, :934, :1220, :1232-1237, ...).
+//
+// NOT COVERED, deliberately: `mlir::OptionalParseResult`
+// (mlir/IR/OpDefinition.h:40).  It is a DISTINCT type that holds a real member
+// of its own, `std::optional<ParseResult> impl`, so its model is `Option<bool>`
+// rather than `bool`, and all five of its members (4 ctors, has_value, value,
+// operator*) are its OWN rather than inherited.  It is keyable in principle but
+// its spelling is `mlir::`, which is rules/mlir's territory, not this module's.
+// Left open on purpose.
+class ParseResult : public LogicalResult {
+public:
+  // llvm/Support/LogicalResult.h:122
+  ParseResult(LogicalResult Result = success());
+  // llvm/Support/LogicalResult.h:126 -- constexpr explicit operator bool() const
+  explicit operator bool() const;
+};
+
 } // namespace llvm
 
 using t1 = llvm::LogicalResult;
 using t2 = llvm::hash_code;
 template <typename T1> using t3 = llvm::FailureOr<T1>;
+using t4 = llvm::ParseResult;
 
 // --- LogicalResult ---------------------------------------------------------
 
@@ -248,3 +296,15 @@ namespace llvm {
 void f22(const char *a0, const char *a1, unsigned a2) {
   return llvm::llvm_unreachable_internal(a0, a1, a2);
 }
+
+// --- ParseResult -----------------------------------------------------------
+//
+// The converting constructor.  `return success();` / `return failure();` /
+// `return mlir::success();` inside a ParseResult-returning `parse()` all route
+// through it, and both sides are the same scalar, so the body is the identity.
+
+llvm::ParseResult f23(llvm::LogicalResult a0) { return llvm::ParseResult(a0); }
+
+// ⭐ INVERTED: `operator bool` returns `failed()`.  See the class comment.
+
+bool f24(llvm::ParseResult a0) { return a0.operator bool(); }

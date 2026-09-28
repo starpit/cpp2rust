@@ -128,3 +128,22 @@ fn f22(a0: Ptr<u8>, a1: Ptr<u8>, a2: u32) {
         a2
     )
 }
+
+// t4 = llvm::ParseResult.  It has no state of its own -- its single data member
+// is LogicalResult's inherited `bool IsSuccess` -- so it is the same scalar as
+// t1 in both models.
+fn t4() -> bool {
+    false
+}
+
+// The converting ParseResult(LogicalResult) ctor: identity on the scalar.
+unsafe fn f23(a0: bool) -> bool {
+    a0
+}
+
+// ⭐ INVERTED ON PURPOSE.  `ParseResult::operator bool()` returns `failed()`,
+// not `succeeded()`.  `a0` here would compile and would invert every
+// `if (parser.parseX())` in the corpus.
+unsafe fn f24(a0: bool) -> bool {
+    !a0
+}
