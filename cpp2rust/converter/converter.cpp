@@ -587,7 +587,8 @@ bool Converter::VisitFunctionDecl(clang::FunctionDecl *decl) {
   // main_0 should be static
   if (!decl->isMain())
     ConvertFunctionQualifiers(decl);
-  StrCat(keyword_unsafe_, keyword::kFn, std::move(function_name));
+  StrCat(keyword_unsafe_, keyword::kFn, std::move(function_name),
+         GetLifetimeBinders(decl));
   {
     PushParen paren(*this);
     ConvertFunctionParameters(decl);
@@ -1622,7 +1623,8 @@ bool Converter::ConvertCXXMethodDecl(clang::CXXMethodDecl *decl) {
   if (!decl->isPureVirtual() && method_target_ != MethodTarget::TraitDecl) {
     emitted_impl_methods_.insert(EmittedMethodKey(decl));
   }
-  StrCat(keyword_unsafe_, keyword::kFn, GetMethodName(decl));
+  StrCat(keyword_unsafe_, keyword::kFn, GetMethodName(decl),
+         GetLifetimeBinders(decl));
 
   {
     PushParen paren(*this);
@@ -1708,7 +1710,8 @@ bool Converter::VisitCXXConstructorDecl(clang::CXXConstructorDecl *decl) {
   if (!in_trait_body_) {
     ConvertFunctionQualifiers(decl);
   }
-  StrCat(keyword_unsafe_, keyword::kFn, GetCtorName(decl));
+  StrCat(keyword_unsafe_, keyword::kFn, GetCtorName(decl),
+         GetLifetimeBinders(decl));
   {
     PushParen paren(*this);
     ConvertFunctionParameters(decl);
@@ -6606,6 +6609,90 @@ void Converter::ConvertAssignment(clang::Expr *lhs, clang::Expr *rhs,
     StrCat(token::kSemiColon,
            isAddrOf() ? ConvertRValue(lhs) : ConvertFreshRValue(lhs));
   }
+}
+
+// A rule TARGET may be spelled with a Rust LIFETIME BINDER. The faithful model
+// of a non-owning, type-erased callable reference -- `llvm::function_ref`, which
+// LLVM documents as never-stored and which appears in this corpus ONLY in
+// parameter position -- is a BORROW, `Option<&'a (dyn Fn() -> T + 'a)>`, not an
+// owning `Box<dyn Fn() -> T>`: a `Box` imposes `'static` plus an allocation and
+// does not compile at the call site.
+//
+// ⛔ NOTHING IN SIGNATURE EMISSION EVER DECLARED THOSE BINDERS. The emitters at
+// :590 / :1625 / :1711 go straight from the function NAME to `(` to the rendered
+// parameter types -- there is no `<...>` slot anywhere between them -- so a `'a`
+// coming out of a rule target reached the output UNDECLARED at every use site:
+//     pub unsafe fn verify(                      // <-- no <'a> here
+//         mut emitError: Option<&'a (dyn Fn() -> libcc2rs::InFlightDiagnostic + 'a)>,
+// and rustc answers E0261 "use of undeclared lifetime name `'a`". That made the
+// borrow -- the only faithful model -- unwritable, which is why a
+// `rules/functional` slot had to revert a key whose reach was already PROVEN
+// (anchored `Cpp2RustUnmapped_llvm_function_ref_...` went 3 -> 0 on
+// dcc/.../Ktdp/KtdpTypes.cpp with the mapped spelling taking its exact place).
+//
+// So: collect the binders out of the RENDERED parameter and return spellings and
+// declare them on the emitted function. Rendering is done through `ToString`,
+// which redirects `rs_code_` into a scratch Buffer, so this observes exactly the
+// text that is about to be emitted without contributing any of it.
+//
+// `'static` is pre-declared in every scope and `'_` is the inferred placeholder;
+// declaring either as a generic parameter is an error, so both are skipped.
+std::string Converter::GetLifetimeBinders(clang::FunctionDecl *decl) {
+  auto is_ident_char = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+  };
+  std::vector<std::string> binders;
+  auto scan = [&](const std::string &spelling) {
+    for (size_t i = 0; i + 1 < spelling.size(); ++i) {
+      if (spelling[i] != '\'') {
+        continue;
+      }
+      size_t j = i + 1;
+      // A lifetime name is `'` followed by an identifier; anything else is not
+      // one (a Rust type spelling carries no character literals, but do not
+      // rely on that).
+      if (std::isdigit(static_cast<unsigned char>(spelling[j])) != 0 ||
+          !is_ident_char(spelling[j])) {
+        continue;
+      }
+      while (j < spelling.size() && is_ident_char(spelling[j])) {
+        ++j;
+      }
+      std::string name = spelling.substr(i, j - i);
+      i = j - 1;
+      if (name == "'static" || name == "'_") {
+        continue;
+      }
+      if (std::ranges::find(binders, name) == binders.end()) {
+        binders.push_back(std::move(name));
+      }
+    }
+  };
+  // Render under the same formals flag the real parameter emission uses, so a
+  // spelling that differs in formal position cannot hide a binder.
+  const bool saved_formals = in_function_formals_;
+  in_function_formals_ = true;
+  auto *definition =
+      decl->getDefinition() != nullptr ? decl->getDefinition() : decl;
+  for (const auto *parameter : definition->parameters()) {
+    scan(ToString(parameter->getType()));
+  }
+  in_function_formals_ = saved_formals;
+  if (!decl->getReturnType()->isVoidType()) {
+    scan(ToString(decl->getReturnType()));
+  }
+  if (binders.empty()) {
+    return "";
+  }
+  std::string out(1, token::kLt);
+  for (size_t i = 0; i < binders.size(); ++i) {
+    if (i != 0) {
+      out += ", ";
+    }
+    out += binders[i];
+  }
+  out += token::kGt;
+  return out;
 }
 
 void Converter::ConvertFunctionParameters(clang::FunctionDecl *decl) {

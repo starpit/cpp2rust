@@ -709,6 +709,14 @@ protected:
   virtual void ConvertAssignment(clang::Expr *lhs, clang::Expr *rhs,
                                  std::string_view assign_operator);
 
+  // Collects the Rust lifetime binders appearing in this function's rendered
+  // parameter and return types and returns them as a generic parameter list
+  // (`"<'a>"`, or `""` when there are none) to be emitted directly after the
+  // function name. Without this, a lifetime coming out of a rule TARGET -- the
+  // faithful shape of a non-owning callable reference such as
+  // `llvm::function_ref` -- reached the output undeclared. See the definition.
+  std::string GetLifetimeBinders(clang::FunctionDecl *decl);
+
   virtual void ConvertFunctionParameters(clang::FunctionDecl *decl);
 
   virtual void ConvertFunctionQualifiers(clang::FunctionDecl *decl);
