@@ -267,3 +267,56 @@ template <typename T1> T1 f33(const std::optional<T1> &o, T1 &&d) {
 template <typename T1> T1 f34(const std::optional<T1> &o, const T1 &d) {
   return o.value_or(d);
 }
+
+// ---- f35 / f36 / f37 -- HETEROGENEOUS comparisons against a BARE VALUE -------
+//
+// Rows g846 (`== on (std::optional<long>, int)`), g790 (`!= on (int,
+// std::optional<long>)`) and g851 (`>= on (std::optional<long>, int)`).
+//
+// WHY f23/f24 DO NOT ALREADY ANSWER THEM.  f23/f24 are written `(const
+// std::optional<T1> &, const T1 &)`, i.e. ONE placeholder used twice, so they only
+// match when the value operand has EXACTLY the optional's payload type.  Every
+// measured site is MIXED-WIDTH: `mlir::getConstantIntValue(orig_lb) == 0` is
+// `(optional<long>, int)` because `0` is an `int`, and libc++ declares these as
+// `template <class T, class U>`, so `T = long, U = int` is the recorded key.  A
+// single-placeholder rule cannot bind `long` and `int` to the same T1 and returns
+// None -- which is why these rows are open even though `==`/`!=` look covered.
+//
+// WHY THE TWO-PLACEHOLDER FORM IS SAFE HERE (row g790 asked for this unverified).
+// The swallow bug (variant t2, densemap t8, vector t8) needs a placeholder whose
+// FOLLOWING LITERAL recurs at the same depth, so findNextLiteralSameDepth walks
+// past a comma and captures several arguments as one string.  Neither placeholder
+// here has that shape: T1 sits inside `std::optional<T1>` and is followed by
+// `> &, const `, which occurs exactly once; T2 is followed by ` &)`, the end of
+// the signature.  Arity is 1, so there is no sibling argument to swallow.
+//
+// THE OVERLAP WITH f23/f24 IS BENIGN, and this was checked rather than assumed.
+// On a same-type site `(optional<long>, long)` both f23 and f35 match and their
+// key strings are the SAME LENGTH, so mapper.cpp:474 (`this_rule.src.size() >
+// rule->src.size()`, STRICTLY greater) keeps whichever it reaches first -- there
+// is no ambiguity refusal on a tie.  That is harmless because the two bodies are
+// semantically identical on that case; f35 is a strict generalisation of f23.
+//
+// ⛔ THE EMPTY OPTIONAL IS THE WHOLE CORRECTNESS QUESTION, and it is why the
+// obvious body is wrong.  libc++ defines these as
+//     operator==(x, v)  ->  x.has_value() ? *x == v : false
+//     operator!=(v, x)  ->  x.has_value() ? v != *x : true
+//     operator>=(x, v)  ->  x.has_value() ? *x >= v : false
+// i.e. a DISENGAGED optional compares LESS THAN every value.  A body that unwraps
+// and compares would panic on `nullopt` (or, with unwrap_or, silently answer with
+// a fabricated payload).  So `None` is answered explicitly, and for `>=` it
+// answers FALSE -- an empty optional is never >= anything.
+template <typename T1, typename T2>
+bool f35(const std::optional<T1> &o, const T2 &v) {
+  return operator==(o, v);
+}
+
+template <typename T1, typename T2>
+bool f36(const T2 &v, const std::optional<T1> &o) {
+  return operator!=(v, o);
+}
+
+template <typename T1, typename T2>
+bool f37(const std::optional<T1> &o, const T2 &v) {
+  return operator>=(o, v);
+}

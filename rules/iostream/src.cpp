@@ -103,3 +103,61 @@ using t4 = std::istream;
 // is an abstract, never-instantiated base and no honest Rust representation for it
 // was established within this slot's budget.
 using t5 = std::ios_base::seekdir;
+
+// ============================================================================
+// DELIBERATELY NOT KEYED: the STREAM MANIPULATORS.  Rows g858 and g861,
+// searched-as (character-for-character, from the queue detail and samples/):
+//     std::ios_base & std::boolalpha(std::ios_base &)     (g858, 1 TU)
+//     std::ios_base & std::left(std::ios_base &)          (g861, 1 TU)
+// libcxx/ios:754 and :829 -- the bodies are
+//     inline ios_base& boolalpha(ios_base& __str) { __str.setf(ios_base::boolalpha); return __str; }
+//     inline ios_base& left(ios_base& __str) { __str.setf(ios_base::left, ios_base::adjustfield); return __str; }
+// i.e. each one MUTATES STICKY FORMATTING STATE on the stream object and hands
+// the same object back.  Neither computes anything; the whole observable effect
+// is the flag, which is read LATER, by a DIFFERENT insertion, possibly in a
+// different function.
+//
+// WHY A RULE HERE WOULD BE SILENTLY WRONG -- this is the point, not the
+// mechanism.  This module models std::ostream (t1/t2/t3) as `std::fs::File`, a
+// bare fd handle with NO formatting state whatsoever, and Rust's `{}` has no
+// stream-sticky state either.  So the only rule body writable against the
+// committed model is the IDENTITY (`return the stream`), which DROPS the flag.
+// That does not fail -- it COMPILES, RUNS, and PRINTS DIFFERENT BYTES:
+//   * `std::left`: with `os.width(n)`/`std::setw(n)` in effect, C++ pads on the
+//     RIGHT (`|abc  |`); dropping the flag leaves the default adjustfield, which
+//     pads on the LEFT (`|  abc|`).
+//   * `std::boolalpha`: C++ writes `true`/`false` for a bool with the flag and
+//     `1`/`0` without it.
+// THE OBSERVER IS THE BYTE STREAM WRITTEN TO THE fd: a differential test that
+// diffs the C++ program's stdout against the translated program's stdout sees
+// it, and NOTHING EARLIER DOES -- not rc, not rustc, not no-placeholders.sh.
+// That is the silent-wrongness class, so these stay out and keep failing LOUDLY
+// as `system function has no rule`.
+//
+// ⭐ boolalpha is NOT the "free no-op" it looks like.  The tempting argument is
+// that Rust's `{}` on a `bool` prints `true`/`false` unconditionally, i.e.
+// already what boolalpha asks for, so the key could be an identity honestly.
+// MEASURED AGAINST THIS TREE, THAT IS FALSE: the ostream-family bool insertion
+// path here does not reach a Rust `bool` at all.  raw_ostream/src.cpp:78-79
+// records that `bool` needs no rule of its own because "bool -> int is an
+// integral promotion ... so C++ always picks operator<<(int) for it" -- so a
+// bool arrives at the keyed insertion ALREADY WIDENED TO int and prints `1`/`0`.
+// Against that path boolalpha is a REAL CHANGE (1/0 -> true/false), not a no-op.
+// And even where a `{}`-on-bool path existed, the identity would be right only
+// by accident and would be WRONG in the mirror direction for `std::noboolalpha`,
+// which must restore `1`/`0` and cannot, because a rule body is a pure function
+// of its arguments and cannot clear state that later insertion sites read.
+//
+// SECOND, INDEPENDENT BLOCKER (either one alone suffices): the signature itself
+// is unwritable.  Both keys take and return `std::ios_base &`, and
+// `std::ios_base` HAS NO TYPE RULE anywhere in the tree -- t5 above keys only
+// the nested `std::ios_base::seekdir`, and the bare `std::ios_base` of row
+// g2894 is explicitly refused for want of an honest Rust representation of an
+// abstract never-instantiated base.  Keying a manipulator therefore presupposes
+// first inventing a formatting-state model for ios_base (flags word + width +
+// precision + fill, threaded through every insertion so a later `<<` can read
+// what an earlier manipulator set).  That is a model change for the whole
+// ostream family, not a two-line rule, and it is the correct place to solve
+// BOTH rows -- at which point the manipulators become one-line setf bodies.
+// Until then: 1 TU each, refused, loud.
+// ============================================================================

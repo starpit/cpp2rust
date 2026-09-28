@@ -182,3 +182,28 @@ fn f34<T1: Clone + ByteRepr>(a0: &Option<Value<T1>>, a1: Ptr<T1>) -> T1 {
         None => a1.read(),
     }
 }
+
+// f35 / f36 / f37 -- heterogeneous comparisons against a bare value (rows g846,
+// g790, g851).  The payload is a shared cell here, so the present case borrows it;
+// the DISENGAGED case is answered without touching the payload at all.  An empty
+// std::optional compares LESS than every value, hence false / true / false.
+fn f35<T1: PartialEq<T2>, T2>(a0: &Option<Value<T1>>, a1: &T2) -> bool {
+    match a0.as_ref() {
+        Some(v) => *v.borrow() == *a1,
+        None => false,
+    }
+}
+
+fn f36<T1: PartialEq<T2>, T2>(a0: &T2, a1: &Option<Value<T1>>) -> bool {
+    match a1.as_ref() {
+        Some(v) => *v.borrow() != *a0,
+        None => true,
+    }
+}
+
+fn f37<T1: PartialOrd<T2>, T2>(a0: &Option<Value<T1>>, a1: &T2) -> bool {
+    match a0.as_ref() {
+        Some(v) => *v.borrow() >= *a1,
+        None => false,
+    }
+}

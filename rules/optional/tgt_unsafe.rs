@@ -181,3 +181,29 @@ unsafe fn f34<T1: Clone>(a0: &Option<T1>, a1: &T1) -> T1 {
         None => Clone::clone(a1),
     }
 }
+
+// f35 / f36 / f37 -- heterogeneous comparisons against a bare value.  The
+// DISENGAGED case is answered explicitly and NEVER unwraps: an empty optional
+// compares LESS than any value, so `==` is false, `!=` is true, and `>=` is
+// false.  Shapes mirror f23/f24, which is this module's established convention
+// for a free operator's `const T &` operand in both models.
+unsafe fn f35<T1: PartialEq<T2>, T2>(a0: &Option<T1>, a1: &T2) -> bool {
+    match a0.as_ref() {
+        Some(v) => *v == *a1,
+        None => false,
+    }
+}
+
+unsafe fn f36<T1: PartialEq<T2>, T2>(a0: &T2, a1: &Option<T1>) -> bool {
+    match a1.as_ref() {
+        Some(v) => *v != *a0,
+        None => true,
+    }
+}
+
+unsafe fn f37<T1: PartialOrd<T2>, T2>(a0: &Option<T1>, a1: &T2) -> bool {
+    match a0.as_ref() {
+        Some(v) => *v >= *a1,
+        None => false,
+    }
+}

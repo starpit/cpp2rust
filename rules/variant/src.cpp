@@ -162,3 +162,33 @@ template <typename T1, typename T2, typename T3, typename T4, typename T5,
 std::size_t f19(const std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0) {
   return a0.index();
 }
+
+// ---- f20 -- operator== on two 8-ary variants (row g848) ---------------------
+//
+// Site: sys-arch-spec/progir/progir.cpp:69 `return attr1.data_ == attr2.data_;`
+// on the 8-ary `OperandAttr::data_`, the only std::variant the corpus
+// instantiates.
+//
+// ⛔ WHAT MAKES THIS CORRECT RATHER THAN A PAYLOAD COMPARISON.  std::variant
+// equality compares the ACTIVE INDEX FIRST and only then the held value: two
+// variants holding equal-looking data in DIFFERENT alternatives are NOT equal.
+// A model that unwrapped and compared payloads would answer `true` for
+// `variant<long, float>(1L)` vs `variant<long, float>(1.0f)`.
+//
+// This module models std::variant as a REAL Rust enum (libcc2rs::Variant8), and
+// that enum is `#[derive(Clone, Debug, PartialEq)]` (libcc2rs/src/variant.rs:42).
+// A derived PartialEq on an enum compares the DISCRIMINANT first and the payload
+// only within the matching arm -- byte-for-byte the C++ rule, for free. This is
+// the payoff of the enum decision recorded at the top of this file; had variant
+// been modelled as a tuple there would be no faithful body to write here.
+//
+// Eight placeholders, not two or three, for the reason t3 documents: arity is not
+// part of the bucket key and `search` (mapper.cpp:474) prefers the LONGER src, so
+// the 8-placeholder form beats a shorter one deterministically instead of by luck,
+// and it cannot swallow alternatives 3..8 into T3 the way `t2` did.
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+bool f20(const std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0,
+         const std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a1) {
+  return operator==(a0, a1);
+}

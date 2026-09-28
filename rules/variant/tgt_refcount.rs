@@ -100,3 +100,13 @@ fn f18<T1, T2, T3, T4, T5, T6, T7, T8>(a0: T8) -> Variant8<T1, T2, T3, T4, T5, T
 // are bounded on `T: ByteRepr`, which an enum carrying arbitrary alternatives
 // cannot satisfy.  The unsafe body is the fallback and fails to COMPILE under
 // refcount (E0605) rather than returning a wrong index.
+
+// f20 (operator== on the 8-ary variant) is OMITTED here for exactly the reason
+// f8/f9/f19 are: the refcount model passes a `const variant &` as
+// `Ptr<Variant8<..>>`, and every Ptr accessor is bounded on `T: ByteRepr`, which
+// an enum carrying arbitrary alternatives cannot satisfy.  Per the union rule in
+// translation_rule.cpp:418-430 the key is still LOADED (tgt_unsafe.rs is the
+// unconditional base layer), so this is not a missing-key abort; refcount simply
+// inherits the unsafe body and fails to COMPILE there (E0605) rather than
+// returning a wrong answer.  That is the same deliberate loud-failure choice the
+// index() keys above make, and it is why no todo!()/unimplemented!() appears.
