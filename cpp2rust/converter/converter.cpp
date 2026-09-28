@@ -4227,12 +4227,105 @@ void Converter::ReportUnresolvedCall(clang::CallExpr *expr,
   assert(0 && "call with neither function decl nor function prototype\n");
 }
 
+// If `expr` is a call THROUGH a pointer-to-member -- `(obj->*pm)(args)` or
+// `(obj.*pm)(args)` -- returns the `->*`/`.*` node, otherwise nullptr. The
+// callee of such a call is a ParenExpr wrapping the operator, and its type is
+// `<bound member function type>` rather than a function pointer, which is why
+// it reaches neither getDirectCallee() nor the FunctionProtoType path below.
+static clang::BinaryOperator *GetPtrMemCallee(clang::CallExpr *expr) {
+  auto *bin_op =
+      clang::dyn_cast<clang::BinaryOperator>(GetCallee(expr)->IgnoreParenImpCasts());
+  return (bin_op != nullptr && bin_op->isPtrMemOp()) ? bin_op : nullptr;
+}
+
+// Resolves the callee of a pointer-to-member call when the member pointer is a
+// COMPILE-TIME CONSTANT, and returns nullptr in every other case.
+//
+// KTDFArchIntrinsics.h is the whole reason this exists:
+//
+//     using GetAttrNameFn = StringAttr (KTDFArchDialect::*)() const;
+//     template <GetAttrNameFn GetAttrName, class AttrConstraint = Attribute>
+//     struct IntrinsicAttr : AttrConstraint {
+//       static auto getAttrName(MLIRContext* context) -> StringAttr {
+//         const auto* dialect = context->getLoadedDialect<KTDFArchDialect>();
+//         return (dialect->*GetAttrName)();                        // <-- here
+//       }
+//     };
+//
+// `GetAttrName` is a NON-TYPE TEMPLATE PARAMETER, i.e. a compile-time constant.
+// In every instantiation the `->*` therefore names exactly ONE member function
+// and the call carries no runtime indirection at all: it is a direct call
+// wearing member-pointer syntax. The standing refusal in VisitBinaryOperator
+// ("a C++ member pointer is an offset/vtable index, not a Rust value") is
+// correct for a member pointer that is a VALUE, and simply does not apply to
+// this shape -- nothing needs to be modelled, because the callee is statically
+// known.
+//
+// That the two cases are distinguishable is not an accident of this one header,
+// it is checkable, and it was checked: `GetAttrNameFn` occurs exactly THREE
+// times in the whole source tree -- the alias above and the two
+// template-parameter declarations -- and never as a variable, parameter, field
+// or array element. Its callee set is closed at seven, every one of them a
+// literal `&`-of-member naming a nullary `const` getter.
+//
+// ⛔ ANYTHING that is not a direct reference to a member function returns
+// nullptr and keeps aborting loudly. In particular `Fn f = ...; (d->*f)();`
+// reaches a DeclRefExpr to a VarDecl, which is a genuine runtime value:
+// resolving that statically would be UNSOUND, not conservative.
+static const clang::CXXMethodDecl *
+ResolveConstantMemberPointerCallee(clang::Expr *member_ptr) {
+  // Peel the sugar a non-type template argument arrives wrapped in. Every step
+  // here is value-preserving -- none of them can substitute one member function
+  // for another -- which is precisely what makes the peel safe.
+  for (clang::Expr *prev = nullptr; member_ptr != prev;) {
+    prev = member_ptr;
+    member_ptr = member_ptr->IgnoreParenImpCasts();
+    if (auto *subst =
+            clang::dyn_cast<clang::SubstNonTypeTemplateParmExpr>(member_ptr)) {
+      // The instantiated form: the node wraps the template ARGUMENT that was
+      // substituted in, i.e. `&KTDFArchDialect::getBandwidthAttrName`.
+      member_ptr = subst->getReplacement();
+    } else if (auto *const_expr =
+                   clang::dyn_cast<clang::ConstantExpr>(member_ptr)) {
+      member_ptr = const_expr->getSubExpr();
+    } else if (auto *unary = clang::dyn_cast<clang::UnaryOperator>(member_ptr);
+               unary != nullptr && unary->getOpcode() == clang::UO_AddrOf) {
+      // The `&` of `&KTDFArchDialect::getBandwidthAttrName`.
+      member_ptr = unary->getSubExpr();
+    }
+  }
+  auto *ref = clang::dyn_cast<clang::DeclRefExpr>(member_ptr);
+  if (ref == nullptr) {
+    return nullptr;
+  }
+  return clang::dyn_cast<clang::CXXMethodDecl>(ref->getDecl());
+}
+
 Converter::CallInfo Converter::CollectCallInfo(clang::CallExpr *expr) {
   using Kind = CallArg::Kind;
 
   CallInfo info;
   info.expr = expr;
   auto callee = GetCallee(expr);
+
+  // A call through a CONSTANT pointer-to-member is a direct call; recognise it
+  // here so EmitCall can spell the callee rather than convert the `->*`, which
+  // is what reaches VisitBinaryOperator's pointer-to-member abort.
+  //
+  // IsMethodOnPtr mirrors the gate VisitMemberExpr uses for `obj->method()`:
+  // it is the condition under which the method is emitted as an inherent
+  // `fn(&self, ...)` that a UFCS spelling can actually name. When it does not
+  // hold there is no direct call to emit, so this is left alone and the
+  // existing abort still fires.
+  if (auto *ptr_mem = GetPtrMemCallee(expr)) {
+    if (const auto *method =
+            ResolveConstantMemberPointerCallee(ptr_mem->getRHS());
+        method != nullptr && IsMethodOnPtr(method)) {
+      info.ptr_mem_callee = method;
+      info.ptr_mem_object = ptr_mem->getLHS();
+      info.ptr_mem_is_arrow = ptr_mem->getOpcode() == clang::BO_PtrMemI;
+    }
+  }
   unsigned arg_begin = 0;
   if (auto op_call = llvm::dyn_cast<clang::CXXOperatorCallExpr>(expr)) {
     if (clang::isa_and_nonnull<clang::CXXMethodDecl>(
@@ -4243,6 +4336,12 @@ Converter::CallInfo Converter::CollectCallInfo(clang::CallExpr *expr) {
 
   auto decl = expr->getCalleeDecl();
   const auto *function = decl ? decl->getAsFunction() : nullptr;
+  // The resolved member function IS the callee's declaration, so supplying it
+  // here gives the arity/variadic/param-type queries below the right answers
+  // and keeps `is_fn_ptr_call` false -- there is no function pointer involved.
+  if (function == nullptr) {
+    function = info.ptr_mem_callee;
+  }
   const clang::FunctionProtoType *proto = nullptr;
   if (!function) {
     auto callee_ty = callee->getType().getDesugaredType(ctx_);
@@ -4459,7 +4558,19 @@ void Converter::EmitArgList(const CallInfo &info) {
 void Converter::EmitCall(CallInfo &&info) {
   EmitHoistedArgs(info);
 
-  if (info.resolved_overload) {
+  if (info.ptr_mem_callee != nullptr) {
+    // Direct call through a constant pointer-to-member. This is byte-for-byte
+    // the emission VisitMemberExpr already performs for `obj->method()`: the
+    // UFCS name, plus the receiver threaded through `ufcs_receiver_`, which
+    // EmitArgList prepends as the first argument. Nothing models the member
+    // pointer, because there is no member pointer left at this point -- see
+    // ResolveConstantMemberPointerCallee for why that is sound here and why it
+    // is deliberately not attempted for a member pointer that is a value.
+    SetUFCSReceiver(info.ptr_mem_object, info.ptr_mem_is_arrow,
+                    info.ptr_mem_callee);
+    StrCat(GetUFCSName(info.ptr_mem_callee), token::kDoubleColon,
+           GetMethodName(info.ptr_mem_callee));
+  } else if (info.resolved_overload) {
     // Callee is still an OverloadExpr in the AST, so converting it would reach
     // VisitUnresolvedLookupExpr. Spell the resolved decl instead.
     if (const auto *method =

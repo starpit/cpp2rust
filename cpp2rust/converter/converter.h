@@ -334,6 +334,18 @@ public:
     // candidate. EmitCall must then spell that decl instead of converting the
     // callee subexpression, which would hit VisitUnresolvedLookupExpr.
     const clang::FunctionDecl *resolved_overload = nullptr;
+    // Non-null when the callee is a call THROUGH a pointer-to-member whose
+    // member pointer is a compile-time constant (a non-type template argument
+    // or an `&`-of-member literal), so the call is a DIRECT call and the callee
+    // is statically known. EmitCall then spells the member function instead of
+    // converting the `->*`, which is what reaches VisitBinaryOperator's
+    // pointer-to-member abort. Stays null for a member pointer that is a
+    // runtime value -- that case must keep aborting loudly.
+    const clang::CXXMethodDecl *ptr_mem_callee = nullptr;
+    // The object expression, i.e. the LHS of the `->*`/`.*`.
+    clang::Expr *ptr_mem_object = nullptr;
+    // True for `->*` (BO_PtrMemI), false for `.*` (BO_PtrMemD).
+    bool ptr_mem_is_arrow = false;
     bool is_variadic;
     bool is_fn_ptr_call;
     bool is_libc_passthrough;
