@@ -112,3 +112,9 @@ fn t12<'a, T1, T2, T3, T4, T5>() -> Option<&'a (dyn Fn(T2, T3, T4, T5) -> T1 + '
 fn t13<'a, T1, T2, T3, T4, T5, T6>() -> Option<&'a (dyn Fn(T2, T3, T4, T5, T6) -> T1 + 'a)> {
     None
 }
+
+// `llvm::function_ref<T1 ()>::function_ref(Callable &&, void *, void *)`.  See the
+// refcount twin for why the Callable is a `&'a mut` borrow and not an owned value.
+unsafe fn f16<'a, T1, T2: Fn() -> T1 + 'a>(a0: &'a mut T2, a1: *mut ::libc::c_void, a2: *mut ::libc::c_void) -> Option<&'a (dyn Fn() -> T1 + 'a)> {
+    Some(&*a0)
+}

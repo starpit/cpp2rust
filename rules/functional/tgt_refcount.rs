@@ -114,3 +114,14 @@ fn t12<'a, T1, T2, T3, T4, T5>() -> Option<&'a (dyn Fn(T2, T3, T4, T5) -> T1 + '
 fn t13<'a, T1, T2, T3, T4, T5, T6>() -> Option<&'a (dyn Fn(T2, T3, T4, T5, T6) -> T1 + 'a)> {
     None
 }
+
+// `llvm::function_ref<T1 ()>::function_ref(Callable &&, void *, void *)`.
+// ⭐ `'a` GENUINELY LANDS IN A RETURN POSITION here, and it is constrainable only
+// through the Callable parameter: the borrow must outlive the `function_ref`, so the
+// Callable is taken as `&'a mut T2` and re-borrowed.  Ownership (`Some(Box::new(a0))`)
+// is impossible for a BORROW model -- it would demand `'static` and an allocation.
+// The two trailing SFINAE pointers are the defaulted `enable_if_t<...> *` params;
+// `void *` is `AnyPtr` in the refcount model.
+fn f16<'a, T1, T2: Fn() -> T1 + 'a>(a0: &'a mut T2, a1: AnyPtr, a2: AnyPtr) -> Option<&'a (dyn Fn() -> T1 + 'a)> {
+    Some(&*a0)
+}

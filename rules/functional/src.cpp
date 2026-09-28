@@ -157,6 +157,22 @@ template <typename Fn> class function_ref;
 template <typename Ret, typename... Params> class function_ref<Ret(Params...)> {
 public:
   function_ref();
+  // ⛔ THE THREE-ARY CTOR.  Real LLVM declares this as
+  //     template <typename Callable> function_ref(Callable &&callable,
+  //         std::enable_if_t<...> * = nullptr, std::enable_if_t<...> * = nullptr)
+  // i.e. the Callable plus TWO DEFAULTED SFINAE POINTER PARAMETERS.  Both
+  // `enable_if_t`s resolve to `void`, so clang renders the signature -- and the
+  // converter's search key -- as `(Callable &&, void *, void *)`, and the recorder
+  // WRITES THE DEFAULTED ARGUMENTS OUT AT THE CALL SITE.  Harvested off
+  // Ktdp/KtdpTypes.cpp with `-verbose`:
+  //   search expr void llvm::function_ref<mlir::InFlightDiagnostic ()>::function_ref(
+  //       (lambda at .../Ktdp/KtdpTypes.cpp:_:_) &&, void *, void *), result:
+  //   None
+  // ⭐ SO A ONE-ARGUMENT CTOR RULE IS DEAD ON ARRIVAL: the key must restate BOTH
+  // defaulted pointer parameters or it cannot match.  They are declared here WITHOUT
+  // defaults and passed explicitly in the rule body below, which renders identically.
+  template <typename Callable>
+  function_ref(Callable &&callable, void * = nullptr, void * = nullptr);
 };
 } // namespace llvm
 
@@ -185,3 +201,19 @@ template <typename T1, typename T2, typename T3, typename T4> using t11 = llvm::
 template <typename T1, typename T2, typename T3, typename T4, typename T5> using t12 = llvm::function_ref<T1(T2, T3, T4, T5)>;
 
 template <typename T1, typename T2, typename T3, typename T4, typename T5, typename T6> using t13 = llvm::function_ref<T1(T2, T3, T4, T5, T6)>;
+
+// THE CONSTRUCTOR for the NULLARY `llvm::function_ref<T1 ()>`.  A TYPE key supplies no
+// constructor, so without this the converter FABRICATES a call to
+// `llvm_function_ref_..._::new_N(...)` -- a Rust function defined nowhere, at rc=0,
+// carrying NO `Cpp2RustUnmapped_` anchor and therefore invisible to
+// pin/no-placeholders.sh.  Measured on Ktdp/KtdpTypes.cpp: the anchored placeholder
+// went 3 -> 0 when t8 landed while the fabricated ctor count did not move at all.
+//
+// ⚠️ `Callable &&` is an LVALUE inside the body, so the forward must be `std::move`d or
+// the recorded key is a dead duplicate of the lvalue-reference spelling.
+// The Callable has no nameable type (it is a closure type), so it is taken generically
+// as T2 -- same as the `std::function` ctor f5 above.
+template <typename T1, typename T2>
+llvm::function_ref<T1()> f16(T2 &&a0) {
+  return llvm::function_ref<T1()>(std::move(a0));
+}
