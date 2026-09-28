@@ -1446,6 +1446,101 @@ std::optional<std::string> tryDeriveTopLevelConstType(const std::string &cpp_typ
   return mapTypeStringRecursive(unqualified);
 }
 
+// A C ARRAY EXTENT IS DECORATION TOO, AND IT IS THE LAST HOLE IN THIS FAMILY.
+// The QualType path already lowers an array structurally -- VisitConstantArrayType
+// (converter.cpp:380) emits `[<elem>; N]` and VisitIncompleteArrayType (:388)
+// emits `[<elem>]` -- but a type that arrives here as a bare STRING (a template
+// argument, or any rule-setup context) has no QualType, so `unsigned char[]` was
+// searched in types_ as one opaque key, missed, and aborted the TU:
+//   LLVM ERROR: unsupported unmapped type `unsigned char[]` has no model in
+//   types_, while mapping `std::shared_ptr<unsigned char[]>`
+// That is dxp/dxp_standalone.cpp's first abort, and the same hole is the widest
+// placeholder family in the corpus (`llvm::cl::initializer<char[_]>`).
+//
+// THE OUTERMOST DIMENSION IS THE *FIRST* BRACKET, not the last: `int[3][4]` is an
+// array of 3 arrays of 4 ints, so it must become `[[i32; 4]; 3]`. We therefore
+// split at the first TOP-LEVEL `[` and recurse on `prefix + everything after the
+// closing `]`, which re-enters as `int[4]`. Getting this backwards would silently
+// transpose a 2-D array, so it is spelled out rather than assumed.
+//
+// THIS IS THE STRING PATH ONLY. Mapper::Map(QualType) (converter.cpp:123) is
+// consulted first and keeps its native array lowering untouched -- that split is
+// the whole point: a rules key for `char[_]` cannot do this, because it hijacks
+// the QualType path as well and makes a plain `const char[]` local fail E0512.
+//
+// Three refusals, each of which would otherwise be silent wrongness:
+//  * an extent that is not pure digits (`char[kSize]`, or the rules-normalised
+//    `char[_]` whose length has been ERASED) -- there is no length to emit and
+//    inventing one, or dropping to a slice, would change the type's size;
+//  * an unbalanced or empty-prefix spelling (`[3]`, `int[3`);
+//  * everything else already handled above -- a trailing `*`/`&` cannot reach
+//    here because those derives run first and this one requires a trailing `]`.
+// A leading `const ` is deliberately NOT peeled here: it is passed down with the
+// element spelling, where tryDeriveTopLevelConstType drops it, exactly as
+// Convert(QualType) does (Rust arrays carry no const).
+std::optional<std::string> tryDeriveArrayType(const std::string &cpp_type) {
+  auto trim = [](std::string s) {
+    while (!s.empty() && isspace(static_cast<unsigned char>(s.front()))) {
+      s.erase(s.begin());
+    }
+    while (!s.empty() && isspace(static_cast<unsigned char>(s.back()))) {
+      s.pop_back();
+    }
+    return s;
+  };
+
+  std::string s = trim(cpp_type);
+  if (s.empty() || s.back() != ']') {
+    return std::nullopt;
+  }
+
+  // First TOP-LEVEL `[` -- depth-aware so a `[` inside template arguments
+  // (`std::array<char[4], 2>`) is not mistaken for this type's own extent.
+  size_t open = std::string::npos;
+  {
+    int depth = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+      const char c = s[i];
+      if (c == '<' || c == '(') {
+        ++depth;
+      } else if (c == '>' || c == ')') {
+        --depth;
+      } else if (c == '[' && depth == 0) {
+        open = i;
+        break;
+      }
+    }
+  }
+  if (open == std::string::npos || open == 0) {
+    return std::nullopt;
+  }
+  const size_t close = s.find(']', open);
+  if (close == std::string::npos) {
+    return std::nullopt;
+  }
+
+  const std::string extent = trim(s.substr(open + 1, close - open - 1));
+  const std::string element =
+      trim(trim(s.substr(0, open)) + s.substr(close + 1));
+  if (element.empty()) {
+    return std::nullopt;
+  }
+  // A non-numeric extent has no length we can emit. Bail -> the loud abort.
+  if (!extent.empty() &&
+      !std::all_of(extent.begin(), extent.end(), [](unsigned char c) {
+        return std::isdigit(c) != 0;
+      })) {
+    return std::nullopt;
+  }
+
+  PushMapContext ctx(cpp_type, map_ctx_.outer_type);
+  const std::string mapped = mapTypeStringRecursive(element);
+  if (extent.empty()) {
+    return "[" + mapped + "]";
+  }
+  return "[" + mapped + "; " + extent + "]";
+}
+
 std::string mapTypeStringRecursive(const std::string &cpp_type) {
   auto [rule, subs] = search(types_, cpp_type, GetTypeMapKey(cpp_type));
   if (!rule) {
@@ -1462,6 +1557,13 @@ std::string mapTypeStringRecursive(const std::string &cpp_type) {
     }
     // Same reasoning, and the last shape in the family: a trailing `*`.
     if (auto derived = tryDerivePointerType(cpp_type)) {
+      return *derived;
+    }
+    // Same reasoning, and the last shape in the family: a trailing `]`, i.e. a
+    // C array extent. Ahead of the const derive because that one deliberately
+    // REFUSES anything with a top-level `[` and would otherwise just fall
+    // through to the abort.
+    if (auto derived = tryDeriveArrayType(cpp_type)) {
       return *derived;
     }
     // And the one member of the family that was missing: a LEADING `const ` with
