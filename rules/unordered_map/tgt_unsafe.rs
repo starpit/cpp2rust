@@ -326,3 +326,29 @@ unsafe fn f56<T1: Eq + Hash, T2>(a0: Vec<(T1, T2)>) -> HashMap<T1, Box<T2>> {
         .map(|(__k, __v)| (__k, Box::new(__v)))
         .collect::<HashMap<T1, Box<T2>>>()
 }
+
+// NOTE ON `a0`: the receiver is spelled DIRECTLY, three times, instead of being
+// bound once to `let __map = &mut *a0;`.  MEASURED: the bound form emitted
+// `let __map = &mut &mut firstIndex;` -- a DOUBLE mutable reference, which makes
+// `HashMap::insert(__map, ..)` an E0308 and `__map as *const HashMap<..>` an
+// invalid cast.  Repeating `a0` is safe here for the same reason it is in f13:
+// a rule body is inlined as one expression, so each `aN` occurrence re-evaluates
+// its argument, and the receiver of a member call is a place expression.
+unsafe fn f57<T1: Eq + Hash + Clone, T2>(
+    a0: &mut HashMap<T1, Box<T2>>,
+    a1: T1,
+    a2: T2,
+) -> (UnsafeHashMapIterator<T1, T2>, bool) {
+    {
+        let __k = a1;
+        let __v = a2;
+        let __inserted = !a0.contains_key(&__k);
+        if __inserted {
+            a0.insert(__k.clone(), Box::new(__v));
+        }
+        (
+            UnsafeHashMapIterator::find_key(&*a0 as *const HashMap<T1, Box<T2>>, &__k),
+            __inserted,
+        )
+    }
+}

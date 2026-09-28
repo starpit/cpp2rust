@@ -344,3 +344,24 @@ fn f56<T1: Eq + Hash + Clone, T2>(a0: Vec<(Value<T1>, Value<T2>)>) -> HashMap<T1
         .map(|(__k, __v)| (__k.borrow().clone(), __v))
         .collect::<HashMap<T1, Value<T2>>>()
 }
+
+fn f57<T1: Eq + Hash + Clone + 'static, T2: 'static>(
+    a0: Ptr<HashMap<T1, Value<T2>>>,
+    a1: T1,
+    a2: T2,
+) -> (RefcountHashMapIter<T1, T2>, bool) {
+    {
+        let __p = a0;
+        let __k = a1;
+        let __v = a2;
+        let __inserted = !Ptr::with_ref(&__p, |__m: &HashMap<T1, Value<T2>>| {
+            __m.contains_key(&__k)
+        });
+        if __inserted {
+            Ptr::with_mut(&__p, |__m: &mut HashMap<T1, Value<T2>>| {
+                __m.insert(__k.clone(), Rc::new(RefCell::new(__v)));
+            });
+        }
+        (RefcountHashMapIter::find_key(__p, &__k), __inserted)
+    }
+}

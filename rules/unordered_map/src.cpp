@@ -392,3 +392,59 @@ std::unordered_map<T1, T2>
 f56(const std::initializer_list<std::pair<const T1, T2>> &a0) {
   return std::unordered_map<T1, T2>(a0);
 }
+
+// f57 -- `unordered_map::emplace(key, value)`, i.e. THE `pair<iterator, bool>`
+// RETURN that every `auto [it, inserted] = m.emplace(k, v)` decomposes.  This
+// supersedes the header note above ("insert / emplace are still NOT mapped ...
+// needs a pair whose first element is a mapped iterator type, and that is not
+// modelled here"): t3 + rules/pair's generic t1 ALREADY compose into that model.
+// MEASURED 2026-09-28 on probe/umapempl/p.cpp (`std::unordered_map<int64_t,size_t>`,
+// harness --cxxflags, -verbose, run to exit rc=0):
+//     search type std::pair<std::__hash_map_iterator<std::__hash_iterator<
+//       std::__hash_node<std::__hash_value_type<long, unsigned long>, void *> *>>,
+//       bool>, result: (T1, T2)                      <- the TYPE already resolves
+//     search expr std::pair<std::__hash_map_iterator<std::__hash_iterator<
+//       std::__hash_node<std::__hash_value_type<long, unsigned long>, void *> *>>,
+//       bool> std::unordered_map<long, unsigned long>::emplace(&&...), result:
+//     None                                           <- the CALL did not
+// ⛔ AND THE MISS WAS SILENT: the TU stayed rc=0 and emitted
+//     firstIndex.emplace(&mut val, &mut ___args_1)
+// textually against a `HashMap<i64, Box<u64>>`, with NO placeholder token and
+// nothing for `pin/no-placeholders.sh` or any bucket census to see.  An unmapped
+// MEMBER does not abort.
+//
+// ARITY IS NOT IN THE KEY AND THE RULE MUST NOT BE VARIADIC.  libc++'s emplace is
+// `template<class... Args> pair<iterator,bool> emplace(Args&&...)`, and
+// `Mapper::ToString` prints the DECLARATION, so both the converter's ask and the
+// recorded key read `emplace(&&...)` whatever the call's arity is -- that is why
+// ONE key serves it.  A variadic RULE (`Init<T, Args> &&...args`, the shape
+// rules/vector f112 and rules/deque_cxx11 f1 use) is NOT usable here: it routes
+// through `cpp_rule_preprocessor.cpp:224 addPackRule`, whose `init` fragment can
+// only construct a type that `findTemplateArgument(callee, init_type)` finds among
+// the CALLEE's own template arguments -- for `unordered_map<K,V,H,E,A>` those are
+// K, V, hash<K>, equal_to<K> and allocator<pair<const K,V>>.  `value_type` =
+// `pair<const K,V>` is NOT among them (only the ALLOCATOR wrapping it is), so
+// `findTemplateArgument` would print "Init type ... is not a template argument"
+// and `std::exit(EXIT_FAILURE)` the preprocessor.  A rule with NO pack instead
+// takes the `add(Mapper::ToString(decl))` path at :153, which records the SAME
+// `(&&...)` spelling while keeping the arguments addressable as a1/a2.
+//
+// SEMANTICS, both load-bearing and both honest here:
+//   * `inserted` -- C++ emplace returns FALSE and LEAVES THE EXISTING VALUE ALONE
+//     when the key is already present.  The bodies therefore test membership
+//     first and only insert on a miss; they never report an unconditional `true`
+//     and never overwrite.  (`HashMap::insert` alone would have done BOTH wrong.)
+//   * the ITERATOR half -- `find_key` on the LIVE map, exactly as f24/f27 and as
+//     f41/f42 do for unordered_set.  It is an IDENTITY, not a copy: `it->second`
+//     routes through f37, whose `second()` yields `*mut T2` into the map's own
+//     node, so a write through it reaches the container.  A cloned value would
+//     have made `it->second = x` a write to a temporary.
+// `a1` and `a2` are each bound to a `let` BEFORE the membership test, so both
+// arguments are evaluated exactly once and unconditionally -- a rule body is
+// inlined as one expression, and `a2` used only inside the `if` would have
+// skipped its side effects on the already-present path.
+template <typename T1, typename T2>
+std::pair<typename std::unordered_map<T1, T2>::iterator, bool>
+f57(std::unordered_map<T1, T2> &o, const T1 &a1, const T2 &a2) {
+  return o.emplace(a1, a2);
+}
