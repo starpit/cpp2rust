@@ -6702,6 +6702,33 @@ public:
   // The 24 `<int>` sites are the ODS `operandSegmentSizes` compatibility path.
   llvm::LogicalResult readAttribute(detail::DenseArrayAttrImpl<int> &result);
   llvm::LogicalResult readAttribute(detail::DenseArrayAttrImpl<long> &result);
+  // ⭐⭐ THE SUSPECT ABOVE IS **REFUTED**, MEASURED 2026-09-28.  A `-verbose` leg
+  // on `dataflow-scheduler/external/ktir-mlir-frontend/lib/Ktdp/KtdpOps.cpp`
+  // (A rc=0, 16,493 emitted lines) that EXITED with `CONVERTER_RC=0` (406,219
+  // log lines, not truncated) answers the ask verbatim, `grep -A1`:
+  //     search expr llvm::LogicalResult
+  //       mlir::DialectBytecodeReader::readAttribute(mlir::detail::DenseArrayAttrImpl<int32_t> &), result:
+  //     None                                                            [x12]
+  //     search expr llvm::LogicalResult
+  //       mlir::DialectBytecodeReader::readAttribute(mlir::detail::DenseArrayAttrImpl<int64_t> &), result:
+  //     None                                                            [x8]
+  // So the EXPR recorder DOES desugar the typedef: it never spells
+  // `mlir::DenseI32ArrayAttr`.  What it keeps is the TEMPLATE ARGUMENT'S OWN
+  // TYPEDEF -- `int32_t`/`int64_t`, not `int`/`long`.  The two keys above are
+  // therefore near-misses on the *argument* spelling, which is EXACTLY the
+  // t26-vs-t29 split one level down (see t29, ~line 1675: the mangling message
+  // canonicalises to `long` while the `search` line -- the only printer that
+  // decides a lookup -- keeps `int64_t`).
+  // ⛔ AND `typedef long int64_t;` IS NOT A FIX HERE EITHER: t29's comment
+  // records, MEASURED, that cpp-rule-preprocessor canonicalises a written
+  // `<int64_t>` back to `<long>` in ir_src.json.  So a concrete key cannot be
+  // spelled the way the converter asks, and f560 below is GENERIC for the same
+  // reason t29 is.  ⭐ SAFE for the same reason too: the only type the converter
+  // must map to substitute `T1` is a BUILTIN INTEGER, which always has a model.
+  // f526/f527 are KEPT: a canonical `<int>`/`<long>` spelling costs nothing and
+  // would match a TU that writes `long` directly -- same disposition as t26.
+  template <typename T1>
+  llvm::LogicalResult readAttribute(detail::DenseArrayAttrImpl<T1> &result);
   // :121 `template <typename T> LogicalResult readOptionalAttribute(T &result)`.
   llvm::LogicalResult readOptionalAttribute(IntegerAttr &result); // 56 sites
   llvm::LogicalResult readOptionalAttribute(StringAttr &result);  // 28 sites
@@ -7347,3 +7374,36 @@ public:
 } // namespace mlir
 using t720 = mlir::DialectRegistry;
 void f620(mlir::DialectRegistry &a0) { return a0.insert(); }
+
+// ===========================================================================
+// f560 -- THE GENERIC `readAttribute(detail::DenseArrayAttrImpl<T1> &)`.
+// ⭐ WHY GENERIC AND NOT A THIRD CONCRETE SPELLING: argued in full at the
+// declaration inside `class DialectBytecodeReader`.  Short form: the converter
+// asks for `<int32_t>` / `<int64_t>` (measured, `CONVERTER_RC=0` verbose leg on
+// `Ktdp/KtdpOps.cpp`), cpp-rule-preprocessor canonicalises a written
+// `<int32_t>` back to `<int>`, so no concrete key can be spelled the way the
+// ask is spelled.  `matchTemplate` (mapper.cpp:547, reached from `search` at
+// :866 for EXPR rules too -- not just type rules) binds `T1` textually to
+// whatever the use site's printer produced.
+// ⭐ THE BUCKET IS UNAFFECTED: `GetExprMapKey` (mapper.cpp:254) takes the name
+// in front of the LAST depth-0 parameter list, i.e.
+// `mlir::DialectBytecodeReader::readAttribute`, and `GetExprCallArity` is 1 --
+// identical for the generic key and for the `<int32_t>` ask.  A placeholder in
+// an ARGUMENT type cannot move the bucket.
+// ⚠️ NO SWALLOW RISK (the matchTemplate same-depth-comma bug): the captured
+// region is a SINGLE template argument terminated by `>`, with no same-depth
+// comma anywhere in it.
+// ⚠️ `T1` DOES NOT APPEAR IN THE TARGET BODY, ON PURPOSE.  `DenseI32ArrayAttr`
+// and `DenseI64ArrayAttr` both map to `dataflowir_gen::ir::Attr` (t29), so the
+// decoded value's Rust type does not depend on `T1`; `instantiateTemplate`
+// (mapper.cpp:820) simply finds nothing to substitute.  An unused generic
+// parameter on a `fn` is legal Rust (E0392 is a type-definition diagnostic).
+// ⚠️ SAME FIDELITY STATEMENT AS f520-f531: the C++ template body's `dyn_cast<T>`
+// is dropped because the TYPE mapping erases the distinction it tests, and
+// `Err` is still failure.  Nothing is fabricated.
+// ===========================================================================
+template <typename T1>
+llvm::LogicalResult f560(mlir::DialectBytecodeReader &a0,
+                        mlir::detail::DenseArrayAttrImpl<T1> &a1) {
+  return a0.readAttribute(a1);
+}

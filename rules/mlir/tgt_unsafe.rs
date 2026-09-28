@@ -3431,3 +3431,19 @@ fn t720() -> () {
 unsafe fn f620(a0: &mut ()) {
     ()
 }
+
+// f560 -- GENERIC detail::DenseArrayAttrImpl<T1>, i.e. DenseI32ArrayAttr (12 asks
+// on Ktdp/KtdpOps.cpp) and DenseI64ArrayAttr (8).  `T1` is unused: both map to
+// `ir::Attr`.  See the src-side comment for why a concrete key cannot work.
+unsafe fn f560<T1>(
+    a0: &mut dataflowir_gen::DialectBytecodeReader,
+    a1: &mut dataflowir_gen::ir::Attr,
+) -> bool {
+    match a0.read_attribute() {
+        Ok(__v) => {
+            *a1 = __v;
+            true
+        }
+        Err(_) => false,
+    }
+}
