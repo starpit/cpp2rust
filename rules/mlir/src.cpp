@@ -805,9 +805,49 @@ public:
 // And `getLine()`/`getColumn()` are declared by `FileLineColLoc` ITSELF
 // (mlir/IR/Location.h:183-184), not by the `FileLineColRange` base, so the
 // inherited-member trap does not apply to f122/f123 either.
-// ⭐ CONSEQUENCE: the precondition the earlier note set is now SATISFIED, so the four
-// cheap follow-ons -- `as_file_line_col` / `is_strict_file_line_col` /
-// `find_file_line_col` / `find_file_line_col_or_unknown` -- are LICENSED and unwritten.
+// ⛔ RETRACTED 2026-09-28.  An earlier version of this note said the four follow-ons --
+// `as_file_line_col` / `is_strict_file_line_col` / `find_file_line_col` /
+// `find_file_line_col_or_unknown` -- were now "LICENSED" because t155/f122/f123 had been
+// proven reached.  THAT INFERENCE WAS WRONG, and two slots measured why.  "The model
+// provides it" and "t155 is reached" do not add up to "a key would be reached":
+//
+//  * `is_strict_file_line_col` -- `grep -rn isStrictFileLineColLoc` over the corpus is
+//    ZERO hits.  A key would be DEAD.
+//  * `find_file_line_col_or_unknown` -- `findInstanceOfOrUnknown` is ZERO hits.  DEAD.
+//  * `find_file_line_col` -- ONE site, dataflow-scheduler/lib/Analysis/Utils.cpp:36,
+//    `op->getLoc()->findInstanceOf<mlir::FileLineColLoc>()`.  ⛔ IT IS UNKEYABLE, for the
+//    SAME reason `hasEffect<Effect>()` is ruled out at t156: `findInstanceOf` is declared
+//    `template <typename T> T findInstanceOf()` on `LocationAttr` (Location.h:41-54) with
+//    NO function parameters, so the location type asked about appears ONLY as an explicit
+//    template argument, which is not part of the recorded signature.
+//    `findInstanceOf<FileLineColLoc>`, `<NameLoc>`, `<CallSiteLoc>` and `<FusedLoc>` would
+//    all collapse into ONE key, and any single body would answer for kinds the C++
+//    distinguishes -- silent wrongness.  (Same defect as rules/variant's `get<0>`/`get<1>`,
+//    queue row c004.)  Independently, the returns do not correspond: the model returns
+//    `Option<FileLineColLoc>` while the C++ returns a nullable `FileLineColLoc` that the
+//    site converts to bool and then calls `.getLine()` on.
+//  * `as_file_line_col` -- 3 sites, all `mlir::dyn_cast<FileLineColLoc>(loc)`, and NO rules
+//    module anywhere keys a `dyn_cast` free template function.  No precedent for the spelling.
+//
+// ⛔ AND `mlir::Location::operator->` IS NOT AN UNLOCK, though it looks like one.  Its real
+// signature is `LocationAttr *operator->() const` (Location.h:88); the model has NO
+// `LocationAttr` at all -- `dataflowir_gen::ir::Location` IS the attribute, with `walk`,
+// `find_file_line_col`, `find_file_line_col_or_unknown` and `as_file_line_col` as inherent
+// methods (ir.rs:757, 776, 790, 725) -- so `operator->` would be the IDENTITY.  But its
+// entire corpus consumer set is four sites and NONE is keyable: Utils.cpp:36
+// (`findInstanceOf`, above), dcc/src/Utils/Utils.cpp:48 (`loc->walk([&](Location){...})`,
+// needing LocWalkResult plus a closure, out of scope below), and
+// ExpressionEvaluatorUtils.cpp:467,469 (`getLoc()->dump()`, no model).  So keying it would
+// record a DEAD key.
+//
+// ⚠️ AND Utils.cpp:36 IS NOT EVEN BLOCKED -- it is SILENTLY MISTRANSLATED, which is a
+// CONVERTER row, not ours.  That TU reaches rc=0 at 58 lines, and the emitted Rust uses
+// `file_loc` twice with NO `let file_loc = ...` anywhere: the `if`-with-init-statement's
+// declaration is DROPPED ENTIRELY because its initializer is unmapped, and the condition
+// becomes a cast-and-call of an undeclared name.  The log is ZERO BYTES.  There are no
+// `Cpp2RustUnmapped` / `todo!` / `UNSUPPORTED` tokens either, so NEITHER the placeholder
+// census NOR a bucket census can see it.  No rules/mlir key can repair it.
+//
 // Still out of scope for their own reasons: `getFilename()` (C++ returns
 // `mlir::StringAttr`, the model returns `&str`; the return types do not correspond, so
 // it needs a DECISION not a key) and `Location::walk` + `LocWalkResult`.
