@@ -55,6 +55,16 @@
 // with the allocator argument default-suppressed on BOTH sides.
 #include <vector>
 
+// FORWARD DECLARATION ONLY, and only so that `mlir::RegionRange`'s own
+// constructor (f142) can be SPELLED inside `namespace mlir` below -- the real
+// definition and the `t46` mapping of this template are further down, in
+// `namespace llvm`.  A forward declaration maps nothing and records nothing on
+// its own (same inert status as the `class StringRef {}` declaration that exists
+// purely so the InFlightDiagnostic `<<` keys can be spelled).
+namespace llvm {
+template <typename T> class MutableArrayRef;
+} // namespace llvm
+
 namespace mlir {
 
 class Operation;
@@ -275,7 +285,25 @@ class ValueRange {};
 // refusals: the C++ type is a HANDLE and the available Rust model is a VALUE.
 
 // mlir/include/mlir/IR/Region.h -- a view over an op's regions.
-class RegionRange {};
+//
+// Region.h:342-356 gives `RegionRange` ITS OWN constructor,
+// `RegionRange(MutableArrayRef<Region> regions = {})`, which is why this one is
+// writable where its sibling is not: `mlir::OperandRange` declares NO
+// constructor at all (`using RangeBaseT::RangeBaseT;`) and its live fabricated
+// spelling turned out to be a hybrid -- the derived receiver scope with the BASE
+// constructor name -- so it is deliberately LEFT FABRICATING (its iterator
+// parameter type has no model, so the argument would arrive unmodelled).
+//
+// The default argument is NOT restated here: a defaulted function argument is
+// not part of the recorded signature, and the recorder writes the default out
+// explicitly at the call site, so `RegionRange()` and `RegionRange(marr)` record
+// as the SAME single key.  Writing a second, nullary entry would be silently
+// redundant (the rules/string `substr` precedent).  No other member is declared,
+// because no other member is mapped.
+class RegionRange {
+public:
+  RegionRange(llvm::MutableArrayRef<Region> regions);
+};
 
 // mlir/include/mlir/IR/OperationName.h -- a HANDLE to the registered operation
 // info (`Impl *`, nullable, uniqued per name).  dataflowir_gen's
@@ -3786,4 +3814,41 @@ template <typename T1> llvm::ArrayRef<T1> f140(const T1 &a0) {
 // the body is a copy of the whole vector.
 template <typename T1> llvm::ArrayRef<T1> f141(const std::vector<T1> &a0) {
   return llvm::ArrayRef<T1>(a0);
+}
+
+// ---- f142: the `mlir::RegionRange` constructor -----------------------------
+// WHY THIS ROW.  `mlir_RegionRange` is the largest fabricated-`::new_N` receiver
+// in the corpus (FABRICATED-NEWN.md §2): the TYPE key t17 is present, the
+// CONSTRUCTOR was absent, so every `RegionRange` construction lowered to a call
+// to `mlir_RegionRange::new_<N>` -- a function defined NOWHERE -- while the run
+// still exited rc=0 with no placeholder token.  Exactly one distinct `new_N`
+// suffix appears at this receiver, which RANKS the row but does not size it
+// (rules/pair saw 4 suffixes for one overload, rules/twine 2 for three).
+//
+// PROVEN ABSENT by a `-verbose` readback (/home/agent/work/mlirslot2/probe-regionrange.vlog):
+//   search expr void mlir::RegionRange::RegionRange(llvm::MutableArrayRef<mlir::Region>), result: None
+//   search expr void mlir::RegionRange::RegionRange(llvm::ArrayRef<mlir::Region *>), result: None
+// The first spelling is the one written here.  The second is the OTHER Region.h
+// overload and is deliberately NOT written: `llvm::ArrayRef<mlir::Region *>` has
+// no model for its element (`mlir::Region *` is not keyed; t36 keys
+// `mlir::Operation *` only), so a key for it would take an unmodelled argument.
+//
+// CONCRETE, NOT GENERIC: `RegionRange` is not a template, so the parameter type
+// resolves at the single instantiation `llvm::MutableArrayRef<mlir::Region>`.
+// t46 already maps `llvm::MutableArrayRef<T1>` -> `Vec<T1>` and t3 maps
+// `mlir::Region` -> `fmt::Region`, so nothing new is claimed and the target
+// mentions no `Tn` (no target-only-generic risk).
+//
+// ⚠️ ALIASING, stated rather than assumed.  `RegionRange` is a NON-OWNING VIEW
+// and `Vec` owns its buffer, so this body COPIES.  That is the settled position
+// for this whole range family (src.cpp:245-249, t14-t17), and it is admissible
+// HERE for the same reason it was admissible for `llvm::ArrayRef`: `RegionRange`
+// exposes NO mutating member, so the only thing a copy can lose is aliasing that
+// no mapped operation can observe.  Contrast `MutableOperandRange`, REFUSED at
+// src.cpp:252-271 precisely because it IS write-through -- and note that the
+// PARAMETER here is a `MutableArrayRef`, which is write-through; what saves this
+// row is that the CONSTRUCTOR only reads it, and `RegionRange` itself cannot
+// write back through it.
+mlir::RegionRange f142(llvm::MutableArrayRef<mlir::Region> a0) {
+  return mlir::RegionRange(a0);
 }

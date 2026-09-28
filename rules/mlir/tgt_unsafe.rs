@@ -1816,3 +1816,20 @@ unsafe fn f140<T1: Clone>(a0: &T1) -> Vec<T1> {
 unsafe fn f141<T1: Clone>(a0: &Vec<T1>) -> Vec<T1> {
     a0.clone()
 }
+
+// f142 -- `mlir::RegionRange`'s own constructor (Region.h:342-356), the largest
+// fabricated-`::new_N` receiver in the corpus.  PROVEN ABSENT by the `-verbose`
+// readback in /home/agent/work/mlirslot2/probe-regionrange.vlog (`result: None`).
+// CONCRETE, not generic: `RegionRange` is not a template, so both sides are
+// already-mapped concrete types -- the parameter `llvm::MutableArrayRef<mlir::Region>`
+// is t46 at `mlir::Region` -> `Vec<fmt::Region>`, and the result t17 is the SAME
+// Rust type.  The body is therefore the identity, which is the only thing it can
+// be: an owning `Vec` model of a non-owning view means construction is a copy
+// (src.cpp:245-249, this module's settled position for t14-t17), and no mapped
+// operation can observe the lost aliasing because `RegionRange` declares no
+// mutating member.  See src.cpp at f142 for the aliasing argument in full and for
+// why the sibling `ArrayRef<mlir::Region *>` overload is deliberately left
+// fabricating.
+unsafe fn f142(a0: Vec<dataflowir_gen::fmt::Region>) -> Vec<dataflowir_gen::fmt::Region> {
+    a0
+}

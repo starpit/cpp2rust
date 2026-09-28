@@ -1711,3 +1711,15 @@ fn f140<T1: Clone>(a0: &T1) -> Vec<T1> {
 fn f141<T1: Clone>(a0: &Vec<T1>) -> Vec<T1> {
     a0.clone()
 }
+
+// f142 -- `mlir::RegionRange`'s own constructor (Region.h:342-356).  Identical to
+// the unsafe body, and deliberately so: both sides are VALUE-LIKE (`Vec` of an
+// owned `fmt::Region`), there is no raw-pointer text and no `as_pointer()`, so the
+// two models expand the same text identically (the `rules/cstddef` precedent).
+// It is restated here only because this module HAS a `tgt_refcount.rs`, and the
+// `rules/iostream` t1 incident established that a module which has one must carry
+// every key the loader looks for in it.  See src.cpp at f142 for the readback and
+// the view/aliasing argument.
+fn f142(a0: Vec<dataflowir_gen::fmt::Region>) -> Vec<dataflowir_gen::fmt::Region> {
+    a0
+}
