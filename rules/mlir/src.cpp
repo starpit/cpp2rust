@@ -777,24 +777,45 @@ public:
 // the bare forward declaration at mlir/IR/AffineMap.h:37:7 and no TU names Builder
 // itself.
 //
-// ⚠️ f124's REACHABILITY IS UNPROVEN, 2026-09-28.  The key READS BACK as FOUND, and
-// a FOUND readback proves RECORDED, never REACHED.  Two attempts to get a converted
-// result both failed for reasons unrelated to the key: `Splat.cpp` (a
-// `rewriter.getUnknownLoc()` site at :137) TIMED OUT at 200 s under `--verbose`,
-// and `EnsureDeviceDeclaration.cpp` (122 lines, `builder.getUnknownLoc()` at :93)
-// aborts EARLIER on `std::unique_ptr<llvm::MemoryBuffer>`, so the call site is never
-// visited -- zero `getUnknownLoc` lines in a 98088-line verbose log.  The
-// declaring-class reasoning above is sound and matches the measured `llvm::FailureOr`
-// lesson (six keys FOUND, all six DEAD), but that lesson is PRECISELY why reasoning
-// cannot settle this: if the receiver keys as `OpBuilder` after all, f124 is a dead
-// key.  ⭐ TO SETTLE IT IN ONE PROBE: restate `class Builder { Location
-// getUnknownLoc(); }; class OpBuilder : public Builder {};` in a `CC2_INC` include
-// dir -- NEVER in the main file, which would make it `IsUserDefinedDecl` -- call it
-// through an `OpBuilder` lvalue, and require the readback
-// `search expr mlir::Location mlir::Builder::getUnknownLoc(), result: <body>`.
-// Do NOT hang the four cheap `as_file_line_col` / `is_strict_file_line_col` /
-// `find_file_line_col*` follow-ons off t155 until t155 likewise shows a CONVERTED
-// RESULT; t154 is the only one of the five proven reached (2 TUs, below).
+// ✅ f124 IS ALIVE AND REACHED -- SETTLED BY PROBE 2026-09-28, so do not re-litigate
+// the keyed-on-`Builder` choice.  An `OpBuilder` LVALUE receiver really does key as
+// `mlir::Builder::getUnknownLoc()`; the declaring-class reasoning above is correct and
+// the `llvm::FailureOr` hazard (six keys FOUND, all six DEAD) does not bite here.
+// Readback, four identical occurrences:
+//     search expr mlir::Location mlir::Builder::getUnknownLoc(), result:
+//     Matching: mlir::Location mlir::Builder::getUnknownLoc()
+//       param a0: &()
+//       return: dataflowir_gen::ir::Location
+//       text: "dataflowir_gen::ir::Location::Unknown"
+// The probe is `probe/mlirf124/` -- `class Builder { Location getUnknownLoc(); };
+// class OpBuilder : public Builder {};` restated in a `CC2_INC` include dir, NEVER in
+// the main file (which would make it `IsUserDefinedDecl` and measure nothing), with
+// the builder taken as a REFERENCE parameter so `OpBuilder` need not be constructible
+// or mapped -- it renders as `Cpp2RustUnmapped_mlir_OpBuilder`, which is recoverable
+// and does not block the call site.  Two earlier attempts had failed for reasons
+// unrelated to the key: `Splat.cpp` timed out at 200 s under `--verbose`, and
+// `EnsureDeviceDeclaration.cpp` aborts earlier on `std::unique_ptr<llvm::MemoryBuffer>`
+// so its call site is never visited.
+//
+// ✅ t155 IS ALSO REACHED, with f122/f123 alongside it -- converted result, both
+// models rc=0, from the same probe extended with
+// `fl.getLine() * 1000u + fl.getColumn()`:
+//     unsafe:   (((*fl).line()).wrapping_mul(1000_u32)).wrapping_add((*fl).column())
+//     refcount: same, through `(*fl.upgrade().deref())`
+// And `getLine()`/`getColumn()` are declared by `FileLineColLoc` ITSELF
+// (mlir/IR/Location.h:183-184), not by the `FileLineColRange` base, so the
+// inherited-member trap does not apply to f122/f123 either.
+// ⭐ CONSEQUENCE: the precondition the earlier note set is now SATISFIED, so the four
+// cheap follow-ons -- `as_file_line_col` / `is_strict_file_line_col` /
+// `find_file_line_col` / `find_file_line_col_or_unknown` -- are LICENSED and unwritten.
+// Still out of scope for their own reasons: `getFilename()` (C++ returns
+// `mlir::StringAttr`, the model returns `&str`; the return types do not correspond, so
+// it needs a DECISION not a key) and `Location::walk` + `LocWalkResult`.
+//
+// A trap for whoever writes them: `pin/cpp2rust` invoked DIRECTLY gives
+// `rc=127 libclang-cpp.so.22.1: cannot open shared object file` unless you
+// `source /home/agent/work/env.sh` first.  That is a missing `LD_LIBRARY_PATH`, not a
+// result about your key.
 class Builder {
 public:
   Location getUnknownLoc();
