@@ -1437,8 +1437,20 @@ bool Converter::ConvertCXXMethodDecl(clang::CXXMethodDecl *decl) {
     StrCat(token::kSemiColon);
   } else if (method_target_ == MethodTarget::TraitDefault) {
     // No definition of this method is visible, so there is no body to
-    // translate. Refuse the translation instead of emitting a placeholder:
-    // an `unimplemented!()` default would compile and then panic at runtime.
+    // translate. The INTENT was to refuse the translation rather than emit a
+    // placeholder, because an `unimplemented!()` default would compile and then
+    // panic at runtime.
+    // ⚠️ THAT REFUSAL DOES NOT HAPPEN in this build. The `assert(0)` below is a
+    // NO-OP under -DNDEBUG, and unlike the reporters at :4640/:4880 this site is
+    // in DECLARATION position, which has NO empty-emission guard: the signature
+    // has already been emitted at :1418-1427, so falling through emits
+    // `unsafe fn m(&mut self, ...) -> T` with NEITHER a `;` NOR a `{}` body and
+    // the emitted crate does not PARSE -- the worst kind of loud, since an
+    // unparseable file cannot be measured at all. Deliberately left alone: the
+    // two candidate fixes (`StrCat(token::kSemiColon)`, as the --survey branch
+    // just above already does, which silently turns a defaulted trait method
+    // into a REQUIRED one; or report_fatal_error) are a semantic choice, not a
+    // mechanical one. See the assert(0) audit row in CONVERTER-QUEUE.md.
     llvm::errs() << "unsupported trait default body: no visible definition for "
                  << decl->getParent()->getQualifiedNameAsString() << "::"
                  << GetMethodName(decl) << " (declared at "
@@ -4877,6 +4889,24 @@ replaceNonUniformLibcField(clang::MemberExpr *expr) {
   return {nullptr, ""};
 }
 
+// ⚠️ NOT A HARD REFUSAL, and its message must not imply one. The `assert(0)` at
+// the bottom is a NO-OP under this release build's -DNDEBUG, so outside
+// --survey this function prints one stderr line, `expr->dump()`s, and RETURNS;
+// the caller (ConvertMemberExpr / VisitCXXThisExpr) then emits no text, and the
+// empty-emission guard in Convert(Expr*, optional<QualType>) substitutes
+// `Cpp2RustUnmappedExpr_<StmtClass>`. Third instance of the compiled-out-assert
+// pattern, after ReportUnsupportedException (:1725-1733, now
+// report_fatal_error) and ReportUnsupportedOperatorCall (:4640).
+//
+// ADJUDICATED 2026-09-28: KEEP THE PLACEHOLDER, do NOT promote this to
+// report_fatal_error. `dsc/designSpaceConfig.h:358`'s one 240-entry NSDMI is
+// 240 of the goal TU's 257 placeholders, the construct has no expressible Rust
+// lowering, and per the guarantee argued at :145 nothing else emits the
+// `Cpp2RustUnmapped` prefix -- so the name CANNOT silently resolve and is a
+// guaranteed E0425 at the exact site, which meets the fail-loudly bar. This is
+// NOT the silent-drop class fixed in 3ce6876a (that emitted nothing at all).
+// Aborting would take a widely-included header's whole TU with it and hide
+// every other defect behind one unmappable construct.
 void Converter::ReportThisWithoutEnclosingFunction(const clang::Expr *expr,
                                                    const std::string &what) {
   const std::string loc =
@@ -4888,8 +4918,11 @@ void Converter::ReportThisWithoutEnclosingFunction(const clang::Expr *expr,
       "non-static data member initializer (NSDMI) / in-class field "
       "initializer, or a default argument. Lowering `this` here requires "
       "knowing whether it becomes the constructor form (`this`) or the method "
-      "form (`self`); the converter refuses to guess, because a wrong choice "
-      "is silently-wrong output, not a compile error";
+      "form (`self`); the converter will not guess, because a wrong choice "
+      "is silently-wrong output, not a compile error. NOT FATAL: this reporter "
+      "RETURNS (see the comment above it), and the caller's empty-emission "
+      "guard turns the site into an undefined "
+      "`Cpp2RustUnmappedExpr_<StmtClass>`, i.e. a guaranteed E0425";
   if (survey::Enabled()) {
     survey::Record(survey::GapKind::kUnsupportedConstruct, detail, loc);
     return;
