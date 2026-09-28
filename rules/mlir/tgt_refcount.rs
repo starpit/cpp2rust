@@ -2637,3 +2637,22 @@ fn f366(a0: libcc2rs::Ptr<dataflowir_gen::AsmPrinter>, a1: &Vec<u8>) -> libcc2rs
     });
     __p
 }
+
+// t480..t482 -- llvm::SmallDenseSet<T>.  Rows g1129, g1130, g1131, g1136, g1137,
+// g1138.  Plain `std::collections::HashSet`, identical to rules/densemap t2 and to
+// t236-t242 in this file; a default-constructed SmallDenseSet IS the empty set, so
+// the init is an exact match and not a sentinel.  TYPE rules, so `fn`, not
+// `unsafe fn` (the t166 / t236 convention).
+fn t480() -> std::collections::HashSet<i64> {
+    std::collections::HashSet::new()
+}
+
+fn t481() -> std::collections::HashSet<u32> {
+    std::collections::HashSet::new()
+}
+
+// `llvm::StringRef` is `Vec<u8>` in THIS model (f22/f23 above) and
+// `Vec<libc::c_char>` in the unsafe one -- see tgt_unsafe.rs.  Both are Hash + Eq.
+fn t482() -> std::collections::HashSet<Vec<u8>> {
+    std::collections::HashSet::new()
+}

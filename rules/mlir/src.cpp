@@ -5940,3 +5940,105 @@ class ImplicitLocOpBuilder : public OpBuilder {};
 
 using t440 = mlir::OpBuilder;
 using t441 = mlir::ImplicitLocOpBuilder;
+
+// ---------------------------------------------------------------------------
+// llvm::SmallDenseSet<T> -- t480..t482.  Queue rows g403, g1129-g1138 (11 rows,
+// all reopened from `blocked:refusal-NARROWED-remeasure`).
+//
+// ⭐ THE ROWS' OWN `searched as:` IS THE SHORT ARITY-1 SPELLING, not the long one
+// the row TITLE shows.  Taken untruncated from queue/samples/g1136.txt:
+//     searched as: llvm::SmallDenseSet<unsigned int>
+//     from decl (NOT a key -- canonicalised, defaulted args kept):
+//                  llvm::SmallDenseSet<unsigned int, _, llvm::DenseMapInfo<unsigned int, void>>
+// The recorder suppresses TRAILING defaulted template arguments, and BOTH of
+// `SmallDenseSet`'s trailing parameters are defaulted (DenseSet.h:288-290:
+// `unsigned InlineBuckets = 4`, `typename ValueInfoT = DenseMapInfo<ValueT>`), so
+// the key the converter actually looks up is arity 1.  All eleven samples agree.
+// ⛔ Keying the long `from decl` text instead would have produced three DEAD keys
+// -- that text is explicitly labelled "NOT a key" by the recorder itself.
+//
+// ⭐ GROUND TRUTH, not just the lead: the BEFORE leg on the witness emits
+//     Cpp2RustUnmapped_llvm_SmallDenseSet_unsigned_int_        (19 sites)
+// in dcc/src/Transform/Sentient/Analyses/GraphStats.cpp (bucket A rc=0), which is
+// the arity-1 spelling mangled.  That is the name the gate counts.
+//
+// ⭐ THE DECLARATION MUST CARRY THE DEFAULTS, and each `using` below must OMIT the
+// trailing arguments.  Written that way the recorded arity is 1 and the key is
+// FULLY CONCRETE: placeholder arity 0, so `matchTemplate`'s same-depth capture
+// (`findNextLiteralSameDepth`, mapper.cpp:173) never runs and the swallow that
+// killed rules/setvector's member keys is ruled out BY CONSTRUCTION.  Same
+// discipline as t236-t242 / t166 / t37-t39.
+// ⛔ AND THAT IS WHY THESE ARE NOT ONE GENERIC `llvm::SmallDenseSet<T1>` KEY (the
+// shape rules/densemap uses for `llvm::DenseSet<T1>`).  A single arity-1 generic
+// would also match the arity-3 `from decl` spelling if the recorder ever stops
+// suppressing the defaults, with `T1` capturing the WHOLE argument list because a
+// comma is not a delimiter -- i.e. it would silently map the set to
+// `HashSet<unsigned int, _, llvm::DenseMapInfo<...>>`-as-one-type.  Concrete keys
+// cannot do that.
+//
+// ⛔ `llvm::SmallDenseSet` IS A DIFFERENT BUCKET FROM t239.  `GetTypeMapKey`
+// truncates at the first `<`, so `llvm::detail::DenseSetImpl` (t239, the CRTP
+// BASE of a `SmallDenseSet<long, N>`) and `llvm::SmallDenseSet` (the DERIVED
+// class, here) never share a bucket and never compete.  t239 is not a duplicate of
+// t480 and neither is dead because of the other: the recorder emits whichever
+// class the corpus NAMES, and these eleven rows name the derived one.
+// ⚠️ The only two prior mentions of `SmallDenseSet` in this module were both
+// COMMENTS (the t239 header and the "DECLARING class" note above it) -- there was
+// no pre-existing SmallDenseSet key, so nothing here is a second key beside a dead
+// one.
+//
+// MODEL: `std::collections::HashSet<T>`, exactly `rules/densemap` t2 and
+// `rules/mlir` t236-t242.  A `SmallDenseSet`'s inline-bucket capacity is an
+// allocation strategy, not semantics, and its iteration order is unspecified, so a
+// HashSet claims nothing the C++ does not.
+//
+// ⭐ ELEMENT EQUALITY IS CHECKED PER SPELLING, because `std::collections::HashSet<T>`
+// is only USABLE for `T: Hash + Eq`:
+//   * `long` -> `i64`, `unsigned int` -> `u32`  -- primitives, both derive both.
+//     Identical to t236 (`HashSet<i64>`) and t240 (`HashSet<u32>`) in this module.
+//   * `llvm::StringRef` -> `Vec<u8>` (refcount) / `Vec<libc::c_char>` (unsafe).
+//     ⚠️ THE TWO MODELS SPELL IT DIFFERENTLY and this module already commits to
+//     both spellings (f22/f23 in each target file), so t482 is not a new
+//     cross-module claim -- it reuses the one rules/mlir already makes.  Both
+//     `Vec<u8>` and `Vec<i8>` are `Hash + Eq`.
+//
+// ⛔ THE FOURTH ELEMENT TYPE, `mlir::Attribute`, IS DELIBERATELY LEFT OUT -- rows
+// g403, g1132, g1133, g1134, g1135.  t6 maps `mlir::Attribute` to
+// `dataflowir_gen::ir::Attr`, and the refusal that stood here for the DenseSetImpl
+// rows said the deciding read was "does `ir::Attr` implement `Hash + Eq`" and that
+// it was "a dataflowir-gen read, not a rules read".  ⭐ THAT READ IS NOW DONE AND
+// IT COMES BACK NEGATIVE: `dataflowir-gen/src/ir.rs:465` is
+// `#[derive(Debug, Clone, PartialEq, Eq)]` -- `Eq` YES, `Hash` NO.  A
+// `HashSet<ir::Attr>` is a well-formed TYPE (the struct carries no bound) so the
+// key would record cleanly and pass every gate, and then no membership operation
+// on it could ever compile.  That is a container that cannot function, i.e. exactly
+// the silent lie t236-t242's header refuses to write.  ⭐ THE CLOSING STEP IS
+// NAMED AND SMALL: add `Hash` to that derive in `dataflowir-gen/src/ir.rs` (which
+// needs `Ty` and every payload to be `Hash` too), then t483 is a one-line key.
+// It is not done here because it is a dataflowir-gen rebuild under a store six
+// slots are already fighting for today.
+//
+// ⭐ NO MEMBER RULES, and as for t236-t242 that is not an omission: all eleven rows
+// are `kind=type` ("system type has no rule"); the queue holds no SmallDenseSet
+// method row at all.  ⚠️ BUT THE MEMBERS ARE REAL AND THEY ARE READ -- censused
+// from the witness GraphStats.cpp: `insert` (x6), `erase`, `empty` (x2), `size`,
+// `begin` (dereferenced), the copy constructor, and SIX range-for loops over the
+// set.  Those emit TEXTUALLY at rc=0 with no placeholder token (the unmapped-member
+// hole), so they stay loud at rustc, not silent -- but they are the reason this is a
+// type-row closure and not a working container.  The range-for/`begin` half needs a
+// `DenseSetImpl<...>::Iterator` model, which is a separate row family.
+namespace llvm {
+template <typename ValueT, unsigned InlineBuckets = 4,
+          typename ValueInfoT = DenseMapInfo<ValueT>>
+class SmallDenseSet {};
+} // namespace llvm
+
+// t480 -- rows g1130, g1131.  Recorded key: `llvm::SmallDenseSet<long>`.
+using t480 = llvm::SmallDenseSet<long>;
+
+// t481 -- rows g1136, g1137, g1138.  Recorded key:
+// `llvm::SmallDenseSet<unsigned int>`.  This is the witness spelling.
+using t481 = llvm::SmallDenseSet<unsigned int>;
+
+// t482 -- row g1129.  Recorded key: `llvm::SmallDenseSet<llvm::StringRef>`.
+using t482 = llvm::SmallDenseSet<llvm::StringRef>;
