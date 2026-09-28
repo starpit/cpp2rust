@@ -367,3 +367,28 @@ template <typename T1, typename T2>
 T2 &f55(std::unordered_map<T1, T2> &o, T1 &&key) {
   return o.operator[](std::move(key));
 }
+
+// f56 -- the INITIALIZER-LIST CONSTRUCTOR, i.e. `std::unordered_map<K,V> m = {{k,v}, ...}`.
+// MEASURED 2026-09-28 from the fallback readback of `probe/umilist/p.cpp`:
+//     std_unordered_map_std_string__int__std_hash_std_string___std_equal_to_std_string___
+//     std_allocator_std_pair_const_std_string__int___ :: new_1 ( { vec! [ (..) , .. ] } , )
+// Two facts that differ from `rules/map`'s f35 and were read off the emission rather than
+// guessed: (a) the braced init list already lowers to a `vec![...]`, same as map; but
+// (b) there is NO extra argument -- the call site carries the init list ALONE, with a
+// single trailing comma and no `None`.  map's f35 needs the `const std::less<T1> &`
+// parameter because libc++ declares `map(initializer_list, const key_compare& = ...)`
+// as ONE constructor with a DEFAULTED comparator, which the recorder collapses to a
+// literal `None` argument; libc++'s `unordered_map(initializer_list<value_type>)` is by
+// contrast its own 1-parameter OVERLOAD (the bucket-count/hasher/equal/allocator forms
+// are separate overloads), so Hash, KeyEqual and Allocator appear only in the mangled
+// TYPE name and never as arguments.  Hence a 1-arg key, not a 4-arg one.
+// The body uses `.rev()` before `collect()` because HashMap's FromIterator inserts in
+// iteration order and a later duplicate REPLACES the value (last-wins), while
+// std::unordered_map's init-list construction keeps the FIRST of equivalent keys;
+// reversing makes the two agree.  `a0` occurs EXACTLY ONCE -- a rule body is inlined as
+// one expression, so every `aN` occurrence re-evaluates that argument.
+template <typename T1, typename T2>
+std::unordered_map<T1, T2>
+f56(const std::initializer_list<std::pair<const T1, T2>> &a0) {
+  return std::unordered_map<T1, T2>(a0);
+}

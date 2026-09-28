@@ -337,3 +337,10 @@ fn f55<T1: Eq + Hash + Clone + 'static, T2: Default + 'static>(
             .as_pointer()
     })
 }
+
+fn f56<T1: Eq + Hash + Clone, T2>(a0: Vec<(Value<T1>, Value<T2>)>) -> HashMap<T1, Value<T2>> {
+    a0.into_iter()
+        .rev()
+        .map(|(__k, __v)| (__k.borrow().clone(), __v))
+        .collect::<HashMap<T1, Value<T2>>>()
+}

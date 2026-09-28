@@ -319,3 +319,10 @@ unsafe fn f54<T1: Eq + Hash + Clone>(
 unsafe fn f55<T1: Eq + Hash, T2: Default>(a0: &mut HashMap<T1, Box<T2>>, a1: T1) -> &mut T2 {
     a0.entry(a1).or_default().as_mut()
 }
+
+unsafe fn f56<T1: Eq + Hash, T2>(a0: Vec<(T1, T2)>) -> HashMap<T1, Box<T2>> {
+    a0.into_iter()
+        .rev()
+        .map(|(__k, __v)| (__k, Box::new(__v)))
+        .collect::<HashMap<T1, Box<T2>>>()
+}
