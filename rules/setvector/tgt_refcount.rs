@@ -81,3 +81,51 @@ fn f4<T1, T2, T3>(a0: Ptr<T1>) -> Ptr<T1> {
 fn f5<T1, T2, T3>(a0: Ptr<T1>) -> Ptr<T1> {
     a0.to_end()
 }
+
+// ============================================================================
+// ARITY-0 CONCRETE MEMBER KEYS, 2026-09-28.  See src.cpp: f2..f5 are keyed
+// 4-ARY GENERIC while the converter asks ARITY-0 CONCRETE, and the 4-ary key
+// cannot match because matchTemplate's `T1` swallows the whole argument list
+// (a comma is not a delimiter).  These carry the SAME MODEL -- a `Vec` in
+// insertion order, insert = membership-tested push -- spelled with no template
+// parameters at all, so no capture and therefore no swallow is possible.
+// ⛔ DO NOT generalise these back to `T1`: that is the defect.
+//
+// Element `mlir::Attribute` -> `dataflowir_gen::ir::Attr`, which derives
+// PartialEq/Eq (ir.rs:465), so the membership test is honest.
+
+fn f6(a0: &mut Vec<dataflowir_gen::ir::Attr>, a1: dataflowir_gen::ir::Attr) -> bool {
+    let __x = a1;
+    if a0.contains(&__x) {
+        false
+    } else {
+        a0.push(__x);
+        true
+    }
+}
+
+fn f7(a0: Vec<dataflowir_gen::ir::Attr>, a1: dataflowir_gen::ir::Attr) -> bool {
+    a0.contains(&a1)
+}
+
+// `size()` is `size_type`, which the ask prints as `unsigned long`.
+fn f8(a0: Vec<dataflowir_gen::ir::Attr>) -> u64 {
+    Vec::len(&a0) as u64
+}
+
+// Element `mlir::Operation *` -> `*mut dataflowir_gen::fmt::OpInst` (t3's
+// model).  Raw pointers are PartialEq, so the membership test is fine here even
+// though the by-value op-handle model is not (see src.cpp's refusal).
+fn f9(a0: &mut Vec<*mut dataflowir_gen::fmt::OpInst>, a1: *mut dataflowir_gen::fmt::OpInst) -> bool {
+    let __x = a1;
+    if a0.contains(&__x) {
+        false
+    } else {
+        a0.push(__x);
+        true
+    }
+}
+
+fn f10(a0: Vec<*mut dataflowir_gen::fmt::OpInst>) -> u64 {
+    Vec::len(&a0) as u64
+}

@@ -173,6 +173,13 @@ public:
   // desynchronise the set.  For SmallVector<T, N> that type is `const T *`.
   const T *begin();
   const T *end();
+
+  // llvm/ADT/SetVector.h:104 -- size_type size() const, where size_type is
+  // `vector_type::size_type` == `size_t`.  The converter's ask prints it as
+  // `unsigned long`, so that is the spelling written here.  Added 2026-09-28
+  // because `(*result).non_parallel_components.size()` was emitting TEXTUALLY
+  // (unmapped-member class: rc=0, no placeholder token, invisible to a census).
+  unsigned long size() const;
 };
 
 // Restated from llvm/ADT/SetVector.h:339.  See the header comment for why the
@@ -256,3 +263,98 @@ template <typename T1, typename T2, typename T3, unsigned T4>
 const T1 *f5(llvm::SetVector<T1, T2, T3, T4> &o) {
   return o.end();
 }
+
+// ============================================================================
+// MEMBER ARITY REPAIR, 2026-09-28 -- THE UN-REPAIRED HALF OF THE SAME DEFECT.
+// ============================================================================
+// The TYPE keys above were already moved to arity-0 fully-concrete spellings
+// because `matchTemplate` captures to the next SAME-DEPTH literal and A COMMA IS
+// NOT A DELIMITER: in a key like `llvm::SetVector<T1, T2, T3, T4>`, `T1` swallows
+// the entire argument list and T2/T3/T4 bind to nothing.  f2..f5 below are keyed
+// exactly that way -- 4-ary generic -- while the converter asks arity-0 CONCRETE,
+// so they are dead for the identical reason the old 4-ary `t1` was.
+//
+// MEASURED on
+//   dataflow-scheduler/lib/Conversion/backend/ScheduleIRToDFIR/KTDFToKTDFLow/
+//   ComponentClassifier.cpp   (A rc=0, 4613 lines; -verbose leg also rc=0)
+// the ideal evidence pairing sits in one log: the TYPE resolves
+//     search type llvm::SetVector<mlir::Attribute>, result: Vec<...::ir::Attr>
+// and a MEMBER resolves
+//     SetVector(), result: Matching: void llvm::SetVector<T1>::SetVector()
+// while insert/contains/size all read `result: None`.  MISSING OVERLOAD, NOT
+// MISSING TYPE.  The consequence is the UNMAPPED-MEMBER class, not an abort: the
+// converter emits the call TEXTUALLY, e.g. emitted line 4108
+//     (unsafe { all_parallel_components.insert(&component) });
+// which is rc=0, carries no `Cpp2RustUnmapped` token, and -- because Rust's
+// `Vec::insert` is `(index, elem)` -- is silently wrong rather than loud.
+//
+// THE FIX IS ARITY-0 AND FULLY CONCRETE.  With no template parameters there is
+// nothing for matchTemplate to capture, so the swallow is ruled out
+// STRUCTURALLY (the t166 / t37-t39 precedent).  DO NOT "generalize" these back
+// to `T1` -- that reintroduces the exact defect.
+//
+// ⚠️ The corpus never spells the element as `mlir::Attribute`; it is
+// `ResourceType`, a typedef.  A source grep for the searched spelling finds
+// nothing, which is expected and is NOT evidence the key is unreachable.
+
+// --- element `mlir::Attribute` (the elements of t1 / t4). -------------------
+// Receiver spelled 1-ARY: the rule-side recorder drops DEFAULTED arguments, so
+// this records as `llvm::SetVector<mlir::Attribute>`, which is what the ask
+// prints.  Verbatim asks:
+//   bool llvm::SetVector<mlir::Attribute>::insert(const mlir::Attribute &)
+//   bool llvm::SetVector<mlir::Attribute>::contains(const mlir::Attribute &) const
+//   unsigned long llvm::SetVector<mlir::Attribute>::size() const
+bool f6(llvm::SetVector<mlir::Attribute> &o, const mlir::Attribute &x) {
+  return o.insert(x);
+}
+
+bool f7(const llvm::SetVector<mlir::Attribute> &o, const mlir::Attribute &x) {
+  return o.contains(x);
+}
+
+unsigned long f8(const llvm::SetVector<mlir::Attribute> &o) { return o.size(); }
+
+// --- element `mlir::Operation *` (the element of t3). -----------------------
+// Receiver 1-ary, as t3 is searched.  `insert` takes `const value_type &`, which
+// for a pointer element is `mlir::Operation *const &` -- the spelling clang
+// prints, and the reason a naive `const T1 *` key can never match a pointer T1.
+//
+// ⛔ `contains` IS DELIBERATELY NOT KEYED FOR THIS ELEMENT FORM.  SetVector.h:253
+// declares `bool contains(const_arg_type_t<key_type> key) const`, and
+// `const_pointer_or_const_ref` resolves to the POINTER BY VALUE for a pointer
+// key type -- i.e. `mlir::Operation *`, not `mlir::Operation *const &`.  This
+// restated class has a single `contains(const T &)`, so it cannot spell that
+// without a pointer partial specialisation, and no witness measured here asks
+// for it.  A key spelled `const &` would read back FOUND and be DEAD at every
+// call site, so it is left OUT to fail loudly instead.
+bool f9(llvm::SetVector<mlir::Operation *> &o, mlir::Operation *const &x) {
+  return o.insert(x);
+}
+
+unsigned long f10(const llvm::SetVector<mlir::Operation *> &o) {
+  return o.size();
+}
+
+// --- elements `mlir::ktdf::StageOp` / `mlir::ktdf_arch::GroupOp`: REFUSED. -----
+// The three members were ALSO wanted for t5/t6's op-handle element forms, and are
+// DELIBERATELY NOT WRITTEN, for two independent reasons either of which is
+// sufficient:
+//   1. THE MODEL CANNOT BE WRITTEN CORRECTLY.  `insert` is a MEMBERSHIP-TESTED
+//      push and `contains` is an equality scan, so both bodies need element
+//      equality -- but the model for an op handle held by value is
+//      `dataflowir_gen::fmt::OpInst`, which is `#[derive(Clone)]` ONLY
+//      (dataflowir-gen/src/fmt.rs:390).  No `PartialEq`, so `Vec::contains`
+//      does not typecheck.  (The `mlir::Attribute` element form is fine:
+//      `dataflowir_gen::ir::Attr` is `#[derive(Debug, Clone, PartialEq, Eq)]`,
+//      ir.rs:465.)  Writing the key anyway would translate rc=0 and then fail to
+//      compile -- the same "reads back FOUND, is useless" shape the header warns
+//      about, only louder.
+//   2. NO ASK WAS OBSERVED.  The witness measured here
+//      (ComponentClassifier.cpp, -verbose rc=0, 117,005 lines) asks ONLY for the
+//      `mlir::Attribute` element form; it contains no StageOp/GroupOp SetVector
+//      site at all, so the 4-ary receiver spelling for those two would be
+//      DERIVED, not read off a `result: None` line.  Per the module's own rule,
+//      a key nobody has checked is a key nobody has checked.
+// The next slot wanting these needs `PartialEq` (or an explicit identity
+// comparison) on the op-handle model FIRST, then a -verbose leg on
+// DoubleBuffering.cpp / ApplicableUnits.cpp to read the exact asks.
