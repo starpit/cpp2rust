@@ -147,3 +147,15 @@ unsafe fn f23(a0: bool) -> bool {
 unsafe fn f24(a0: bool) -> bool {
     !a0
 }
+
+// t5 = llvm::SMLoc -> Ptr<u8>.  Same opaque pointer-shaped handle as
+// tgt_unsafe.rs's `*const u8`, in this model's pointer type (the f22 pairing).
+// Nothing reads through it, so the null handle is never borrowed.
+fn t5() -> Ptr<u8> {
+    Ptr::null()
+}
+
+// `SMLoc() = default` leaves the `const char *Ptr = nullptr` NSDMI alone.
+fn f25() -> Ptr<u8> {
+    Ptr::null()
+}

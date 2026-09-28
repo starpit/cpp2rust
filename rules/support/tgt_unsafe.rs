@@ -140,3 +140,17 @@ unsafe fn f23(a0: bool) -> bool {
 unsafe fn f24(a0: bool) -> bool {
     !a0
 }
+
+// t5 = llvm::SMLoc -> *const u8.  An OPAQUE pointer-shaped handle: the class's
+// one data member IS a `const char *` into a SourceMgr-owned MemoryBuffer, and
+// no corpus site dereferences it, compares it outside the refused
+// `mlir::AsmParser` body, or asks for `getPointer()`.  See src.cpp for the grep
+// and for why every member except the default ctor is refused.
+fn t5() -> *const u8 {
+    std::ptr::null()
+}
+
+// `SMLoc() = default` leaves the `const char *Ptr = nullptr` NSDMI alone.
+unsafe fn f25() -> *const u8 {
+    std::ptr::null()
+}

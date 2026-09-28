@@ -172,12 +172,80 @@ public:
   explicit operator bool() const;
 };
 
+// llvm/Support/SMLoc.h:21 --
+//   class SMLoc {
+//     const char *Ptr = nullptr;
+//   public:
+//     SMLoc() = default;
+//     bool isValid() const { return Ptr != nullptr; }
+//     bool operator==(const SMLoc &RHS) const { return RHS.Ptr == Ptr; }
+//     bool operator!=(const SMLoc &RHS) const { return RHS.Ptr != Ptr; }
+//     const char *getPointer() const { return Ptr; }
+//     static SMLoc getFromPointer(const char *Ptr) { ... }
+//   };
+//
+// MODEL: an OPAQUE POINTER-SHAPED HANDLE.  An SMLoc *is* a bare
+// `const char *` into a MemoryBuffer owned by a SourceMgr, and the ONE data
+// member is that pointer, so `*const u8` (unsafe) / `Ptr<u8>` (refcount) is the
+// class's actual representation, not a stand-in.  Nothing here reads through
+// it.
+//
+// WHY THE TYPE IS SAFE TO KEY WHILE EVERY MEMBER IS REFUSED -- 25 corpus sites,
+// grep re-run and re-confirmed 2026-09-28, and EVERY ONE is opaque
+// pass-through:
+//   * 12 default-constructed nulls handed straight to
+//     `SourceMgr::AddNewSourceBuffer` (dxp/util.cpp:154,
+//     dxp/tools/DxpOptMain.cpp:199, ddc/ddl/ddl.cpp:67,
+//     dcc/tools/dcc-standalone/dcc-standalone-main.cpp:1099 and :1284,
+//     dcc/src/Driver/dcc.cpp:86, hcc/tools/hcc-standalone/...:483 and :663,
+//     dataflow-scheduler/tools/.../dataflow-scheduler-main.cpp:214,
+//     dr5/tools/dr5-driver-lib/dr5-opt-main.cpp:267 and :449, ...);
+//   * 9 `::llvm::SMLoc xOperandsLoc;` locals in tablegen'd `*Ops.cpp` parsers
+//     (ddc/ddl/Dialect/DdlOps.cpp:225/229/233, dcc/src/Dialect/Trace/
+//     TraceOps.cpp:67, dcc/src/Dialect/Sentient/SentientOps.cpp:1223/1226,
+//     dataflow-scheduler/.../DataflowOps.cpp:101, ...) -- stored, then handed
+//     to a diagnostic;
+//   * 4 UNUSED lambda parameters
+//     (.../Dialect/Dataflow/DataflowTypes.cpp:68/73/78/82).
+// ZERO dereferences, zero `getPointer()`, zero `isValid()`.  The only
+// comparison anywhere in the corpus is the single `==` site behind
+// `mlir::AsmParser`.
+//
+// ⛔ EVERY MEMBER IS REFUSED, AND THE REFUSAL IS WHAT MAKES THE TYPE HONEST:
+//   * `operator==` / `operator!=` (queue g837) -- these are POINTER equality:
+//     two SMLocs are equal iff they point at the SAME BYTE of the same
+//     MemoryBuffer.  Its one call site is inside an `mlir::AsmParser` parse
+//     body, squarely behind the standing `llvm::SourceMgr` refusal (the parser
+//     reads the buffer back out, and we do not model the buffer).  A
+//     content-comparing or owned-value model would make DISTINCT LOCATIONS
+//     COMPARE EQUAL -- silent wrongness.  The pointer-shaped model above at
+//     least keeps distinct locations distinct, but no `==` key is written.
+//   * `getPointer()` returns THE ADDRESS -- `data()`'s and `front()`'s refusal
+//     ground.  For SMLoc the address IS the value, which is exactly why the
+//     type must stay opaque.
+//   * `getFromPointer(const char *)` -- manufactures a location from an address
+//     into a buffer we do not model; no corpus site calls it.
+//   * `isValid()` -- no corpus site calls it, so any model of it would be
+//     unfalsifiable.
+//
+// SWALLOW-SAFETY: `llvm::SMLoc` is ARITY 0 (no `<` anywhere in the spelling),
+// so it can neither be swallowed nor swallow a sibling -- the
+// `matchTemplate`-past-a-comma class cannot reach it.  It is exact-match-only.
+class SMLoc {
+  const char *Ptr = nullptr;
+
+public:
+  // llvm/Support/SMLoc.h:26 -- SMLoc() = default
+  SMLoc();
+};
+
 } // namespace llvm
 
 using t1 = llvm::LogicalResult;
 using t2 = llvm::hash_code;
 template <typename T1> using t3 = llvm::FailureOr<T1>;
 using t4 = llvm::ParseResult;
+using t5 = llvm::SMLoc;
 
 // --- LogicalResult ---------------------------------------------------------
 
@@ -308,3 +376,15 @@ llvm::ParseResult f23(llvm::LogicalResult a0) { return llvm::ParseResult(a0); }
 // ⭐ INVERTED: `operator bool` returns `failed()`.  See the class comment.
 
 bool f24(llvm::ParseResult a0) { return a0.operator bool(); }
+
+// --- llvm::SMLoc -----------------------------------------------------------
+//
+// The DEFAULT CONSTRUCTOR, and the ONLY member keyed.  12 of the 25 corpus
+// sites are literally `SMLoc()` as an argument, and 9 more are
+// `::llvm::SMLoc x;` default-init locals, so a type key with no constructor
+// here is the measured rc=0-then-E0433 shape.  `SMLoc() = default` leaves
+// `Ptr` at its `nullptr` NSDMI, so the honest body is a NULL pointer.
+//
+// Every other member is REFUSED -- see the class comment for each reason.
+
+llvm::SMLoc f25() { return llvm::SMLoc(); }
