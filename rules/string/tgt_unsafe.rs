@@ -427,3 +427,76 @@ unsafe fn f81(a0: Vec<libc::c_char>, a1: Vec<libc::c_char>, a2: usize) -> usize 
         }
     })(&a0, &a1, a2)
 }
+
+// t4, t5 -- std::errc and std::from_chars_result.  See src.cpp for the measured
+// `search type std::from_chars_result, result: None` readback and for why errc must
+// carry its discriminant rather than collapse to () or bool.
+//
+// t4: `enum class errc` over `int`, so `i32`, and the default IS the success value
+// (`std::errc()` == 0) -- which is exactly what a type key's body has to produce.
+fn t4() -> i32 {
+    0
+}
+
+// t5: the aggregate `{ const char *ptr; std::errc ec; }` in DECLARATION ORDER.
+// `const char *` is `*const libc::c_char` in this model (f5/f11 record that), and
+// the second field is t4's representation.  The default is a NULL ptr with a zero
+// (success) errc, matching a value-initialised `from_chars_result`.
+fn t5() -> (*const libc::c_char, i32) {
+    (::std::ptr::null(), 0)
+}
+
+// f82 -- std::from_chars(const char *, const char *, long &).  See src.cpp for the
+// readback and for the [charconv.from.chars] semantics each branch implements.
+// Every `aN` occurs EXACTLY ONCE (rule bodies are inlined, so a second occurrence
+// would re-evaluate the caller's argument expression); the `let` prelude is what
+// makes that true while the body still reads the buffer many times.
+unsafe fn f82(
+    a0: *const libc::c_char,
+    a1: *const libc::c_char,
+    a2: &mut i64,
+) -> (*const libc::c_char, i32) {
+    let __first = a0;
+    let __last = a1;
+    let __out = a2;
+    let __n = (__last as usize).saturating_sub(__first as usize);
+    let __s = unsafe { ::std::slice::from_raw_parts(__first as *const u8, __n) };
+    let mut __i: usize = 0;
+    let __neg = __i < __s.len() && __s[__i] == b'-';
+    if __neg {
+        __i += 1;
+    }
+    let __digits_from = __i;
+    // Accumulate NEGATIVE so i64::MIN is representable on the way in.
+    let mut __acc: i64 = 0;
+    let mut __ovf = false;
+    while __i < __s.len() && __s[__i].is_ascii_digit() {
+        let __d = (__s[__i] - b'0') as i64;
+        match __acc.checked_mul(10).and_then(|__v| __v.checked_sub(__d)) {
+            Some(__v) => __acc = __v,
+            // Keep consuming digits: `ptr` must point past every MATCHED digit even
+            // when the value does not fit.
+            None => __ovf = true,
+        }
+        __i += 1;
+    }
+    if __i == __digits_from {
+        // No conversion: ptr == first, out-parameter untouched, errc::invalid_argument.
+        return (__first, 22);
+    }
+    let __end = __first.wrapping_add(__i);
+    if __ovf {
+        // errc::result_out_of_range, out-parameter untouched.
+        return (__end, 34);
+    }
+    if __neg {
+        *__out = __acc;
+    } else {
+        match __acc.checked_neg() {
+            Some(__v) => *__out = __v,
+            // i64::MIN with no sign: out of range for a positive result.
+            None => return (__end, 34),
+        }
+    }
+    (__end, 0)
+}

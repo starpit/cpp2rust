@@ -395,3 +395,73 @@ fn f81(a0: Vec<u8>, a1: Vec<u8>, a2: usize) -> usize {
         }
     })(&a0, &a1, a2)
 }
+
+// t4, t5 -- std::errc and std::from_chars_result.  Both type keys MUST be present in
+// this model as well as in tgt_unsafe.rs: a module carrying a tgt_refcount.rs must
+// carry EVERY type key in it or the tree fails to LOAD (translation_rule.cpp:233,
+// which under NDEBUG presents as rc=139 with no message -- the rules/iostream t1
+// precedent).  See src.cpp for the readback and the errc-discriminant argument.
+fn t4() -> i32 {
+    0
+}
+
+// `const char *` is `Ptr<u8>` in this model (f5/f11/f26 all record that), so the
+// first field is a Ptr and the second is t4's representation.  Declaration order
+// `(ptr, ec)` is load-bearing: a mapped aggregate is destructured positionally.
+fn t5() -> (Ptr<u8>, i32) {
+    (Ptr::null(), 0)
+}
+
+// f82 -- std::from_chars.  Same branch-for-branch semantics as tgt_unsafe.rs; the
+// only difference is how the half-open range is walked.  `Ptr<u8>` is NOT Copy in
+// this model, so the end of the range is detected with `Ptr`'s own `PartialEq`
+// (rc.rs:189) against `__last` rather than by a pointer subtraction -- there is no
+// pointer-difference operation on `Ptr`, and inventing a byte count from the two
+// handles would be the kind of silent arithmetic this module refuses elsewhere.
+// `offset` takes `&self`, so `__first` is never moved and can still be returned as
+// the `ptr` field on the no-conversion path.
+// Every `aN` occurs EXACTLY ONCE, via the `let` prelude.
+fn f82(a0: Ptr<u8>, a1: Ptr<u8>, a2: Ptr<i64>) -> (Ptr<u8>, i32) {
+    let __first = a0;
+    let __last = a1;
+    let __out = a2;
+    let __p0 = __first.offset(0isize);
+    let __neg = __p0 != __last && __p0.read() == b'-';
+    let mut __i: usize = if __neg { 1 } else { 0 };
+    let __digits_from = __i;
+    // Accumulate NEGATIVE so i64::MIN is representable on the way in.
+    let mut __acc: i64 = 0;
+    let mut __ovf = false;
+    loop {
+        let __p = __first.offset(__i as isize);
+        if __p == __last {
+            break;
+        }
+        let __b = __p.read();
+        if !__b.is_ascii_digit() {
+            break;
+        }
+        let __d = (__b - b'0') as i64;
+        match __acc.checked_mul(10).and_then(|__v| __v.checked_sub(__d)) {
+            Some(__v) => __acc = __v,
+            None => __ovf = true,
+        }
+        __i += 1;
+    }
+    if __i == __digits_from {
+        return (__first, 22);
+    }
+    let __end = __first.offset(__i as isize);
+    if __ovf {
+        return (__end, 34);
+    }
+    if __neg {
+        __out.write(__acc);
+    } else {
+        match __acc.checked_neg() {
+            Some(__v) => __out.write(__v),
+            None => return (__end, 34),
+        }
+    }
+    (__end, 0)
+}

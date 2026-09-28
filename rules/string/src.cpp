@@ -1,10 +1,12 @@
 // Copyright (c) 2022-present INESC-ID.
 // Distributed under the MIT license that can be found in the LICENSE file.
 
+#include <charconv>
 #include <iterator>
 #include <streambuf>
 #include <string_view>
 #include <string>
+#include <system_error>
 
 using t1 = std::string;
 using t2 = std::string::iterator;
@@ -322,3 +324,107 @@ std::string_view f66(std::string_view a0, std::size_t a1, std::size_t a2) {
 std::size_t f81(const std::string &a0, const std::string &a1, std::size_t a2) {
   return a0.rfind(a1, a2);
 }
+
+// ---------------------------------------------------------------------------
+// t4, t5 -- `std::errc` and `std::from_chars_result`, the two TYPE models that
+// `util/variabledefinition/VariableDefinition.cpp` (queue row g2832,
+// `(anonymous namespace)::ParseInt64`) is blocked on.  Bucket B, 0 lines:
+//
+//     search type std::from_chars_result, result:
+//     None
+//     LLVM ERROR: unsupported structured binding / DecompositionDecl with 2
+//     bindings [ptr, ec] of type `std::from_chars_result` is not implemented,
+//     reached while converting `(anonymous namespace)::ParseInt64` at
+//     .../VariableDefinition.cpp:165:14
+//
+// READ BACK from the converter's own -verbose log against pin/ir.v30 (the leg
+// EXITED, rc=1 at 43,123 lines, and the abort site :165 is the LAST thing in the
+// log -- so this is not a truncated-log silence).  The rejecting predicate is
+// `converter.cpp:1035 if (!Mapper::Contains(type.getUnqualifiedType()))`: the
+// by-value decomposition branch refuses purely for want of a MODEL.  `const auto
+// [ptr, ec]` is by value, so `ref_holder == false` and the all-scalar filter at
+// `:1006` (which lives only on the ref-holder branch) is never evaluated.
+//
+// SHAPE: `std::from_chars_result` is the two-field aggregate
+// `{ const char *ptr; std::errc ec; }`, so t5 is a TUPLE in declaration order
+// `(ptr, ec)` -- the converter destructures a mapped aggregate positionally
+// (`.0`/`.1`), so the order is load-bearing and a swapped tuple would silently
+// bind `ptr` to the error code.  mlir t21 is the precedent that a tuple is a
+// legal type-key target.
+using t5 = std::from_chars_result;
+
+// `std::errc` CARRIES A DISCRIMINANT AND THE MODEL MUST TOO.  The one site is
+// `VariableDefinition.cpp:166`,
+//     DT_CHECK_MSG(ec == std::errc() && ptr == sv.data() + sv.size(), ...)
+// and the -verbose AST dump shows the comparison as
+//     ImplicitCastExpr 'errc' <LValueToRValue> / DeclRefExpr 'const errc' ... 'ec'
+//     CXXScalarValueInitExpr 'std::errc'
+// i.e. the right-hand side is a SCALAR VALUE INIT, so the model must have a zero
+// value that means "no error".  It is `enum class errc {...}` over `int`, hence
+// `i32` with `std::errc() == 0`.
+// ⛔ A `()` or `bool` model would make ParseInt64 silently ACCEPT bad input: the
+// `ec == std::errc()` conjunct would be a constant, and `DT_CHECK_MSG` would stop
+// rejecting non-integers.  That is the `OperationState -> ()` /
+// `PassOptions::Option<bool>` failure (the latter flipped a flag from `init(true)`
+// to `false`) with a different type name.  The value is carried, not erased.
+using t4 = std::errc;
+
+// f82 -- `std::from_chars`, the third part of row g2832.  SPELLING READ BACK from
+// the converter's own -verbose log on the tree that already carries t4/t5, so this
+// is the IDEAL-EVIDENCE pairing (two siblings that RESOLVE beside one that MISSES):
+//     search type std::from_chars_result, result: (*const libc::c_char, i32)
+//     search type std::errc, result: i32
+//     search expr std::from_chars_result std::from_chars(const char *, const char *, long &), result:
+//     None
+// Note THREE parameters and `long &`, not `long long &` and not a defaulted `base`:
+// libc++ declares the base-less form as a SEPARATE overload, so unlike f66/f81 there
+// is no defaulted argument for the recorder to write out, and `int64_t` is `long`
+// under these --cxxflags.  Keying `long long &` or a 4th `int` would be a spelling
+// that nothing ever searches for.
+//
+// SEMANTICS, [charconv.from.chars]: decimal only, a leading `-` accepted and a
+// leading `+` NOT; on no conversion `ptr == first` and `ec == invalid_argument`; on
+// overflow `ptr` still points past every matched digit and the out-parameter is LEFT
+// UNTOUCHED with `ec == result_out_of_range`.  The two error codes are libc++'s
+// `errc` enumerators, i.e. the errno values: `invalid_argument` == EINVAL == 22 and
+// `result_out_of_range` == ERANGE == 34 -- which is the whole point of t4 carrying
+// the discriminant: a `bool`/`()` model could not tell those apart from success, and
+// `VariableDefinition.cpp:166` rejects non-integers by comparing against
+// `std::errc()`.  The accumulator runs NEGATIVE so that `-9223372036854775808`
+// parses rather than spuriously reporting overflow.
+std::from_chars_result f82(const char *a0, const char *a1, long &a2) {
+  return std::from_chars(a0, a1, a2);
+}
+
+// ⛔ `std::string_view::data()` IS STILL NOT KEYED, AND THE RECEIVER-MODEL FIX
+// DOES NOT REMOVE THE DANGLE -- IT RELOCATES IT.  MEASURED in this module's own
+// recorded signatures:
+//   * a NON-CONST `std::string &` receiver lowers to a POINTER: f26 `at()` is
+//     `fn f26(a0: Ptr<Vec<u8>>, a1: usize) -> Ptr<u8>` / `&mut Vec<libc::c_char>`,
+//     and `a0.decay().offset(a1)` is SOUND because the pointee is the caller's.
+//   * a `const std::string &` receiver lowers BY VALUE: f81 `rfind()` is
+//     `fn f81(a0: Vec<u8>, ...)` and f5 `c_str()` is
+//     `unsafe fn f5(a0: Vec<libc::c_char>) -> *const libc::c_char`.
+//   * `std::string_view` is a VALUE TYPE, so its receiver is by value
+//     unconditionally: f62 `size()` is `fn f62(a0: Vec<u8>) -> usize`.
+// So consider re-modelling t3 as a non-owning view (a `Ptr<u8>` plus a length,
+// e.g. via the new `Ptr::<T>::borrow_vec(&Value<Vec<T>>)`, rc.rs:258).  The view
+// then has to be CONSTRUCTED from a `std::string`, and the only recorded way in is
+// f59, `std::basic_string::operator std::string_view()`, whose receiver is a
+// `const std::string &` -- i.e. BY VALUE, an owned `Vec` dropped at f59's closing
+// brace.  A borrowing view built there points into that copy, so every
+// `string_view` obtained from a `std::string` would be born dangling and every
+// later `data()` deref would hit `weak.upgrade().expect("ub: dangling pointer")`.
+// ⭐ The dangle is a consequence of the CONST-REF-BY-VALUE lowering, not of t3's
+// shape, and a rule target cannot reach the caller's owner through f59.  Changing
+// t3 therefore trades a refused `data()` for a guaranteed runtime panic on every
+// view constructed from a string -- strictly worse than a loud translate-time
+// abort.  ⭐ The sound receiver shape f26 proves out needs a NON-CONST reference,
+// which `string_view` (a value type with no mutating member) can never present.
+// The three `from_chars` parts above are therefore landed WITHOUT `data()`, which
+// stays unkeyed; row g2832 gets its type models and its free function, and the
+// `sv.data()` member remains the one unmapped piece.  It does NOT abort -- an
+// unmapped MEMBER is emitted textually with rc=0 (live proof:
+// `(unsafe { base.data() })` at `KTDFToKTDFLow.cpp.rs:3593`) -- so this module's
+// refusal is visible as a compile error on the emitted Rust, never as silent
+// pointer corruption.
