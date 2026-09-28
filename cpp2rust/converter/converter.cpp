@@ -1255,6 +1255,10 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
       ref_holder && type->isLValueReferenceType() &&
       type.getNonReferenceType().isConstQualified() &&
       GetTemporaryHolderInit(decl->getInit()) != nullptr;
+  // ⭐ THE BINDINGS THAT GET THE POINTER FORM instead of a by-value element read.
+  // Only ever populated on the CONST-REFERENCE-holder arm below; empty means the
+  // emission is byte-for-byte what it was before this set existed.
+  std::unordered_set<const clang::BindingDecl *> ptr_form;
   if (temp_holder) {
     for (const auto *binding : bindings) {
       // A reference binding still aliases observably; those stay on the loud
@@ -1278,16 +1282,47 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
       if (bt->isReferenceType() || !bt.isConstQualified()) {
         return false;
       }
-      // Scalars only: a class-typed element would need a clone whose semantics
-      // this function cannot establish, and a pointer-to-non-const element
-      // would let a write reach the aliased pair.
-      if (!bt->isPointerType() && !bt->isEnumeralType() &&
-          !bt->isIntegralType(ctx_) && !bt->isFloatingType()) {
-        return false;
-      }
       if (bt->isPointerType() &&
           !bt->getPointeeType().isConstQualified()) {
         return false;
+      }
+      // ⭐ NON-SCALAR ELEMENT: THE POINTER FORM, not a by-value read and NOT a
+      // copy. A scalar element is read by value (`(*h).N`) because the copy is
+      // bit-for-bit and needs no clone; a CLASS-typed element read the same way
+      // is `E0507: cannot move out of a dereference of a raw pointer` -- rc=0
+      // with Rust that does not compile, which is the failure mode this whole
+      // construct is policed for. So spell it the way the map branch (:1140) and
+      // `EmitVectorDecompositionBindings` (:3075) already spell an aliased
+      // element:
+      //     let sdscName = &raw const (*__decomp_2753_17).0;   // *const Vec<c_char>
+      // plus a `ptr_bindings_` registration, so `VisitDeclRefExpr` (:5417)
+      // derefs at every use. NOTHING IS COPIED and NOTHING IS MOVED: the
+      // binding is a raw pointer INTO the very object the C++ reference names,
+      // which is also why OBJECT IDENTITY is preserved exactly -- the hazard a
+      // clone would have introduced cannot arise. Every binding on this arm is
+      // const-qualified (checked above) and the holder is a `const` lvalue
+      // reference, so no write can travel back through the alias either.
+      //
+      // MEASURED WITNESS (dsc/sdsc-perfmodel/perfmodel.cpp:2753, the first abort
+      // of that TU after a7217888):
+      //     const auto& [sdscName, opCategory, idealCycles] = perfData[i];
+      //   DecompositionDecl 'const std::tuple<std::string, std::string, long> &'
+      //   BindingDecl sdscName     'const std::string'  <- RECORD, pointer form
+      //   BindingDecl opCategory   'const std::string'  <- RECORD, pointer form
+      //   BindingDecl idealCycles  'const long'         <- scalar, by value
+      // i.e. the two forms MIX within one decomposition, which is why this is a
+      // per-binding set and not a whole-decl flag.
+      //
+      // ⛔ RESTRICTED TO A RECORD TYPE. An array element would need `&raw const`
+      // of an array and a decayed use, a member-pointer or a vector/complex
+      // element has no established model here, and each of those stays on the
+      // LOUD refusal path rather than being guessed at.
+      if (!bt->isPointerType() && !bt->isEnumeralType() &&
+          !bt->isIntegralType(ctx_) && !bt->isFloatingType()) {
+        if (!bt->isRecordType()) {
+          return false;
+        }
+        ptr_form.insert(binding);
       }
     }
     // Everything below is written against the VALUE type.
@@ -1370,7 +1405,15 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
   // struct has no rule by construction (GetMemberwiseBindingFields refuses one
   // that does), so the ONLY evidence its Rust model exists is that its own
   // annotation comes out placeholder-free.
-  if (temp_holder || !memberwise_fields.empty()) {
+  // ⭐ AND THE POINTER-FORM ARM, for the identical reason: a class-typed element
+  // is exactly the case the scalars-only filter used to refuse, so `&raw const
+  // (*h).N` must not be emitted unless that element HAS a model -- otherwise a
+  // loud abort would be traded for a `let` whose type does not exist. The holder
+  // annotation is the right thing to test because `Convert(QualType)` SUBSTITUTES
+  // the element types (`Mapper::Map` does not -- it answers the unsubstituted
+  // `(T1, T2)` template text), so a placeholder-free holder annotation is
+  // precisely "every element's own model is a mapped value type".
+  if (temp_holder || !memberwise_fields.empty() || !ptr_form.empty()) {
     std::string annotation;
     {
       Buffer buf(*this);
@@ -1429,6 +1472,13 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
     // that case FAILS LOUDLY rather than being silently miscompiled.
     if (binding_name == "_") {
       StrCat(keyword::kLet, "_", token::kAssign);
+    } else if (ptr_form.contains(binding)) {
+      // A pointer-form binding is a const alias that is never reassigned, so
+      // `mut` would only be an `unused_mut` warning -- and this is the same
+      // plain `let` that `EmitVectorDecompositionBindings` already emits for the
+      // identical `&raw const` form. `ptr_form` is empty for every shape that was
+      // accepted before, so this cannot move an existing byte.
+      StrCat(keyword::kLet, binding_name, token::kAssign);
     } else {
       StrCat(keyword::kLet, keyword::kMut, binding_name, token::kAssign);
     }
@@ -1444,10 +1494,26 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
         memberwise_fields.empty()
             ? std::to_string(index)
             : GetNamedDeclAsString(memberwise_fields[index]);
-    StrCat(ref_holder ? std::format("(*{}).{}", holder, element)
-                      : std::format("{}.{}", holder, element));
+    // A NON-SCALAR element is taken BY POINTER (`&raw const (*h).N`), never read
+    // by value: the by-value read of a class element is E0507. `ptr_form` is
+    // only ever non-empty on the const-reference-holder arm, so `ref_holder` is
+    // necessarily true here and `(*h)` is the correct base.
+    if (ptr_form.contains(binding)) {
+      StrCat(std::format("&raw const (*{}).{}", holder, element));
+    } else {
+      StrCat(ref_holder ? std::format("(*{}).{}", holder, element)
+                        : std::format("{}.{}", holder, element));
+    }
     StrCat(token::kSemiColon);
     ++index;
+  }
+  // Register the pointer-form bindings only AFTER the emission is committed, so
+  // a path that refused above can never leave a stale deref behind. NOT scoped,
+  // for the same reason as the map branch (:1145): a standalone DeclStmt has its
+  // uses in the REST of the enclosing CompoundStmt, outside any RAII guard's
+  // dynamic extent, and a BindingDecl* is unique per source site.
+  for (const auto *binding : ptr_form) {
+    ptr_bindings_.insert(binding);
   }
   return true;
 }
