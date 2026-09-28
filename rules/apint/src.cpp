@@ -130,9 +130,99 @@ public:
   friend bool operator==(const DynamicAPInt &A, int64_t B);
 };
 
+// Restated from llvm/ADT/APInt.h.  A DIFFERENT CLASS from DynamicAPInt above,
+// and modelled differently: see the `{ bit_width, value }` argument below.
+class APInt {
+  unsigned BitWidth;
+  uint64_t VAL;
+
+public:
+  // llvm/ADT/APInt.h:111 -- APInt(unsigned numBits, uint64_t val,
+  //                               bool isSigned = false,
+  //                               bool implicitTrunc = false)
+  // ⚠️ ONLY ONE CTOR ENTRY IS PERMITTED FOR THIS FAMILY.  Defaulted arguments are
+  // written out at the C++ call site, so the 2-, 3- and 4-argument spellings all
+  // record as this same 4-argument key; a second entry for the 2-argument form
+  // would be a dead duplicate of this one.
+  APInt(unsigned numBits, uint64_t val, bool isSigned = false,
+        bool implicitTrunc = false);
+  // llvm/ADT/APInt.h:1489
+  unsigned getBitWidth() const;
+  // llvm/ADT/APInt.h:1541 -- `return U.VAL;`
+  uint64_t getZExtValue() const;
+  // llvm/ADT/APInt.h:1563 -- `return SignExtend64(U.VAL, BitWidth);`
+  int64_t getSExtValue() const;
+  // llvm/ADT/APInt.h:1080 -- `bool eq(const APInt &RHS) const { return (*this) == RHS; }`
+  bool eq(const APInt &RHS) const;
+};
+
 } // namespace llvm
 
 using t1 = llvm::DynamicAPInt;
+
+// ---------------------------------------------------------------------------
+// t2/f5-f9 -- `llvm::APInt`, ADDED 2026-09-28.  THIS SUPERSEDES THE REFUSAL
+// RECORDED ABOVE, AND ONLY BECAUSE THE THING THE REFUSAL DEMANDED NOW EXISTS.
+// ---------------------------------------------------------------------------
+// The refusal above says, verbatim, "A correct `APInt` model must carry
+// `{ bit_width, value }` as a struct (or a real bignum); only then are
+// `getZExtValue`, `getSExtValue`, `getBitWidth` and `eq` writable."  That struct
+// is now `libcc2rs::APInt` (libcc2rs/src/apint.rs), which carries `bit_width: u32`
+// and `value: u64`, maintains LLVM's unused-bits-clear invariant on store, and
+// sign-extends FROM `bit_width` in `get_sext_value`.  So the condition the refusal
+// set is met, and the members it withheld are written below.
+//
+// ⛔ WHAT MUST NEVER BE DONE, AND WHY THESE KEYS LAND AS ONE BLOCK:
+// A type key for `llvm::APInt` WITHOUT these members is strictly WORSE than no
+// key at all.  Today `llvm::APInt` has no key, so it lowers to
+// `Cpp2RustUnmapped_llvm_APInt` and every use is a LOUD E0412.  Add the type key
+// alone and that name disappears -- the receiver resolves, and
+// `.getSExtValue()` is then emitted TEXTUALLY against a real Rust type at rc=0
+// with no placeholder token: silent at translate time, and the exact class this
+// row exists to remove.  The type key and its members are therefore a single
+// atomic change; never land t2 without f5-f9.
+//
+// WHY A STRUCT AND NOT A TUPLE (the only composite precedent in the rule tree):
+// all five keys below are calls on an `APInt` RECEIVER, and a method call whose
+// receiver type contains a tuple is not resolved by the rule preprocessor
+// (`rules/mlir/tgt_unsafe.rs:362-366`; corroborated here by
+// `grep -rn 'Tuple\|tuple' rule-preprocessor/src/*.rs` = ZERO hits, i.e. the
+// preprocessor has no tuple-type concept at all).  A named struct in libcc2rs has
+// the standing precedent of `libcc2rs::InFlightDiagnostic` (rules/mlir t70/f21),
+// which is a libcc2rs struct used as a type key with members in receiver form.
+//
+// ⚠️ THE ONE THING THIS MODEL CANNOT ANSWER: a `BitWidth` above 64.  LLVM keeps
+// those in `U.pVal[]` and a `u64` cannot hold them.  `bit_width` is a RUNTIME
+// expression at the call site so no translate-time refusal is possible; the ctor
+// PANICS instead.  That is not `todo!()` -- it is a reachable, correct check on an
+// unrepresentable value, and it is stricter than release C++, never laxer.
+//
+// ⚠️ ALSO NOT ANSWERED, deliberately: every arithmetic/bitwise operator, the
+// ordering comparisons, `operator!=`, `trunc`/`sext`/`zext`, `getActiveBits`,
+// `isNegative`, and `toString`.  Each is short against these two fields, but an
+// unmapped MEMBER is SILENT (see the correction above), so they go in when a site
+// appears -- not on speculation.
+//
+// ⭐ PAIRED ROW, NOT OWNED HERE: `llvm::APInt mlir::IntegerAttr::getValue() const`
+// (16 asks, the largest single count) is a `rules/mlir` receiver.  Its RETURN type
+// is `llvm::APInt`, so it was blocked on this model and is now unblocked by it;
+// it is the front half of the observer expression
+// `step.getValue().getSExtValue()`.  Until rules/mlir keys it, `getValue()` is
+// still emitted textually and the seam stays open on that side.
+using t2 = llvm::APInt;
+
+llvm::APInt f5(unsigned numBits, uint64_t val, bool isSigned,
+               bool implicitTrunc) {
+  return llvm::APInt(numBits, val, isSigned, implicitTrunc);
+}
+
+unsigned f6(const llvm::APInt &x) { return x.getBitWidth(); }
+
+uint64_t f7(const llvm::APInt &x) { return x.getZExtValue(); }
+
+int64_t f8(const llvm::APInt &x) { return x.getSExtValue(); }
+
+bool f9(const llvm::APInt &a, const llvm::APInt &b) { return a.eq(b); }
 
 // The default constructor.  Present because a type rule maps the TYPE ONLY: the
 // converter looks the default ctor up as an ordinary expr rule and, on a miss,

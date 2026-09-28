@@ -67,4 +67,12 @@ pub use sync::*;
 mod diag;
 pub use diag::*;
 
+// `llvm::APInt`: a fixed-width integer whose WIDTH IS PART OF THE VALUE, since
+// `getSExtValue()` sign-extends from `BitWidth` and `operator==` asserts on it.
+// rules/apint t2/f5-f9 map to it.  A named struct rather than a tuple because
+// every member is a call on an `APInt` receiver and a tuple receiver carries no
+// member rules.
+mod apint;
+pub use apint::*;
+
 pub use libcc2rs_macros::{ByteRepr, goto, goto_block, switch};
