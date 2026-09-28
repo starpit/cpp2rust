@@ -49,6 +49,26 @@ std::string last_type_search_canonical_; // empty when it equalled the sugared
 std::unordered_map<std::string, const clang::TagDecl *> user_tags_;
 bool user_tags_built_ = false;
 
+// SECOND index, keyed by the AS-WRITTEN (sugared) spelling of every tag
+// reachable from the OUTER QualType currently being mapped. `user_tags_` above
+// cannot serve a template specialisation: it keys on
+// `ToString(GetTypeForDecl(tag))`, which DESUGARS
+// (`FoldFunction<std::vector<long>>` becomes
+// `FoldFunction<std::vector<long, std::allocator<long>>>`), while the leaf
+// string that arrives at mapTypeStringRecursive is the sugar the source wrote.
+// Indexing from the outer QualType makes BOTH sides of the comparison come out
+// of the same printer on the same sugar, so the match is by construction --
+// no guessed PrintingPolicy anywhere. Filled on demand, cleared with the ctx.
+// ACCUMULATING, never keyed on one outer type: MEASURED, the five gating dbo/ddc/dcg
+// TUs reach this leaf with `(no outer QualType in hand)` -- the leaf arrives from an
+// EXPRESSION context, not from a QualType entry point -- so an index built only from
+// map_ctx_.outer_type fires on the probe and buys NOTHING on the corpus. It is
+// therefore also fed from `search(clang::QualType)`, i.e. from every type the mapper
+// ever looks up, whose sugared spelling is the very string it looked up.
+std::unordered_map<std::string, const clang::TagDecl *> sugared_tags_;
+
+void CollectSugaredTags(clang::QualType ty, int depth);
+
 clang::PrintingPolicy getPrintPolicy() {
   assert(ctx_);
   clang::PrintingPolicy policy(ctx_->getLangOpts());
@@ -460,6 +480,10 @@ search(clang::QualType qual_type) {
   auto sugared = ToString(qual_type, ScalarSugar::kPreserve);
   last_type_search_sugared_ = sugared;
   last_type_search_canonical_.clear();
+  // Record the AS-WRITTEN spellings of the project tags inside this type while we
+  // still hold the QualType. mapTypeStringRecursive gets only a STRING, and for a
+  // leaf reached from an expression there is no outer QualType at all.
+  CollectSugaredTags(qual_type, 0);
   if (auto res = search(types_, sugared, GetTypeMapKey(sugared)); res.first) {
     log() << "search type " << sugared
           << ", result: " << res.first->type_info.type << '\n';
@@ -886,6 +910,49 @@ void CollectTagDecls(clang::QualType ty,
   }
 }
 
+// Index the tags reachable from an AS-WRITTEN type under their AS-WRITTEN
+// spelling. This is CollectTagDecls' twin with the one difference that matters:
+// it must NOT canonicalise. CollectTagDecls opens with `ty.getCanonicalType()`
+// because it only wants a decl to name a location; here the STRING is the
+// product, and canonicalising it reintroduces exactly the desugared spelling
+// (`std::vector<long, std::allocator<long>>`) that no leaf ever carries.
+// Template arguments are therefore read off the sugared
+// TemplateSpecializationType when there is one, and only fall back to the
+// specialisation decl's (already-canonical) argument list when there is not.
+void CollectSugaredTags(clang::QualType ty, int depth) {
+  if (ty.isNull() || depth > 8 || sugared_tags_.size() > 4096 ||
+      ctx_ == nullptr) {
+    return;
+  }
+  const clang::QualType unq = ty.getUnqualifiedType();
+  const clang::TagDecl *tag = unq->getAsTagDecl();
+  if (tag != nullptr && tag->getIdentifier() != nullptr &&
+      IsUserDefinedDecl(tag)) {
+    sugared_tags_.emplace(ToString(unq), tag);
+  }
+  if (const auto *tst = unq->getAs<clang::TemplateSpecializationType>()) {
+    for (const auto &arg : tst->template_arguments()) {
+      if (arg.getKind() == clang::TemplateArgument::Type) {
+        CollectSugaredTags(arg.getAsType(), depth + 1);
+      }
+    }
+  } else if (const auto *spec =
+                 llvm::dyn_cast_or_null<clang::ClassTemplateSpecializationDecl>(
+                     tag)) {
+    for (const auto &arg : spec->getTemplateArgs().asArray()) {
+      if (arg.getKind() == clang::TemplateArgument::Type) {
+        CollectSugaredTags(arg.getAsType(), depth + 1);
+      }
+    }
+  }
+  if (!unq->getPointeeType().isNull()) {
+    CollectSugaredTags(unq->getPointeeType(), depth + 1);
+  }
+  if (const auto *arr = ctx_->getAsArrayType(unq)) {
+    CollectSugaredTags(arr->getElementType(), depth + 1);
+  }
+}
+
 // Walk every DeclContext in the TU collecting PROJECT tag decls, keyed by the
 // mapper's spelling of their type. This is the only way to answer
 // "is this SPELLING a project type?" on the mapTypeStringRecursive path, which
@@ -1267,6 +1334,30 @@ std::optional<std::string> tryDerivePointerType(const std::string &cpp_type) {
     return std::nullopt;
   }
 
+  // A POINTER TO AN ABSTRACT PROJECT RECORD MUST CARRY `dyn`, and this is the
+  // one place on the derive path that can know it: we hold the pointee's own
+  // decl. AddRuleForUserDefinedType already does exactly this for every project
+  // record it registers (`*mut dyn N` in the unsafe model, `PtrDyn<dyn N>` in
+  // refcount -- see the isAbstract() branch there); a derived pointer that
+  // returned a plain `*mut N` for an abstract `N` would be a dyn-less pointer
+  // to a trait, i.e. silently wrong Rust instead of a loud abort.
+  // `FoldFunction<Dtype>` (pure-virtual getData/insertData) is exactly that
+  // shape, and it is why this is REQUIRED and not a refinement.
+  if (const clang::TagDecl *tag = nullptr;
+      LooksLikeUserDefinedTypeName(pointee, &tag)) {
+    const auto *cxx = llvm::dyn_cast<clang::CXXRecordDecl>(tag);
+    const clang::CXXRecordDecl *def =
+        cxx != nullptr ? cxx->getDefinition() : nullptr;
+    if (def != nullptr && def->isAbstract()) {
+      const std::string rs_name = ToRustName(ToString(GetTypeForDecl(tag)));
+      switch (model_) {
+      case Model::kUnsafe:
+        return (is_const ? "*const dyn " : "*mut dyn ") + rs_name;
+      case Model::kRefCount:
+        return "PtrDyn<dyn " + rs_name + '>';
+      }
+    }
+  }
   PushMapContext ctx(cpp_type, map_ctx_.outer_type);
   return (is_const ? "*const " : "*mut ") + mapTypeStringRecursive(pointee);
 }
@@ -1410,18 +1501,30 @@ std::string mapTypeStringRecursive(const std::string &cpp_type) {
     // Rust name at rc=0 -- and is not weakened by this branch.
     if (const clang::TagDecl *tag = nullptr;
         LooksLikeUserDefinedTypeName(cpp_type, &tag)) {
+      // THE NAME MUST COME FROM THE DECL, NEVER FROM `cpp_type`. What this TU
+      // will actually DEFINE is GetRecordName's `ToRustName(ToString(
+      // GetTypeForDecl(decl)))` (converter.cpp:4755-4760), and for a template
+      // specialisation that DESUGARS: the leaf string
+      // `FoldFunction<std::vector<long>>` mangles to
+      // `FoldFunction_std_vector_long__`, but VisitRecordDecl emits
+      // `FoldFunction_std_vector_long__std_allocator_long___`. Returning
+      // ToRustName(cpp_type) there would turn a LOUD abort into rc=0 plus
+      // E0412 -- strictly worse. The two strings are equal for a
+      // non-template tag, which is why this is a no-op for the enum and
+      // plain-record cases that already worked.
+      const std::string ported = ToRustName(ToString(GetTypeForDecl(tag)));
       static std::set<std::string> ported_leaves;
       if (ported_leaves.insert(cpp_type).second) {
         llvm::errs() << "note: project leaf type `" << cpp_type
                      << "` has no types_ entry yet; emitting its PORTED name `"
-                     << ToRustName(cpp_type) << "` (declared at "
+                     << ported << "` (declared at "
                      << (ctx_ != nullptr
                              ? tag->getLocation().printToString(
                                    ctx_->getSourceManager())
                              : std::string("<no ASTContext>"))
                      << ")\n";
       }
-      return ToRustName(cpp_type);
+      return ported;
     }
     if (survey::MangleUnmapped()) {
       // --mangle-unmapped (TRIAGE ONLY): the twin of the fallback in
@@ -1514,14 +1617,27 @@ bool LooksLikeUserDefinedTypeName(const std::string &cpp_type,
     user_tags_built_ = true;
     CollectUserTags(ctx_->getTranslationUnitDecl());
   }
-  auto it = user_tags_.find(cpp_type);
-  if (it == user_tags_.end()) {
-    return false;
+  if (auto it = user_tags_.find(cpp_type); it != user_tags_.end()) {
+    if (decl != nullptr) {
+      *decl = it->second;
+    }
+    return true;
   }
-  if (decl != nullptr) {
-    *decl = it->second;
+  // SECOND CHANCE, for a template specialisation. `user_tags_` deliberately
+  // skips ClassTemplateSpecializationDecl because its key desugars and would
+  // never match; the sugared index below is built from the OUTER QualType being
+  // mapped, so its keys are the same spellings a leaf carries. Rebuilt whenever
+  // the outer type changes -- the walk is bounded and only runs after a miss.
+  if (!map_ctx_.outer_type.isNull()) {
+    CollectSugaredTags(map_ctx_.outer_type, 0);
   }
-  return true;
+  if (auto it = sugared_tags_.find(cpp_type); it != sugared_tags_.end()) {
+    if (decl != nullptr) {
+      *decl = it->second;
+    }
+    return true;
+  }
+  return false;
 }
 
 PushASTContext::PushASTContext(clang::ASTContext &ctx) : prev_(ctx_) {
@@ -1529,11 +1645,13 @@ PushASTContext::PushASTContext(clang::ASTContext &ctx) : prev_(ctx_) {
   // The tag index holds decls owned by the OLD context; never let it outlive it.
   user_tags_.clear();
   user_tags_built_ = false;
+  sugared_tags_.clear();
 }
 PushASTContext::~PushASTContext() {
   ctx_ = prev_;
   user_tags_.clear();
   user_tags_built_ = false;
+  sugared_tags_.clear();
 }
 
 bool Contains(clang::QualType qual_type) {
