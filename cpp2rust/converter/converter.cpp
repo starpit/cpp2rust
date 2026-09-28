@@ -1634,7 +1634,52 @@ static bool IsaSemiColonStmt(const clang::Stmt *stmt) {
 
 bool Converter::Convert(clang::Stmt *stmt) {
   PushExprKind push(*this, ExprKind::Void);
+  // The STATEMENT-position twin of the placeholder guard in
+  // Convert(Expr*, optional<QualType>) (see the argument there). Without it, a
+  // statement whose lowering emits nothing -- e.g. every `operator<<` chain
+  // that reaches ReportUnsupportedOperatorCall, which under -DNDEBUG merely
+  // returns -- was replaced by the bare `;` appended below. That is LEGAL Rust,
+  // so the construct vanished with no token and no compile error:
+  // dcc/src/Transform/Sentient/LexicalOrdering.cpp's `a_ss << ...; b_ss << ...;`
+  // became ` ; ;`, leaving a comparator that compares two empty strings and is
+  // constantly false. Silent wrongness, strictly worse than a loud abort, and
+  // invisible to every placeholder census.
+  //
+  // `Cpp2RustUnmappedStmt_<StmtClass>` is a path expression that NOTHING in the
+  // converter or the emitted crate defines, so -- exactly like the expression
+  // prefix -- it can only ever produce `E0425 cannot find value` at the precise
+  // site, never silently resolve.
+  const size_t before = rs_code_->size();
+  const size_t hoisted_before = hoisted_records_.size();
   auto exited_visit = TraverseStmt(stmt);
+  // A NullStmt IS the empty statement; emitting nothing for it is correct. A
+  // DeclStmt of a TagDecl legitimately routes its text to hoisted_records_.
+  const bool emitted_nothing = rs_code_->size() == before &&
+                               hoisted_records_.size() == hoisted_before;
+  if (stmt && emitted_nothing && !clang::isa<clang::NullStmt>(stmt)) {
+    const std::string loc =
+        stmt->getBeginLoc().printToString(ctx_.getSourceManager());
+    std::string detail = std::string("no Rust statement text for ") +
+                         stmt->getStmtClassName();
+    if (curr_function_ != nullptr) {
+      detail += ", reached while converting `" +
+                curr_function_->getQualifiedNameAsString() + "`";
+    }
+    if (survey::Enabled()) {
+      // Reuses kUnsupportedExpr rather than adding a kind: the sweep tooling
+      // greps the existing kind names.
+      survey::Record(survey::GapKind::kUnsupportedExpr, detail, loc);
+    }
+    StrCat(std::string("Cpp2RustUnmappedStmt_") + stmt->getStmtClassName());
+    static std::set<std::string> reported;
+    if (reported.insert(stmt->getStmtClassName()).second) {
+      llvm::errs() << "note: " << detail << " at " << loc
+                   << "; emitting the undefined placeholder "
+                      "`Cpp2RustUnmappedStmt_"
+                   << stmt->getStmtClassName()
+                   << "` instead of silently dropping the statement\n";
+    }
+  }
   if (stmt && IsaSemiColonStmt(stmt)) {
     StrCat(token::kSemiColon);
   }
@@ -4576,7 +4621,22 @@ void Converter::ReportUnmappedSystemType(const clang::RecordDecl *decl) {
 //   * the resolved callee rendered by Mapper::ToString(NamedDecl*), which is
 //     exactly the rule-key signature form the preprocessor records, and
 //   * the source location.
-// LOUD FAILURE, never a placeholder: outside --survey this still asserts.
+// ⚠️ NOT A LOUD FAILURE. This comment used to claim "LOUD FAILURE, never a
+// placeholder: outside --survey this still asserts", and that claim was FALSE:
+// the `assert(0)` at the bottom is a NO-OP under the release build's -DNDEBUG,
+// so outside --survey this function prints one stderr line and RETURNS; the
+// OO_LessLess arm then `break`s and ConvertCXXOperatorCallExpr ends
+// `return false`, having emitted no Rust and traversed no child. Measured: one
+// non-survey run of ddl/Dialect/DdlOps.cpp printed 248 of these and exited 0.
+// The same defect was found and fixed for ReportUnsupportedException (see the
+// comment at the `report_fatal_error` there) but never here.
+// It is now CONTAINED rather than fatal: in statement position the caller's
+// guard in Convert(Stmt*) emits `Cpp2RustUnmappedStmt_...` and in value
+// position Convert(Expr*, optional<QualType>) emits `Cpp2RustUnmappedExpr_...`,
+// so the site is an undefined name and a guaranteed E0425 instead of a bare
+// `;`. Promoting this to report_fatal_error is still the right end state (it is
+// a NAMED refusal) but moves many TUs from translate-complete to abort, so it
+// is deliberately left as a separate, measured change.
 void Converter::ReportUnsupportedOperatorCall(
     clang::CXXOperatorCallExpr *expr) {
   const char *spelling = clang::getOperatorSpelling(expr->getOperator());
