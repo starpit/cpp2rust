@@ -1832,17 +1832,77 @@ std::string normalizeTranslationRule(std::string rule) {
   // rules.
   ReplaceAll(rule, "*&&", "* &&");
 
-  static const std::array<std::pair<std::regex, std::string>, 1>
-      normalization_rules{{
-          // Ignore constant template parameters, i.e. replace them with _.
-          {std::regex(R"(\b\d+\b)"), "_"},
-      }};
+  // Ignore constant template parameters, i.e. replace them with _.
+  //
+  // ⛔ THE ERASURE IS LOAD-BEARING AND MUST NOT BE REMOVED WHOLESALE. Measured
+  // over pin/ir.v27 (1,597 recorded key spellings): 45 keys in 11 modules
+  // contain an erased `_`, and 43 of them are erased ON PURPOSE, because ONE key
+  // has to serve every N --
+  //     std::array<T1, _>          (10, module `array`)
+  //     std::bitset<_>             (11, module `bitset`)
+  //     llvm::SetVector<T1,T2,T3,_> / SmallSetVector<T1, _>  (7, `setvector`)
+  //     llvm::SmallString<_> / SmallVector<T1, _>            (5, `smallvector`)
+  //     const char (&)[_]          (`pair`, `filesystem`, `mlir`, `stringref`)
+  //     T1[_][_], T1[_][_][_]      (2, module `carray`)
+  // `const char (&)[N]` for a string literal has no finite key set at all, so
+  // un-erasing these would kill the keys with no possible replacement. That is
+  // why this rewrite exists.
+  //
+  // ⭐ BUT A `std::ratio<Num, Den>` ARGUMENT IS THE TYPE'S IDENTITY, NOT A SIZE
+  // WE MAY IGNORE. This function is used for BOTH the rules-key side and the
+  // search side, so erasing those digits made `std::chrono::nanoseconds`
+  // (`ratio<1, 1000000000>`) and `std::chrono::seconds` (`ratio<1, 1>`) THE SAME
+  // KEY -- one collapsed body serving every Period. external/g3log/time.cpp:43-48
+  // subtracts a `seconds` duration from a `nanoseconds` one, which C++ resolves
+  // through `common_type` as -1,000,000,000ns; a Period-less key cannot know that
+  // factor and subtracts 1, wrong by 1e9 in the sub-second field of every log
+  // line. So ratio's arguments -- and ONLY ratio's -- survive normalization.
+  static const std::regex kConstTemplateArg(R"(\b\d+\b)");
 
-  for (const auto &r : normalization_rules) {
-    rule = std::regex_replace(rule, r.first, r.second);
+  // Half-open spans of `rule` whose digits must survive.
+  std::vector<std::pair<std::size_t, std::size_t>> keep;
+  static constexpr std::string_view kRatio = "ratio<";
+  for (std::size_t p = rule.find(kRatio); p != std::string::npos;
+       p = rule.find(kRatio, p + 1)) {
+    // Only `ratio<`/`std::ratio<`, never a `my_ratio<` that merely ends in it.
+    if (p > 0) {
+      unsigned char prev = static_cast<unsigned char>(rule[p - 1]);
+      if (std::isalnum(prev) || prev == '_') {
+        continue;
+      }
+    }
+    std::size_t args = p + kRatio.size();
+    std::size_t i = args;
+    int depth = 1;
+    for (; i < rule.size() && depth > 0; ++i) {
+      if (rule[i] == '<') {
+        ++depth;
+      } else if (rule[i] == '>') {
+        --depth;
+      }
+    }
+    // Unbalanced (a truncated or elided spelling): leave it to the erasure
+    // rather than guessing where the argument list ends.
+    if (depth == 0) {
+      keep.emplace_back(args, i - 1);
+    }
   }
 
-  return rule;
+  std::string out;
+  out.reserve(rule.size());
+  std::size_t cursor = 0;
+  for (const auto &[begin, end] : keep) {
+    if (begin < cursor) {
+      continue; // already inside a protected span
+    }
+    out += std::regex_replace(rule.substr(cursor, begin - cursor),
+                              kConstTemplateArg, "_");
+    out += rule.substr(begin, end - begin);
+    cursor = end;
+  }
+  out += std::regex_replace(rule.substr(cursor), kConstTemplateArg, "_");
+
+  return out;
 }
 
 } // namespace
