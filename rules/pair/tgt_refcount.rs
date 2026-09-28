@@ -148,3 +148,18 @@ fn f19<T1, T2: TryFrom<Vec<u8>>>(a0: T1, a1: Vec<u8>) -> (Value<T1>, Value<T2>) 
         )),
     )
 }
+
+fn f20<T1: TryFrom<Vec<u8>>, T2>(a0: Vec<u8>, a1: T2) -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(
+            <T1>::try_from({
+                let mut __b = a0.to_vec();
+                __b.push(0);
+                __b
+            })
+            .ok()
+            .expect("failed conversion"),
+        )),
+        Rc::new(RefCell::new(a1.try_into().ok().expect("failed conversion"))),
+    )
+}

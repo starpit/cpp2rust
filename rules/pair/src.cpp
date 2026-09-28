@@ -160,3 +160,30 @@ template <typename T1, typename T2, typename T3, std::size_t T4>
 std::pair<T1, T2> f19(T3 &&a0, char const (&a1)[T4]) {
   return std::pair<T1, T2>(std::move(a0), a1);
 }
+
+// f20 -- THE `const` SIBLING OF f15, AND THE KEY BEHIND THE LARGEST SINGLE ERROR
+// CLASS MEASURED IN THIS PROJECT (733 of 1,246 error lines in the 16-TU crate).
+// MEASURED 2026-09-28 from a `-verbose` run on the real corpus TU
+// (/home/agent/work/pairctor/isa.log, isa.cpp):
+//   search expr void std::pair<std::string, int>::pair(
+//                    const char (&)[_], const int &), result:
+//   None
+// f15 is `pair(const char (&)[_], T2 &)` and f16 is `(..., T2 &&)`; NEITHER can
+// unify, because the corpus's second argument is a `const int` LVALUE --
+// `const int numLCCRs = 16;` / `const int numJCRs = ...` at isa.cpp:228-229 --
+// so the forwarding ctor deduces `_U2 = const int &` and the DECLARED signature
+// prints `const int &`, which is `const T2 &`, not `T2 &` and not `T2 &&`.
+// This is NOT a swallow (arity 2, clean singular spelling, no comma-joined or
+// oddly-decorated operand) and NOT staleness (f15/f16 are recorded and are
+// MATCHING 18 other sites in the same log).  It is a plain missing overload.
+// SWALLOW-SAFETY: identical to f15 -- `[_]` is followed by `, const T2 &)` and
+// the final placeholder `T2` is terminated by `nextLit = " &)"` at
+// end-of-signature, so a shorter instantiation fails to match rather than
+// swallowing a tail.  No ambiguity with f15/f16: `const T2 &` and `T2 &` /
+// `T2 &&` are distinct literal tails at the same position.
+// Body is f15's verbatim; the `const` is a C++-side qualifier only and has no
+// Rust representation here (a1 arrives by value, as in f15/f16).
+template <typename T1, typename T2, std::size_t T3>
+std::pair<T1, T2> f20(char const (&a0)[T3], const T2 &a1) {
+  return std::pair<T1, T2>(a0, a1);
+}
