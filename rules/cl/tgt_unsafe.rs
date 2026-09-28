@@ -27,3 +27,11 @@ fn t4() -> i32 {
     0
 }
 
+
+fn t5<T1: Default>() -> T1 {
+    Default::default()
+}
+
+fn t6<T1: Default, T2>() -> T1 {
+    Default::default()
+}

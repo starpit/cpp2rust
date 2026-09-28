@@ -221,3 +221,7 @@ fn f35<T1: Ord + Clone, T2>(
         .map(|(__k, __v)| (__k.borrow().clone(), __v))
         .collect::<BTreeMap<T1, Value<T2>>>()
 }
+
+fn t4<T1, T2, T3>() -> BTreeMap<T1, Value<T2>> {
+    BTreeMap::new()
+}

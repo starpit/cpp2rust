@@ -125,3 +125,25 @@ template <typename T1> using t2 = llvm::cl::opt_storage<T1, false, false>;
 
 using t4 = llvm::cl::NumOccurrencesFlag;
 
+
+// ---------------------------------------------------------------------------
+// SWALLOW FIX -- /home/agent/work/SWALLOW-AUDIT.md row #3.  t1 `llvm::cl::opt<T1>`
+// binds its ONLY placeholder to the comma-joined tail of a 2-/3-ary
+// instantiation (arity is not part of the bucket key; a same-depth comma is not
+// a delimiter):
+//   LLVM ERROR: unsupported unmapped type `std::string, true`
+//   LLVM ERROR: unsupported unmapped type `DCC::ProgIRFormat, false,
+//       mlir::detail::PassOptions::GenericOptionParser<DCC::ProgIRFormat>`
+// The value model is UNAFFECTED by the extra arguments: ExternalStorage only
+// changes WHERE the DataType lives, and ParserClass only how argv is parsed --
+// neither is observable in a value model, so both keys map to T1 exactly as t1
+// does.  (The argv caveat above is unchanged and still applies.)
+// SWALLOW-SAFETY: each key demands a LITERAL `, true` / `, false, ` that cannot
+// occur in the bare `llvm::cl::opt<Foo>` t1 serves, so t1's traffic is
+// untouched; and the two new keys cannot match each other.  Non-type bool
+// arguments record LITERALLY, not as `_` -- proof is the sibling t2
+// `llvm::cl::opt_storage<T1, false, false>` in this very module.  In t6 the
+// `false` is NON-TRAILING (T2 follows), so SuppressDefaultTemplateArgs, which
+// drops only trailing defaults, keeps it.
+template <typename T1> using t5 = llvm::cl::opt<T1, true>;
+template <typename T1, typename T2> using t6 = llvm::cl::opt<T1, false, T2>;

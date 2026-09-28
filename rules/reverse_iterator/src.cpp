@@ -84,3 +84,25 @@ std::__wrap_iter<T1 *>
 f14(const std::reverse_iterator<std::__wrap_iter<T1 *>> &it) {
   return it.base();
 }
+
+// ---------------------------------------------------------------------------
+// SWALLOW FIX -- /home/agent/work/SWALLOW-AUDIT.md rows #4 and #5, the same bug
+// and the same fix shape as rules/vector t8.  t1's trailing literal is ` *>`;
+// against `std::reverse_iterator<mlir::Operation *const *>` the FIRST same-depth
+// ` *>` is the SECOND star, so T1 swallows the decoration:
+//   LLVM ERROR: unsupported unmapped type `mlir::Operation *const`,
+//     while mapping `std::reverse_iterator<mlir::Operation *const *>`
+//   LLVM ERROR: unsupported unmapped type `dsc2::ScheduleNode *const`,
+//     while mapping `std::reverse_iterator<std::__wrap_iter<dsc2::ScheduleNode *const *>>`
+// SWALLOW-SAFETY: the new keys' literal run is ` *const *>`, and the text
+// `*const` CANNOT occur in `std::reverse_iterator<Foo *>` or
+// `std::reverse_iterator<std::__wrap_iter<Foo *>>`, so every instantiation that
+// resolves via t1/t2 today keeps resolving there.  Where both match (a
+// `<Foo *const *>` element) the new src is strictly longer, so search()'s
+// tie-break (mapper.cpp:430-437) picks it.  `T1 *const *` is a pointer to const
+// pointer, exactly how clang prints it; no default argument is involved, so
+// nothing is elided.  Model: identical to t1/t2 -- the element is itself a
+// pointer, so the iterator is a pointer to a pointer (rules/vector t8's shape).
+template <typename T1> using t3 = std::reverse_iterator<T1 *const *>;
+template <typename T1>
+using t4 = std::reverse_iterator<std::__wrap_iter<T1 *const *>>;

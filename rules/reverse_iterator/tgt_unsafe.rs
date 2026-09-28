@@ -71,3 +71,11 @@ unsafe fn f13<T1>(a0: *mut T1) -> *mut T1 {
 unsafe fn f14<T1>(a0: *mut T1) -> *mut T1 {
     a0
 }
+
+fn t3<T1>() -> *const *mut T1 {
+    Default::default()
+}
+
+fn t4<T1>() -> *const *mut T1 {
+    Default::default()
+}

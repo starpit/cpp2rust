@@ -169,3 +169,7 @@ unsafe fn f35<T1: Ord, T2>(a0: Vec<(T1, T2)>, a1: Option<T1>) -> BTreeMap<T1, Bo
         .map(|(__k, __v)| (__k, Box::new(__v)))
         .collect::<BTreeMap<T1, Box<T2>>>()
 }
+
+fn t4<T1, T2, T3>() -> BTreeMap<T1, Box<T2>> {
+    BTreeMap::new()
+}

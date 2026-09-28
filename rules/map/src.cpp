@@ -195,3 +195,30 @@ std::map<T1, T2> f35(const std::initializer_list<std::pair<const T1, T2>> &a0,
                      const std::less<T1> &a1) {
   return std::map<T1, T2>(a0, a1);
 }
+
+// ---------------------------------------------------------------------------
+// SWALLOW FIX -- /home/agent/work/SWALLOW-AUDIT.md row #2.
+// `GetTypeMapKey` (mapper.cpp:115) truncates at the first `<`, so arity is NOT
+// part of the bucket key, and in `matchTemplate` a same-depth comma is not a
+// delimiter -- only the next literal run is.  So t1's T2 (nextLit `>`) binds the
+// WHOLE comma-joined tail of a 3-ary instantiation:
+//   LLVM ERROR: unsupported unmapped type `std::vector<bool>, std::greater<void>`
+//   LLVM ERROR: unsupported unmapped type `std::pair<std::optional<long>, bool *>,
+//                                          (lambda at .../CFGSimplificationSentientLevel.cpp)`
+// SWALLOW-SAFETY: t1 keeps every 2-ary instantiation it serves today, because
+// against `std::map<int, float>` this key's T2 has nextLit `", "` and
+// findNextLiteralSameDepth finds no further same-depth `", "` -> npos -> NO
+// match at all.  Where both match (3-ary) this src is longer (20 vs 16 chars)
+// and search()'s tie-break (mapper.cpp:430-437) prefers it.  T3 is a free
+// parameter of THIS rule's own template, so SuppressDefaultTemplateArgs cannot
+// elide it (the mechanism that made a `DenseMapInfo<T1, void>` spelling a dead
+// duplicate).
+// ⚠️ FIDELITY CAVEAT, reported and not hidden: the comparator T3 is DROPPED by
+// the model, and a 3-ary std::map is only ever written BECAUSE the comparator is
+// non-default -- both observed instantiations use `std::greater<void>` / a
+// lambda, i.e. an order that BTreeMap's Ord does not reproduce.  No member of a
+// 3-ary map is keyed (every f-key spells a 2-ary receiver and swallows the same
+// way), so keyed operations still fail loudly; the residual exposure is a
+// converter-lowered range-for, which would iterate ASCENDING.  See the report.
+template <typename T1, typename T2, typename T3>
+using t4 = std::map<T1, T2, T3>;

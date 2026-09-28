@@ -70,3 +70,11 @@ fn f13<T1>(a0: Ptr<T1>) -> Ptr<T1> {
 fn f14<T1>(a0: Ptr<T1>) -> Ptr<T1> {
     a0
 }
+
+fn t3<T1>() -> Ptr<Ptr<T1>> {
+    Ptr::null()
+}
+
+fn t4<T1>() -> Ptr<Ptr<T1>> {
+    Ptr::null()
+}
