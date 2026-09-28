@@ -1461,11 +1461,13 @@ std::optional<std::string> tryDerivePointerType(const std::string &cpp_type) {
         cxx != nullptr ? cxx->getDefinition() : nullptr;
     if (def != nullptr && def->isAbstract()) {
       const std::string rs_name = ToRustName(ToString(GetTypeForDecl(tag)));
+      // The trait is `<Name>__Virtual`; `<Name>` itself is the struct.
       switch (model_) {
       case Model::kUnsafe:
-        return (is_const ? "*const dyn " : "*mut dyn ") + rs_name;
+        return (is_const ? "*const dyn " : "*mut dyn ") + rs_name +
+               "__Virtual";
       case Model::kRefCount:
-        return "PtrDyn<dyn " + rs_name + '>';
+        return "PtrDyn<dyn " + rs_name + "__Virtual>";
       }
     }
   }
@@ -2117,14 +2119,17 @@ void AddRuleForUserDefinedType(clang::NamedDecl *decl) {
 
     if (auto cxx_decl = llvm::dyn_cast<clang::CXXRecordDecl>(record_decl)) {
       if (cxx_decl->isAbstract()) {
+        // The trait is `<Name>__Virtual`; `<Name>` itself is the struct.
         switch (model_) {
         case Model::kUnsafe:
-          AddTypeRule(cpp_name + " *", TranslationRule::TypeRule::UnsafePtr(
-                                           "*mut dyn " + rs_name));
+          AddTypeRule(cpp_name + " *",
+                      TranslationRule::TypeRule::UnsafePtr(
+                          "*mut dyn " + rs_name + "__Virtual"));
           break;
         case Model::kRefCount:
-          AddTypeRule(cpp_name + " *", TranslationRule::TypeRule::RefcountPtr(
-                                           "PtrDyn<dyn " + rs_name + '>'));
+          AddTypeRule(cpp_name + " *",
+                      TranslationRule::TypeRule::RefcountPtr(
+                          "PtrDyn<dyn " + rs_name + "__Virtual>"));
           break;
         }
       } else {

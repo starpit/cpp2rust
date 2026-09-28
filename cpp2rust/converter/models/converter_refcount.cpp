@@ -246,10 +246,15 @@ bool ConverterRefCount::VisitPointerType(clang::PointerType *type) {
                            pointee_type->isArrayType());
   if (pointee_type->isRecordType() &&
       abstract_structs_.contains(GetID(pointee_type->getAsRecordDecl()))) {
-    StrCat("PtrDyn<dyn");
-  } else {
-    StrCat("Ptr<");
+    // The trait is `<Record>__Virtual` (`<Record>` is the struct), and that
+    // name cannot come from the recursive type visit below -- it would emit the
+    // bare record name. So emit the trait name here and stop.
+    StrCat("PtrDyn<dyn",
+           GetRecordName(pointee_type->getAsRecordDecl()) + "__Virtual",
+           token::kGt);
+    return false;
   }
+  StrCat("Ptr<");
   Convert(pointee_type);
   StrCat(token::kGt);
   return false;

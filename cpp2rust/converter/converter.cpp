@@ -499,7 +499,13 @@ bool Converter::VisitPointerType(clang::PointerType *type) {
   StrCat(pointee_type.isConstQualified() ? "*const" : "*mut");
   if (pointee_type->isRecordType() &&
       abstract_structs_.contains(GetID(pointee_type->getAsRecordDecl()))) {
+    // The trait is named `<Record>__Virtual`, which the recursive type visit
+    // below cannot produce: it would emit the bare record name, and appending
+    // the suffix with a trailing `StrCat` yields `dyn Name __Virtual` (token
+    // spacing). So emit the trait name here and stop.
     StrCat(keyword::kDyn);
+    StrCat(GetRecordName(pointee_type->getAsRecordDecl()) + "__Virtual");
+    return false;
   }
   return Convert(pointee_type);
 }
@@ -1309,17 +1315,19 @@ bool Converter::VisitCXXRecordDecl(clang::CXXRecordDecl *decl) {
     }
 
     if (decl->isAbstract()) {
+      // An abstract class emits BOTH: a `<Name>__Virtual` trait carrying the
+      // virtual methods, AND the ordinary struct for the record itself. The
+      // struct is required -- an abstract C++ base still has fields, nested
+      // enums, static members and non-virtual methods, and derived records
+      // name it. So fall through to `EmitRustStructOrUnion` instead of
+      // returning.
+      //
+      // Do NOT re-add a nested-enum loop here: `EmitRustStructOrUnion` (:1108)
+      // already opens by visiting every nested `EnumDecl`, so a loop at this
+      // point would emit each nested enum twice (E0428). The loop that used to
+      // live here existed *only* because this path never reached
+      // `EmitRustStructOrUnion`.
       ConvertAbstractClass(decl);
-      // An abstract class becomes a trait, so `EmitRustStructOrUnion` is not
-      // reached -- but a nested enum lives at module scope in Rust either way
-      // and is referenced by name from every derived class. Emitting the trait
-      // must not lose it.
-      for (auto *d : decl->decls()) {
-        if (auto *enum_decl = llvm::dyn_cast<clang::EnumDecl>(d)) {
-          VisitEnumDecl(enum_decl);
-        }
-      }
-      return false;
     }
 
     DefineImplicitMembers(decl);
@@ -6450,13 +6458,19 @@ pub fn main() {{
 
 void Converter::ConvertAbstractClass(clang::CXXRecordDecl *decl) {
   ENSURE(abstract_structs_.insert(GetID(decl)).second);
-  auto trait_name = GetRecordName(decl);
+  // The record itself still emits as a struct under its own name (see
+  // VisitCXXRecordDecl), so the trait takes a distinct name.
+  auto trait_name = GetRecordName(decl) + "__Virtual";
   auto access_specifier_as_string = AccessSpecifierAsString(decl->getAccess());
   auto signature = std::format("{} {} trait {}", access_specifier_as_string,
                                keyword_unsafe_, trait_name);
+  // Must stay CAPTURELESS: `ConvertCXXMethodDecls` takes a raw function
+  // pointer. Only virtual methods belong in the trait; a constructor has no
+  // `self` and is rejected outright (E0038), and it is now emitted as an
+  // inherent member of the struct instead.
   auto predicate = [](auto *method) {
-    return !method->isImplicit() &&
-           !clang::isa<clang::CXXDestructorDecl>(method);
+    return method->isVirtual() &&
+           !clang::isa<clang::CXXConstructorDecl>(method);
   };
   PushInTraitBody push_trait(*this, true);
   ConvertCXXMethodDecls(decl, signature, predicate);
@@ -6542,8 +6556,8 @@ Converter::VirtualMethodsFor(const clang::CXXRecordDecl *decl) {
     auto base_type = decl->bases_begin()->getType();
     auto base_target = GetUnsafeTypeAsString(base_type);
     if (BaseTargetNamesTrait(base_type, base_target)) {
-      it->second.header =
-          std::format("{} impl {} for {}", keyword_unsafe_, base_target, name);
+      it->second.header = std::format("{} impl {}__Virtual for {}",
+                                      keyword_unsafe_, base_target, name);
     } else {
       // The base is not lowered to a Rust trait (a rule-mapped base names a
       // TYPE, not a trait), so there is no trait to implement. Its virtual
