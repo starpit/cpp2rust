@@ -247,6 +247,28 @@ class OperandRange {};
 class ResultRange {};
 class ValueRange {};
 
+// ⛔ REFUSED, RECORDED SO THE NEXT SLOT DOES NOT RE-DERIVE IT:
+// `mlir::MutableOperandRange` IS NOT MAPPED, AND THE OWNING-`Vec` PRECEDENT THAT
+// t14 (`mlir::OperandRange`, immediately above) SETS DOES NOT EXTEND TO IT.
+// `OperandRange` is a READ-ONLY borrowed view, so copying it into an owning Vec
+// loses only aliasing.  `MutableOperandRange` (ValueRange.h:118) is a
+// WRITE-THROUGH handle over the OWNER OP's operand list -- `assign()`/`append()`/
+// `erase()` on it MUTATE THE OP.  The corpus stores two of them BY VALUE as
+// long-lived members and then writes through them:
+//   dcc/src/Transform/Sentient/AddressPinningAndToggle.cpp:1043-1044
+//     `MutableOperandRange mutable_addr_`, `MutableOperandRange immutable_addr_`
+//   ... then `mutable_addr_.assign(...)`   at :1790 and :1877
+//   ... and  `immutable_addr_.assign(...)` at :1903
+// Under an owning-`Vec` model every one of those four writes mutates a PRIVATE
+// COPY and the operand rewrite NEVER REACHES THE OP: rc=0, it compiles, and the
+// transform silently does nothing.  That is strictly worse than today's loud
+// abort, which is why this is a refusal and not a cheap key.
+// A FAITHFUL model is `(owner op, start, length)` indexing into the op's operand
+// storage, i.e. it needs OPERAND-LIST SURFACE in the IR model that
+// `dataflowir_gen` does not have today -> this is a dataflowir-gen row, not a
+// rules row.  Same shape of argument as the t25/OpState and OwningOpRef
+// refusals: the C++ type is a HANDLE and the available Rust model is a VALUE.
+
 // mlir/include/mlir/IR/Region.h -- a view over an op's regions.
 class RegionRange {};
 
@@ -2507,3 +2529,97 @@ template <typename T1> llvm::SetVector<T1> f120() {
 // t151 -- see the restatement of `mlir::RegisteredOperationName` above for the
 // full argument.  Arity 0, so no normalization or swallow hazard.
 using t151 = mlir::RegisteredOperationName;
+
+// ---------------------------------------------------------------------------
+// PASS 2026-09-28: the two remaining 1-each SmallVector-element gates.
+// Both arrive EXACTLY as t83/t84/t85/t151 did -- never named as a type a rule is
+// looked up on, but as the bare ELEMENT of a container rules/smallvector already
+// maps, so the mapper RECURSES into the element and an element with no model is a
+// hard `mapper.cpp:722` abort that emits nothing:
+//   `unsupported unmapped type X has no model in types_, while mapping
+//    llvm::SmallVector<X>`
+// ---------------------------------------------------------------------------
+namespace mlir {
+namespace func {
+// mlir/Dialect/Func/IR/FuncOps.h.inc:574 -- `class CallOp : public ::mlir::Op<
+// CallOp, ZeroRegions, VariadicResults, ..., SymbolUserOpInterface::Trait>`, i.e.
+// an ORDINARY ODS-GENERATED OP CLASS: one `Operation *` through its `OpState`
+// base.  So it maps where t25 (`mlir::OpState`) and t27 (`mlir::scf::ForOp`) map,
+// `fmt::OpInst`, and it carries t25's PROHIBITION VERBATIM: ⛔ NO `==`, NO `!=`,
+// NO identity test, because a C++ op handle compares `Operation *` while
+// `fmt::OpInst` is an op's printed CONTENT -- see the g045 refusal.
+//
+// NO MEMBER IS KEYED, and the MIS-SERVICE HAZARD WAS CHECKED, not assumed.  A key
+// on a DERIVED class cannot relocate an INHERITED member (measured on
+// `llvm::FailureOr`: six keys FOUND, all six DEAD), so the question that matters
+// is the reverse one -- can an EXISTING key on a BASE serve a member call on
+// CallOp and thereby make a unit silently wrong?  It cannot: `grep -n 'OpState::'
+// src.cpp` is ZERO HITS, so rules/mlir keys NO OpState member at all.  The
+// corpus's member calls therefore all stay LOUD:
+//   `call.getLoc()`, `body.getCallee()`   (dbo/src/InitBin.cpp:105)
+//   `func::CallOp::create(...)`           (InitBin.cpp:72,105 -- a STATIC member
+//                                          on CallOp itself, not inherited)
+// No destructor exists (`grep -n '~CallOp' FuncOps.h.inc` = 0 hits, and neither
+// `Op` nor `OpState` declares one), so the handle model is permitted -- the
+// OwningOpRef test.
+class CallOp {};
+} // namespace func
+
+namespace linalg {
+// mlir/Dialect/Linalg/IR/LinalgInterfaces.h.inc:477 --
+// `class LinalgOp : public ::mlir::OpInterface<LinalgOp,
+//  detail::LinalgOpInterfaceTraits>`.
+// ⭐ MEASURED, NOT PREDICTED: IT IS AN OP INTERFACE, NOT AN OP CLASS.  It does
+// NOT derive from OpState; it derives from `mlir::detail::Interface<...,
+// Operation *, ...>` (InterfaceSupport.h:94), whose state is the pair
+// (`Operation *`, `const Concept *conceptImpl`).
+//
+// DOES THE t58 / `InterfaceMap` REFUSAL GOVERN IT?  NO -- and that is the point
+// worth recording, because it reads as though it should.  t58 refuses to model
+// INTERFACE DISPATCH (the sorted TypeID -> concept table); the crate has zero
+// notion of it, and t58 is nevertheless MAPPED, as an opaque unit, with every
+// member absent.  `LinalgOp` is the interface's VALUE side, and its PAYLOAD IS AN
+// OP: the only way a corpus site obtains one is `dyn_cast<LinalgOp>(op)` /
+// `walk([](LinalgOp){})`.  So the faithful widening is t27's, `fmt::OpInst`, and
+// what is LOST is exactly the `conceptImpl` pointer -- i.e. dispatch, which is
+// precisely what t58 already declines to model and what stays LOUD here because
+// ⛔ NO MEMBER IS KEYED.  Every read the corpus performs aborts:
+//   `linalg_op.emitError(...)`              (ConstructThreeStagePipeline.cpp:258,
+//                                            457, 485 -- inherited, and no
+//                                            OpState member is keyed either)
+//   `linalg_op.getMatchingIndexingMap(...)` (:749, :778)
+//   `linalg_op.getDpsInitOperand(...)`      (:777, :1034)
+//   `linalg_op.getNumDpsInits()`            (:1033)
+//   `compute_op.getOperation()`             (:1032)
+// so NO unit is silently wrong -- the `OpAsmParser::Argument` test.  Same
+// PROHIBITION as t25/t27: ⛔ no `==`, no `!=`.  No destructor exists (`grep
+// '~LinalgOp'` = 0 hits; `detail::Interface` declares none), so the handle model
+// is permitted.
+class LinalgOp {};
+} // namespace linalg
+} // namespace mlir
+
+// t152 -- `mlir::func::CallOp`.  Arity 0, so no `\b\d+\b` normalization and no
+// last-placeholder swallow hazard.  Gates dbo/src/InitBin.cpp.
+using t152 = mlir::func::CallOp;
+
+// f121 -- THE DEFAULT CONSTRUCTOR FOR t152, AND IT IS REQUIRED.  Unlike t151
+// (whose type is not default-constructible in C++, so no site can ask for one),
+// the GATING TU ITSELF default-constructs one: `func::CallOp found;`
+// (dbo/src/InitBin.cpp:41), as do dbo/src/Transforms/Autopilot.cpp:61,:82,:103,
+// :229 and PlacePrograms.cpp:182.  Without this key the TU is rc=0 and then
+// `E0433: cannot find module or crate mlir_func_CallOp` -- the tell being
+// `search expr void T::T(), result: None`.  A default-constructed ODS op handle
+// is the NULL handle; `fmt::OpInst` has no null, so the target spells t25's
+// unreachable-placeholder init and says so there.
+mlir::func::CallOp f121() { return mlir::func::CallOp(); }
+
+// t153 -- `mlir::linalg::LinalgOp`.  Arity 0.  Gates
+// dataflow-scheduler/lib/Conversion/frontend/KTIRToScheduleIR/
+// ConstructThreeStagePipeline.cpp.
+// NO CONSTRUCTOR KEY, and that is checked rather than assumed: `grep -rn
+// 'LinalgOp [a-z_]*;' dataflow-scheduler` is ZERO HITS -- every value comes from
+// `dyn_cast`, a `walk` lambda parameter, a function parameter, or
+// `compute_ops_[0]`, and `SmallVector<LinalgOp> v;` constructs no element.  This
+// is t151's and t27's precedent, both committed without a constructor.
+using t153 = mlir::linalg::LinalgOp;

@@ -1356,3 +1356,56 @@ unsafe fn f120<T1>() -> Vec<T1> {
 fn t151() -> Option<dataflowir_gen::TdOpDef> {
     None
 }
+
+// t152 -- `mlir::func::CallOp` -> `fmt::OpInst`.  An ordinary ODS-generated op
+// class (FuncOps.h.inc:574, `::mlir::Op<CallOp, ...>`), i.e. one `Operation *`
+// through its OpState base, so this is t25's representation and t27's precedent.
+//
+// ⛔ t25's PROHIBITION APPLIES UNCHANGED: no `operator==`, no `operator!=`, no
+// identity test is mapped, and none may be added without a handle-identity
+// model.  A C++ op handle is equal iff the `Operation *` are the same object;
+// `OpInst` is the op's printed CONTENT, so equality here would call two distinct
+// calls to the same callee with the same operands the SAME operation.  No member
+// is mapped either, so every read (`getCallee`, `getLoc`, `create`) still aborts
+// loudly in the mapper rather than returning a plausible lie.
+//
+// The `init` is t25's, and for t25's reason: a default-constructed ODS op handle
+// is the NULL handle, `fmt::OpInst` has no null, and this expression exists only
+// to type-check the type key.
+fn t152() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+// f121 -- the default constructor for t152, required because the gating TU writes
+// `func::CallOp found;` (dbo/src/InitBin.cpp:41).  Byte-identical to t152's init
+// on purpose, and for the same reason t85/f119 are: t152 supplies the type's zero
+// value while f121 is the expression a written `func::CallOp x;` lowers to.  It is
+// the null handle in C++ and `fmt::OpInst` cannot represent null, so this is a
+// PLACEHOLDER -- the value is never read, because no CallOp member is mapped.
+fn f121() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+// t153 -- `mlir::linalg::LinalgOp` -> `fmt::OpInst`.  IT IS AN OP INTERFACE, not
+// an op class (LinalgInterfaces.h.inc:477, `::mlir::OpInterface<LinalgOp, ...>`),
+// so its C++ state is the PAIR (`Operation *`, `const Concept *`).  The payload is
+// an op and every corpus value comes from `dyn_cast<LinalgOp>(op)` or a `walk`
+// lambda, so t27's widening is the faithful one.
+//
+// ⛔ WHAT IS LOST, STATED: the `conceptImpl` pointer -- i.e. INTERFACE DISPATCH,
+// which is exactly what t58 (`mlir::detail::InterfaceMap`) already declines to
+// model because `dataflowir_gen` has no notion of it.  That refusal does NOT
+// forbid this key -- t58 is itself mapped -- it constrains it: NO MEMBER IS
+// MAPPED, so `getNumDpsInits`/`getDpsInitOperand`/`getMatchingIndexingMap`/
+// `emitError`/`getOperation` all abort loudly instead of dispatching to nothing.
+// t25's equality prohibition applies here too.  No constructor key: nothing in
+// the corpus default-constructs one.
+fn t153() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
