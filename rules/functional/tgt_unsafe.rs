@@ -88,3 +88,7 @@ unsafe fn f14<T1, T2, T3, T4, T5, T6>(a0: &Option<Box<dyn Fn(T2, T3, T4, T5, T6)
 unsafe fn f15<T1, T2, T3, T4, T5, T6, T7: Fn(T2, T3, T4, T5, T6) -> T1 + 'static>(a0: T7) -> Option<Box<dyn Fn(T2, T3, T4, T5, T6) -> T1>> {
     Some(Box::new(a0))
 }
+
+fn t8<'a, T1>() -> Option<&'a (dyn Fn() -> T1 + 'a)> {
+    None
+}

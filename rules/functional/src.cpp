@@ -127,3 +127,37 @@ template <typename T1, typename T2, typename T3, typename T4, typename T5, typen
 template <typename T1, typename T2, typename T3, typename T4, typename T5, typename T6, typename T7> std::function<T1(T2, T3, T4, T5, T6)> f15(T7 a0) {
   return std::function<T1(T2, T3, T4, T5, T6)>(a0);
 }
+
+// ---------------------------------------------------------------------------
+// `llvm::function_ref<R()>` -- a NON-OWNING type-erased callable REFERENCE.
+// Harvested with `-verbose` off Ktdp/KtdpTypes.cpp; 10 asks, all `result: None`,
+// all `searched as: llvm::function_ref<mlir::InFlightDiagnostic ()>`, so the key is
+// the ARROW SHAPE `llvm::function_ref<T1 ()>` (same reason as `std::function`
+// above: a bare `llvm::function_ref<T1>` would bind T1 to a C++ FUNCTION TYPE,
+// which has no model in types_).
+//
+// ⛔ THE MODEL IS A BORROW, NOT A `Box`.  `function_ref` is documented as never
+// stored and the corpus agrees -- every occurrence in bucket A is a PARAMETER,
+// zero fields, zero return positions.  An owning `Box<dyn Fn...>` would impose
+// `'static` plus an allocation and would not compile at the call site, so the
+// faithful model is `Option<&'a (dyn Fn() -> T1 + 'a)>`.
+//
+// This is the FIRST rule in the tree carrying a non-`'static` lifetime.  It is
+// only writable because 63546ba2 taught the converter to collect `'`-binders out
+// of the rendered parameter/return spellings and declare them after the function
+// name; before that fix every emitted signature carried an UNDECLARED `'a`
+// (rustc E0261) and the key had to be reverted.
+// RESTATED, NOT #included: cpp-rule-preprocessor compiles this file with a fixed
+// flag set that cannot reach an LLVM tree (same reason as rules/support,
+// rules/stringref, rules/twine).  Declared for real at
+// llvm/ADT/STLFunctionalExtras.h:36.
+namespace llvm {
+template <typename Fn> class function_ref;
+// llvm/ADT/STLFunctionalExtras.h:36
+template <typename Ret, typename... Params> class function_ref<Ret(Params...)> {
+public:
+  function_ref();
+};
+} // namespace llvm
+
+template <typename T1> using t8 = llvm::function_ref<T1()>;
