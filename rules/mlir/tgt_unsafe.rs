@@ -1874,3 +1874,48 @@ unsafe fn f145(a0: &mut Vec<dataflowir_gen::ir::Value>) -> Vec<dataflowir_gen::i
 fn t166() -> Vec<dataflowir_gen::ir::Value> {
     Default::default()
 }
+
+// f146 -- `llvm::APInt mlir::IntegerAttr::getValue() const`, 16 asks on
+// KtdpDialect.cpp and the largest single count in that TU's diagnosis.  The full
+// argument is in src.cpp; in one paragraph: t10 widens `mlir::IntegerAttr` to the
+// whole `ir::Attr` enum, so this body RECOVERS the integral case, and it can
+// recover it EXACTLY because `Attr::Int(i64, Ty)` carries the type suffix as data
+// and `Ty::Int(u32)` is the width.  The width is the whole point of the key --
+// `rules/apint` f8 (`getSExtValue`) sign-extends FROM BitWidth, so a width-less
+// model of this accessor turns a 32-bit -1 into +4294967295 in the loop bound at
+// `dcc/src/Dialect/Sentient/SentientOps.cpp:1074`.
+//
+// `v as u64` is a two's-complement reinterpretation, and `APInt::new` then masks
+// to the width -- which is what MLIR's IntegerAttr storage holds.  `implicit_trunc
+// = true` says exactly that: the high bits of a negative `i64` are DELIBERATELY
+// dropped, not accidentally.
+//
+// ⛔ THE PANIC ARM IS THE LOUD FAILURE, NOT A `todo!()`.  In C++ the static type
+// `IntegerAttr` already guaranteed integrality; these arms are reachable only
+// because t10 widened, and the message names the arm so a real occurrence is
+// diagnosable instead of silently answering 0.
+unsafe fn f146(a0: dataflowir_gen::ir::Attr) -> libcc2rs::APInt {
+    match a0 {
+        // `w`-bit integer attribute -- the ordinary case.
+        dataflowir_gen::ir::Attr::Int(v, dataflowir_gen::ir::Ty::Int(w)) => {
+            libcc2rs::APInt::new(w, v as u64, true, true)
+        }
+        // `index` -- MLIR's IndexType stores IntegerAttrs at
+        // kInternalStorageBitWidth = 64.
+        dataflowir_gen::ir::Attr::Int(v, dataflowir_gen::ir::Ty::Index) => {
+            libcc2rs::APInt::new(64, v as u64, true, true)
+        }
+        // `mlir::BoolAttr` IS an IntegerAttr of i1; its `getValue()` is the 1-bit
+        // arm.  Omitting this would have sent every boolean attribute to the panic.
+        dataflowir_gen::ir::Attr::Bool(b) => {
+            libcc2rs::APInt::new(1, b as u64, false, true)
+        }
+        other => panic!(
+            "mlir::IntegerAttr::getValue() reached a non-integral ir::Attr arm: \
+             {other:?}.  The C++ static type IntegerAttr guaranteed integrality; \
+             this state exists only because rules/mlir t10 widens IntegerAttr to \
+             the whole ir::Attr enum, so reaching it means the attribute was built \
+             through a path that lost its integral type"
+        ),
+    }
+}

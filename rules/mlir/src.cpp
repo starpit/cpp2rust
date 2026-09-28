@@ -70,6 +70,17 @@ template <typename T> class MutableArrayRef;
 // (`no template named 'ArrayRef' in namespace 'llvm'`), which is a regen failure,
 // not a converter gap.
 template <typename T> class ArrayRef;
+// ⭐ AND `APInt`, COMPLETE-BUT-EMPTY, purely so `mlir::IntegerAttr::getValue()`
+// (f146) can be SPELLED with its real BY-VALUE return type.  A by-value return
+// needs a COMPLETE type in the DEFINITION of f146, so unlike `raw_ostream` at
+// :3418 this one cannot be left incomplete.  It declares no member and no `using
+// tN =`, so it maps nothing and records nothing in THIS module -- `rules/apint`
+// owns `llvm::APInt` (its t2, the width-carrying `libcc2rs::APInt { bit_width,
+// value }`), and the converter resolves the type key by NAME across modules,
+// exactly as the `llvm::StringRef` parameters of f22-f24 resolve to
+// rules/stringref.  ⛔ Do NOT add `using tN = llvm::APInt` here: that would be a
+// DUPLICATE key against rules/apint t2.
+class APInt {};
 } // namespace llvm
 
 namespace mlir {
@@ -246,7 +257,24 @@ class DictionaryAttr {};
 // static guarantee (an `IntegerAttr` is known integral; an `Attr` is not).  The
 // widening is sound for storage and comparison and is the same choice already
 // made for mlir::Attribute (t6).
-class IntegerAttr {};
+//
+// ⭐ `getValue()` IS NOW DECLARED -- the ONE member of this class that is, and the
+// note further down that says "sound only because NO ACCESSOR IS MAPPED" is
+// narrowed accordingly (see f146).  It became keyable only when `rules/apint`
+// landed a WIDTH-CARRYING `llvm::APInt` model (t2, commit 78a49f21); before that
+// the return type had no key and a rule here could not have been written without
+// inventing a width.
+class IntegerAttr {
+public:
+  // mlir/include/mlir/IR/BuiltinAttributes.h.inc -- `::llvm::APInt getValue()
+  // const`.  BY VALUE, which is what makes it keyable at all: a member returning
+  // a REFERENCE out of a by-value receiver is silently dangling under the
+  // refcount model (the reason `std::string_view::front()` and
+  // `llvm::SMLoc::getPointer()` were both refused).  Confirmed by readback --
+  // the recorded key is `llvm::APInt mlir::IntegerAttr::getValue() const`, with
+  // no `&`.
+  llvm::APInt getValue() const;
+};
 
 // ir.rs:491 `Attr::I32Array` is documented as "`mlir::ArrayAttr` of IntegerAttrs".
 // Same widening as IntegerAttr, and for the same reason.
@@ -4068,3 +4096,64 @@ mlir::ValueRange f144(llvm::ArrayRef<mlir::Value> a0) {
 mlir::ValueRange f145(std::vector<mlir::Value> &a0) {
   return mlir::ValueRange(a0);
 }
+
+// ---- f146: `mlir::IntegerAttr::getValue()`, queue row g-largest-in-diagnosis ---
+//
+// THE MEASUREMENT.  `-verbose` on
+// `dataflow-scheduler/external/ktir-mlir-frontend/lib/Ktdp/KtdpDialect.cpp`
+// (A rc=0, 3,948 emitted lines; the verbose leg EXITED 0 at 102,598 log lines, so
+// its silence is real silence and not a truncation artefact) records
+//
+//     search expr llvm::APInt mlir::IntegerAttr::getValue() const, result: None
+//
+// SIXTEEN times -- the largest single ask count in that TU's diagnosis.
+//
+// ⛔ WHY IT WAS NOT MERELY "MISSING": IT WAS SILENT.  An unmapped MEMBER does not
+// abort.  The converter emits the call TEXTUALLY, at rc=0, with NO placeholder
+// token to grep for -- `KtdpDialect.cpp:3117` came out as
+// `unsafe { self.getValue() }` with no `fn getValue` anywhere in the file, i.e. a
+// plain E0599 at the far end of the pipeline and nothing in the translate log.
+// That is the whole reason this row is worth a key rather than a refusal.
+//
+// WHY THE RETURN TYPE DECIDES THE WIDTH, AND WHY THAT IS THE POINT.
+// `getSExtValue()` (rules/apint f8) sign-extends FROM BitWidth.  The composite
+// expression `step.getValue().getSExtValue()` therefore needs BOTH halves to be
+// width-aware: a width-less model of this accessor turns a 32-bit -1 into
+// +4294967295, and the named observer for exactly that is a LOOP BOUND --
+// `dcc/src/Dialect/Sentient/SentientOps.cpp:1074,1080,1081`.  This key supplies
+// the width; rules/apint t2 carries it.
+//
+// THE MODEL.  t10 WIDENS `mlir::IntegerAttr` to the whole `ir::Attr` enum (there
+// is no distinct Rust type for the subclass), so the target body must recover the
+// integral case from the enum.  `Attr::Int(i64, Ty)` (ir.rs:470) carries the type
+// suffix as DATA -- "the type suffix is part of the value, not decoration" -- and
+// `Ty::Int(u32)` (ir.rs:39) is the width, so the APInt is reconstructible exactly.
+//   * `Attr::Int(v, Ty::Int(w))`  -> width `w`.
+//   * `Attr::Int(v, Ty::Index)`   -> width 64.  MLIR's IndexType has
+//     `kInternalStorageBitWidth = 64`, and `IntegerAttr::get(IndexType, v)`
+//     stores a 64-bit APInt; this is not a guess about the model, it is what
+//     BuiltinAttributes.cpp's IntegerAttr storage does for index.
+//   * `Attr::Bool(b)`             -> width 1.  ⭐ NOT a widening error and NOT
+//     out of scope: `mlir::BoolAttr` IS an `IntegerAttr` of `i1` in MLIR
+//     (BuiltinAttributes.h -- BoolAttr is a distinct C++ class but the STORAGE and
+//     `getValue()` are IntegerAttr's i1 arm).  Dropping this arm would have made
+//     every boolean attribute take the panic path.
+//   * every other arm PANICS WITH A NAMED MESSAGE.  In C++ the static type
+//     `IntegerAttr` already guaranteed integrality, so these states are
+//     unreachable in any program that type-checked -- they exist only because t10
+//     widened.  ⛔ A panic here is the LOUD failure the brief demands, not a
+//     `todo!()`: it names the arm it saw, so a real occurrence is diagnosable
+//     rather than silently answering 0.
+//
+// ⚠️ NARROWING THE MODULE'S OWN ABSENCE NOTES.  Three comments in this file say a
+// widening is "sound only because NO ACCESSOR IS MAPPED" and list `getValue()`
+// among the absent ones (:696, :759, :988, :1909).  Those are about
+// `IntegerSetAttr`, `TypeAttr`, `DenseElementsAttr`/`SparseElementsAttr`,
+// `llvm::cl::opt` and `FlatSymbolRefAttr` -- DIFFERENT receivers, each with its
+// own `getValue()`.  This key is on `mlir::IntegerAttr` ONLY; a key is recorded
+// per fully-qualified signature, so none of those receivers is affected and none
+// of those notes becomes false.
+//
+// THE RECEIVER IS `const` AND ARRIVES BY VALUE, exactly as for f11
+// (`bool mlir::Attribute::operator!() const`) whose target likewise takes a0.
+llvm::APInt f146(const mlir::IntegerAttr &a) { return a.getValue(); }

@@ -1765,3 +1765,38 @@ fn f145(a0: &mut Vec<dataflowir_gen::ir::Value>) -> Vec<dataflowir_gen::ir::Valu
 fn t166() -> Vec<dataflowir_gen::ir::Value> {
     Default::default()
 }
+
+// f146 -- `llvm::APInt mlir::IntegerAttr::getValue() const`, 16 asks on
+// KtdpDialect.cpp and the largest single count in that TU's diagnosis.  Body
+// IDENTICAL to the unsafe model's, and it is identical for a reason that matters
+// HERE specifically: the C++ member returns `llvm::APInt` BY VALUE, so there is no
+// borrow taken out of the by-value receiver and nothing can dangle under refcount.
+// That is precisely the test `std::string_view::front()` and
+// `llvm::SMLoc::getPointer()` FAILED -- both return a REFERENCE into a receiver
+// this model owns by value -- and it is why the by-value return was confirmed off
+// the readback spelling (no `&`) before the key was written.
+//
+// See src.cpp and tgt_unsafe.rs for the width argument (t10 widens IntegerAttr to
+// `ir::Attr`; `Attr::Int(i64, Ty)` + `Ty::Int(u32)` make the APInt exactly
+// reconstructible) and for why the fallback arm PANICS with a named message rather
+// than answering 0.
+fn f146(a0: dataflowir_gen::ir::Attr) -> libcc2rs::APInt {
+    match a0 {
+        dataflowir_gen::ir::Attr::Int(v, dataflowir_gen::ir::Ty::Int(w)) => {
+            libcc2rs::APInt::new(w, v as u64, true, true)
+        }
+        dataflowir_gen::ir::Attr::Int(v, dataflowir_gen::ir::Ty::Index) => {
+            libcc2rs::APInt::new(64, v as u64, true, true)
+        }
+        dataflowir_gen::ir::Attr::Bool(b) => {
+            libcc2rs::APInt::new(1, b as u64, false, true)
+        }
+        other => panic!(
+            "mlir::IntegerAttr::getValue() reached a non-integral ir::Attr arm: \
+             {other:?}.  The C++ static type IntegerAttr guaranteed integrality; \
+             this state exists only because rules/mlir t10 widens IntegerAttr to \
+             the whole ir::Attr enum, so reaching it means the attribute was built \
+             through a path that lost its integral type"
+        ),
+    }
+}
