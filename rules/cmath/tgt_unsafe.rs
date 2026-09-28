@@ -16,3 +16,15 @@ unsafe fn f4(a0: f64) -> f64 {
 unsafe fn f5(a0: i32) -> f64 {
     (a0 as f64).log2()
 }
+unsafe fn f6(a0: f64, a1: f64) -> f64 {
+    (a0 as f64).powf(a1 as f64)
+}
+unsafe fn f7(a0: i32, a1: i32) -> f64 {
+    (a0 as f64).powf(a1 as f64)
+}
+unsafe fn f8(a0: f64, a1: i32) -> f64 {
+    (a0 as f64).powf(a1 as f64)
+}
+unsafe fn f9(a0: f32, a1: f32) -> f32 {
+    (a0 as f32).powf(a1 as f32)
+}

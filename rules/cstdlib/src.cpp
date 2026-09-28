@@ -32,3 +32,7 @@ void f9(void *base, size_t nmemb, size_t size,
 char *f10(const char *path, char *resolved_path) {
   return realpath(path, resolved_path);
 }
+
+// exit(int) -- 4 of the goal TU's undefined-free-function errors.  void and
+// noreturn; libc::exit returns `!`, which coerces.
+void f11(int a0) { return exit(a0); }

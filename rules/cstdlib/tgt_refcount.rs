@@ -93,3 +93,7 @@ fn f9(a0: AnyPtr, a1: usize, a2: usize, a3: fn(AnyPtr, AnyPtr) -> i32) {
         }
     }
 }
+
+fn f11(a0: i32) {
+    unsafe { libc::exit(a0) }
+}
