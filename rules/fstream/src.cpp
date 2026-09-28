@@ -83,3 +83,48 @@ std::istreambuf_iterator<char> f8(std::basic_streambuf<char> *p) {
 // (no row searched the resolved spelling for the input side).
 
 using t4 = std::istreambuf_iterator<char>;
+
+// ---------------------------------------------------------------------------
+// f9 -- `std::ofstream(const std::string &, std::ios_base::openmode)`.
+//
+// MEASURED ABSENT, verbatim from a `-verbose` run of
+// sys-arch-spec/initpacket/initpacket.cpp against pin/ir.v20:
+//     search expr void std::basic_ofstream<char>::basic_ofstream(const std::string &, unsigned int), result:
+//     None
+// This is the FABRICATED-`::new_<N>` class: with no ctor key the converter emits
+// `std_basic_ofstream_char_...::new_N` at rc=0 with no placeholder token, so
+// pin/no-placeholders.sh cannot see it.
+//
+// ONE key, not two: the corpus overwhelmingly writes `std::ofstream ofs(name);`
+// with the openmode DEFAULTED, and the recorder writes a defaulted argument out
+// at the call site, so `ofs(name)` and `ofs(name, std::ios::binary)` record as
+// this SAME key.  A nullary/one-arg second entry would be silently redundant
+// (the `substr` precedent).
+//
+// ⭐ THE OPENMODE IS NOW HONOURED, and f1 was fixed in the SAME change (its key
+// string is untouched; only its BODY changed, and it gained the `a1` parameter the
+// key always had).  The earlier version of this rule DISCARDED `mode` and used
+// `File::create`, which TRUNCATES.  That was not a theoretical loss: the corpus has
+// `ios::app`/`ios_base::app` at 10 sites, three of them exactly this
+// ctor-with-mode shape, two of them append-mode LOG files --
+//     ddb/src/Standardization/DDBStandardizationMgr.h:179
+//         std::ofstream log_file(erroFileName, std::ios_base::app);
+//     ddb/src/Standardization/DDBStandardizationMgr.cpp:152
+//         std::ofstream file(fileName, std::ios::app);
+//     spyrecode-host-functions/processSpyreCodeArtifacts_standalone.cpp:205
+//         std::ofstream out(name, std::ios::binary);
+// -- so the discarding body would have emitted a program that RUNS and silently
+// wipes two log files.  That is the SILENT WRONGNESS class, worse than a loud
+// failure, and it is why this rule was not committed as written.
+//
+// The mapping, the measured bit values, and the disposition of
+// ate/binary/in/trunc are documented once, on f1 in tgt_unsafe.rs.
+//
+// ⚠️ STILL LOSSY, named: f5 (`std::ifstream(const char *, openmode)`) also
+// discards its mode.  That is NOT the same exposure -- `File::open` is read-only
+// and destroys nothing -- so the worst case there is a missing `in|out`/`ate`
+// position, not data loss.  Left alone deliberately: no corpus site asks for it,
+// and changing it is not needed to remove the truncation bug.
+std::ofstream f9(const std::string &filename, std::ios_base::openmode mode) {
+  return std::ofstream(filename, mode);
+}
