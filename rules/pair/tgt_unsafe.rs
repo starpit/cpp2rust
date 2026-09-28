@@ -67,3 +67,11 @@ unsafe fn f16<T1: From<Vec<libc::c_char>>, T2>(a0: Vec<libc::c_char>, a1: T2) ->
         a1.into(),
     )
 }
+
+unsafe fn f17<T1: PartialEq, T2: PartialEq>(a0: &(T1, T2), a1: &(T1, T2)) -> bool {
+    a0 == a1
+}
+
+unsafe fn f18<T1: PartialEq, T2: PartialEq>(a0: &(T1, T2), a1: &(T1, T2)) -> bool {
+    a0 != a1
+}

@@ -74,3 +74,7 @@ unsafe fn f15<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
 unsafe fn f16<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
     a0 != a1
 }
+
+unsafe fn f17<T1>(a0: &mut Vec<T1>, a1: T1) {
+    a0.push(a1)
+}

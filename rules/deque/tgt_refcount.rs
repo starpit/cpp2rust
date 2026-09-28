@@ -37,3 +37,7 @@ fn f15<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
 fn f16<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
     a0 != a1
 }
+
+fn f17<T1: ByteRepr>(a0: Ptr<Vec<T1>>, a1: T1) {
+    a0.with_mut(|__v: &mut Vec<T1>| __v.push(a1))
+}

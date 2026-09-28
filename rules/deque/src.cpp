@@ -73,3 +73,10 @@ template <typename T1>
 bool f16(const std::deque<T1> &a, const std::deque<T1> &b) {
   return operator!=(a, b);
 }
+
+// f17 -- push_back FOR AN LVALUE OF AN ARBITRARY ELEMENT TYPE.  f4 keys only the
+// `T1 &&` overload and f7 only `std::deque<std::vector<T1>>`, so `d.push_back(x)`
+// with `x` a named lvalue of any other element type was unmapped.
+template <typename T1> void f17(std::deque<T1> &o, const T1 &value) {
+  return o.push_back(value);
+}

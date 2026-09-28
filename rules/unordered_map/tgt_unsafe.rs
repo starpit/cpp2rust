@@ -315,3 +315,7 @@ unsafe fn f54<T1: Eq + Hash + Clone>(
 ) -> libcc2rs::UnsafeHashSetIterator<T1> {
     libcc2rs::UnsafeHashSetIterator::erase(&*a0 as *const HashSet<T1>, &a1)
 }
+
+unsafe fn f55<T1: Eq + Hash, T2: Default>(a0: &mut HashMap<T1, Box<T2>>, a1: T1) -> &mut T2 {
+    a0.entry(a1).or_default().as_mut()
+}

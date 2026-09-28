@@ -347,3 +347,23 @@ typename std::unordered_set<T1>::iterator
 f54(std::unordered_set<T1> &o, typename std::unordered_set<T1>::const_iterator it) {
   return o.erase(it);
 }
+
+// f55 -- operator[] TAKING AN RVALUE KEY.  MEASURED 2026-09-28 from
+// `probe/umapdecomp/p.cpp` (`std::unordered_map<int,long> um; um[7] = 100;`):
+//     search expr long & std::unordered_map<int, long>::operator[](int &&), result:
+//     None
+// f1 keys only the `const T1 &` overload, so a SUBSCRIPT WITH A PRVALUE KEY -- which
+// is what `um[7]`, `um[i + 1]` and `um[some_call()]` all are, since libc++ declares
+// both `mapped_type &operator[](const key_type &)` and `mapped_type &operator[](key_type &&)`
+// and overload resolution picks the && one for any rvalue -- found NO key and fell
+// through to the converter's generic array-subscript lowering, emitting
+// `um[(7) as usize] = 100_i64` against a `HashMap<i32, Box<i64>>` (two E0308s: the
+// index is not a `&i32`, and the value is not a `Box<i64>`).  `rules/map` has had
+// this pair since the start (f1 + f8, byte-identical bodies); this is the missing
+// unordered twin.  The body is `entry(k).or_default()`, which INSERTS a
+// default-constructed value for a missing key -- exactly what C++ `operator[]` does,
+// and why it must not be a `get`/panic form.
+template <typename T1, typename T2>
+T2 &f55(std::unordered_map<T1, T2> &o, T1 &&key) {
+  return o.operator[](std::move(key));
+}

@@ -326,3 +326,14 @@ fn f54<T1: Eq + Hash + Clone + 'static>(
 ) -> RefcountHashSetIter<T1> {
     RefcountHashSetIter::erase(a0, &a1)
 }
+
+fn f55<T1: Eq + Hash + Clone + 'static, T2: Default + 'static>(
+    a0: Ptr<HashMap<T1, Value<T2>>>,
+    a1: T1,
+) -> Ptr<T2> {
+    a0.with_mut(|__v: &mut HashMap<T1, Value<T2>>| {
+        __v.entry(a1)
+            .or_insert_with(|| Rc::new(RefCell::new(<T2>::default())))
+            .as_pointer()
+    })
+}

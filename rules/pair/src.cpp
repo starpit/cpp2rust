@@ -62,6 +62,19 @@ std::pair<T1, T2> &f14(std::pair<T1, T2> &dst, std::pair<T1, T2> &&src) {
   return dst.operator=(std::move(src));
 }
 
+// g419 -- REFUTED AND SUPERSEDED BY f17/f18 BELOW (measured 2026-09-28).  Both
+// operators ARE keyed now and probe/paireq/p.cpp MATCHes in BOTH models.  The
+// note below is kept only as a record of what was wrong with it.  What it got
+// right: the rule side really does record `bool std::operator==(...)` WITHOUT
+// the `__1` component (rules/deque's identically-written f15/f16 record WITH it).
+// What it got wrong: it inferred from that asymmetry that the key was DEAD.  It
+// is not -- the CONVERTER prints the pair operators the same `__1`-less way, so
+// the two sides AGREE and the key matches.  The quoted `rule key: bool
+// std::__1::operator!=(...)` abort text came from a different converter than the
+// one it was compared against.  Lesson: a key spelling that merely LOOKS wrong
+// next to a sibling module is not evidence of deadness -- run the probe.
+//
+// ORIGINAL (WRONG) NOTE FOLLOWS.
 // g419 -- `bool std::__1::operator!=(const pair<A,B> &, const pair<A,B> &)` is
 // NOT KEYED HERE, deliberately.  MEASURED 2026-09-27: an unqualified call form
 // `operator!=(a, b)` with two `const std::pair<T1, T2> &` parameters records the
@@ -103,4 +116,21 @@ std::pair<T1, T2> f15(char const (&a0)[T3], T2 &a1) {
 template <typename T1, typename T2, std::size_t T3>
 std::pair<T1, T2> f16(char const (&a0)[T3], T2 &&a1) {
   return std::pair<T1, T2>(a0, std::move(a1));
+}
+
+// f17/f18 -- pair's free comparison operators, written EXACTLY like rules/deque's
+// f15/f16.  This SUPERSEDES the g419 note above, which is now known wrong: the
+// `std::__1` inline-namespace component comes from the RESOLVED CALLEE's
+// declaration (cpp_rule_preprocessor.cpp:232/237 getQualifiedNameAsString,
+// mapper.cpp:2162/2165 printQualifiedName), not from how the call is written, so
+// an UNQUALIFIED `operator==(a, b)` records WITH `__1` and matches -- as
+// rules/deque, rules/vector f115/f116 and rules/set already demonstrate.
+template <typename T1, typename T2>
+bool f17(const std::pair<T1, T2> &a, const std::pair<T1, T2> &b) {
+  return operator==(a, b);
+}
+
+template <typename T1, typename T2>
+bool f18(const std::pair<T1, T2> &a, const std::pair<T1, T2> &b) {
+  return operator!=(a, b);
 }
