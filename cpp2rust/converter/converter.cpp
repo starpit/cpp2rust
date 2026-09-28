@@ -767,7 +767,8 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
   // any binding that is itself a reference or a class type, still ALIASES
   // observably and stays on the loud refusal path -- see the REFERENCE
   // paragraph above.
-  if (type->isReferenceType()) {
+  const bool ref_holder = type->isReferenceType();
+  if (ref_holder) {
     if (!type->isLValueReferenceType()) {
       return false;
     }
@@ -831,16 +832,41 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
   // Annotate: without the type, `let t = <init>;` left one measured case at
   // `E0282: type annotations needed` because the tuple element types are only
   // pinned by the (separate) binding statements.
+  // A REFERENCE holder is annotated as a RAW POINTER TO the model, not as the
+  // model itself. MEASURED (goal TU, three sites): `dim_prop_.at(i)` lowers
+  // through `rules/vector`'s POINTER-returning `at`, so a value annotation is
+  // `E0308 expected tuple, found *mut _` and `holder.0` on a raw pointer is
+  // `E0609`/`E0614` -- Rust does not auto-deref a raw pointer for field access.
+  // `Convert(decl->getType())` cannot be used to get the `*const`:
+  // `Convert(QualType)` consults `Mapper::Map` FIRST (:126), which answers for
+  // the REFERENCE type with the *value* model and drops the reference-ness, and
+  // `VisitReferenceType` is only reached when no rule matched. So build the
+  // annotation the way `VisitPointerType` (:498) does: sigil, then pointee.
+  // Pointer-holder + deref-at-use is the convention the converter already
+  // ships in `EmitVectorDecompositionBindings` and `VisitCXXForRangeStmtMap`.
+  if (ref_holder) {
+    StrCat("*const");
+  }
   Convert(type);
   StrCat(token::kAssign);
-  ConvertVarInit(type, decl->getInit());
+  // Hand the ORIGINAL reference QualType to ConvertVarInit so its
+  // reference-reconciliation branch (:6170) is reachable: when the init is NOT
+  // already a reference/pointer it inserts `&`, and `&T` coerces to `*const T`
+  // at a `let` with an explicit annotation. Passing the stripped value type
+  // suppressed that branch entirely, which is how the E0308 got emitted.
+  ConvertVarInit(ref_holder ? decl->getType() : type, decl->getInit());
   StrCat(token::kSemiColon);
 
   unsigned index = 0;
   for (const auto *binding : bindings) {
     StrCat(keyword::kLet, keyword::kMut, GetNamedDeclAsString(binding),
            token::kAssign);
-    StrCat(std::format("{}.{}", holder, index));
+    // The holder is a raw pointer when it came from a reference, so the element
+    // is reached through a deref. Reading through the pointer (rather than
+    // copying the holder first) is also what keeps the binding observing the
+    // aliased pair -- the bindings are all const, so no write travels back.
+    StrCat(ref_holder ? std::format("(*{}).{}", holder, index)
+                      : std::format("{}.{}", holder, index));
     StrCat(token::kSemiColon);
     ++index;
   }
