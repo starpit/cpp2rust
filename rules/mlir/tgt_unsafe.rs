@@ -2443,3 +2443,31 @@ fn t250() -> Vec<dataflowir_gen::ir::Ty> {
 fn t251() -> Vec<dataflowir_gen::ir::Ty> {
     Default::default()
 }
+
+
+// ---------------------------------------------------------------------------
+// t260 `mlir::SelfOwningTypeID` -> AN OPAQUE UNIT, the SAME model as t72
+// (`mlir::TypeID`) and for the same reason: the crate has no RTTI concept, and
+// every emitted site is a static declaration plus its zero-initialiser
+// (`LazyCell<T>` / `std::mem::zeroed::<T>()`), never a comparison and never a
+// member read.  `==` and `getTypeID()` stay UNDECLARED in src.cpp, so identity is
+// not silently faked -- it aborts.  See src.cpp at `using t260 =`.
+// ⚠️ Plain `fn`, not `unsafe fn`: the t37-t39 / t166 / t167-t216 convention for a
+// TYPE rule.
+fn t260() -> () {
+    ()
+}
+
+// t261 `mlir::NamedAttrList` -> `dataflowir_gen::ir::AttrDict` (ir.rs:559), the
+// ENTRY-TYPE completion of t21: t21 is one `(String, Attr)` entry, t261 is the
+// dictionary of them.  ORDER IS CORRECT BY THE CRATE'S OWN DOCUMENTED FACT --
+// ir.rs:552-558 says MLIR sorts a dictionary by key on construction and the
+// printer walks THAT order, so a `Vec` (the `SetVector` model) would print in
+// insertion order and differ from the reference.  The init is the EMPTY
+// dictionary, which is what a default-constructed NamedAttrList is: MLIR's
+// `NamedAttrList()` holds no attributes, and `getDictionary()` on it yields the
+// empty DictionaryAttr, so `BTreeMap::new()` is faithful rather than a sentinel.
+// ⚠️ Plain `fn`, not `unsafe fn`: the t37-t39 / t166 convention for a TYPE rule.
+fn t261() -> dataflowir_gen::ir::AttrDict {
+    dataflowir_gen::ir::AttrDict::new()
+}

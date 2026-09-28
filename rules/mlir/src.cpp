@@ -4928,3 +4928,129 @@ using t251 = llvm::detail::indexed_accessor_range_base<
     llvm::PointerUnion<const mlir::Value *, const mlir::Type *,
                        mlir::OpOperand *, mlir::detail::OpResultImpl *>,
     mlir::Type, mlir::Type, mlir::Type>;
+
+// ---- merged from wt/mlirF: t260/t261 ----
+// The two forward declarations MUST be inside `namespace mlir` -- appending them at global
+// scope is what broke the first merge attempt of this block (`no type named ... in namespace
+// mlir`), because the worktree had them inside the namespace and a naive EOF append does not
+// carry namespace scoping with it.
+namespace mlir {
+// `mlir::SelfOwningTypeID` -- mlir/Support/TypeID.h, the SEPARATE class t72's
+// comment already names ("`TypeIDAllocator`/`SelfOwningTypeID` are separate
+// classes").  Declared next to TypeID because it is the same RTTI-token family.
+// ⛔ NO MEMBER IS DECLARED, and that absence is the whole enforcement: `getTypeID()`
+// and `operator TypeID()` are deliberately absent so anything that tries to
+// OBSERVE the identity still aborts loudly instead of getting a silent lie.
+// See `using t260 =` for the identity argument and the emitted evidence.
+class SelfOwningTypeID {};
+
+// `mlir::NamedAttrList` -- mlir/IR/Attributes.h, an ordered list of
+// NamedAttribute with a sort-on-demand `getDictionary()`.  Sibling of
+// `NamedAttribute` (declared above, t21).  NO MEMBER IS DECLARED: every emitted
+// site is TYPE POSITION only (see `using t261 =`), so `append`/`set`/`get`/
+// `getDictionary` stay unmapped and still abort.
+class NamedAttrList {};
+
+} // namespace mlir
+
+// ---------------------------------------------------------------------------
+// t260-t261 -- two ARITY-0 FULLY-CONCRETE keys (no `<` at all, so GetTypeMapKey's
+// truncate-at-first-`<` and matchTemplate's same-depth capture cannot swallow
+// anything: the t166 / t167-t246 proven-safe form).
+//
+// ⭐ BOTH KEYS ARE TAKEN FROM THE EMITTED SPELLING, NOT FROM A QUEUE ROW.  The
+// ground-truth extraction over emitted `.rs` gives exactly
+// `Cpp2RustUnmapped_mlir_SelfOwningTypeID` (966 sites / 104 files) and
+// `Cpp2RustUnmapped_mlir_NamedAttrList` (2,033 / 16); both are bare, undecorated,
+// arity-0 names, so the `SmallSet`/`SetVector` dead-key failure (queue text that
+// the corpus never emits) cannot recur here.
+//
+// ⛔ REFUSED IN THIS BLOCK: `mlir::OwningOpRef<mlir::ModuleOp>` (972 / 79) and
+// `mlir::OwningOpRef<mlir::Operation *>` (3 / 3).  The refusal is NOT new -- it is
+// the settled one this file already cites twice (at the InFlightDiagnostic block,
+// "a destructor with an observable effect is the axis on which `mlir::OwningOpRef`
+// was REFUSED", and again at the six-handles block, "none of them is the
+// `mlir::OwningOpRef` / `mlir::InFlightDiagnostic` case where a destructor with
+// observable effect FORBIDS an opaque model").  OwningOpRef's destructor calls
+// `op->erase()`, which UNLINKS the op from its parent block -- observable IR
+// mutation, exactly the unique_ptr criterion.
+// ⭐ THE OBSERVER, NAMED, from the goal TU's own emitted output
+// (`dmg-AFTER/dxp__dxp_standalone.cpp.rs`): the pair
+//     pub unsafe fn getModule(&mut self) -> *mut ..._OwningOpRef_mlir_ModuleOp_
+//     pub unsafe fn get_module(&mut self) -> *mut ..._OwningOpRef_mlir_ModuleOp_
+// (13 occurrences each) hands out a RAW POINTER INTO the owning field `module_`
+// (13 occurrences), and a sibling struct holds `sdscBundleModuleOp` initialised
+// by `<...>::default()`.  Every caller of `getModule()`/`get_module()` is the
+// observer: model the owner as a plain handle/copy and the erase runs once per
+// copy (double-erase through a pointer the callers still hold); model it as a
+// unit like t61 and the erase never runs at all (leak, and the module outlives
+// the pass that owned it).  Neither is representable while t61 already maps
+// `mlir::ModuleOp` itself to `()` -- there is no Rust-side op to erase, so the
+// ownership semantics have nothing to attach to.  This is a dataflowir-gen row
+// (it needs real op/block surface), not a rules row.
+// ⛔ ALSO NOT KEYED: `Cpp2RustUnmapped_mlir_NamedAttrList__class_mlir_StringAttr`
+// (3 sites / 1 file).  A decorated spelling whose written form carries a template
+// argument, so it is exposed to the recorder's DEFAULTED-TRAILING-ARGUMENT
+// collapse: writing it verbatim risks collapsing onto the bare `NamedAttrList`
+// key above and silently duplicating it.  3 sites is not worth that risk; left
+// fabricating and loud.
+// ---------------------------------------------------------------------------
+
+// t260 -- `mlir::SelfOwningTypeID` -> AN OPAQUE UNIT.  966 sites / 104 files, the
+// WIDEST file spread in this slot's set.  The model and the bargain are t72's
+// (`mlir::TypeID` -> `()`), and the identity question the wide spread raises is
+// SETTLED BY THE EMITTED OUTPUT rather than by analogy.
+//
+// ⭐ THE IDENTITY CHECK, MEASURED.  Across the whole `cens0928c/out` corpus the
+// name occurs in EXACTLY TWO syntactic shapes and nothing else:
+//     32x  static mut id_N: std::cell::LazyCell<Cpp2RustUnmapped_mlir_SelfOwningTypeID> =
+//     32x  unsafe { std::mem::zeroed::<Cpp2RustUnmapped_mlir_SelfOwningTypeID>() }
+// i.e. a static declaration and its zero-initialiser.  There is NO comparison, no
+// `getTypeID()`, no member read, no pass-by-value -- so this is the CAST/TYPE-
+// POSITION-ONLY shape that needs a NAME and no member rules at all.  `()` is
+// `std::mem::zeroed`-able and `LazyCell<()>` is well-formed, so both shapes
+// typecheck.
+// ⛔ WHAT IS LOST IS IDENTITY, the same loss t72 takes and for the same reason:
+// the crate has no RTTI concept.  The brief's hazard -- "if the corpus compares
+// TypeIDs across TUs, a per-TU-fresh value is a silent lie" -- does not bite,
+// because the corpus compares them NOWHERE, and `operator==`/`getTypeID()` are
+// DELIBERATELY UNDECLARED above, so if a comparison ever appears it aborts loudly
+// instead of answering `true` from nothing.  A per-TU-fresh value would be the
+// WORSE choice here for exactly that reason: it would make comparisons compile.
+using t260 = mlir::SelfOwningTypeID;
+
+// t261 -- `mlir::NamedAttrList` -> `dataflowir_gen::ir::AttrDict` (ir.rs:559).
+// 2,033 sites / 16 files.  This is the ENTRY-TYPE completion of t21: t21 maps ONE
+// `mlir::NamedAttribute` to `(String, Attr)` "the ENTRY TYPE of ir::AttrDict", so
+// the LIST of them maps to the dictionary itself.  Nothing is invented.
+//
+// ⭐ THE ORDER HAZARD IS SETTLED THE OPPOSITE WAY FROM `SetVector`, and the crate
+// says so in its own words.  ir.rs:552-558, verbatim:
+//     /// A `BTreeMap` is not a convenience: MLIR sorts a dictionary by key on
+//     /// construction and the printer walks it in that order, so insertion order
+//     /// is not what lands in the file. Using an insertion-ordered map here
+//     /// produces IR that differs from the reference on every `get_unit`.
+// So for THIS family insertion order is NOT the observable -- the SORTED order is,
+// which is precisely `NamedAttrList`'s sort-on-demand `getDictionary()` contract.
+// `rules/setvector` models `SetVector` as `Vec<T1>` *because* insertion order is
+// observable there; here the reverse fact is documented and load-bearing, so a
+// `Vec` model would be the wrong one: it would print dictionaries in insertion
+// order and differ from the reference on every op.  De-duplication also agrees:
+// MLIR's `NamedAttrList::set(name, v)` REPLACES an existing entry, which is
+// `BTreeMap::insert`.
+// ⭐ EVERY EMITTED SITE IS TYPE POSITION, so no member rule is needed and none is
+// given.  Across `cens0928c/out` + `dmg-AFTER` the name occurs in exactly two
+// shapes:  52x  `attrs: *mut Cpp2RustUnmapped_mlir_NamedAttrList,`  (a parameter)
+// and      24x  `let _attrs: *mut Cpp2RustUnmapped_mlir_NamedAttrList =
+//                    &mut (*result).attributes;`
+// -- a declaration and the address of a field.  The 52 parameter sites become
+// well-typed `*mut ir::AttrDict` immediately.
+// ⚠️ HONEST LIMIT ON THE 24: `(*result).attributes` is a field the converter
+// assumes on its OperationState-alike, and a grep for a `pub attributes:` field
+// over dataflowir-gen finds NONE, so those 24 lines do not compile either way --
+// this key does not fix them and does not make them worse (the fabricated type
+// does not exist at all today).  It is named as a limit, not claimed as a win.
+// ⛔ NO DEF is involved: the model is a crate `type` alias, not a generated op
+// DEF, so the missing-DEF wave that hit mlir::LLVM/ktdf/linalg cannot apply.
+using t261 = mlir::NamedAttrList;
+
