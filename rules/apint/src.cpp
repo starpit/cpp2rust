@@ -53,7 +53,57 @@
 // constructor (header:120), the `SlowDynamicAPInt` conversion (header:109), and
 // `gcd`/`lcm`/`abs`/`ceilDiv`/`floorDiv`.  Each is a one-line body against i64
 // and should be added when a site appears -- but a key nobody reaches is a key
-// nobody has checked, so they are left out and will abort loudly.
+// nobody has checked, so they are left out.
+//
+// ⛔ CORRECTED 2026-09-28: THE OLD TEXT HERE SAID THE OMITTED KEYS "WILL ABORT
+// LOUDLY".  THAT IS FALSE FOR ANY OF THEM THAT IS A MEMBER, AND THE CORRECTION
+// IS MEASURED, NOT INFERRED.
+// An unmapped MEMBER does not abort: the converter emits the call TEXTUALLY
+// against the receiver's target type, so `<recv>.unmappedMethod(...)` reaches
+// the emitted Rust as a call to a method that exists nowhere -- at rc=0, with
+// no placeholder token, so `pin/no-placeholders.sh` stays at 0.  Loud at rustc
+// time, silent at translate time.  Only the CONSTRUCTOR fabricates visibly, as
+// `<mangled>::new_<N>`, which is why f1 below exists and is correct as written.
+// So of the omissions listed above: the ctor entry really is loud; every member
+// entry is SILENT and this comment must not be read as a safety argument.
+//
+// ⚠️ AND THE DIRECTLY MEASURED MISSES ARE ON A TYPE THIS MODULE DOES NOT MODEL.
+// `llvm::APInt` and `llvm::DynamicAPInt` are DIFFERENT LLVM CLASSES.  This
+// module models only `DynamicAPInt`; `grep -rn 'llvm::APInt' rules/*/src.cpp`
+// over the whole rule tree returns ZERO -- `llvm::APInt` has no type key
+// anywhere, so it lowers to `Cpp2RustUnmapped_llvm_APInt`.  Measured on
+// `dataflow-scheduler/external/ktir-mlir-frontend/lib/Ktdp/KtdpDialect.cpp`
+// (bucket A, rc=0), emitted line 3113-3142:
+//   `Cpp2RustUnmapped_llvm_APInt`  3 uses,  0 definitions   (E0412)
+//   `llvm_APInt::new_1(...)`       3 calls, 0 impls         (E0433, the LOUD half)
+//   `.getValue()`                  3 calls, 0 `fn getValue`
+//   `.getZExtValue()`              1 call,  0 `fn getZExtValue`  (SILENT)
+// A census naming `rules/apint` as the owner of those misses is naming the
+// right module by name and the wrong type by semantics.
+//
+// ⛔ REFUSED: DO NOT ADD AN `llvm::APInt` TYPE KEY MODELLED AS A FIXED-WIDTH
+// INTEGER, AND THEREFORE DO NOT ADD `getZExtValue`/`eq` AS MEMBERS OF ONE.
+// The i64 model above is honest for `DynamicAPInt` because that class holds an
+// inline int64_t whenever the value fits and arbitrary precision is its
+// OVERFLOW path.  `APInt` is the opposite: its bit width is an EXPLICIT,
+// per-object field that its members' results are computed FROM, so a model that
+// does not carry the width answers some members with a wrong value rather than
+// with a failure.
+//   ⭐ THE OBSERVER, IN THIS CORPUS, NOT HYPOTHETICAL:
+//   dcc/src/Dialect/Sentient/SentientOps.cpp:1074,1080,1081 --
+//     `step.getValue().getSExtValue()`, `ub.getValue().getSExtValue() -
+//      lb.getValue().getSExtValue()`.
+//   `IntegerAttr::getValue()` returns an `llvm::APInt`, and `getSExtValue()`
+//   SIGN-EXTENDS FROM BitWidth.  For a 32-bit APInt holding 0xFFFFFFFF the C++
+//   answer is -1; a u64/i64 model holding the same bits answers +4294967295.
+//   That RUNS and gives a wrong loop bound -- the silent-wrongness class, which
+//   is worse than a loud failure.  `getBitWidth()` cannot be answered at all
+//   from such a model, and C++ `APInt::operator==` ASSERTS equal bit widths
+//   where a plain integer compare would silently succeed across widths.
+// A correct `APInt` model must carry `{ bit_width, value }` as a struct (or a
+// real bignum); only then are `getZExtValue`, `getSExtValue`, `getBitWidth` and
+// `eq` writable.  Until that model exists these members are left out, and the
+// omission is SILENT, not loud -- see the correction above.
 
 #include <cstdint>
 
