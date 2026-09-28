@@ -131,3 +131,77 @@ bool f46(const std::string &a0, const std::string &a1) { return a0 != a1; }
 bool f47(const std::string &a0, const char *a1) { return a0 != a1; }
 
 bool f48(const char *a0, const std::string &a1) { return a0 != a1; }
+
+// f49 -- `std::basic_string<char>::npos`.  A DECLARATION-ONLY in-class static data
+// member (libcxx/string:797, `static const size_type npos = -1;` -- the definition
+// lives out-of-line in the dylib), so the converter never traverses a VarDecl that
+// carries an initializer and never emits the `pub static mut npos_<n>` it then
+// references.  MEASURED, not inferred: with no key, a TU using it emits
+//     (*std::cell::LazyCell::force_mut(&mut *&raw mut npos_1))
+// against nothing at all -- an instant E0425 that no placeholder grep and no
+// bucket census can see (there is no `Cpp2RustUnmapped` token and rc=0).
+// 6 of 78 bucket-A census TUs carry it.
+//
+// THE SEARCHED SPELLING IS THE TEMPLATE-SPECIALISED QUALIFIED NAME, read back from
+// the converter's own -verbose log, not guessed:
+//     search expr std::basic_string<char>::npos, result:
+//     None
+// Same mechanism and same key shape as rules/iostream f5/f6 (std::ios_base::in /
+// ::out): Converter::ConvertDeclRefExpr consults the mapper BEFORE the IsGlobalVar
+// branch, and the rule preprocessor's `declref` matcher records
+// Mapper::ToString(VarDecl) == printQualifiedName, so the two spellings agree.
+//
+// WIDTH IS MEASURED, NOT ASSUMED.  The same log shows `search type size_type,
+// result: usize` for this module, so `npos == size_type(-1)` is `usize::MAX`.
+// A body of `0`, or `-1` in a narrower width, would be silently wrong; the probe
+// asserts a REAL find() index in one case and npos in another so neither passes.
+std::size_t f49() { return std::string::npos; }
+
+// ---------------------------------------------------------------------------
+// f50..f57 -- `std::to_string`, the #2 cause of compile errors in the port-goal TU:
+// MEASURED by the first `cargo check` on `dxp/dxp_standalone.cpp`'s emitted Rust
+// (36,772 lines, bucket A) -- 166 of 1,245 errors, 13.3%, all `E0425 cannot find
+// function`, across FIVE distinct mangled fallback spellings (`to_string_6` x88,
+// `to_string_80` x46, `to_string_84` x4, `to_string_94` x12, `to_string_97` x16).
+// Five spellings means the recorder saw FIVE DIFFERENT OVERLOADS, so one key
+// cannot answer for them; each arithmetic overload is keyed separately below.
+//
+// SEARCHED SPELLINGS, read back from the converter's own -verbose log (each printed
+// `result:` / `None` against ir.v13), NOT guessed -- note `unsigned` prints as
+// `unsigned int`, and the return type IS part of the key for a free function:
+//     search expr std::string std::to_string(int), result:                None
+//     search expr std::string std::to_string(unsigned int), result:       None
+//     search expr std::string std::to_string(long), result:               None
+//     search expr std::string std::to_string(unsigned long), result:      None
+//     search expr std::string std::to_string(long long), result:          None
+//     search expr std::string std::to_string(unsigned long long), result: None
+//     search expr std::string std::to_string(float), result:              None
+//     search expr std::string std::to_string(double), result:             None
+//
+// THE FLOAT OVERLOADS ARE WHERE A PLAUSIBLE BODY IS SILENTLY WRONG.  [string.conversions]
+// defines to_string(float/double) as `sprintf(buf, "%f", val)` -- `%f` is ALWAYS SIX
+// decimal places, so `to_string(1.5)` is "1.500000" and `to_string(2.0)` is "2.000000",
+// whereas Rust's `{}` yields "1.5" and "2".  The bodies therefore use `{:.6}`, and the
+// probe asserts the exact strings so a `{}` body fails rather than passing every integer
+// test and corrupting every float.  `long double` (`%Lf`) is DELIBERATELY LEFT OUT: this
+// toolchain has no faithful Rust f80, so any body would be a silent precision change.
+//
+// REPRESENTATION: t1 is `Vec<libc::c_char>` (unsafe) / `Vec<u8>` (refcount), and it is
+// NUL-TERMINATED -- f7/f9/f10 all `chain(std::iter::once(0))` or `.push(0)`, and f46..f48
+// compare with `len() - 1`.  The bodies below append the NUL for exactly that reason; a
+// body without it would make every `.len() - 1` slice in the goal TU drop a real digit.
+std::string f50(int a0) { return std::to_string(a0); }
+
+std::string f51(unsigned int a0) { return std::to_string(a0); }
+
+std::string f52(long a0) { return std::to_string(a0); }
+
+std::string f53(unsigned long a0) { return std::to_string(a0); }
+
+std::string f54(long long a0) { return std::to_string(a0); }
+
+std::string f55(unsigned long long a0) { return std::to_string(a0); }
+
+std::string f56(float a0) { return std::to_string(a0); }
+
+std::string f57(double a0) { return std::to_string(a0); }

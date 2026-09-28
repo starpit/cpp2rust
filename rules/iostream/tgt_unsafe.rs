@@ -57,3 +57,9 @@ fn f5() -> u32 {
 fn f6() -> u32 {
     0x10
 }
+
+// f7 -- std::ios_base::binary == 0x04 (libcxx/ios:286). Plain `unsigned int` constant,
+// nothing model-dependent, so tgt_refcount.rs restates it byte-identically.
+fn f7() -> u32 {
+    0x04
+}

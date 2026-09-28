@@ -303,3 +303,40 @@ fn f48(a0: Ptr<u8>, a1: Vec<u8>) -> bool {
         .take(a1.len().saturating_sub(1))
         .eq(a0.to_c_string_iterator())
 }
+
+// f49 -- std::string::npos. Byte-identical to tgt_unsafe.rs: a plain integral constant
+// has nothing model-dependent in it. Restated because rules/string has a tgt_refcount.rs,
+// and a module that has one must carry EVERY key in it or the converter ABORTS AT LOAD
+// TIME in the refcount model (translation_rule.cpp:233); under NDEBUG that presents as
+// rc=139 with no message. See rules/iostream/tgt_refcount.rs for the incident.
+fn f49() -> usize {
+    usize::MAX
+}
+
+// f50..f57 -- std::to_string. Same as tgt_unsafe.rs except the element type: this model's
+// t1 is `Vec<u8>`, so `into_bytes()` is already the right representation and no per-byte
+// cast is needed. Still NUL-TERMINATED, for the same `len() - 1` reason.
+fn f50(a0: i32) -> Vec<u8> {
+    format!("{}\0", a0).into_bytes()
+}
+fn f51(a0: u32) -> Vec<u8> {
+    format!("{}\0", a0).into_bytes()
+}
+fn f52(a0: i64) -> Vec<u8> {
+    format!("{}\0", a0).into_bytes()
+}
+fn f53(a0: u64) -> Vec<u8> {
+    format!("{}\0", a0).into_bytes()
+}
+fn f54(a0: i64) -> Vec<u8> {
+    format!("{}\0", a0).into_bytes()
+}
+fn f55(a0: u64) -> Vec<u8> {
+    format!("{}\0", a0).into_bytes()
+}
+fn f56(a0: f32) -> Vec<u8> {
+    format!("{:.6}\0", a0).into_bytes()
+}
+fn f57(a0: f64) -> Vec<u8> {
+    format!("{:.6}\0", a0).into_bytes()
+}

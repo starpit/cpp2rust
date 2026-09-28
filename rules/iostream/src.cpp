@@ -61,3 +61,22 @@ std::ostream *f4() { return &std::cerr; }
 unsigned int f5() { return std::ios_base::in; }
 
 unsigned int f6() { return std::ios_base::out; }
+
+// f7 -- `std::ios_base::binary`, the third member of the same family as f5/f6 and
+// dangling for exactly the same reason: libcxx/ios:286 is
+// `static const openmode binary = 0x04;`, a DECLARATION-ONLY in-class static, so no
+// `pub static mut binary_<n>` is ever emitted while the use site still emits
+//     (*std::cell::LazyCell::force_mut(&mut *&raw mut binary_5))
+// -- an E0425 with rc=0, no placeholder token and no diagnostic.  2 of 78 bucket-A
+// census TUs carry it (dbo EmitSpyreCode.cpp, util sendefs.cpp).
+//
+// SEARCHED SPELLING, read back from the converter's -verbose log against ir.v13:
+//     search expr std::ios_base::binary, result:
+//     None
+// i.e. the plain qualified name, identical in shape to f5/f6.
+//
+// VALUE IS READ OFF THE HEADER THE CONVERTER PARSES WITH, not remembered:
+// toolchain/libcxx/ios:284-289 is app=0x01 ate=0x02 binary=0x04 in=0x08 out=0x10
+// trunc=0x20, which is self-consistent with f5=0x08 and f6=0x10 already committed
+// here.  openmode is `unsigned int` -> u32, same as f5/f6.
+unsigned int f7() { return std::ios_base::binary; }

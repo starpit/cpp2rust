@@ -156,3 +156,11 @@ fn f30<T1>(a0: &Option<Value<T1>>) -> Ptr<T1> {
 fn f31<T1>(a0: &Option<Value<T1>>) -> Ptr<T1> {
     Value::as_pointer(a0.as_ref().expect("bad optional access"))
 }
+
+// f32 -- `std::nullopt`. Byte-identical to tgt_unsafe.rs: `()` is a tag with no
+// ownership, so there is nothing for the refcount model to re-shape. Restated because a
+// module carrying a tgt_refcount.rs must answer for EVERY key or the converter aborts at
+// load time in that model.
+fn f32() -> () {
+    ()
+}

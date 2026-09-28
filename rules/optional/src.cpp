@@ -203,3 +203,38 @@ template <typename T1> T1 *f30(std::optional<T1> &o) { return o.operator->(); }
 template <typename T1> const T1 *f31(const std::optional<T1> &o) {
   return o.operator->();
 }
+
+// f32 -- `std::nullopt`, i.e. `inline constexpr std::nullopt_t std::nullopt`
+// (libcxx/__utility/in_place.h / optional).  It is a namespace-scope global with a
+// definition, but it lives in a SYSTEM HEADER, and the converter only emits
+// `pub static mut X_<n>: LazyCell<..>` for a VarDecl it actually traverses -- a
+// system-header decl never is.  So the use site emits
+//     (*std::cell::LazyCell::force_mut(&mut *&raw mut nullopt_101))
+// with no declaration anywhere in the file: E0425, rc=0, no placeholder token.
+// 3 of 78 bucket-A census TUs carry it (6 use sites in ktir-mlir-frontend
+// KtdpDialect.cpp alone).
+//
+// SEARCHED SPELLING, read back from the converter's -verbose log, NOT guessed:
+//     search expr std::nullopt, result:
+//     None
+// The plain qualified name.  NOTE this only happens where the surrounding
+// construction is NOT itself keyed: `return std::nullopt;` into an
+// `std::optional<int>` matches f3 (`optional(std::nullopt_t)`) and the argument is
+// never emitted, which is why the tiny synthetic case shows no dangle.  The corpus
+// sites are the ones that reach VisitDeclRefExpr -- a by-value `nullopt_t`
+// copy-construct, and argument positions -- so a key here is the only fix.
+//
+// THE TARGET IS `()`, NOT `None`, AND THAT IS DELIBERATE.  The searched expression's
+// TYPE is `std::nullopt_t`, which this module already models as the unit type (t4,
+// `fn t4() -> ()`, "it is a tag"); the readback confirms the converter agrees --
+// `search type std::nullopt_t, result: ()`.  `()` has exactly one value, so mapping
+// the unique value of a unit type to `()` is faithful rather than approximate, and it
+// is what f6/f17..f20 already expect to receive in their `a1: ()` parameter.  A body
+// of `None` would be an Option-typed expression standing in for a nullopt_t-typed one
+// and would mistype every argument position (the corpus shows
+// `let _args_3: () = <here>`), so it is rejected even though the C++ reads like None.
+// What is NOT fixed by this key: two of the six KtdpDialect sites are
+// `return <nullopt>` from a function whose Rust return type is Option<..>, i.e. they
+// need the nullopt_t -> optional CONVERSION keyed at that site, not this declref.
+// That is a separate row and is deliberately left out rather than papered over here.
+const std::nullopt_t &f32() { return std::nullopt; }

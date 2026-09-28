@@ -298,3 +298,74 @@ unsafe fn f48(a0: *const libc::c_char, a1: Vec<libc::c_char>) -> bool {
     let s = a0;
     std::slice::from_raw_parts(s, (0..).take_while(|&i| *s.add(i) != 0).count() + 1).to_vec() != a1
 }
+
+// f49 -- std::string::npos == size_type(-1).  size_type is `usize` in this module
+// (readback: `search type size_type, result: usize`), so this is usize::MAX.
+// Model-independent: a plain integral constant, hence byte-identical in tgt_refcount.rs.
+unsafe fn f49() -> usize {
+    usize::MAX
+}
+
+// f50..f57 -- std::to_string. `Vec<libc::c_char>`, NUL-TERMINATED (see src.cpp: every
+// other constructor in this module terminates, and f46..f48 compare with `len() - 1`).
+// The `\0` is inside the format string so there is exactly one allocation and no chance
+// of forgetting it on one arm.
+//
+// f56/f57 are `{:.6}` because C++ to_string for float/double is `%f`, i.e. always six
+// decimals -- `{}` would print "1.5" where C++ prints "1.500000".
+unsafe fn f50(a0: i32) -> Vec<libc::c_char> {
+    format!("{}\0", a0)
+        .into_bytes()
+        .iter()
+        .map(|&b| b as libc::c_char)
+        .collect::<Vec<libc::c_char>>()
+}
+unsafe fn f51(a0: u32) -> Vec<libc::c_char> {
+    format!("{}\0", a0)
+        .into_bytes()
+        .iter()
+        .map(|&b| b as libc::c_char)
+        .collect::<Vec<libc::c_char>>()
+}
+unsafe fn f52(a0: i64) -> Vec<libc::c_char> {
+    format!("{}\0", a0)
+        .into_bytes()
+        .iter()
+        .map(|&b| b as libc::c_char)
+        .collect::<Vec<libc::c_char>>()
+}
+unsafe fn f53(a0: u64) -> Vec<libc::c_char> {
+    format!("{}\0", a0)
+        .into_bytes()
+        .iter()
+        .map(|&b| b as libc::c_char)
+        .collect::<Vec<libc::c_char>>()
+}
+unsafe fn f54(a0: i64) -> Vec<libc::c_char> {
+    format!("{}\0", a0)
+        .into_bytes()
+        .iter()
+        .map(|&b| b as libc::c_char)
+        .collect::<Vec<libc::c_char>>()
+}
+unsafe fn f55(a0: u64) -> Vec<libc::c_char> {
+    format!("{}\0", a0)
+        .into_bytes()
+        .iter()
+        .map(|&b| b as libc::c_char)
+        .collect::<Vec<libc::c_char>>()
+}
+unsafe fn f56(a0: f32) -> Vec<libc::c_char> {
+    format!("{:.6}\0", a0)
+        .into_bytes()
+        .iter()
+        .map(|&b| b as libc::c_char)
+        .collect::<Vec<libc::c_char>>()
+}
+unsafe fn f57(a0: f64) -> Vec<libc::c_char> {
+    format!("{:.6}\0", a0)
+        .into_bytes()
+        .iter()
+        .map(|&b| b as libc::c_char)
+        .collect::<Vec<libc::c_char>>()
+}

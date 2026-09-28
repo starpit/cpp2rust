@@ -139,3 +139,9 @@ unsafe fn f30<T1>(a0: &mut Option<T1>) -> &mut T1 {
 unsafe fn f31<T1>(a0: &Option<T1>) -> &T1 {
     a0.as_ref().expect("bad optional access")
 }
+
+// f32 -- the value `std::nullopt`, of type std::nullopt_t, which t4 models as `()`.
+// The unit type has exactly one value, so this is exact, not an approximation.
+unsafe fn f32() -> () {
+    ()
+}

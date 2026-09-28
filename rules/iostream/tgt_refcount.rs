@@ -71,3 +71,12 @@ fn f5() -> u32 {
 fn f6() -> u32 {
     0x10
 }
+
+// f7 -- std::ios_base::binary. Restated byte-identically from tgt_unsafe.rs because this
+// module HAS a tgt_refcount.rs and therefore must carry EVERY key in it -- omitting one
+// leaves ir_refcount.json short of ir_src.json and the converter ABORTS AT LOAD TIME in
+// the refcount model, poisoning every translation. That is the incident documented above
+// for f5/f6; it is not hypothetical.
+fn f7() -> u32 {
+    0x04
+}
