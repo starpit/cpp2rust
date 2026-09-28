@@ -55,6 +55,14 @@
 // with the allocator argument default-suppressed on BOTH sides.
 #include <vector>
 
+// For `std::pair`, which is the RETURN TYPE of `llvm::detail::DenseSetImpl::insert`
+// and therefore part of the recorded key f900-f903 must match (the recorder puts
+// the return type in the key -- rules/set's f13 readback is
+// `std::pair<...iterator..., bool> std::set<T1>::insert(const T1 &)`).  It arrives
+// transitively via <vector>/<string> today; named explicitly so a future include
+// trim cannot silently break the four `insert` keys.
+#include <utility>
+
 // FORWARD DECLARATION ONLY, and only so that `mlir::RegionRange`'s own
 // constructor (f142) can be SPELLED inside `namespace mlir` below -- the real
 // definition and the `t46` mapping of this template are further down, in
@@ -5360,6 +5368,19 @@ using t420 = mlir::memref::MemorySpaceCastOp;
 using t421 = mlir::memref::CastOp;
 // t422 -- Cpp2RustUnmapped_mlir_memref_ReinterpretCastOp, 2 sites / 1 file.
 using t422 = mlir::memref::ReinterpretCastOp;
+//   ⛔⛔ THAT LAST SENTENCE IS REFUTED, 2026-09-28 (slot densemem).  It is a
+//     `from decl` observation, not a key observation.  MEASURED DIRECTLY on the
+//     `mlir::Attribute` rows, which go through the IDENTICAL
+//     `DenseMapInfo<T, Enable = void>` primary template: the converter's own
+//     `search expr` ask spells `llvm::DenseMapInfo<mlir::Attribute>` with NO
+//     `, void`, while the `from decl` line for the same type prints
+//     `llvm::DenseMapInfo<mlir::Attribute, void>`.  Trailing-default suppression
+//     cannot distinguish `llvm::StringRef` from `mlir::Attribute` here, so the
+//     two StringRef rows need the SAME defaulted declaration as the seven above,
+//     NOT a non-defaulted one.  What still blocks them is only the element model
+//     (`llvm::StringRef` is rules/stringref's, and t482 says why its two models
+//     differ).  ⚠️ Honest scope: this is a mechanism-level refutation plus a
+//     direct same-template measurement, not a captured StringRef ask.
 
 // ---------------------------------------------------------------------------
 // t236-t242 -- `llvm::SmallSet` and `llvm::detail::DenseSetImpl`, the two
@@ -6243,21 +6264,24 @@ using t441 = mlir::ImplicitLocOpBuilder;
 //     cross-module claim -- it reuses the one rules/mlir already makes.  Both
 //     `Vec<u8>` and `Vec<i8>` are `Hash + Eq`.
 //
-// ⛔ THE FOURTH ELEMENT TYPE, `mlir::Attribute`, IS DELIBERATELY LEFT OUT -- rows
-// g403, g1132, g1133, g1134, g1135.  t6 maps `mlir::Attribute` to
-// `dataflowir_gen::ir::Attr`, and the refusal that stood here for the DenseSetImpl
-// rows said the deciding read was "does `ir::Attr` implement `Hash + Eq`" and that
-// it was "a dataflowir-gen read, not a rules read".  ⭐ THAT READ IS NOW DONE AND
-// IT COMES BACK NEGATIVE: `dataflowir-gen/src/ir.rs:465` is
-// `#[derive(Debug, Clone, PartialEq, Eq)]` -- `Eq` YES, `Hash` NO.  A
-// `HashSet<ir::Attr>` is a well-formed TYPE (the struct carries no bound) so the
-// key would record cleanly and pass every gate, and then no membership operation
-// on it could ever compile.  That is a container that cannot function, i.e. exactly
-// the silent lie t236-t242's header refuses to write.  ⭐ THE CLOSING STEP IS
-// NAMED AND SMALL: add `Hash` to that derive in `dataflowir-gen/src/ir.rs` (which
-// needs `Ty` and every payload to be `Hash` too), then t483 is a one-line key.
-// It is not done here because it is a dataflowir-gen rebuild under a store six
-// slots are already fighting for today.
+// ⭐⭐ THE FOURTH ELEMENT TYPE, `mlir::Attribute`, IS NOW KEYED AT t920-t923 --
+// rows g403, g1132, g1133, g1134, g1135.  ⛔⛔ THE REFUSAL THAT STOOD HERE IS
+// STALE AND IS CORRECTED IN PLACE RATHER THAN LEFT TO MISLEAD, because a stale
+// "measured" claim in a comment has already cost this project two rows.  It said:
+// "THAT READ IS NOW DONE AND IT COMES BACK NEGATIVE: `dataflowir-gen/src/ir.rs:465`
+// is `#[derive(Debug, Clone, PartialEq, Eq)]` -- `Eq` YES, `Hash` NO", and named
+// the closing step as "add `Hash` to that derive ... (which needs `Ty` and every
+// payload to be `Hash` too)".  ⭐ THAT CLOSING STEP HAS LANDED: `dataflowir-gen`
+// commit 308a547 "derive Hash on Attr, AffineMap and AffineExpr" is an ancestor of
+// that crate's HEAD, so `ir.rs:540` now reads
+// `#[derive(Debug, Clone, PartialEq, Eq, Hash)] pub enum Attr`, `Ty` carries it at
+// ir.rs:36, and `ir::Value` at ir.rs:20.  The blocker named here NO LONGER EXISTS;
+// do not re-derive the refusal from this paragraph.  The soundness direction that
+// matters (two EQUAL attributes must not hash differently) is asserted upstream by
+// `dataflowir-gen/tests/model.rs::attr_is_a_sound_hash_set_key`, which looks up a
+// SEPARATELY-CONSTRUCTED equal key.  See t920 at the tail of this file for the
+// spelling work the closure actually needed, which was the template-argument
+// arity, not the element model.
 //
 // ⭐ NO MEMBER RULES, and as for t236-t242 that is not an omission: all eleven rows
 // are `kind=type` ("system type has no rule"); the queue holds no SmallDenseSet
@@ -8215,3 +8239,352 @@ llvm::ParseResult f870(mlir::AsmParser &a0) { return a0.parseOptionalRSquare(); 
 // variant.  That is loud (the next token check fails) and it is the crate's recorded
 // limit, not a silent acceptance.
 llvm::ParseResult f871(mlir::AsmParser &a0, mlir::Type &a1) { return a0.parseType(a1); }
+
+// ===========================================================================
+// t920-t927 -- THE DenseSet FAMILY OVER THE mlir HANDLE TYPES.  24 emitted
+// sites: 14 `llvm::SmallDenseSet<mlir::Attribute, ...>` in one file
+// (ScratchpadConflicts.cpp), 7 `llvm::detail::DenseSetImpl<mlir::StringAttr, ...>`
+// in two, and 3 `DenseSetImpl<mlir::Attribute>` / `DenseSetImpl<mlir::Value>`.
+//
+// ⭐⭐ THIS CLOSES THE REFUSAL RECORDED AT t480-t482 AND IN "THE NINE SPELLINGS
+// DELIBERATELY NOT KEYED" ABOVE.  That refusal said the deciding read was
+// "does the element's Rust model implement `Hash + Eq`", that `HashSet` does not
+// compile without both, and that "that check is a `dataflowir-gen` read, not a
+// rules read, and it is the next step for these five".  ⭐ THE READ IS NOW DONE
+// AND IT COMES BACK POSITIVE -- `dataflowir-gen` commit 308a547 ("derive Hash on
+// Attr, AffineMap and AffineExpr") is an ancestor of that crate's HEAD, so:
+//     ir.rs:540  #[derive(Debug, Clone, PartialEq, Eq, Hash)] pub enum Attr
+//     ir.rs:36   #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum Ty
+//     ir.rs:20   #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct Value
+// and `Ty` is the only non-trivial payload `Attr` carries, so all three element
+// models below are `Hash + Eq`.  ⛔ THE STALE REFUSAL TEXT AT t483 HAS BEEN
+// CORRECTED IN PLACE rather than left to mislead the next slot -- it asserted
+// `ir.rs:465` was `#[derive(Debug, Clone, PartialEq, Eq)]`, "`Eq` YES, `Hash` NO",
+// and that claim is now FALSE.
+//
+// ⭐ THE HASH SOUNDNESS DIRECTION THAT MATTERS IS ALREADY ASSERTED UPSTREAM.
+// The fatal direction for a hash container is two EQUAL values hashing
+// DIFFERENTLY -- `contains` then misses a member that is present, with no
+// diagnostic.  `ir.rs`'s own derive note says it holds by construction ("the
+// derive hashes exactly the fields `PartialEq` compares") and
+// `dataflowir-gen/tests/model.rs::attr_is_a_sound_hash_set_key` asserts a lookup
+// with a SEPARATELY-CONSTRUCTED equal key succeeds.  Extra collisions between
+// UNEQUAL values are harmless, so no claim is needed in that direction.
+//
+// ⭐ ELEMENT MODELS, one per spelling, taken from THIS module's own type rules:
+//   * `mlir::Attribute` -- t6 -> `dataflowir_gen::ir::Attr`.
+//   * `mlir::StringAttr` -- t7 -> the SAME `dataflowir_gen::ir::Attr` (t7's target
+//     note: "In real MLIR StringAttr is a ... the SAME `ir::Attr`").  So a
+//     StringAttr-keyed set and an Attribute-keyed set are the same Rust type.
+//     That is not a collision: the two C++ spellings are DISTINCT search keys.
+//   * `mlir::Value` -- t4 -> `dataflowir_gen::ir::Value`.
+// Same `HashSet` in BOTH models, for t480-t482's reason: a set hands out no
+// mapped value, so there is nothing for the refcount model to share, and these
+// three elements are spelled identically under both models (unlike t482's
+// `llvm::StringRef`).
+//
+// ⛔⛔ THE TEMPLATE-ARGUMENT SPELLING WAS THE WHOLE RISK AND IT IS SETTLED BY
+// MEASUREMENT, NOT BY READING THE PLACEHOLDER.  The converter searches with
+// DEFAULTED TEMPLATE ARGUMENTS DROPPED and says so in as many words:
+//   searched as: llvm::SmallDenseSet<mlir::Attribute>
+//   from decl (NOT a key -- canonicalised, defaulted args kept):
+//       llvm::SmallDenseSet<mlir::Attribute, _, llvm::DenseMapInfo<mlir::Attribute, void>>
+// A rule alias records with trailing defaults dropped too, so the two agree and the
+// spellings below are written the SHORT way -- no `, void` on `DenseMapInfo`, no
+// `InlineBuckets`.  ⛔ THE LONG WAY WAS TRIED AND IS DEAD: recorded verbatim as the
+// `from decl` text, it left the witness TU byte-identical to its BEFORE.
+// ⛔ AND THIS CORRECTS THE t236-t242 HEADER, which says "the two `llvm::StringRef`
+// rows are recorded WITH [the `, void`]" and made that the reason those rows "need
+// the non-defaulted declaration the seven above must not have".  That reads like a
+// `from decl` observation, and if it is, those two rows are blocked by nothing and
+// are a free follow-up.  NOT verified here -- stated as the next probe, not as a
+// result.  (`_` for a non-type argument, as in t239 and t923, is likewise a
+// `from decl` artefact and is NOT spelled in a key.)
+//
+// ⛔⛔ CORRECTED 2026-09-28 (slot densemem): THE CENSUS BELOW IS RIGHT AND IS
+// KEPT, BUT ITS CONCLUSION IS NOW STALE.  `insert`, `contains`, `empty` and
+// `size` ARE KEYED for `mlir::Attribute` at f900-f909; do not re-derive the
+// refusal from this paragraph.  What survives of it: the range-for, for a
+// DIFFERENT and stronger reason (it is not a rules question at all).  See the
+// member-half header just below t920's aliases.
+// ⛔⛔ NO MEMBER RULE IS WRITTEN AND THAT IS A MEASURED DECISION, NOT AN
+// OVERSIGHT.  The member surface was censused from the emitting files BEFORE
+// keying the types, because an unmapped member does NOT abort -- it is emitted
+// TEXTUALLY with no placeholder token, so a wrong choice here is invisible to
+// every census.  Censused surface:
+//   ScratchpadConflicts.cpp (SmallDenseSet<mlir::Attribute>, 14 sites):
+//     default-construct x4, `insert(x)` RESULT DISCARDED x1, `contains(x)` x1,
+//     one range-for over the set, and pass-by-`&` x3.
+//   KTDFArchAttributes.cpp (SmallDenseSet<Attribute>, 2 declarations):
+//     `keys.insert(key).second` -- THE PAIR IS READ, x2.
+// ⛔ `insert` IS THE BLOCKER AND IT IS A RETURN-TYPE BLOCKER, NOT A BODY ONE.
+// `llvm::detail::DenseSetImpl::insert` returns `std::pair<iterator, bool>` and
+// `KTDFArchAttributes.cpp` READS `.second` off it, while Rust's
+// `HashSet::insert` returns a bare `bool`.  A rule mapping `insert` -> `bool`
+// would compile the discarding sites and make `.second` a silent E0609 on the
+// two that read it; mapping it to a tuple needs a `DenseSetImpl<...>::Iterator`
+// model, which does not exist in this module (t480-t482's header already names
+// it "a separate row family", and rules/set's f13 shows the shape it would have
+// to take -- a `libcc2rs::UnsafeSetIterator` equivalent plus a `find_key`).
+// ⛔ THAT LAST SENTENCE IS FALSE AS OF f900-f903: `libcc2rs::UnsafeHashSetIterator`
+// (iterators.rs:516) IS that model, `rules/unordered_map` t5/f41/f42 already keys
+// it over the same Rust `HashSet`, and `.second` was measured to lower to `.1`
+// structurally even with `insert` unmapped.  Kept as the record of what was
+// wrong: it inferred "not writable here" from "not written here".
+// Neither is writable here, so `insert` is LEFT OUT and stays loud at rustc.
+// ⚠️ `contains` IS cleanly mappable (`bool contains(const ValueT &) const` ->
+// `HashSet::contains`, exact in both directions) but its DECLARING class is
+// `llvm::detail::DenseSetImpl`, not the derived `SmallDenseSet` -- a key on a
+// derived class cannot relocate an inherited member -- and keying it alone would
+// close 1 of the 24 sites while `insert` stays loud in the same expression. It is
+// named here so the next slot does not have to re-census it.
+// t920 -- 14 sites, ScratchpadConflicts.cpp.
+// ⛔⛔ THE KEY IS THE ARITY-1 SPELLING AND THE ARITY-3 ONE IS NOT A KEY AT ALL.
+// This was measured from the converter's OWN diagnostic, which prints both and
+// labels them:
+//   searched as: llvm::SmallDenseSet<mlir::Attribute>
+//   from decl (NOT a key -- canonicalised, defaulted args kept):
+//       llvm::SmallDenseSet<mlir::Attribute, _, llvm::DenseMapInfo<mlir::Attribute>>
+// ⭐ SO `from decl` IS A TRAP: it is the spelling a census of emitted placeholders
+// or of `unsupported system type has no rule:` text hands you, and keying it is
+// DEAD.  An arity-3 rule was written first, recorded verbatim as the `from decl`
+// text, and the witness TU came back BYTE-IDENTICAL to its BEFORE (same md5) with
+// the placeholder `Cpp2RustUnmapped_llvm_SmallDenseSet_mlir_Attribute_` still in
+// place -- that placeholder name is itself the arity-1 spelling, and is the cheap
+// tell.  Match `searched as`, which has DEFAULTED ARGUMENTS DROPPED, i.e. exactly
+// what a rule alias records by default.  Same discipline as t480-t482.
+using t920 = llvm::SmallDenseSet<mlir::Attribute>;
+
+// ===========================================================================
+// THE MEMBER HALF -- t921/t928 + f900-f909.  ⭐⭐ THE REFUSAL DIRECTLY ABOVE
+// ("NO MEMBER RULE IS WRITTEN AND THAT IS A MEASURED DECISION") IS CLOSED FOR
+// `mlir::Attribute`, AND ITS CENSUS IS KEPT because the census was right; only
+// the "not writable here" conclusion was wrong.  Read the corrections below
+// before re-deriving anything from it.
+//
+// ⭐ (1) THE ASKS ARE MEASURED, NOT INFERRED.  A `--verbose` translate of a probe
+// carrying all five shapes prints one `search expr` line per member, and the
+// DECLARING CLASS in every one of them is the BASE, spelled exactly as t923:
+//   search expr bool llvm::detail::DenseSetImpl<mlir::Attribute,
+//     llvm::SmallDenseMap<mlir::Attribute, llvm::detail::DenseSetEmpty, _,
+//     llvm::DenseMapInfo<mlir::Attribute>,
+//     llvm::detail::DenseSetPair<mlir::Attribute>>,
+//     llvm::DenseMapInfo<mlir::Attribute>>::contains(const mlir::Attribute &) const
+// -- byte-identical to t923's `ir_src.json` readback, `_` included.  So ONE base
+// key really does cover every derived `SmallDenseSet`/`DenseSet` spelling, and a
+// key on the derived spelling would have been byte-plausible and DEAD.  The four
+// asks are `insert(const mlir::Attribute &)`, `insert(mlir::Attribute &&)`,
+// `contains(const mlir::Attribute &) const`, `empty() const`, `size() const`.
+// ⛔ BOTH `insert` OVERLOADS OCCUR IN THE CORPUS and the census above missed
+// that: `result.insert(resource.getKind())` (ScratchpadConflicts.cpp:54) passes a
+// PRVALUE and binds `insert(ValueT &&)` -- the emitted fallback name is
+// `insert_pmutdataflowir_genirAttr_rv`, with the `_rv` suffix -- while
+// `keys.insert(key)` (KTDFArchAttributes.cpp) passes an lvalue and binds
+// `insert(const ValueT &)`, emitted `insert_pconstdataflowir_genirAttr`.  Keying
+// one overload leaves the other on the mangled fallback, which is rules/set's
+// measured lesson restated.
+//
+// ⭐⭐ (2) `insert`'s RETURN TYPE IS SOLVED WITH A REAL ITERATOR, NOT A
+// PLACEHOLDER FIRST ELEMENT.  The refusal above says a tuple "needs a
+// `DenseSetImpl<...>::Iterator` model, which does not exist in this module".
+// The model it names ALREADY EXISTS IN libcc2rs and is already keyed by another
+// module: `libcc2rs::UnsafeHashSetIterator<K> = HashSetIter<K, *const HashSet<K>>`
+// (libcc2rs/src/iterators.rs:516) with `null`/`begin`/`end`/`find_key`/`value`/
+// `inc`/`is_end`, `PartialEq`, `PrefixInc`, `PostfixInc` and a `SetIterator` impl
+// at iterators.rs:876.  `rules/unordered_map` t5/f41/f42 is the identical shape
+// over the identical Rust container (`HashSet<T1>`), so this is a REUSE, not a
+// new model.  ⭐ THAT IS WHY THE HONEST OPTION WAS TAKEN OVER THE CHEAP ONE: a
+// 2-tuple whose first element were a unit-like placeholder would be merely
+// loud-if-used, whereas `find_key` puts the iterator ON the inserted-or-found
+// element, so `.first` is CORRECT and not just unusable.  `.second` reads the
+// real `HashSet::insert` boolean in both cases.
+// ⭐ AND `.second` LOWERS STRUCTURALLY, measured: with `insert` entirely unmapped
+// the converter still emitted `(...).1` for `.second`, and
+// `search type std::pair<...DenseSetIterator<false>, bool>` already resolves to
+// rules/pair's `(T1, T2)`.  So nothing about the pair itself needed keying -- only
+// the function whose Rust return type the `.1` is taken from.
+//
+// ⚠️ (3) THE DECLARATIONS ARE EXPLICIT SPECIALISATIONS, the t750/t751 discipline.
+// Members on the PRIMARY template would give `insert` the DEPENDENT return type
+// `std::pair<typename DenseSetImpl<...>::iterator, bool>`, which is the f461
+// `simple_ilist<mlir::Block>` shape that records a spelling no ask ever matches.
+// In a full specialisation `iterator` is concrete, so the recorded return type is
+// the `DenseSetImpl<...>::DenseSetIterator<false>` the ask spells.  The nested
+// `DenseSetIterator` is declared with a `bool` parameter because that is what
+// DenseSet.h:105 declares (`template <bool IsConst> class DenseSetIterator`) and
+// DenseSet.h:154 typedefs `iterator = DenseSetIterator<false>` -- the ask carries
+// the canonical `<false>` form, not the `::iterator` sugar.
+// ⚠️ `size()` returns `unsigned`, not `size_t`: the ask says `unsigned int`
+// (DenseSet.h:87 `size_type size() const`, and `size_type` is `unsigned` there).
+// Getting this wrong is a DEAD key, not a wrong body.
+//
+// ⛔ WHAT IS STILL LEFT OUT, AND THE MEASURED REASON.
+//   * THE RANGE-FOR IS NOT A RULES PROBLEM AND NO MEMBER KEY CAN FIX IT.
+//     `converter.cpp:2959-2996 ConvertLoopVariable` lowers EVERY range-for
+//     positionally -- `0..range.len()` plus `range.as_ptr().add(i)` for a
+//     reference loop variable, `range[i].clone()` for a by-value one -- and never
+//     consults `begin`/`end` rules at all.  So
+//     `for (const auto &written : producer_writes)` emits
+//     `producer_writes.as_ptr().add(i)` against a `HashSet`, which has `len()`
+//     but no `as_ptr()`, and the loop variable lands as `*const ir::Attr` so the
+//     `contains` inside it gets a pointer where the rule wants the element.
+//     Both are E0599/E0308 at rustc and BOTH SURVIVE THIS COMMIT.  Keying
+//     `begin`/`end` would be pure dead weight: measured, the lowering never asks.
+//     Closing it is a converter change (range-for over a non-indexable container
+//     must go through `.iter()`), or a representation change away from `HashSet`,
+//     and neither is a rules/mlir decision.
+//   * NO MEMBER KEY FOR t924-t927 (`mlir::StringAttr`, `mlir::Value`).  Their
+//     TYPE keys are landed, but no member ask on either was ever censused, and a
+//     member rule for a receiver no TU reaches is unverifiable weight.  The
+//     shapes below transpose mechanically if a census ever finds one.
+//   * NO ITERATOR MEMBERS (`operator*`, `operator++`, `operator==`).  Nothing in
+//     the corpus reads `.first`, so they would be unverified; an iterator member
+//     reached without them is a mangled fallback name, i.e. loud at rustc.
+// ===========================================================================
+namespace llvm {
+namespace detail {
+// t922's instantiation -- `DenseMap` MapTy.
+template <>
+class DenseSetImpl<mlir::Attribute,
+                   llvm::DenseMap<mlir::Attribute, llvm::detail::DenseSetEmpty,
+                                  llvm::DenseMapInfo<mlir::Attribute>,
+                                  llvm::detail::DenseSetPair<mlir::Attribute>>,
+                   llvm::DenseMapInfo<mlir::Attribute>> {
+public:
+  template <bool IsConst> class DenseSetIterator {};
+  bool empty() const;
+  unsigned size() const;
+  bool contains(const mlir::Attribute &V) const;
+  std::pair<DenseSetIterator<false>, bool> insert(const mlir::Attribute &V);
+  std::pair<DenseSetIterator<false>, bool> insert(mlir::Attribute &&V);
+};
+
+// t923's instantiation -- `SmallDenseMap` MapTy.  THIS is the one every censused
+// site reaches (`llvm::SmallDenseSet<mlir::Attribute>`'s base).
+template <>
+class DenseSetImpl<
+    mlir::Attribute,
+    llvm::SmallDenseMap<mlir::Attribute, llvm::detail::DenseSetEmpty, 4,
+                        llvm::DenseMapInfo<mlir::Attribute>,
+                        llvm::detail::DenseSetPair<mlir::Attribute>>,
+    llvm::DenseMapInfo<mlir::Attribute>> {
+public:
+  template <bool IsConst> class DenseSetIterator {};
+  bool empty() const;
+  unsigned size() const;
+  bool contains(const mlir::Attribute &V) const;
+  std::pair<DenseSetIterator<false>, bool> insert(const mlir::Attribute &V);
+  std::pair<DenseSetIterator<false>, bool> insert(mlir::Attribute &&V);
+};
+} // namespace detail
+} // namespace llvm
+
+// t922 -- `llvm::DenseSet<mlir::Attribute>`'s CRTP base, the DECLARING class of
+// every inherited member.  Distinguished from t923 by the `DenseMap` MapTy.
+using t922 = llvm::detail::DenseSetImpl<
+    mlir::Attribute,
+    llvm::DenseMap<mlir::Attribute, llvm::detail::DenseSetEmpty,
+                   llvm::DenseMapInfo<mlir::Attribute>,
+                   llvm::detail::DenseSetPair<mlir::Attribute>>,
+    llvm::DenseMapInfo<mlir::Attribute>>;
+
+// t923 -- `llvm::SmallDenseSet<mlir::Attribute, N>`'s CRTP base.
+using t923 = llvm::detail::DenseSetImpl<
+    mlir::Attribute,
+    llvm::SmallDenseMap<mlir::Attribute, llvm::detail::DenseSetEmpty, 4,
+                        llvm::DenseMapInfo<mlir::Attribute>,
+                        llvm::detail::DenseSetPair<mlir::Attribute>>,
+    llvm::DenseMapInfo<mlir::Attribute>>;
+
+// t924 -- `llvm::DenseSet<mlir::StringAttr>`'s CRTP base.  7 sites / 2 files are
+// recorded against the `mlir::StringAttr` DenseSetImpl spelling; BOTH MapTy
+// variants are written because the census measured the element type, not which
+// of the two containers each site declares.
+using t924 = llvm::detail::DenseSetImpl<
+    mlir::StringAttr,
+    llvm::DenseMap<mlir::StringAttr, llvm::detail::DenseSetEmpty,
+                   llvm::DenseMapInfo<mlir::StringAttr>,
+                   llvm::detail::DenseSetPair<mlir::StringAttr>>,
+    llvm::DenseMapInfo<mlir::StringAttr>>;
+
+// t925 -- `llvm::SmallDenseSet<mlir::StringAttr, N>`'s CRTP base.
+using t925 = llvm::detail::DenseSetImpl<
+    mlir::StringAttr,
+    llvm::SmallDenseMap<mlir::StringAttr, llvm::detail::DenseSetEmpty, 4,
+                        llvm::DenseMapInfo<mlir::StringAttr>,
+                        llvm::detail::DenseSetPair<mlir::StringAttr>>,
+    llvm::DenseMapInfo<mlir::StringAttr>>;
+
+// t926 -- `llvm::DenseSet<mlir::Value>`'s CRTP base.  `ir::Value` derives Hash
+// (ir.rs:20), so this is the same closure as the Attribute rows.
+using t926 = llvm::detail::DenseSetImpl<
+    mlir::Value,
+    llvm::DenseMap<mlir::Value, llvm::detail::DenseSetEmpty,
+                   llvm::DenseMapInfo<mlir::Value>,
+                   llvm::detail::DenseSetPair<mlir::Value>>,
+    llvm::DenseMapInfo<mlir::Value>>;
+
+// t927 -- `llvm::SmallDenseSet<mlir::Value, N>`'s CRTP base.
+using t927 = llvm::detail::DenseSetImpl<
+    mlir::Value,
+    llvm::SmallDenseMap<mlir::Value, llvm::detail::DenseSetEmpty, 4,
+                        llvm::DenseMapInfo<mlir::Value>,
+                        llvm::detail::DenseSetPair<mlir::Value>>,
+    llvm::DenseMapInfo<mlir::Value>>;
+
+// ---------------------------------------------------------------------------
+// t921 / t928 -- `llvm::detail::DenseSetImpl<...>::DenseSetIterator<false>`, the
+// `.first` of `insert`.  Modelled as `libcc2rs::UnsafeHashSetIterator<ir::Attr>`,
+// argued at the member-half header above.  Two keys because the two MapTy
+// instantiations are DISTINCT nested classes, exactly as t922 and t923 are
+// distinct.  ⚠️ These are written as the CANONICAL `DenseSetIterator<false>`
+// rather than the `::iterator` typedef, because that is the form the recorded
+// `insert` return type carries.
+using t921 = llvm::detail::DenseSetImpl<
+    mlir::Attribute,
+    llvm::DenseMap<mlir::Attribute, llvm::detail::DenseSetEmpty,
+                   llvm::DenseMapInfo<mlir::Attribute>,
+                   llvm::detail::DenseSetPair<mlir::Attribute>>,
+    llvm::DenseMapInfo<mlir::Attribute>>::DenseSetIterator<false>;
+
+using t928 = llvm::detail::DenseSetImpl<
+    mlir::Attribute,
+    llvm::SmallDenseMap<mlir::Attribute, llvm::detail::DenseSetEmpty, 4,
+                        llvm::DenseMapInfo<mlir::Attribute>,
+                        llvm::detail::DenseSetPair<mlir::Attribute>>,
+    llvm::DenseMapInfo<mlir::Attribute>>::DenseSetIterator<false>;
+
+// f900/f901 -- `insert` on t922, both overloads.  Non-const receiver.
+std::pair<t921, bool> f900(t922 &a0, const mlir::Attribute &a1) {
+  return a0.insert(a1);
+}
+
+std::pair<t921, bool> f901(t922 &a0, mlir::Attribute &&a1) {
+  return a0.insert(std::move(a1));
+}
+
+// f902/f903 -- `insert` on t923, both overloads.  ⭐ THESE TWO ARE THE ONES THE
+// CORPUS REACHES: f903 (rvalue) at ScratchpadConflicts.cpp:54 and f902 (lvalue)
+// at KTDFArchAttributes.cpp:120,152 where `.second` is read.
+std::pair<t928, bool> f902(t923 &a0, const mlir::Attribute &a1) {
+  return a0.insert(a1);
+}
+
+std::pair<t928, bool> f903(t923 &a0, mlir::Attribute &&a1) {
+  return a0.insert(std::move(a1));
+}
+
+// f904/f905 -- `contains`, const receiver.  Exact in both directions.
+bool f904(const t922 &a0, const mlir::Attribute &a1) { return a0.contains(a1); }
+
+bool f905(const t923 &a0, const mlir::Attribute &a1) { return a0.contains(a1); }
+
+// f906/f907 -- `empty`, const receiver.
+bool f906(const t922 &a0) { return a0.empty(); }
+
+bool f907(const t923 &a0) { return a0.empty(); }
+
+// f908/f909 -- `size`, const receiver.  Returns `unsigned`, NOT `size_t`.
+unsigned f908(const t922 &a0) { return a0.size(); }
+
+unsigned f909(const t923 &a0) { return a0.size(); }

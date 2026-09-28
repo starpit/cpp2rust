@@ -3505,3 +3505,243 @@ fn f753(a0: libcc2rs::Ptr<dataflowir_gen::AsmPrinter>, a1: dataflowir_gen::ir::T
 // verbatim with `with_mut`.  The test that proves it: construct
 // `Ptr::new(AsmParser::new("%a"))`, call `with_mut(|p| p.parse_operand(&mut s))` and
 // assert `s == "%a"` -- i.e. that a Ptr-held parser both borrows mutably AND advances.
+
+// t920-t927 -- the DenseSet family over the mlir handle types, 24 sites.  Argued
+// in full at `t920` in src.cpp.  SAME `HashSet` in BOTH models, for t480-t482's
+// reason: a set hands out no mapped value, so there is nothing for the refcount
+// model to share, and unlike t482's `llvm::StringRef` these three elements are
+// spelled identically under both models.
+//
+// ⭐ `Hash` IS WHAT MAKES THESE WRITABLE AT ALL.  `dataflowir-gen` 308a547 derives
+// it on `ir::Attr` (ir.rs:540) and it was already on `ir::Ty` (ir.rs:36, the only
+// non-trivial payload `Attr` carries) and on `ir::Value` (ir.rs:20).  Without it a
+// `HashSet<ir::Attr>` is a well-formed TYPE that records cleanly and then no
+// membership operation on it can compile -- which is the silent lie the refusal
+// these keys replace was right to refuse.
+//
+// ⛔ CORRECTED: this said "NO MEMBER RULE ... `insert` ... stays loud".  The
+// members ARE keyed now, at t921/t928 + f900-f909 below, with a REAL iterator
+// (`libcc2rs::UnsafeHashSetIterator`, which already existed).  What stays loud is
+// the RANGE-FOR, and not for a rules reason: `converter.cpp ConvertLoopVariable`
+// lowers every range-for as `0..len()` + `as_ptr().add(i)` and never consults
+// `begin`/`end`, so `HashSet` has no `as_ptr` and that one site is E0599 no
+// matter what this file says.  Full census at `t920` in src.cpp.
+
+// t920 -- `llvm::SmallDenseSet<mlir::Attribute>` (the SEARCHED-AS spelling; the
+// arity-3 `from decl` text is NOT a key).  14 sites, ScratchpadConflicts.cpp.
+fn t920() -> std::collections::HashSet<dataflowir_gen::ir::Attr> {
+    std::collections::HashSet::new()
+}
+
+// t922 / t923 -- `mlir::Attribute`'s `DenseSetImpl` base, `DenseMap` and
+// `SmallDenseMap` MapTy respectively.  t6 maps the element to `ir::Attr`.
+fn t922() -> std::collections::HashSet<dataflowir_gen::ir::Attr> {
+    std::collections::HashSet::new()
+}
+
+fn t923() -> std::collections::HashSet<dataflowir_gen::ir::Attr> {
+    std::collections::HashSet::new()
+}
+
+// t924 / t925 -- `mlir::StringAttr`'s `DenseSetImpl` base.  ⭐ THE ELEMENT IS THE
+// SAME `ir::Attr`, because t7 maps `mlir::StringAttr` to it: in real MLIR a
+// `StringAttr` IS an `Attribute` sharing the uniquer handle, and this module
+// already commits to that identity.  Distinct C++ search keys, one Rust type.
+fn t924() -> std::collections::HashSet<dataflowir_gen::ir::Attr> {
+    std::collections::HashSet::new()
+}
+
+fn t925() -> std::collections::HashSet<dataflowir_gen::ir::Attr> {
+    std::collections::HashSet::new()
+}
+
+// t926 / t927 -- `mlir::Value`'s `DenseSetImpl` base.  t4 maps the element to
+// `ir::Value`, which derives `Hash + Eq` at ir.rs:20.
+fn t926() -> std::collections::HashSet<dataflowir_gen::ir::Value> {
+    std::collections::HashSet::new()
+}
+
+fn t927() -> std::collections::HashSet<dataflowir_gen::ir::Value> {
+    std::collections::HashSet::new()
+}
+
+// ===========================================================================
+// THE MEMBER HALF -- t921/t928 + f900-f909, `mlir::Attribute` only.  Argued in
+// full at the member-half header in src.cpp.  IDENTICAL IN BOTH MODELS for the
+// t920 reason: a set hands out no mapped value, so the container is a plain
+// `HashSet` under both, and therefore the iterator is the UNSAFE one under both
+// (`RefcountHashSetIter` is keyed on `Ptr<HashSet<K>>`, which is NOT this
+// module's representation).
+//
+// ⭐ `.first` IS A REAL ITERATOR, NOT A PLACEHOLDER.  `find_key` positions it on
+// the inserted-or-already-present element, which is exactly what C++
+// `DenseSetImpl::insert` returns; `.second` is the real `HashSet::insert`
+// boolean.  So neither element of the tuple is a lie.  This is a REUSE of
+// `rules/unordered_map`'s t5/f41/f42 over the identical Rust container.
+//
+// ⚠️ `__k.clone()` IS LOAD-BEARING: the key has to outlive the `insert` so
+// `find_key` can locate it, and `HashSet::insert` consumes its argument.
+// ⚠️ THE CAST `__set as *const HashSet<..>` re-borrows the receiver the iterator
+// points into -- the unsafe model's established iterator shape
+// (rules/unordered_map f41, rules/set f13), not a new liberty taken here.
+// ===========================================================================
+
+fn t921() -> libcc2rs::UnsafeHashSetIterator<dataflowir_gen::ir::Attr> {
+    libcc2rs::UnsafeHashSetIterator::null()
+}
+
+fn t928() -> libcc2rs::UnsafeHashSetIterator<dataflowir_gen::ir::Attr> {
+    libcc2rs::UnsafeHashSetIterator::null()
+}
+
+// f900/f901 -- `insert` on t922 (`DenseMap` MapTy), const-ref and rvalue.
+unsafe fn f900(
+    a0: &mut std::collections::HashSet<dataflowir_gen::ir::Attr>,
+    a1: dataflowir_gen::ir::Attr,
+) -> (
+    libcc2rs::UnsafeHashSetIterator<dataflowir_gen::ir::Attr>,
+    bool,
+) {
+    {
+        // ⚠️⚠️ THE SPELLING OF THE RECEIVER HERE IS MEASURED, NOT IDIOMATIC, AND
+        // TWO NATURAL FORMS WERE WRONG.  The converter substitutes a `&mut`
+        // parameter with the CALLER'S PLACE EXPRESSION (`keys`, `(*result)`),
+        // not with a reference to it, and it inserts its own autoref in a
+        // reference context.  Measured, on this module, at the pin:
+        //   `&mut *a0` -> `&mut &mut keys`  (E0308 on `HashSet::insert`'s UFCS
+        //                                    receiver, E0606 on the cast)
+        //   `a0`       -> `keys`            (E0605: `HashSet as *const HashSet`)
+        //   `&raw const *a0` -> `&raw const keys`   ✓ -- a RAW-REF context gets
+        //                                    no autoref, so both readings agree.
+        // So `a0` appears exactly once, inside `&raw const`, and the insert goes
+        // through the resulting pointer.  rules/unordered_map f41's `&mut *a0`
+        // shape does NOT transplant here.
+        let __k = a1;
+        let __p = &raw const *a0;
+        let __inserted = (*(__p as *mut std::collections::HashSet<dataflowir_gen::ir::Attr>))
+            .insert(__k.clone());
+        (libcc2rs::UnsafeHashSetIterator::find_key(__p, &__k), __inserted)
+    }
+}
+
+unsafe fn f901(
+    a0: &mut std::collections::HashSet<dataflowir_gen::ir::Attr>,
+    a1: dataflowir_gen::ir::Attr,
+) -> (
+    libcc2rs::UnsafeHashSetIterator<dataflowir_gen::ir::Attr>,
+    bool,
+) {
+    {
+        // ⚠️⚠️ THE SPELLING OF THE RECEIVER HERE IS MEASURED, NOT IDIOMATIC, AND
+        // TWO NATURAL FORMS WERE WRONG.  The converter substitutes a `&mut`
+        // parameter with the CALLER'S PLACE EXPRESSION (`keys`, `(*result)`),
+        // not with a reference to it, and it inserts its own autoref in a
+        // reference context.  Measured, on this module, at the pin:
+        //   `&mut *a0` -> `&mut &mut keys`  (E0308 on `HashSet::insert`'s UFCS
+        //                                    receiver, E0606 on the cast)
+        //   `a0`       -> `keys`            (E0605: `HashSet as *const HashSet`)
+        //   `&raw const *a0` -> `&raw const keys`   ✓ -- a RAW-REF context gets
+        //                                    no autoref, so both readings agree.
+        // So `a0` appears exactly once, inside `&raw const`, and the insert goes
+        // through the resulting pointer.  rules/unordered_map f41's `&mut *a0`
+        // shape does NOT transplant here.
+        let __k = a1;
+        let __p = &raw const *a0;
+        let __inserted = (*(__p as *mut std::collections::HashSet<dataflowir_gen::ir::Attr>))
+            .insert(__k.clone());
+        (libcc2rs::UnsafeHashSetIterator::find_key(__p, &__k), __inserted)
+    }
+}
+
+// f902/f903 -- `insert` on t923 (`SmallDenseMap` MapTy).  The two the corpus
+// actually reaches.
+unsafe fn f902(
+    a0: &mut std::collections::HashSet<dataflowir_gen::ir::Attr>,
+    a1: dataflowir_gen::ir::Attr,
+) -> (
+    libcc2rs::UnsafeHashSetIterator<dataflowir_gen::ir::Attr>,
+    bool,
+) {
+    {
+        // ⚠️⚠️ THE SPELLING OF THE RECEIVER HERE IS MEASURED, NOT IDIOMATIC, AND
+        // TWO NATURAL FORMS WERE WRONG.  The converter substitutes a `&mut`
+        // parameter with the CALLER'S PLACE EXPRESSION (`keys`, `(*result)`),
+        // not with a reference to it, and it inserts its own autoref in a
+        // reference context.  Measured, on this module, at the pin:
+        //   `&mut *a0` -> `&mut &mut keys`  (E0308 on `HashSet::insert`'s UFCS
+        //                                    receiver, E0606 on the cast)
+        //   `a0`       -> `keys`            (E0605: `HashSet as *const HashSet`)
+        //   `&raw const *a0` -> `&raw const keys`   ✓ -- a RAW-REF context gets
+        //                                    no autoref, so both readings agree.
+        // So `a0` appears exactly once, inside `&raw const`, and the insert goes
+        // through the resulting pointer.  rules/unordered_map f41's `&mut *a0`
+        // shape does NOT transplant here.
+        let __k = a1;
+        let __p = &raw const *a0;
+        let __inserted = (*(__p as *mut std::collections::HashSet<dataflowir_gen::ir::Attr>))
+            .insert(__k.clone());
+        (libcc2rs::UnsafeHashSetIterator::find_key(__p, &__k), __inserted)
+    }
+}
+
+unsafe fn f903(
+    a0: &mut std::collections::HashSet<dataflowir_gen::ir::Attr>,
+    a1: dataflowir_gen::ir::Attr,
+) -> (
+    libcc2rs::UnsafeHashSetIterator<dataflowir_gen::ir::Attr>,
+    bool,
+) {
+    {
+        // ⚠️⚠️ THE SPELLING OF THE RECEIVER HERE IS MEASURED, NOT IDIOMATIC, AND
+        // TWO NATURAL FORMS WERE WRONG.  The converter substitutes a `&mut`
+        // parameter with the CALLER'S PLACE EXPRESSION (`keys`, `(*result)`),
+        // not with a reference to it, and it inserts its own autoref in a
+        // reference context.  Measured, on this module, at the pin:
+        //   `&mut *a0` -> `&mut &mut keys`  (E0308 on `HashSet::insert`'s UFCS
+        //                                    receiver, E0606 on the cast)
+        //   `a0`       -> `keys`            (E0605: `HashSet as *const HashSet`)
+        //   `&raw const *a0` -> `&raw const keys`   ✓ -- a RAW-REF context gets
+        //                                    no autoref, so both readings agree.
+        // So `a0` appears exactly once, inside `&raw const`, and the insert goes
+        // through the resulting pointer.  rules/unordered_map f41's `&mut *a0`
+        // shape does NOT transplant here.
+        let __k = a1;
+        let __p = &raw const *a0;
+        let __inserted = (*(__p as *mut std::collections::HashSet<dataflowir_gen::ir::Attr>))
+            .insert(__k.clone());
+        (libcc2rs::UnsafeHashSetIterator::find_key(__p, &__k), __inserted)
+    }
+}
+
+// f904/f905 -- `contains`.  Exact in both directions.
+unsafe fn f904(
+    a0: std::collections::HashSet<dataflowir_gen::ir::Attr>,
+    a1: dataflowir_gen::ir::Attr,
+) -> bool {
+    a0.contains(&a1)
+}
+
+unsafe fn f905(
+    a0: std::collections::HashSet<dataflowir_gen::ir::Attr>,
+    a1: dataflowir_gen::ir::Attr,
+) -> bool {
+    a0.contains(&a1)
+}
+
+// f906/f907 -- `empty`.
+unsafe fn f906(a0: std::collections::HashSet<dataflowir_gen::ir::Attr>) -> bool {
+    a0.is_empty()
+}
+
+unsafe fn f907(a0: std::collections::HashSet<dataflowir_gen::ir::Attr>) -> bool {
+    a0.is_empty()
+}
+
+// f908/f909 -- `size`.  C++ `unsigned`, so `u32`, not `usize`.
+unsafe fn f908(a0: std::collections::HashSet<dataflowir_gen::ir::Attr>) -> u32 {
+    (a0.len() as u32)
+}
+
+unsafe fn f909(a0: std::collections::HashSet<dataflowir_gen::ir::Attr>) -> u32 {
+    (a0.len() as u32)
+}
