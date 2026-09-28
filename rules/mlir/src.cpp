@@ -2643,6 +2643,19 @@ namespace func {
 // `Op` nor `OpState` declares one), so the handle model is permitted -- the
 // OwningOpRef test.
 class CallOp {};
+
+// mlir/Dialect/Func/IR/FuncOps.h.inc -- `class FuncOp : public ::mlir::Op<FuncOp,
+// ...>`, an ORDINARY ODS-GENERATED OP CLASS exactly like CallOp above, i.e. one
+// `Operation *` through its OpState base.  Declared here ONLY so t157's key can be
+// spelled; the model is argued at `using t157 =`.
+//
+// SAME MIS-SERVICE CHECK AS CallOp, re-run rather than assumed: `grep -n 'OpState::'
+// src.cpp` is still ZERO HITS, so no existing key can serve an inherited member call
+// on a FuncOp receiver.  Every corpus read therefore stays LOUD -- `func.getName()`,
+// `func.getBody()`, `func.getFunctionType()`, `func.setPrivate()`, `FuncOp::create`.
+// No destructor exists (neither `Op` nor `OpState` declares one), so the handle model
+// is permitted -- the OwningOpRef test.
+class FuncOp {};
 } // namespace func
 
 namespace linalg {
@@ -2703,6 +2716,34 @@ mlir::func::CallOp f121() { return mlir::func::CallOp(); }
 // `compute_ops_[0]`, and `SmallVector<LinalgOp> v;` constructs no element.  This
 // is t151's and t27's precedent, both committed without a constructor.
 using t153 = mlir::linalg::LinalgOp;
+
+// t157 -- `mlir::func::FuncOp`.  Arity 0, so no `\b\d+\b` normalization and no
+// last-placeholder swallow hazard.  ⭐ FIRST-ABORT for dcc/src/Transform/Sentient/
+// LexicalOrdering.cpp (n=150 census row 70):
+//     LLVM ERROR: unsupported unmapped type `mlir::func::FuncOp` has no model in
+//     types_, while mapping `llvm::SmallVector<mlir::func::FuncOp>`
+// -- the key the mapper searched for is the BARE type, taken verbatim from the TSV;
+// the `SmallVector` around it is already modelled, so the element type is the gap.
+// It is t152's shape, argued in full there and at t25/t27: an ODS op handle widens to
+// `fmt::OpInst`, ⛔ with NO `==`, NO `!=` and NO member keyed.
+using t157 = mlir::func::FuncOp;
+
+// f125 -- THE DEFAULT CONSTRUCTOR FOR t157, on t152/f121's precedent and for the same
+// measured reason: the corpus really does default-construct one, so without this key a
+// TU reaching such a site is rc=0 and then `E0433: cannot find module or crate
+// mlir_func_FuncOp`.  Sites, checked not assumed (`grep -rn 'FuncOp [a-z_]*;'`):
+//   `func::FuncOp program;`             dbo/src/Transforms/WrapProgramDfir.cpp:88
+//   `func::FuncOp first_declaration;`   dbo/src/Transforms/Autopilot.cpp:645
+//   `func::FuncOp curr_func_;`          dcc/src/Transform/Sentient/
+//                                       SpecializedCanonicalization.cpp:224 (and
+//                                       three more as class members under
+//                                       dataflow-scheduler/include/.../KTDFToKTDFLow)
+// ⚠️ NOTE FOR THE BEFORE/AFTER READER: the GATING TU above does NOT need it --
+// `llvm::SmallVector<func::FuncOp> funcs;` (LexicalOrdering.cpp:204) constructs no
+// element -- so f125 is licensed by those OTHER sites, not by the row it ships with.
+// A default-constructed ODS op handle is the NULL handle and `fmt::OpInst` has no
+// null, so the target is t152/f121's unreachable placeholder and says so there.
+mlir::func::FuncOp f125() { return mlir::func::FuncOp(); }
 
 // ---------------------------------------------------------------------------
 // PASS 2026-09-28: the `mlir::Location` row, keyed against the model that landed
