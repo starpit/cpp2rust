@@ -217,6 +217,51 @@ impl<T> Ptr<T> {
         }
     }
 
+    /// BORROW-PROVENANCE constructor: a `Ptr<T>` that ALIASES element 0 of an
+    /// already-owned `Vec<T>` without allocating anything.
+    ///
+    /// This is the capability an aliasing `begin()` needs (e.g. `mlir::Region`'s block list,
+    /// whose callers deref the iterator and mutate through it). The two allocating
+    /// constructors are both WRONG for that job: `Ptr::null()` deref-of-nulls on the first
+    /// access, and `Ptr::alloc(v[0].clone())` fabricates a fresh allocation, so `*begin()` is
+    /// a COPY -- mutation through it is lost and `end()` comparison is against the wrong
+    /// object.
+    ///
+    /// ⭐ NO NEW PROVENANCE IS INTRODUCED. This is deliberately a named, discoverable
+    /// spelling of the EXISTING `PtrKind::StackVec` borrow provenance, which is already
+    /// reachable as `<Rc<RefCell<Vec<T>>> as AsPointer<T>>::as_pointer().decay()`. Because the
+    /// provenance is unchanged, every downstream rule is already correct and already tested:
+    /// * `Drop` -- `Ptr<T>` has NO `Drop` impl at all, for ANY provenance. Ownership is
+    ///   severed from `Ptr` by design: `alloc`/`alloc_array` LEAK the strong `Rc` via
+    ///   `Rc::into_raw` and retain only a `Weak`, and freeing is the explicit `delete()`.
+    ///   Dropping a `Ptr` therefore only decrements a weak count -- a no-op for the owner in
+    ///   both provenances. **So `Drop` never has to distinguish them, because it does nothing
+    ///   for either, and no discriminant is needed.**
+    /// * `delete()` -- already discriminates: it matches only `Heap*`/`Reinterpreted` and
+    ///   panics `"ub: invalid delete"` on every `Stack*` kind, so a borrowed `Ptr` cannot free
+    ///   its owner's storage (see `decay_stack_vec_cannot_be_freed`).
+    /// * `Clone` -- shallow: clones the `Weak` and copies `offset`. Both clones alias the same
+    ///   `Vec`; neither owns it.
+    /// * `PartialEq`/`Ord` -- compare `(byte_offset, kind.address())`, where `address()` is the
+    ///   OWNER CELL's address (`Weak::as_ptr`), not the element's. So two `Ptr`s derived from
+    ///   the same `Vec` compare equal iff their offsets match, which is exactly the
+    ///   `it == end()` semantics an iterator needs, and pointers into different `Vec`s never
+    ///   compare equal.
+    ///
+    /// ⚠️ LIVENESS, not lifetimes, is what keeps this safe: the retained `Weak` means every
+    /// access goes through `weak.upgrade().expect("ub: dangling pointer")`, so a `Ptr` that
+    /// outlives its owner panics loudly instead of reading freed memory. That is why the owner
+    /// must be an `Rc<RefCell<Vec<T>>>` (`Value<Vec<T>>`) and NOT a plain `&mut Vec<T>`: a
+    /// plain reference has no owner cell to downgrade, and a raw-pointer variant would silently
+    /// lose this check on exactly the reallocating (splicing) mutations it must catch.
+    #[inline]
+    pub fn borrow_vec(owner: &Value<Vec<T>>) -> Self {
+        Self {
+            offset: 0,
+            kind: PtrKind::StackVec(Rc::downgrade(owner)),
+        }
+    }
+
     #[inline]
     pub fn delete(&self) {
         match &self.kind {
@@ -1042,6 +1087,78 @@ impl<T: 'static> Ptr<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // THE ALIASING PROOF for `Ptr::borrow_vec` -- the capability an aliasing `begin()` needs.
+    // Every assertion below is one the two allocating constructors FAIL:
+    // `Ptr::alloc(v[0].clone())` fabricates a copy, so the write-through would not be visible in
+    // the owner and the `end()`/identity comparisons would be against the wrong object;
+    // `Ptr::null()` panics on the first deref.
+    #[test]
+    fn borrow_vec_ptr_aliases_the_owners_vec_and_does_not_allocate() {
+        let owner: Value<Vec<i32>> = Rc::new(RefCell::new(vec![10, 20, 30]));
+        let begin: Ptr<i32> = Ptr::borrow_vec(&owner);
+
+        // Borrow provenance, and NO allocation: the Ptr only downgraded the caller's Rc, so the
+        // strong count is untouched (an allocating ctor would have made a second allocation).
+        assert!(matches!(begin.kind, PtrKind::StackVec(_)));
+        assert_eq!(Rc::strong_count(&owner), 1);
+        assert_eq!(begin.len(), 3);
+
+        // ⭐ WRITE THROUGH THE Ptr, READ THE Vec: the mutation must be visible in the owner.
+        begin.write(11);
+        begin.offset(2).write(33);
+        assert_eq!(*owner.borrow(), vec![11, 20, 33]);
+
+        // ⭐ And the reverse direction: mutate the Vec, read it back through the Ptr.
+        owner.borrow_mut()[1] = 22;
+        assert_eq!(begin.read(), 11);
+        assert_eq!(begin.offset(1).read(), 22);
+        assert_eq!(begin.offset(2).read(), 33);
+
+        // Iterator identity: `it == end()` semantics over the same owner.
+        let end = begin.to_end();
+        assert_ne!(begin, end);
+        assert_eq!(end, begin.offset(3));
+        assert!(begin < end);
+        assert_eq!(begin.to_last(), begin.offset(2));
+
+        // Same owner => equal provenance; a Ptr re-derived independently compares equal, and the
+        // pre-existing spelling of this provenance is the SAME Ptr.
+        assert_eq!(begin, Ptr::borrow_vec(&owner));
+        assert_eq!(begin, owner.as_pointer().decay());
+
+        // A different Vec with identical contents must NOT compare equal.
+        let other: Value<Vec<i32>> = Rc::new(RefCell::new(vec![11, 22, 33]));
+        assert_ne!(begin, Ptr::borrow_vec(&other));
+
+        // Clone is shallow: the clone aliases the same Vec, it does not copy it.
+        let cloned = begin.clone();
+        cloned.offset(1).write(99);
+        assert_eq!(*owner.borrow(), vec![11, 99, 33]);
+    }
+
+    // A borrowed Ptr must never free its owner's storage: provenance IS discriminated where it
+    // matters, by `delete()`, even though `Drop` does nothing for either provenance.
+    #[test]
+    #[should_panic(expected = "ub: invalid delete")]
+    fn borrow_vec_ptr_cannot_be_freed() {
+        let owner: Value<Vec<i32>> = Rc::new(RefCell::new(vec![1, 2, 3]));
+        Ptr::borrow_vec(&owner).delete();
+    }
+
+    // Dropping a borrow-provenance Ptr is a no-op for the owner: the Vec is still alive and
+    // readable through a second Ptr afterwards.
+    #[test]
+    fn dropping_a_borrow_vec_ptr_does_not_disturb_the_owner() {
+        let owner: Value<Vec<i32>> = Rc::new(RefCell::new(vec![7, 8, 9]));
+        {
+            let tmp: Ptr<i32> = Ptr::borrow_vec(&owner);
+            tmp.offset(1).write(88);
+        } // tmp dropped here
+        assert_eq!(Rc::strong_count(&owner), 1);
+        assert_eq!(*owner.borrow(), vec![7, 88, 9]);
+        assert_eq!(Ptr::borrow_vec(&owner).offset(1).read(), 88);
+    }
 
     #[test]
     fn decay_heap_vec_can_be_freed() {
