@@ -2909,6 +2909,8 @@ unsafe fn f460(a0: &mut dataflowir_gen::fmt::Region) -> &mut Vec<dataflowir_gen:
 // have its own body.
 unsafe fn f461(a0: &mut Vec<dataflowir_gen::fmt::Block>) -> *mut dataflowir_gen::fmt::Block {
     a0.as_mut_ptr()
+}
+
 // ---------------------------------------------------------------------------
 // t520 / f420 / f421 -- `mlir::MutableOperandRange` AS A WRITE-THROUGH VIEW.
 //

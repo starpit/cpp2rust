@@ -2803,6 +2803,8 @@ fn f460(a0: &mut dataflowir_gen::fmt::Region) -> &mut Vec<dataflowir_gen::fmt::B
 // `Ptr::alloc(..clone())` would fabricate a copy; neither is admissible.
 fn f461(a0: libcc2rs::Ptr<dataflowir_gen::fmt::Block>) -> libcc2rs::Ptr<dataflowir_gen::fmt::Block> {
     a0
+}
+
 // ---------------------------------------------------------------------------
 // t520 / f420 / f421 -- `mlir::MutableOperandRange` AS A WRITE-THROUGH VIEW.
 // See tgt_unsafe.rs at t520 for the aliasing argument and the measured
