@@ -2552,3 +2552,11 @@ fn t304() -> dataflowir_gen::fmt::OpInst {
         <dataflowir_gen::ops::mlir_ktdf_PrivateYieldOp as dataflowir_gen::MlirOp>::DEF,
     )
 }
+
+// t320 -- `mlir::OpTrait::OneRegion<mlir::ModuleOp>`.  DEF verified present at
+// dataflow_ods.rs:4800 (`pub struct mlir_ModuleOp;`) BEFORE this key was written.
+fn t320() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_ModuleOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}

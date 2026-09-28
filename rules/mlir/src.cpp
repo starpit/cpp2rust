@@ -4308,6 +4308,17 @@ llvm::APInt f146(const mlir::IntegerAttr &a) { return a.getValue(); }
 //     mlir::math     6 spellings,  6 occurrences  (AbsIOp AbsFOp ExpOp TanhOp LogOp SqrtOp)
 //     mlir::memref   4 spellings,  4 occurrences  (LoadOp AllocOp GetGlobalOp
 //                   ExtractAlignedPointerAsIndexOp)
+// ⭐⭐ RE-TESTED 2026-09-28 (the `mlir::ktdf` falsification prompted a sweep of EVERY def-absence
+// refusal in this file, on the principle that nothing here re-tests its own refusals).  THIS ONE
+// STILL STANDS.  All 25 spellings re-run through the refusal's OWN test -- `grep -cE "struct
+// mlir_<dialect>_<Op>\b"` against the CURRENT dataflow_ods.rs -- return **0, every one**.  And the
+// SECOND route was checked too, which the original refusal did not do: `grep -rnE
+// "mlir_(LLVM|math|memref)_" dataflowir-gen/src/` (the HAND-WRITTEN side, where `fmt.rs` / `ir.rs`
+// live) is ALSO 0 hits, and `grep -oE "mlir_(LLVM|math|memref)_[A-Za-z0-9_]+"` over the whole
+// generated file returns NOTHING AT ALL -- the three dialect PREFIXES do not occur.  So unlike
+// `mlir::ktdf`, which the `ods_more` / `TD_OPS_MORE` table silently closed, these three dialects
+// were not carried in by the table's growth.  ⛔ STAYS LOUD; do not reopen on a spot check.
+//
 // ⚠️ An earlier note flagged only TWO absent DEFs (`mlir_LLVM_UndefOp`, `mlir_math_AbsIOp`)
 // because it SPOT-CHECKED eleven ops; the real shape is whole-dialect, 25 of 75.  That is a
 // dataflowir-gen `.td` COVERAGE GAP, not a rules gap, and those 45 occurrences must stay LOUD
@@ -4560,6 +4571,10 @@ namespace OpTrait {
 template <typename ConcreteType> class VariadicResults {};
 template <typename ConcreteType> class VariadicOperands {};
 template <typename ConcreteType> class SingleBlock {};
+// `OneRegion` (OpDefinition.h:556, `class OneRegion : public TraitBase<ConcreteType, OneRegion>`)
+// -- a FOURTH trait bucket of this same family, declared for t320 and for the same reason as the
+// three above: a pure tag base, no member of it mapped.
+template <typename ConcreteType> class OneRegion {};
 namespace detail {
 // mlir/IR/OpDefinition.h:628 / :560 -- `template <typename ConcreteType,
 // template <typename> class TraitType> class MultiResultTraitBase` and its operand twin.
@@ -4683,6 +4698,58 @@ using t302 = mlir::OpTrait::SingleBlock<mlir::ktdf::PrivateOp>;
 using t303 = mlir::OpTrait::detail::MultiResultTraitBase<mlir::ktdf::PrivateOp, mlir::OpTrait::VariadicResults>;
 // t304 -- Cpp2RustUnmapped_mlir_OpTrait_detail_MultiOperandTraitBase_mlir_ktdf_PrivateYieldOp__mlir_OpTrait_VariadicOperands_, 1 occurrence.  DEF `ops::mlir_ktdf_PrivateYieldOp` present.
 using t304 = mlir::OpTrait::detail::MultiOperandTraitBase<mlir::ktdf::PrivateYieldOp, mlir::OpTrait::VariadicOperands>;
+
+// ---------------------------------------------------------------------------
+// t320 -- `mlir::OpTrait::OneRegion<mlir::ModuleOp>`, THE LAST SURVIVOR OF THIS WHOLE FAMILY,
+// and it was found by RE-CENSUSING the corpus rather than by reading any refusal's list.
+//
+// ⭐ FOUND BY CENSUS, NOT BY LIST.  Anchored `grep -ohE 'Cpp2RustUnmapped_mlir_OpTrait[A-Za-z0-9_]*'`
+// over all 226 files of the v30 sweep at fresh30/out returns exactly SIX distinct survivors: the
+// five `mlir::ktdf` spellings t300-t304 already landed, plus this one --
+//     Cpp2RustUnmapped_mlir_OpTrait_OneRegion_mlir_ModuleOp_    1 occurrence, 1 file
+// in `dbo__src__Transforms__ReduceToInitBin.cpp.rs`.  `OneRegion` had ZERO mentions anywhere in
+// this file before now (`grep -n OneRegion rules/mlir/src.cpp` = 0 hits): it is a FOURTH trait
+// bucket that no refusal in this file ever enumerated, so no "left-out list" would have led here.
+//
+// ⭐ DEF VERIFIED BEFORE THE KEY WAS WRITTEN, which is the whole discipline of this row:
+// `grep -nE "struct mlir_ModuleOp\b"` against
+//   dataflowir-gen-654e676bccb4a05f/out/dataflow_ods.rs  ->  `:4800  pub struct mlir_ModuleOp;`
+// i.e. 1 hit.  Same DEF t232 (`SingleBlock<mlir::ModuleOp>`) already names, so the target model is
+// not a new claim: the trait base of an op IS that op (the t161/t162 precedent).
+//
+// ⛔ MONOMORPHIC, FULLY CONCRETE, arity 0 -- for the t166 / t37-t39 / t217-t235 reason.  The
+// `mlir::OpTrait::OneRegion` bucket was EMPTY before this key, so a generic `OneRegion<T>` would be
+// the SOLE candidate in it and `search()`'s longer-src tie-break (mapper.cpp:430-437) could not
+// protect it: the densemap failure verbatim.  Arity 0 also means `matchTemplate`'s capture
+// (`findNextLiteralSameDepth`, :173) never runs, so the swallow bug cannot occur here at all.
+//
+// ⛔ t25's PROHIBITION CARRIES: cast-target position only, NO MEMBER IS EVER READ, so a NAME and
+// no member rules is the complete and correct key.  CONFIRMED for this spelling specifically --
+// the single site in ReduceToInitBin.cpp is an implicit derived-to-base upcast of a `ModuleOp` to
+// its `OneRegion` trait base and reads nothing off it.  No `fN`: nothing constructs a trait base.
+// t320 -- Cpp2RustUnmapped_mlir_OpTrait_OneRegion_mlir_ModuleOp_, 1 occurrence.  DEF `ops::mlir_ModuleOp` present (dataflow_ods.rs:4800).
+using t320 = mlir::OpTrait::OneRegion<mlir::ModuleOp>;
+
+// ---------------------------------------------------------------------------
+// ⛔ NEW REFUSAL, RECORDED SO THE NEXT SLOT DOES NOT SPEND A SLOT ON IT -- and it is the single
+// biggest remaining `mlir_` survivor that LOOKS like the falsified `mlir::ktdf` row and IS NOT:
+//     Cpp2RustUnmapped_mlir_detail_SymbolOpInterfaceTrait_mlir_ktdf_arch_DeviceOp_   18 occurrences
+// 18 occurrences is more than t300-t304 moved COMBINED, so the temptation is real.  ⛔ REFUSED:
+// `grep -nE "struct mlir_ktdf_arch_DeviceOp\b"` against dataflow_ods.rs = **0 hits**, and so is
+// `grep -oE "mlir_ktdf_arch[A-Za-z0-9_]*"` -- the prefix does not occur at all, and neither does
+// any `*DeviceOp`.  A key here would record fine, pass the load smoke test, and FAIL AT RUSTC.
+//
+// ⭐⭐ THE FINDING THAT MAKES THIS WORTH WRITING DOWN: `mlir::ktdf::arch` IS A DIFFERENT DIALECT
+// FROM `mlir::ktdf`, AND THE `.td` COVERAGE CLOSURE DID NOT COVER IT.  Enumerating every generated
+// def, `grep -oE "struct mlir_ktdf[A-Za-z0-9_]*"` returns 18 names: sixteen plain `mlir_ktdf_*`
+// (BufferPhaseOp CreateTokenOp DataTransferOp FifoAllocateOp ParallelOp ParallelYieldOp PipelineOp
+// PrivateOp PrivateYieldOp ReadFromFifoOp SelectMemrefOp StageOp TilingDeriveSizeOp
+// TilingLinearizeIndexOp TilingReserveSizeOp WriteToFifoOp) plus TWO from the `ktdf::lowering`
+// SUB-dialect (`mlir_ktdf_lowering_ExecuteOnOp`, `mlir_ktdf_lowering_SignalOp`) -- and ZERO from
+// `ktdf::arch`.  ⚠️ So sub-dialect coverage is PER-SUB-DIALECT: `ktdf::lowering` is covered while
+// `ktdf::arch` is not, and "the ktdf gap is closed" must NOT be generalised to `mlir::ktdf::*`.
+// This is a live dataflowir-gen `.td` coverage gap and those 18 occurrences must stay LOUD so the
+// coverage question keeps its evidence.  Re-test it the same way: the grep above, both routes.
 
 // ---------------------------------------------------------------------------
 // t236-t242 -- `llvm::SmallSet` and `llvm::detail::DenseSetImpl`, the two
