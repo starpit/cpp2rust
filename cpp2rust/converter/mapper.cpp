@@ -1521,11 +1521,57 @@ void CollectUserTags(const clang::DeclContext *dc, int depth = 0) {
         auto ty = GetTypeForDecl(tag);
         if (!ty.isNull()) {
           user_tags_.emplace(ToString(ty), tag);
+          // SECOND SPELLING FOR A FUNCTION-LOCAL TAG. `ToString(GetTypeForDecl)`
+          // is the spelling the CONSUMER needs (it is what VisitRecordDecl will
+          // define), but it is NOT guaranteed to be the spelling a LEAF string
+          // carries: a leaf reaching mapTypeStringRecursive as a template
+          // argument of `std::vector<padType>` carries the bare `padType`, and
+          // if ToString renders the local tag with its enclosing function scope
+          // the index key and the lookup key never meet. Key the qualified name
+          // as well, insert-if-absent, so the lookup can succeed either way.
+          // The VALUE is the same decl, so the ported name the consumer emits is
+          // unchanged -- this widens the index, it does not change any output.
+          const std::string qual = tag->getQualifiedNameAsString();
+          if (!qual.empty()) {
+            user_tags_.emplace(qual, tag);
+          }
+          // PROVE REACHED, NOT RECORDED: a function-local tag is rare enough
+          // that one line per tag is not noise, and without it a miss here is
+          // indistinguishable from "the walk never got to the decl".
+          if (llvm::isa<clang::FunctionDecl>(tag->getDeclContext())) {
+            llvm::errs() << "note: indexed FUNCTION-LOCAL project tag `" << qual
+                         << "` (type spelling `" << ToString(ty) << "`)\n";
+          }
         }
       }
     }
+    // A FUNCTION BODY IS A DeclContext TOO, AND OMITTING IT COST TWO TUs.
+    // `enum padType { AHEAD, AFTER };` at dcgbeCodegen.cpp:5336 and
+    // `struct StitchState { ... };` at progtailor.cpp:436 are declared INSIDE a
+    // function body, so their semantic DeclContext is the FunctionDecl, not a
+    // namespace or a record. With only the three contexts below, `user_tags_`
+    // never held either spelling, `LooksLikeUserDefinedTypeName("padType")`
+    // returned false, and the project-leaf branch in mapTypeStringRecursive
+    // (which exists precisely to emit the PORTED name of a project type the TU
+    // defines itself) was never reached -- so both TUs aborted with
+    //   unsupported unmapped type `padType` has no model in types_,
+    //   while mapping `std::vector<padType>`
+    // even though the error message's OWN tag dump already labelled the leaf
+    // `[project type]`, i.e. IsUserDefinedDecl was true the whole time. That
+    // disagreement between the diagnostic and the lookup is the tell.
+    //
+    // This is NOT a rules question: a function-local tag is unnameable from a
+    // rule (it has no qualified spelling any rule key could carry), so the only
+    // honest owner is the converter, which already ports such tags.
+    //
+    // Two spellings COLLIDING (`enum padType` in two different functions of one
+    // TU) keeps the FIRST, exactly as every other insert here does; that is a
+    // pre-existing property of a bare-spelling index, not something this change
+    // introduces, and it is also already true of the Rust name the converter
+    // would emit for both.
     if (llvm::isa<clang::NamespaceDecl>(d) || llvm::isa<clang::RecordDecl>(d) ||
-        llvm::isa<clang::LinkageSpecDecl>(d)) {
+        llvm::isa<clang::LinkageSpecDecl>(d) ||
+        llvm::isa<clang::FunctionDecl>(d)) {
       CollectUserTags(llvm::cast<clang::DeclContext>(d), depth + 1);
     }
   }
@@ -1826,6 +1872,48 @@ std::optional<std::string> tryDerivePointerType(const std::string &cpp_type) {
   };
 
   std::string s = trim(cpp_type);
+
+  // A TOP-LEVEL TRAILING `const` ON A POINTER IS A PROPERTY OF THE BINDING, NOT
+  // OF THE TYPE, and stripping it here is the one const-strip that is not a
+  // guess. `T *const` is a const POINTER to a (possibly non-const) T: the
+  // pointee's constness lives in `T` and is preserved verbatim below, while the
+  // pointer OBJECT's constness has no representation in a Rust type at all --
+  // Rust spells it `let` vs `let mut` on the binding. `*const T` maps the
+  // POINTEE's const, which is why `T *const` and `T *` must map to the SAME
+  // Rust type and no information is lost. Contrast the trailing-const bail
+  // further down (which stays): `T const` with no top-level `*` is a const
+  // VALUE, where dropping the const would be exactly the silent wrongness this
+  // project exists to stop, so it still aborts.
+  //
+  // MEASURED: this shape is unavoidable for any map keyed by a pointer, because
+  // `std::unordered_map<K,V>::value_type` is `std::pair<const K, V>` -- with
+  // `K = const dsc2::LoopNode *` that is `std::pair<const dsc2::LoopNode *const,
+  // ...>`, and SNComputeLowering.cpp's whole first abort was
+  //   unsupported unmapped type `const dsc2::LoopNode *const` has no model in
+  //   types_, while mapping `std::pair<const dsc2::LoopNode *const,
+  //   std::unordered_map<PrimaryDimTypes, int>>`
+  // where `const dsc2::LoopNode *` on its own already derives fine. The queue
+  // records this as "leading const on a value type is not keyable by a rule" and
+  // routes it here for the same reason a local tag is routed here: no rule key
+  // can spell it (a `const std::pair<T1,T2>` alias reads back with the const
+  // stripped and just duplicates an existing key), so the rule side genuinely
+  // cannot express it.
+  {
+    const std::string kConst = "const";
+    if (s.size() > kConst.size() &&
+        s.compare(s.size() - kConst.size(), kConst.size(), kConst) == 0) {
+      const char before = s[s.size() - kConst.size() - 1];
+      if (!(isalnum(static_cast<unsigned char>(before)) || before == '_')) {
+        std::string without = trim(s.substr(0, s.size() - kConst.size()));
+        // ONLY when a top-level `*` is what the const binds to. `T const` (a
+        // const value) and `std::vector<T const> ` fall through untouched.
+        if (!without.empty() && without.back() == '*') {
+          s = without;
+        }
+      }
+    }
+  }
+
   if (s.empty() || s.back() != '*') {
     return std::nullopt;
   }
