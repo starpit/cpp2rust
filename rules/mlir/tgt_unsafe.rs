@@ -1833,3 +1833,35 @@ unsafe fn f141<T1: Clone>(a0: &Vec<T1>) -> Vec<T1> {
 unsafe fn f142(a0: Vec<dataflowir_gen::fmt::Region>) -> Vec<dataflowir_gen::fmt::Region> {
     a0
 }
+
+// f143/f144/f145 -- three of the four MEASURED `mlir::ValueRange` constructor
+// spellings (/home/agent/work/VALUERANGE-SPELLINGS.md; the `-verbose` leg exited on
+// its own at 27,901 asks and its emission matches the plain run's 31,212 lines, so
+// its `result: None` is admissible).  t14 (`OperandRange`), t16 (`ValueRange`),
+// t19 at `mlir::Value` and rules/vector's `std::vector<mlir::Value>` are ALL the
+// same Rust type `Vec<ir::Value>`, so f143/f144 are the IDENTITY and f145 is a
+// clone.  The owning-`Vec` model of a borrowed view is this module's settled
+// position (src.cpp:245-249) and is admissible here for f142's reason: ValueRange's
+// whole public surface past the constructors is `getTypes()`/`getType()`, both
+// `const`, so it declares NO mutating member and the lost aliasing is
+// unobservable.  See src.cpp at f143 for the four asks, for why the COPY
+// CONSTRUCTOR is deliberately absent (written, measured 7 -> 7 sites, deleted), and
+// for why f145's non-const reference is NOT write-through.
+unsafe fn f143(a0: Vec<dataflowir_gen::ir::Value>) -> Vec<dataflowir_gen::ir::Value> {
+    a0
+}
+
+unsafe fn f144(a0: Vec<dataflowir_gen::ir::Value>) -> Vec<dataflowir_gen::ir::Value> {
+    a0
+}
+
+// f145 -- `std::vector<mlir::Value> &` is the forwarding template's DEDUCED
+// parameter (ValueRange.h:397-401), read-only in fact, so `&mut Vec` here (the
+// rules/array f3-f5 convention for a non-const reference) is only borrowed, never
+// written.  PATH FORM with an explicit reborrow, NOT `a0.clone()`: the converter
+// substitutes the argument textually and appends methods textually, so a bare
+// `a0.clone()` risks emitting `&mut (*s).clone()` = `&mut ((*s).clone())`, a
+// reference to a temporary -- the bug measured and fixed in f140.
+unsafe fn f145(a0: &mut Vec<dataflowir_gen::ir::Value>) -> Vec<dataflowir_gen::ir::Value> {
+    Clone::clone(&*a0)
+}

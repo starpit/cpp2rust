@@ -63,6 +63,13 @@
 // purely so the InFlightDiagnostic `<<` keys can be spelled).
 namespace llvm {
 template <typename T> class MutableArrayRef;
+// ⭐ AND `ArrayRef`, for the SAME reason and a second consumer: `mlir::ValueRange`
+// (:270) declares `ValueRange(llvm::ArrayRef<Value>)` -- key f145's sibling f144 --
+// and the real `llvm::ArrayRef` definition in this file does not open until :1117,
+// i.e. AFTER namespace mlir.  Without this line the rule source does not compile
+// (`no template named 'ArrayRef' in namespace 'llvm'`), which is a regen failure,
+// not a converter gap.
+template <typename T> class ArrayRef;
 } // namespace llvm
 
 namespace mlir {
@@ -260,7 +267,19 @@ struct EmptyProperties {};
 // see the cost note in tgt_unsafe.rs.
 class OperandRange {};
 class ResultRange {};
-class ValueRange {};
+// ⭐ THE THREE CONSTRUCTORS ARE DECLARED HERE, not just keyed at f143-f145: this
+// is a STUB class, so an undeclared constructor is a compile error in the rule
+// source itself (the f142 / `RegionRange` shape at :303).  The COPY constructor is
+// deliberately NOT declared -- see f143's paragraph for why (written, measured
+// 7 -> 7 sites, deleted).  `ValueRange(ArrayRef<Value> = {})`'s default argument is
+// omitted on purpose: the recorder writes a default out at the call site, so a
+// nullary variant records as the SAME key.
+class ValueRange {
+public:
+  ValueRange(OperandRange values);
+  ValueRange(llvm::ArrayRef<Value> values);
+  ValueRange(std::vector<Value> &values);
+};
 
 // ⛔ REFUSED, RECORDED SO THE NEXT SLOT DOES NOT RE-DERIVE IT:
 // `mlir::MutableOperandRange` IS NOT MAPPED, AND THE OWNING-`Vec` PRECEDENT THAT
@@ -3897,4 +3916,94 @@ template <typename T1> llvm::ArrayRef<T1> f141(const std::vector<T1> &a0) {
 // write back through it.
 mlir::RegionRange f142(llvm::MutableArrayRef<mlir::Region> a0) {
   return mlir::RegionRange(a0);
+}
+
+// ---- f143/f144/f145: three of the four `mlir::ValueRange` constructor -------
+// spellings.  MEASURED, not predicted: /home/agent/work/VALUERANGE-SPELLINGS.md,
+// from a `-verbose` leg that EXITED ON ITS OWN at 27,901 asks whose emission is
+// 31,212 lines -- the same line count the plain run gives, which is the proof it
+// covered the whole TU, so its `result: None` is admissible.  (The slot-scale
+// attempt died at 5,782 asks, 4.8x short, while these sites sit in the last 4% of
+// the file; that log's silence was worthless.)  Witness TU
+// `dcc/src/Transform/Sentient/Deuniform.cpp`; pin/cpp2rust md5
+// e2d09f4562c470f813b0fa142d373bfb.  The four asks, all `result: None`:
+//   2  void mlir::ValueRange::ValueRange(const mlir::ValueRange &)   <- NOT written, see below
+//   2  void mlir::ValueRange::ValueRange(llvm::ArrayRef<mlir::Value>)      -> f144
+//   5  void mlir::ValueRange::ValueRange(mlir::OperandRange)               -> f143
+//   6  void mlir::ValueRange::ValueRange(std::vector<mlir::Value> &)       -> f145
+// ⭐ THE LONG-PREDICTED KEY (`ArrayRef<mlir::Value>`) WAS RIGHT AND COVERS 2 OF 15
+// ASKS.  It is not the dominant spelling.  Same lesson as `optional::value_or`
+// (one apparent key, three real) and `pair` f20: a deduced/converting parameter is
+// part of the key, so "the missing overload" is usually several.
+//
+// ALL THREE ARGUMENT TYPES ARE ALREADY MODELLED, so none of these is a
+// missing-model refusal: `mlir::OperandRange` is t14 (src.cpp:1351),
+// `llvm::ArrayRef<T>` is t19, `std::vector<mlir::Value>` is rules/vector t1.  All
+// three, and the result t16, are the SAME Rust type `Vec<ir::Value>`, so every
+// body below is an identity or a copy and nothing new is claimed.
+//
+// ⚠️ ALIASING, stated not assumed -- the f142 licence verbatim, re-derived on
+// ValueRange.h:383-430: the entire public surface past the constructors is
+// `getTypes()`/`getType()`, BOTH `const`, over a read-only
+// `indexed_accessor_range_base`.  ValueRange declares NO MUTATING MEMBER, so the
+// owning-`Vec` model (t16) loses only aliasing that no mapped operation can
+// observe.  Contrast `mlir::MutableOperandRange`, REFUSED at src.cpp:252-271
+// precisely because it IS write-through.
+//
+// ⛔ DO NOT CONFUSE THIS WITH THE SETTLED `mlir::OperandRange` REFUSAL.  That one
+// is about OperandRange's OWN constructor (it declares none --
+// `using RangeBaseT::RangeBaseT;` -- its live fabricated spelling is a hybrid, and
+// its `iterator` parameter has no model).  Here OperandRange is only an ARGUMENT
+// type and t14 maps it.  Different row, not blocked.
+//
+// ⛔ THE COPY CONSTRUCTOR (`const mlir::ValueRange &`, 2 asks) IS DELIBERATELY NOT
+// WRITTEN.  A previous slot wrote exactly it as "f143", measured it, and found the
+// witness TU's fabricated `mlir_ValueRange::new_` count UNCHANGED at 7 -> 7; it
+// then correctly DELETED the key.  A recorded readback is not reachedness (the
+// `std::replace` precedent), and an unreached key is indistinguishable from a
+// missing one while making the class look handled -- which is how rules/support
+// came to carry six dead `llvm::FailureOr` keys.  So it stays out until someone
+// can show a DISAPPEARANCE.  (Unrelated to the OTHER "f143" in this file, at
+// src.cpp:1631: that paragraph refuses a `mlir::OperationState` constructor and
+// only names the index that was next free when it was written.)
+
+// f143 -- `ValueRange(OperandRange values)` (ValueRange.h:414), BY VALUE.  Both
+// sides are `Vec<ir::Value>` (t14 and t16), so the body is the identity, exactly
+// like f142.  5 of the 15 asks.
+mlir::ValueRange f143(mlir::OperandRange a0) {
+  return mlir::ValueRange(a0);
+}
+
+// f144 -- `ValueRange(ArrayRef<Value> values = {})` (ValueRange.h:413), BY VALUE.
+// ⛔ THE DEFAULT ARGUMENT IS NOT PART OF THE RECORDED SIGNATURE -- the recorder
+// writes it out at the call site, so a nullary variant would record as THIS SAME
+// key and a second entry would be a silent duplicate (the `substr` precedent, and
+// f142's own reasoning).  Written CONCRETE, not as `llvm::ArrayRef<T1>`: the ask
+// spells the instantiation, and t19 at `mlir::Value` is the same `Vec<ir::Value>`.
+mlir::ValueRange f144(llvm::ArrayRef<mlir::Value> a0) {
+  return mlir::ValueRange(a0);
+}
+
+// f145 -- the BIGGEST spelling (6 of 15 asks) and the only one whose argument
+// needed its own licence: `std::vector<mlir::Value> &`, a NON-CONST REFERENCE.
+//
+// ⭐ IT IS NOT A WRITE-THROUGH PARAMETER, AND THE HEADER IS WHY.  ValueRange
+// declares no `std::vector` constructor at all.  This spelling is the FORWARDING
+// TEMPLATE at ValueRange.h:397-401:
+//     template <typename Arg, typename = enable_if_t<
+//         is_constructible<ArrayRef<Value>, Arg>::value && !is_convertible<Arg, Value>::value>>
+//     ValueRange(Arg &&arg) : ValueRange(ArrayRef<Value>(std::forward<Arg>(arg))) {}
+// `Arg &&` deduces to `std::vector<Value> &` for a non-const LVALUE vector, which
+// is the ONLY reason the recorded key lacks a `const`.  The body forwards into
+// `ArrayRef<Value>(...)`, which reads `data()`/`size()` and nothing else, and the
+// constructed ValueRange then exposes only the two `const` members above.  So NO
+// WRITE CAN REACH THE CALLER'S VECTOR in C++ either, and there is no observer to
+// name: the copy differs from the original only in aliasing, the same loss f142
+// and f139-f141 already take.
+// ⚠️ THIS IS WHY IT IS NOT THE `string_view::front()` / `SMLoc::getPointer()`
+// shape.  Those were refused because a by-reference C++ result let the CALLER
+// write (or alias) through a by-value Rust receiver.  Here the reference is an
+// INPUT that is only read, and the deduced `&` is an artefact of forwarding.
+mlir::ValueRange f145(std::vector<mlir::Value> &a0) {
+  return mlir::ValueRange(a0);
 }
