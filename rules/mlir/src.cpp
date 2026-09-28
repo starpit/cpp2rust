@@ -447,7 +447,16 @@ class MemRefType {
 public:
   MemRefType();
 };
-class RankedTensorType {};
+// ⭐ UPDATE 2026-09-28 (mlir slot): `RankedTensorType` IS NOW A KEY IN ITS OWN
+// RIGHT -- t164, 15 queue rows (g2375 etc., `searched as: mlir::RankedTensorType`).
+// EXACTLY the t73/MemRefType move one paragraph up: the empty tag existed only so
+// t32's `TypedValue<mlir::RankedTensorType>` could be SPELLED, and a spelling is
+// not a key.  Its DEFAULT CONSTRUCTOR is declared here and keyed as f137, for the
+// f42 reason: a `using tN =` alone gives rc=0 and then E0433.
+class RankedTensorType {
+public:
+  RankedTensorType();
+};
 namespace ktdf {
 class TokenType {};
 class FifoSlotType {};
@@ -3580,3 +3589,125 @@ mlir::OptionalParseResult f135(llvm::ParseResult r) { return mlir::OptionalParse
 mlir::OptionalParseResult f136(const mlir::InFlightDiagnostic &d) {
   return mlir::OptionalParseResult(d);
 }
+
+// ============================================================================================
+// MEASUREMENT NOTE, 2026-09-28 -- t158 `mlir::affine::AffineForOp` AS A CONTAINER ELEMENT.
+// NO KEY IS ADDED OR CHANGED BY THIS BLOCK.  It is appended AFTER the 9-row refusal comment
+// block and AFTER t163 / f130-f136 (`mlir::OptionalParseResult`); NEITHER was reverted or
+// edited.
+//
+// FIRST-ABORT-RANKING.md row #3 flagged a contradiction: the `mlir::affine::AffineForOp` type
+// row was closed `done` (this file's `using t158 = mlir::affine::AffineForOp;`), yet 4 of the
+// 48 real bucket-B TUs -- 8%, joint-third on the whole B frontier -- still carried
+//     LLVM ERROR: unsupported unmapped type `mlir::affine::AffineForOp` has no model in
+//     types_, while mapping `llvm::SmallVector<mlir::affine::AffineForOp>`
+// (and the `std::map<const dsc2::BlockNode *, mlir::affine::AffineForOp>` variant).  The
+// survey correctly REFUSED to reopen the row on that evidence and asked for a HEAD-level
+// re-run first.  Done, and the answer is that the row was right:
+//
+//   binary  pin/cpp2rust (md5 33e811d189cf), rules  pin/ir.v16 with THIS module regenerated
+//   from the WORKING TREE (ir.v16 predates t158-t163, which is the whole explanation):
+//     dbo/src/Transforms/sdsc_bundle/LoopUnroll.cpp          B/0  ->  A rc=0  37,976 lines
+//     dsc-based-utils/DSC2ToDataflowIR/V3/SNTransferLowering.cpp
+//                                                            B/0  ->  A rc=0  65,706 lines
+//     .../SNComputeLowering.cpp      B -> B, abort text CHANGED, no longer mentions AffineForOp:
+//         `const dsc2::LoopNode *const` ... while mapping
+//         `std::pair<const dsc2::LoopNode *const, std::unordered_map<PrimaryDimTypes, int>>`
+//     .../SNControlFlowLowering.cpp  B -> B, abort text CHANGED, no longer mentions AffineForOp:
+//         structured binding / DecompositionDecl with 2 bindings [dim, kind]
+//
+// So `AffineForOp` fronts 0 of 48 B TUs at HEAD, down from 4.  The rows stay `done`.
+//
+// ⛔ THE STANDING LESSON, because this cost a survey slot a false contradiction: an abort of
+// the form "element E has no model, while mapping CONTAINER<E>" has TWO causes that read
+// identically, and only one of them is a bug in this file.
+//   (1) A SWALLOW BUG in a container key -- `GetTypeMapKey` (mapper.cpp:115) strips at `<`,
+//       so a short key and a longer instantiation share one bucket, and `matchTemplate`'s
+//       placeholder capture runs to the next SAME-DEPTH literal
+//       (`findNextLiteralSameDepth`, mapper.cpp:173), so a placeholder can capture
+//       `A, B` commas and all and the mapper then tries to map that comma-joined string as a
+//       type.  That is `9f7657f5` / `KtdpOps.cpp` / `DenseMapInfo<StringRef, void>`.
+//       ⭐ ITS SIGNATURE: the reported "type" is comma-joined or otherwise malformed, or the
+//       report names the CONTAINER rather than the element.
+//   (2) A STALE RULE-IR TREE.  The element key exists in `src.cpp` but not in the `ir.vN` the
+//       run used.  ⭐ ITS SIGNATURE: the reported element is a clean, well-formed, singular
+//       spelling that `grep` finds in this file.  That is this row.
+// `mlir::affine::AffineForOp` is arity 0 -- it has no `<`, so it CANNOT be swallowed and
+// cannot swallow -- which is by itself enough to rule out (1) before running anything.
+// Check the arity first; it is free.
+//
+// READBACK, whole-spelling, against the abort's own text: `ir_src.json` records
+// `"t158": "mlir::affine::AffineForOp"`, byte-identical to the abort's
+// `mlir::affine::AffineForOp`.  The key is LIVE, not recorded at a divergent spelling.
+// Swallow-safety: arity 0, so `GetTypeMapKey` buckets it at the whole spelling
+// `mlir::affine::AffineForOp`; nothing else in this module or any other shares that bucket
+// (it is the only key whose stripped form equals it), so `search()`'s longer-src tie-break at
+// mapper.cpp:430-437 is never consulted, and there is no placeholder to run past a comma.
+// It cannot match any other arity because it has no placeholder at all.
+//
+// REGRESSION LOCK: `/home/agent/work/probes/affineforop_container.cpp` exercises
+// `AffineForOp` in BOTH corpus container positions (`llvm::SmallVector<...>` and
+// `std::map<const BlockNode *, ...>`) with no `==`, no `!=`, no identity test and no member
+// call on any op handle, per t25.  WRITTEN, NOT RUN.
+// ============================================================================================
+
+// ============================================================================================
+// t164 / t165 / f137 / f138 -- `mlir::RankedTensorType` and `mlir::FunctionType`, the two
+// largest remaining open mlir clusters that are NOT sinks: 15 rows (g2375 ...) and 11 rows
+// (g1739 ...).  BOTH are mlir builtin TYPE VALUES, so they take the WIDENING that t41
+// (`ShapedType`), t42 (`TensorType`), t60 (`IndexType`) and t73 (`MemRefType`) already took:
+//   -> `dataflowir_gen::ir::Ty` (ir.rs:37), init = the empty-spelling `Ty::Opaque("")` NULL
+//      SENTINEL, and NO ACCESSOR MAPPED.
+//
+// ⭐ WHY THIS IS THE SAME BARGAIN AND NOT A NEW CLAIM.  `RankedTensorType` was ALREADY
+// widened once, one level up the interface: t42 maps `mlir::TensorType`, the type INTERFACE
+// over `RankedTensorType`/`UnrankedTensorType`, and t41 maps `ShapedType` above that.  So the
+// model that a ranked tensor is an `ir::Ty` is ALREADY committed to by this module; t164 only
+// lets the CONCRETE spelling reach it.  Refusing t164 while keeping t42 would be incoherent.
+//
+// ⛔ THE COST, RESTATED SO IT IS NOT LOST: `ir::Ty` has `Ty::Vector(Vec<i64>, Box<Ty>)` and
+// `Ty::MemRef(Vec<i64>, Box<Ty>)` but NO TENSOR VARIANT and NO FUNCTION VARIANT, so both land
+// in `Ty::Opaque(spelling)` (ir.rs:47) and their structure is recoverable only by reparsing
+// the spelling.  That is ACCEPTED here for the same reason t41/t42 accepted it, and the reason
+// is checkable rather than asserted: NO accessor is mapped, so every STRUCTURE QUERY still
+// aborts LOUDLY in the mapper instead of reading structure that is not there.  Specifically
+// NOT claimed, for either type: `getShape`, `getElementType`, `getRank`, `hasRank`,
+// `hasStaticShape`, `cloneWith`, `getNumInputs`, `getNumResults`, `getInput`, `getInputs`,
+// `getResult`, `getResults`, `clone`, `getContext`, and NOT the `::get(...)` FACTORIES
+// (`RankedTensorType::get`, `FunctionType::get`) -- which is what the corpus actually calls
+// most often (dbo/src/InitBin.cpp:152, dr5/.../CreateAdd.cpp:42, ...), so those sites keep
+// aborting loudly.  What the two keys buy is the SIGNATURE and the CONTAINER: a parameter
+// (`dbo/src/HostCompute.h:42  mlir::RankedTensorType flits`), a local
+// (`dbo/src/Pipeline/CorrectAtRuntime.cpp:281  const mlir::FunctionType type =`) and a
+// `cast<>`/`dyn_cast<>` template argument become EXPRESSIBLE.  The t40 `mlir::Pass` /
+// t43 `mlir::OpOperand` / t84 / t73 precedent: map the type, map no member.
+//
+// ⛔ NO `==`/`!=`, no identity test, no member -- the t25 prohibition.
+//
+// ⚠️ DESTRUCTOR GATE (the `mlir::OwningOpRef` / `mlir::InFlightDiagnostic` check that forbids
+// an opaque model): both are trivially destructible uniquer-pointer handles in this toolchain
+// -- `mlir/IR/BuiltinTypes.h` declares neither a user destructor nor any owned storage -- so
+// neither is the case where a destructor with observable effect forbids the handle model.
+//
+// ⭐ ARITY 0, CLEAN SINGULAR SPELLINGS: neither row can be a collapsed-template-argument
+// swallow, and neither spelling is served by an existing bucket (checked: `ir_src.json` at
+// pin/ir.v17 contains `mlir::RankedTensorType` ONLY inside t32's
+// `mlir::detail::TypedValue<mlir::RankedTensorType>`, and contains no `FunctionType` at all --
+// so these are genuinely-missing models, NOT the phantom class).
+namespace mlir {
+class FunctionType {
+public:
+  FunctionType();
+};
+} // namespace mlir
+
+using t164 = mlir::RankedTensorType;
+using t165 = mlir::FunctionType;
+
+// f137 / f138 -- the default constructors for t164 / t165, one per type key.  The f40-f45
+// reason verbatim: a `using tN =` maps the TYPE ONLY, the converter looks `void <T>::<T>()` up
+// as an ORDINARY EXPR RULE, and on a miss emits `<mangled type>::new()`, which does not exist
+// -- rc=0 and then `error[E0433]`.  Each body is the SAME null-handle sentinel as its type's
+// `init`, NOT a valid value.
+mlir::RankedTensorType f137() { return mlir::RankedTensorType(); }
+mlir::FunctionType f138() { return mlir::FunctionType(); }

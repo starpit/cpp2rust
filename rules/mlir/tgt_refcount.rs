@@ -1654,3 +1654,29 @@ unsafe fn f136(a0: &libcc2rs::InFlightDiagnostic) -> Option<bool> {
     let _ = a0;
     Some(false)
 }
+
+// t164 `mlir::RankedTensorType` -> `ir::Ty` (ir.rs:37).  A WIDENING, the same one t41,
+//   t42, t60 and t73 make; see src.cpp for why t42 (`TensorType`, the interface OVER this
+//   type) already committed to this model.  ⛔ `Ty` has NO TENSOR VARIANT, so this lands in
+//   `Ty::Opaque(spelling)` and the shape is recoverable only by reparsing.  The init is the
+//   empty-spelling null sentinel, NOT a real type.  NO accessor is mapped.
+fn t164() -> dataflowir_gen::ir::Ty {
+    dataflowir_gen::ir::Ty::Opaque(String::new())
+}
+
+// t165 `mlir::FunctionType` -> `ir::Ty` (ir.rs:37).  A WIDENING, the same one t164 makes.
+//   ⛔ `Ty` has NO FUNCTION VARIANT, so the input/result type lists are NOT carried; they
+//   land in `Ty::Opaque(spelling)`.  NO accessor and NOT `FunctionType::get` are mapped, so
+//   every structure query and every construction still aborts LOUDLY.
+fn t165() -> dataflowir_gen::ir::Ty {
+    dataflowir_gen::ir::Ty::Opaque(String::new())
+}
+
+// f137 / f138 -- the default constructors for t164 / t165.  Same null-handle sentinel as
+// each type's `init` above, for the f40-f45 / f42 reason (type key alone -> E0433).
+fn f137() -> dataflowir_gen::ir::Ty {
+    dataflowir_gen::ir::Ty::Opaque(String::new())
+}
+fn f138() -> dataflowir_gen::ir::Ty {
+    dataflowir_gen::ir::Ty::Opaque(String::new())
+}
