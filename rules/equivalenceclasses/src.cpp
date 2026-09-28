@@ -75,7 +75,10 @@ public:
   //   note: no Rust type text for `llvm::EquivalenceClasses<int>::ECValue`
   //   (Record); emitting the undefined placeholder
   //   `Cpp2RustUnmapped_llvm_EquivalenceClasses_int__ECValue`
-  class ECValue {};
+  class ECValue {
+  public:
+    bool isLeader() const;  // header:88
+  };
 
   // Restated from EquivalenceClasses.h:171 -- `class member_iterator`, also a
   // nested CLASS. Searched spelling, verbatim from the same note stream:
@@ -84,6 +87,17 @@ public:
   // GraphColoring.hpp:71-73 names it in three PARAMETERS of doesEdgeExist, which
   // is why it cannot be an anonymous `impl Iterator` on the Rust side.
   class member_iterator {};
+
+  // MEMBERS THE CORPUS CALLS, restated from the header so this file typechecks and
+  // so each signature STRING matches LLVM exactly.  See the f-key block below.
+  const ECValue &insert(const ElemTy &Data);          // header:201
+  bool empty() const;                                 // header:150
+  const ElemTy &getLeaderValue(const ElemTy &V) const;// header:212
+  member_iterator member_begin(const ECValue &ECV) const; // header:225
+  member_iterator member_end() const;                 // header:231
+  member_iterator findLeader(const ECValue &ECV) const;   // header:239
+  member_iterator findLeader(const ElemTy &V) const;      // header:243
+  member_iterator unionSets(member_iterator L1, member_iterator L2); // header:290
 };
 
 } // namespace llvm
@@ -100,3 +114,150 @@ template <typename T1>
 using t2 = typename llvm::EquivalenceClasses<T1>::member_iterator;
 template <typename T1>
 using t3 = typename llvm::EquivalenceClasses<T1>::ECValue;
+
+// ============================================================================
+// MEMBER (FUNCTION) KEYS -- ADDED 2026-09-28.  THIS MODULE HAD 3 TYPE KEYS AND
+// ZERO FUNCTION KEYS, WHICH IS A SILENT-WRONGNESS SHAPE, AND IT WAS MEASURED AS
+// SUCH RATHER THAN ASSUMED.
+//
+// Witness: dcc/src/Transform/Sentient/Analyses/GraphColoring.cpp --
+// bucket A, rc=0, 28,911 emitted lines (pin e2d09f45, rule tree cloned from
+// pin/ir.v27).  The emitted .rs contained CALLS TO METHODS THAT EXIST NOWHERE,
+// at rc=0, with NO placeholder token, so pin/no-placeholders.sh stayed clean and
+// no bucket census could see them:
+//   .findLeader_pconsti32_const(...)                                     x3
+//   .findLeader_pconstlibcc2rsECValuei32_const(...)                      x1
+//   .unionSets_libcc2rsMemberIteri32_libcc2rsMemberIteri32(_L1, _L2)     x1
+//   .member_begin(...)  x3   .member_end()  x1   .getLeaderValue(...) x1
+//   .isLeader()         x2   .insert(...)   x1
+// The `_pconsti32_const` suffixes are the converter's overload mangling: with no
+// rule it emits the C++ name TEXTUALLY against the mapped receiver type, i.e.
+// against `libcc2rs::EquivalenceClasses<i32>`, which has `find_leader` and
+// `union_sets_iters` and has never had any of the names above.
+//
+// WHY THESE ARE LANDABLE AND NOT A REFERENCE/ITERATOR-IDENTITY REFUSAL.
+// The refusal criterion for this type is that a member handing out a REFERENCE
+// or an ITERATOR under a by-value receiver dangles silently (the ground on which
+// string_view::front() and SMLoc::getPointer() were both refused).  Every member
+// keyed below returns BY VALUE:
+//   * findLeader / member_begin / member_end / unionSets return
+//     `libcc2rs::MemberIter<T>`, which is a SNAPSHOT (`chain: Vec<T>, idx`),
+//     not a pointer into the forest (iterators.rs:1348-1352);
+//   * getLeaderValue returns `T` by value (a `.clone()` out of the BTreeMap);
+//   * isLeader returns `bool`;
+//   * insert returns `ECValue<T>` by value.
+// LEADER IDENTITY is also preserved, which is the other refusal ground: LLVM's
+// unionSets keeps L1 as leader and splices L2's chain onto its end
+// (EquivalenceClasses.h:295-312), and `union_leaders` reproduces exactly that
+// (iterators.rs:1596-1611), so `updated_leader == it_A` at GraphColoring.cpp:679
+// -- the test by which the caller learns which class survived -- reads the same
+// answer.  MemberIter's PartialEq compares the CURRENT ELEMENT, and elements are
+// unique in the forest, so element equality == C++ node-address equality.
+//
+// ONE HONEST CAVEAT ON insert (f8).  C++ returns `const ECValue &`, a reference
+// INTO the structure whose isLeader() bit changes on a later unionSets; libcc2rs
+// returns a snapshot, so a caller that held the result across a mutation would
+// read a STALE is_leader().  The corpus's only call site discards the result
+// (GraphColoring.cpp:624 `this_ec.insert(baseNodeIdx);`), and a by-value return
+// cannot dangle -- which is the property that makes a key safe here.  The
+// observer to watch for is `const auto &E = EC.insert(x); EC.unionSets(...);
+// E.isLeader()`.  It does not exist in this corpus.
+//
+// DELIBERATELY NOT KEYED, WITH THE OBSERVER NAMED IN EACH CASE:
+//  * begin() / end().  REFUSED, and this is a TYPE mismatch, not a naming gap.
+//    LLVM's `iterator` is `SmallVector<const ECValue *>::const_iterator`, i.e. a
+//    RAW POINTER, so the converter maps the loop variable as
+//    `*const *const libcc2rs::ECValue<i32>` (emitted at GraphColoring .rs:27660,
+//    28390).  libcc2rs's begin()/end() return `RangeIter<ECValue<T>>`, which is
+//    not that type, so keying them would swap a compile error for a type error
+//    at the ASSIGNMENT and change what `*I` means.  Honest fixes are a model for
+//    `EquivalenceClasses<T>::iterator` or a pointer-yielding begin(); both are
+//    libcc2rs changes and libcc2rs is not this slot's to touch.  OBSERVER: the
+//    `for (I = EC.begin(), E = EC.end(); I != E; ++I)` walks at :348 and :559.
+//  * ++MI / *MI on member_iterator.  Not keyed here: these are EXPR keys on the
+//    nested iterator type (prefix_inc / at), the converter emits infix forms, and
+//    a `++` written infix in a rule body records NOTHING.  They belong with the
+//    begin()/end() work, not ahead of it.
+//  * erase(), getNumClasses(), isEquivalent(), getOrInsertLeaderValue(): no
+//    corpus caller measured, and a key nobody reaches is a key nobody checked.
+
+// f1 -- EquivalenceClasses.h:243 `member_iterator findLeader(const ElemTy &V) const`.
+// GraphColoring.cpp:350, :565, and the emitted mangling `findLeader_pconsti32_const`.
+template <typename T1>
+typename llvm::EquivalenceClasses<T1>::member_iterator
+f1(const llvm::EquivalenceClasses<T1> &ec, const T1 &v) {
+  return ec.findLeader(v);
+}
+
+// f2 -- EquivalenceClasses.h:239 `member_iterator findLeader(const ECValue &ECV) const`,
+// the ECValue overload.  GraphColoring.cpp:562; emitted mangling
+// `findLeader_pconstlibcc2rsECValuei32_const`.  Rust cannot overload, so this is a
+// SEPARATE key onto the separately-named `find_leader_of`.
+template <typename T1>
+typename llvm::EquivalenceClasses<T1>::member_iterator
+f2(const llvm::EquivalenceClasses<T1> &ec,
+   const typename llvm::EquivalenceClasses<T1>::ECValue &ecv) {
+  return ec.findLeader(ecv);
+}
+
+// f3 -- EquivalenceClasses.h:290 `member_iterator unionSets(member_iterator L1,
+// member_iterator L2)`, the iterator overload GraphColoring.cpp:676 calls.
+// NON-CONST receiver: it mutates the forest.
+template <typename T1>
+typename llvm::EquivalenceClasses<T1>::member_iterator
+f3(llvm::EquivalenceClasses<T1> &ec,
+   typename llvm::EquivalenceClasses<T1>::member_iterator l1,
+   typename llvm::EquivalenceClasses<T1>::member_iterator l2) {
+  return ec.unionSets(l1, l2);
+}
+
+// f4 -- EquivalenceClasses.h:225 `member_iterator member_begin(const ECValue &ECV) const`.
+// GraphColoring.cpp:353, :565, :577.
+template <typename T1>
+typename llvm::EquivalenceClasses<T1>::member_iterator
+f4(const llvm::EquivalenceClasses<T1> &ec,
+   const typename llvm::EquivalenceClasses<T1>::ECValue &ecv) {
+  return ec.member_begin(ecv);
+}
+
+// f5 -- EquivalenceClasses.h:231 `member_iterator member_end() const`.  The C++
+// body is `member_iterator(nullptr)`, i.e. it needs no receiver state at all, so
+// the target may equally spell it as the Default; it is keyed on the receiver
+// form because that is how the corpus writes it (GraphColoring.cpp:577).
+template <typename T1>
+typename llvm::EquivalenceClasses<T1>::member_iterator
+f5(const llvm::EquivalenceClasses<T1> &ec) {
+  return ec.member_end();
+}
+
+// f6 -- EquivalenceClasses.h:212 `const ElemTy &getLeaderValue(const ElemTy &V) const`.
+// GraphColoring.cpp:571.  C++ returns a const reference; the libcc2rs member returns
+// T BY VALUE (a clone out of the BTreeMap), which is what makes this safe under
+// refcount -- a reference into a union-find forest is invalidated by unionSets.
+template <typename T1>
+T1 f6(const llvm::EquivalenceClasses<T1> &ec, const T1 &v) {
+  return ec.getLeaderValue(v);
+}
+
+// f7 -- EquivalenceClasses.h:88 `bool isLeader() const`, a member of the NESTED
+// ECValue (keyed as t3).  GraphColoring.cpp:349, :560 spell it `(*I)->isLeader()`;
+// it is the filter that turns all-entries iteration into leader iteration.
+template <typename T1>
+bool f7(const typename llvm::EquivalenceClasses<T1>::ECValue &ecv) {
+  return ecv.isLeader();
+}
+
+// f8 -- EquivalenceClasses.h:201 `const ECValue &insert(const ElemTy &Data)`.
+// GraphColoring.cpp:624.  See the insert caveat above: snapshot, not a reference.
+template <typename T1>
+typename llvm::EquivalenceClasses<T1>::ECValue
+f8(llvm::EquivalenceClasses<T1> &ec, const T1 &v) {
+  return ec.insert(v);
+}
+
+// f9 -- EquivalenceClasses.h:150 `bool empty() const`.  GraphColoring.cpp:553
+// `ec.second.empty()`.
+template <typename T1>
+bool f9(const llvm::EquivalenceClasses<T1> &ec) {
+  return ec.empty();
+}

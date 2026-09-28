@@ -3576,6 +3576,13 @@ using t162 = mlir::arith::ConstantIndexOp;
 // REFUSED, WITH REASONS: the 9 trait-class type rows g081 g088 g096 g099 g102 g104 g107 g112
 // g125.  No key is written for any of them.  The deciding measurement, run 2026-09-28:
 //
+// ⛔ READ THE CORRECTION AT THE END OF THIS BLOCK BEFORE ACTING ON IT.  The `OneTypedResult`
+// third -- g081 / g096 / g112 -- IS OVERTURNED AND REOPENED: those rows are shipping FABRICATED
+// identifiers in rc=0 output (407 occurrences, 53 distinct spellings, 8 emitted .rs files), not
+// aborting, so the "dead key" conclusion below does not hold for them.  The other 6 rows
+// (g088 g099 g102 g104 g107 g125) have NOT been re-measured this way and their refusal stands
+// only as far as the checks below reach.
+//
 // (1) LOCATION CHECK over /home/agent/work/queue/samples/<id>.txt.  Every one of the 9 rows has
 //     exactly ONE distinct location, and it is the trait's OWN declaration inside the prebuilt
 //     LLVM include tree -- ZERO locations anywhere in repos/dt_src:
@@ -3602,6 +3609,67 @@ using t162 = mlir::arith::ConstantIndexOp;
 //     `DenseMapInfo` as "IS A TRAITS CLASS AND IS DELIBERATELY NOT MODELLED".  Tag/CRTP bases
 //     with no state; a Rust type for them would be an empty struct nothing can be done with, and
 //     a too-short key there swallows placeholders (the densemap note records that hazard).
+//
+// ⛔⛔ CORRECTION, 2026-09-28 (LATER THAN EVERYTHING ABOVE): THE `OneTypedResult` THIRD OF THIS
+// REFUSAL -- ROWS g081 / g096 / g112 -- IS WRONG, AND THOSE ROWS HAVE BEEN REOPENED.  The two
+// measurements in (1) and (2) above STILL HOLD and were independently re-verified: every row has
+// exactly one location (`mlir/IR/OpDefinition.h:702:9  class Impl`) and `rg -l OneTypedResult`
+// over `repos/dt_src` is ZERO files.  What does NOT follow is the conclusion "a `tN` would be a
+// DEAD key".  MEASURED CONTRADICTION: those rows did not abort, they FABRICATED, and the
+// fabricated identifiers are sitting in rc=0 OUTPUT RIGHT NOW.  Anchored to the STANDALONE
+// prefix (`(^|[^A-Za-z0-9_])Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_`, which is NOT the same
+// text as the substring inside the much longer `Cpp2RustUnmapped_mlir_Op_<Op>__<traitlist>_`
+// names of the separately-unkeyed `mlir::Op<...>` type -- counting them together measures two
+// defects at once), over the emitted corpus `/home/agent/work/verify0928/out`:
+//     8 emitted .rs files, 407 occurrences, 53 DISTINCT SPELLINGS.
+//   top files: hcc/.../DataflowToCore/VectorChainLowering.cpp   267
+//              dsc-based-utils/.../V3/SNTransferLowering.cpp      35
+//              dcc/src/Transform/Sentient/LexicalOrdering.cpp     32
+//              dsc-based-utils/PCFGToDataflowIR/PCFG2ToDataflowIR.cpp  21
+//   top spellings: `..._mlir_Type__Impl_mlir_arith_ConstantOp_` 114, `..._vector_ExtractOp_` 21,
+//              `..._arith_SelectOp_` 20, `..._sentient_ConstantOp_` 17, `..._arith_MulIOp_` 14.
+// EVERY occurrence is in CAST-TARGET (type) POSITION -- the implicit derived-to-base upcast of an
+// op to its trait base, e.g. `const_op as Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_...`.
+// ⭐ SO "NOTHING READS A MEMBER" MAKES A KEY HERE TRIVIAL, NOT DEAD: the site needs a NAME for the
+// cast target and NO MEMBER RULES AT ALL.  "Dead" was inferred from the member-read check alone
+// and never checked against the emitted corpus, which is the mistake to avoid repeating.
+// ⚠️ NOTE the outer `ResultType` varies -- `mlir::Type` (most), `mlir::VectorType`,
+// `mlir::IndexType` -- and the earlier size estimate of "~19 keys / 3 outer args" UNDERCOUNTS:
+// measured on the corpus above it is 53.
+//
+// WHAT A LANDING LOOKS LIKE, AND THE ONE TRAP THAT KILLS THE OBVIOUS VERSION.
+//   * MONOMORPHIC, one `using tN = mlir::OpTrait::OneTypedResult<RT>::Impl<mlir::X::YOp>;` per
+//     spelling.  SWALLOW-SAFETY: `GetTypeMapKey` (mapper.cpp:115) truncates at the first `<`, so
+//     every one of these lands in the bucket `mlir::OpTrait::OneTypedResult`, which is EMPTY
+//     today.  Fully concrete => placeholder arity 0 => `matchTemplate`'s capture
+//     (`findNextLiteralSameDepth`, :173) never runs, so the `DenseMapInfo<T1>`/`__wrap_iter<T1 *>`
+//     swallow cannot occur; and being pairwise distinguished by their own template arguments, a
+//     literal match selects exactly one and `search()`'s longer-src tie-break (:430-437) is never
+//     needed.  That matters, because a GENERIC `OneTypedResult<T1>::Impl<T2>` would be the SOLE
+//     candidate in that bucket, where the tie-break CANNOT protect it -- this is precisely the
+//     densemap failure, so DO NOT write the generic form.  Same discipline as t37-t39 / t166.
+//   * TARGET MODEL: `fmt::OpInst::new(<dataflowir_gen::ops::mlir_X_YOp as MlirOp>::DEF)`, i.e.
+//     the CONCRETE OP's OWN DEF -- exactly what t161/t162 already do (t162 maps
+//     `arith::ConstantIndexOp` onto `mlir_arith_ConstantOp`'s DEF).  Nothing new is claimed: the
+//     trait base of an op is that op.  `tgt_refcount.rs` needs an entry too or the loader aborts
+//     (rules/iostream t1), written as a plain `fn`, not `unsafe fn` (the t37-t39 / t166
+//     convention for a TYPE rule).
+//   * ⛔ DO NOT GENERATE ALL 53 BLIND -- MEASURED, 2026-09-28: TWO of the 53 ConcreteOps HAVE NO
+//     GENERATED DEF at all.  Checked with `rg "struct <op>\b"` against
+//     `repos/dt_src/cpp2rust-port/dataflowir-gen/target/debug/build/dataflowir-gen-*/out/
+//     dataflow_ods.rs`: `mlir_LLVM_UndefOp` -> 0 hits and `mlir_math_AbsIOp` -> 0 hits, while
+//     mlir_arith_ConstantOp / sentient_ConstantOp / vector_ExtractOp / arith_SelectOp /
+//     arith_MulIOp / vector_InsertOp / arith_CmpIOp / arith_AddIOp /
+//     dataflow_GetLogicalMemoryViewOp / vectorchain_ShuffleOp / uniform_DefImmutableMappingOp are
+//     all present.  A key naming an absent DEF records fine and passes the load smoke test, then
+//     fails at rustc -- so CHECK EVERY OP'S DEF FIRST and leave the ones without one LOUD (they
+//     are the `mlir::LLVM` / `mlir::math` dialects, which the .td set does not cover; that is a
+//     dataflowir-gen coverage question, not a rules one).
+//   * GATE: the ANCHORED standalone count above, BEFORE -> AFTER, on a witness that EMITS
+//     (bucket A rc=0).  `dcc/src/Transform/Sentient/LexicalOrdering.cpp` (32) is a good size;
+//     `hcc/.../VectorChainLowering.cpp` (267) is the big one.  ⚠️ `g172`'s own spelling
+//     (`IndexType` / `uniform::DefImmutableMappingOp`) occurs ONCE, so g172 is a POOR gate row.
+//     A recorded key that does not move that count is NOT REACHED and must be reported as such.
 //   g088 `mlir::detail::SymbolOpInterfaceTrait<ktdf_arch::DeviceOp>`
 //   g125 `mlir::detail::FunctionOpInterfaceTrait<func::FuncOp>`
 //     HANDLED INDIVIDUALLY, because these are `mlir::detail::` INTERFACE traits: they carry
