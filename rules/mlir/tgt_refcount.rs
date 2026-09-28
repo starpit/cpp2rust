@@ -2280,3 +2280,29 @@ fn t241() -> std::collections::HashSet<u32> {
 fn t242() -> std::collections::HashSet<u64> {
     std::collections::HashSet::new()
 }
+
+// t243-t246: llvm::ilist_iterator over mlir::Operation / mlir::Block.  See
+// src.cpp for the four spellings, why the IsReverse flag is two distinct keys,
+// and why the erase-during-walk question is settled in favour of this model.
+// The representation is a `Ptr<T>` INTO the Vec the container already is --
+// identical to t36 (`mlir::Operation *`) and to rules/list_iterator's
+// tgt_refcount t1/t2 against the same Vec representation, so nothing new is
+// introduced here.  The init is the NULL POINTER, the same faithful default t36
+// gives: an iterator with no position traps on use instead of pretending to
+// point at an operation.  IsReverse does not change the REPRESENTATION, only
+// the direction a (deliberately unkeyed) operator++ would step.
+fn t243() -> libcc2rs::Ptr<dataflowir_gen::fmt::OpInst> {
+    libcc2rs::Ptr::<dataflowir_gen::fmt::OpInst>::null()
+}
+
+fn t244() -> libcc2rs::Ptr<dataflowir_gen::fmt::OpInst> {
+    libcc2rs::Ptr::<dataflowir_gen::fmt::OpInst>::null()
+}
+
+fn t245() -> libcc2rs::Ptr<dataflowir_gen::fmt::Block> {
+    libcc2rs::Ptr::<dataflowir_gen::fmt::Block>::null()
+}
+
+fn t246() -> libcc2rs::Ptr<dataflowir_gen::fmt::Block> {
+    libcc2rs::Ptr::<dataflowir_gen::fmt::Block>::null()
+}

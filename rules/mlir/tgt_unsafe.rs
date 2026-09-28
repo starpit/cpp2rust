@@ -2399,3 +2399,28 @@ fn t241() -> std::collections::HashSet<u32> {
 fn t242() -> std::collections::HashSet<u64> {
     std::collections::HashSet::new()
 }
+
+// t243-t246: llvm::ilist_iterator over mlir::Operation / mlir::Block.  See
+// src.cpp for the four spellings, why the IsReverse flag is two distinct keys,
+// and why the erase-during-walk question is settled in favour of this model.
+// The representation is a raw element pointer INTO the Vec the container
+// already is -- identical to t36 (`mlir::Operation *`) and to
+// rules/list_iterator's unsafe iterator against the same Vec representation.
+// The init is the NULL POINTER, the same faithful default t36 gives.
+// IsReverse does not change the REPRESENTATION, only the direction a
+// (deliberately unkeyed) operator++ would step.
+fn t243() -> *mut dataflowir_gen::fmt::OpInst {
+    ::std::ptr::null_mut()
+}
+
+fn t244() -> *mut dataflowir_gen::fmt::OpInst {
+    ::std::ptr::null_mut()
+}
+
+fn t245() -> *mut dataflowir_gen::fmt::Block {
+    ::std::ptr::null_mut()
+}
+
+fn t246() -> *mut dataflowir_gen::fmt::Block {
+    ::std::ptr::null_mut()
+}

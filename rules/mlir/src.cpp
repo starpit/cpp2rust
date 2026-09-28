@@ -4762,3 +4762,74 @@ using t242 = llvm::detail::DenseSetImpl<
 //        `Hash + Eq`, and `std::collections::HashSet` does not compile without
 //        both.  That check is a `dataflowir-gen` read, not a rules read, and it
 //        is the next step for these five.
+
+// ---------------------------------------------------------------------------
+// llvm::ilist_iterator over mlir::Operation and mlir::Block -- t243..t246.
+//
+// THE ROWS.  34 queue rows (g244, g324, g1433-g1464) are all TYPE rows and all
+// four spellings below; taken untruncated from queue/samples/, "searched as"
+// and "from decl" are IDENTICAL for every one, so there is no dead-duplicate.
+// All four are fully concrete (arity 0, no T<digits>), so matchTemplate's
+// placeholder capture never runs and a swallow is ruled out by construction.
+//
+// THE DECLARATIONS ARE LOCAL, and NO TEMPLATE PARAMETER CARRIES A DEFAULT.
+// Reaching real llvm/ADT/ilist_iterator.h would need an absolute -I into the
+// target's LLVM tree (the reason rules/raw_ostream, rules/stringref and
+// rules/ilist all give at length).  The parameter KINDS are copied verbatim
+// from LLVM-22.1.3's headers so the printer renders the same spelling:
+//   ilist_node_options.h:156  template <class T, bool, bool, class TagT, bool,
+//                                       class ParentTy> struct node_options
+//   ilist_iterator.h:80       template <class OptionsT, bool IsReverse,
+//                                       bool IsConst> class ilist_iterator
+// Defaults are deliberately omitted: the samples show the printer emitting all
+// three ilist_iterator arguments and all six node_options arguments, so a
+// defaulted-and-elided parameter would produce a spelling that never matches.
+// `IsReverse` is the rbegin/rend flag -- true and false are DISTINCT keys, not
+// one key with an elided default.
+//
+// MODEL: a Ptr<OpInst> / Ptr<Block> INTO the Vec the container already is, i.e.
+// exactly rules/vector's and rules/list_iterator's iterator representation.
+// THE ERASE-DURING-WALK QUESTION IS SETTLED IN FAVOUR OF THIS: every mutating
+// pass copies the ops into a SmallVector BEFORE mutating, and
+// EnhancedDeadVariableElimination.cpp:441-445 says why in a comment ("some of
+// the operations are going to be deleted and operating directly over
+// getOperations results in segfaults"); LightweightSimplification.cpp:269-310
+// is the same shape -- its rbegin/rend ilist walk only does
+// ops_list.push_back(&*I) and every erase() happens in a LATER loop over
+// ops_list.  That check was sampled (5 of ~8 TUs), not exhaustive: treat it as
+// strong but not closed.  (LexicalOrdering.cpp:186's `(*I++)->moveBefore(...)`
+// is NOT a counter-witness -- that I is a SmallVector<Operation*> reverse
+// iterator, not an ilist_iterator.)
+//
+// NO MEMBER IS KEYED HERE, matching the rest of this module: all 34 rows are
+// type rows, and a member reached on one of these iterators must keep ABORTING
+// LOUDLY rather than get a body guessed against an unverified model.
+namespace llvm {
+namespace ilist_detail {
+template <class T, bool EnableSentinelTracking, bool IsSentinelTrackingExplicit,
+          class TagT, bool HasIteratorBits, class ParentTy>
+struct node_options;
+} // namespace ilist_detail
+template <class OptionsT, bool IsReverse, bool IsConst> class ilist_iterator;
+} // namespace llvm
+
+// t243 -- Cpp2RustUnmapped_llvm_ilist_iterator_..._mlir_Operation_..._false_false_, 24 rows.
+using t243 = llvm::ilist_iterator<
+    llvm::ilist_detail::node_options<mlir::Operation, false, false, void, false,
+                                     void>,
+    false, false>;
+// t244 -- same, IsReverse=true (rbegin/rend), 5 rows.
+using t244 = llvm::ilist_iterator<
+    llvm::ilist_detail::node_options<mlir::Operation, false, false, void, false,
+                                     void>,
+    true, false>;
+// t245 -- mlir::Block, IsReverse=false, 4 rows.
+using t245 = llvm::ilist_iterator<
+    llvm::ilist_detail::node_options<mlir::Block, false, false, void, false,
+                                     void>,
+    false, false>;
+// t246 -- mlir::Block, IsReverse=true, 1 row.
+using t246 = llvm::ilist_iterator<
+    llvm::ilist_detail::node_options<mlir::Block, false, false, void, false,
+                                     void>,
+    true, false>;
