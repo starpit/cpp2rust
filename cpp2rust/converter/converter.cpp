@@ -16,8 +16,10 @@
 #include <llvm/Support/ErrorHandling.h>
 
 #include <algorithm>
+#include <cctype>
 #include <format>
 #include <ranges>
+#include <string_view>
 #include <utility>
 
 #include "compiler.h"
@@ -3345,6 +3347,10 @@ bool Converter::Convert(clang::Expr *expr,
     }
   }
   if (needs_conversion) {
+    // The PushParen above wraps operand AND cast together -- `( x as T )` --
+    // so it does NOT save a block-form operand from the `as`. `before` is
+    // exactly where this operand's text starts, so reuse it.
+    ParenthesizeBlockCastOperand(before);
     ConvertCast(*implicit_convert_to);
     computed_expr_type_ = ComputedExprType::FreshValue;
   }
@@ -6881,11 +6887,21 @@ void Converter::ConvertVarInit(clang::QualType qual_type, clang::Expr *expr) {
     if (auto *cond = clang::dyn_cast<clang::ConditionalOperator>(
             expr->IgnoreParenImpCasts());
         cond && cond->isLValue()) {
+      // ⛔ THE PARENTHESES ARE LOAD-BEARING, NOT COSMETIC. `Convert(cond)` here
+      // always emits an `if`/`else` BLOCK, and the `as` two lines down cannot
+      // take a block as its left operand -- see
+      // ParenthesizeBlockCastOperand(). Measured 2026-09-28: this exact site
+      // was the ONLY defect in
+      // dcc/src/Transform/Sentient/{AddressPinningAndToggle,
+      // RegisterTypeAssignment}.cpp, 2 parse errors each, and both TUs were
+      // otherwise complete bucket-A output failing solely on rustfmt (rc=1).
+      const size_t cond_start = rs_code_->size();
       {
         PushExprKind push(*this, ExprKind::LValue);
         PushInitType init_type(*this, qual_type);
         Convert(cond);
       }
+      ParenthesizeBlockCastOperand(cond_start);
       StrCat(keyword::kAs);
       Convert(qual_type);
       return;
@@ -7717,6 +7733,50 @@ void Converter::ConvertDeref(clang::Expr *expr) {
 }
 
 void Converter::ConvertArrow(clang::Expr *expr) { ConvertDeref(expr); }
+
+// See the header for WHY this is mandatory and why dropping the cast instead
+// would be silently wrong.
+void Converter::ParenthesizeBlockCastOperand(size_t operand_start) {
+  if (rs_code_ == nullptr || operand_start >= rs_code_->size()) {
+    return;
+  }
+  std::string_view tail(*rs_code_);
+  tail.remove_prefix(operand_start);
+  while (!tail.empty() &&
+         std::isspace(static_cast<unsigned char>(tail.front()))) {
+    tail.remove_prefix(1);
+  }
+  if (tail.empty()) {
+    return;
+  }
+  // Every Rust expression form that is a BLOCK, i.e. whose textual extent ends
+  // at a `}` and which therefore cannot be an `as` operand unparenthesised.
+  // A bare `{` is included: `ConvertAssignment` and the ctor-argument emitter
+  // both wrap their payload in one.
+  static constexpr std::string_view kBlockStarters[] = {
+      "if", "match", "unsafe", "loop", "while", "for", "{"};
+  bool starts_block = false;
+  for (std::string_view kw : kBlockStarters) {
+    if (!tail.starts_with(kw)) {
+      continue;
+    }
+    if (kw == "{") {
+      starts_block = true;
+      break;
+    }
+    // Only a whole keyword introduces a block; `iffy_name` and `formula` must
+    // not be mistaken for one.
+    const char after = tail.size() > kw.size() ? tail[kw.size()] : '\0';
+    starts_block = !(std::isalnum(static_cast<unsigned char>(after)) ||
+                     after == '_' || after == ':');
+    break;
+  }
+  if (!starts_block) {
+    return;
+  }
+  rs_code_->insert(operand_start, "(");
+  StrCat(token::kCloseParen);
+}
 
 void Converter::ConvertCast(clang::QualType qual_type, int line) {
   log() << "[ConvertCast] Called from line " << line << '\n';

@@ -792,6 +792,28 @@ protected:
   virtual void ConvertCast(clang::QualType qual_type,
                            int line = __builtin_LINE());
 
+  // ⛔ RUST'S `as` REFUSES A BLOCK EXPRESSION AS ITS LEFT OPERAND.
+  // `if c { &mut *x } else { &mut *y } as *mut ()` is a PARSE error --
+  //   error: expected expression, found `as`
+  //   help: parentheses are required to parse this as an expression
+  // -- because a block-form expression in statement-ish position terminates at
+  // its closing `}` and `as` then has nothing to its left. The converter emits
+  // EVERY C++ conditional operator as an `if`/`else` BLOCK
+  // (VisitConditionalOperator), so any path that appends a cast to a converted
+  // sub-expression can produce this, and it is invisible to a placeholder
+  // census: the file emits, rc=1 comes only from `failed to run rustfmt`, and
+  // the line count looks healthy.
+  //
+  // `operand_start` is the offset in the CURRENT `rs_code_` buffer at which the
+  // cast's operand began. If the text emitted from there starts a block, wrap
+  // it in parentheses retroactively -- the operand text is already in a plain
+  // `std::string`, so the insert is exact and needs no re-emission.
+  //
+  // ⛔ THE FIX IS THE PARENTHESES, NEVER DROPPING THE CAST: a pointer coercion
+  // that disappears is a SILENT TYPE CHANGE, which is strictly worse than a
+  // parse error because nothing downstream reports it.
+  void ParenthesizeBlockCastOperand(size_t operand_start);
+
   // `hoisted_range_name`, when non-empty, names a local the caller has already
   // bound the range init to; the range init is then NOT re-emitted here. See
   // the hoist comment on VisitCXXForRangeStmtIndexBased.
