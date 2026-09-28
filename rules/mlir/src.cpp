@@ -81,6 +81,24 @@ template <typename T> class ArrayRef;
 // rules/stringref.  ⛔ Do NOT add `using tN = llvm::APInt` here: that would be a
 // DUPLICATE key against rules/apint t2.
 class APInt {};
+// ⭐ AND `StringRef` / `Twine`, FORWARD ONLY, for the f400-f406 row: the
+// `mlir::Builder` attribute factory (`class Builder` at :978, inside `namespace
+// mlir`) declares `getNamedAttr(StringRef, Attribute)` and
+// `getStringAttr(const Twine &)` with the REAL parameter types from
+// `mlir/IR/Builders.h`, and the real `class StringRef {}` / `class Twine {}`
+// definitions in this file do not open until :1242/:1255 -- i.e. AFTER
+// `namespace mlir` closes.  A function DECLARATION may name an incomplete
+// parameter type, so forward declarations are enough here; the f400-f406
+// DEFINITIONS sit at the end of the file where both are complete.  ⛔ The
+// parameter types must be the header's own (`StringRef`, `const Twine &`) and
+// not a convenient substitute: the recorded src key carries them, so keying
+// `getStringAttr(StringRef)` against a corpus call that resolves to
+// `getStringAttr(const Twine &)` is a DEAD key -- silently, at rc=0.
+// They declare no member and no `using tN =` here, so they map nothing;
+// rules/stringref t1 and rules/twine t1 own them (both `Vec<libc::c_char>` in
+// the unsafe overlay, `Vec<u8>` in the refcount one).
+class StringRef;
+class Twine;
 } // namespace llvm
 
 namespace mlir {
@@ -978,6 +996,40 @@ public:
 class Builder {
 public:
   Location getUnknownLoc();
+  // ⭐ THE ATTRIBUTE/TYPE FACTORY HALF OF `mlir::Builder` (Builders.h:53-220),
+  // added 2026-09-28 for f400-f406.  `dataflowir-gen` commit 2f78cb6 built the
+  // model these name (`src/build.rs:488-561`, `pub struct Builder` with
+  // `get_named_attr` / `get_dictionary_attr` / `get_bool_attr` /
+  // `get_string_attr` / `get_integer_attr` / `get_integer_type` /
+  // `get_str_array_attr` / `get_i64_array_attr`, all `&self`), which VOIDS the
+  // refusal recorded at `using t440 =` below -- that refusal's stated reason was
+  // "build.rs models only the INSERTION half", and it now models both.
+  //
+  // ⭐ WHY THEY GO HERE AND NOT ON `OpBuilder`.  Every one of the 148 corpus
+  // sites is `builder.getX(...)` / `odsBuilder.getX(...)` on an `OpBuilder` or
+  // `ImplicitLocOpBuilder` receiver, and in real MLIR all of them RESOLVE to
+  // `mlir::Builder::getX` through `class OpBuilder : public Builder`.  Declaring
+  // them on the BASE reproduces that resolution exactly, so whether the
+  // converter keys on the receiver's static type or on the declaring class, this
+  // rule and the corpus site compute the SAME key -- and ONE set of keys covers
+  // BOTH receivers instead of two near-duplicate sets.  (`OpBuilder` is given
+  // its `: public Builder` base at :1019 for this reason; before this row it had
+  // no base at all, which is why the member census found these 148 unmapped.)
+  //
+  // ⛔ `getIntegerType` IS DELIBERATELY ABSENT.  The model has
+  // `get_integer_type(width: u32) -> ir::Ty`, but C++ returns
+  // `mlir::IntegerType`, which is declared at :790 with NO `using tN =` -- it is
+  // UNMAPPED.  A key would have to claim a target type the module does not
+  // define.  1 site, LEFT LOUD.  Its two-argument sibling
+  // `getIntegerType(width, isSigned)` is absent from the model on purpose
+  // (`ir::Ty` cannot carry signedness, so `si32` would print `i32`).
+  NamedAttribute getNamedAttr(llvm::StringRef name, Attribute val);
+  DictionaryAttr getDictionaryAttr(llvm::ArrayRef<NamedAttribute> value);
+  BoolAttr getBoolAttr(bool value);
+  StringAttr getStringAttr(const llvm::Twine &bytes);
+  IntegerAttr getIntegerAttr(Type type, int64_t value);
+  ArrayAttr getI64ArrayAttr(llvm::ArrayRef<int64_t> values);
+  ArrayAttr getStrArrayAttr(llvm::ArrayRef<llvm::StringRef> values);
 };
 
 // `mlir::ModuleOp` -- BuiltinOps.h.inc:199, reached as the RETURN type of
@@ -1016,7 +1068,14 @@ class PassManager {};
 // itself is NOT mapped (no `using tN =` names it) -- a previous slot landed
 // `IROperandBase` in `llvm::detail` by reopening the wrong `detail`, and this is
 // the same hazard one level down: get the ENCLOSER wrong and the key is dead.
-class OpBuilder {
+// ⭐ `: public Builder` ADDED 2026-09-28 for the f400-f406 row.  Real MLIR is
+// `class OpBuilder : public Builder` (Builders.h:212), so this makes the rule
+// source's inheritance match the header it is keying against; without it the
+// f400-f406 bodies do not compile (`no member named 'getNamedAttr'`), which is a
+// regen failure rather than a converter gap.  t440's key is unaffected: it is
+// ARITY 0, FULLY CONCRETE, so the key is the bare name `mlir::OpBuilder` and a
+// base class does not enter it.
+class OpBuilder : public Builder {
 public:
   struct Listener {};
 };
@@ -6149,3 +6208,77 @@ using t542 = mlir::PatternRewriter;
 
 // t543 -- 18 asks; recorded key `mlir::IRRewriter`.
 using t543 = mlir::IRRewriter;
+// ===========================================================================
+// f400-f406 -- THE `mlir::Builder` ATTRIBUTE FACTORY, 148 SITES.
+//
+// ⭐ THIS IS THE ROW t440/t441 NAMED AND DELIBERATELY LEFT OUT.  Its refusal was
+// "`build.rs` models only the INSERTION half [...] keying them would name
+// functions that do not exist, trading 148 loud failures for 148 silent ones."
+// `dataflowir-gen` commit 2f78cb6 built the factory half (`src/build.rs:488-561`,
+// `pub struct Builder` + eight `&self` methods, re-exported at the crate root),
+// so the reason no longer holds.  Each name below was CHECKED against that file,
+// not against the C++ header, because an unmapped member does NOT abort -- the
+// converter emits the call TEXTUALLY at rc=0 with no placeholder token.
+//
+// ⭐ REACHABILITY: `OpBuilder` has a `base: Builder` field and
+// `impl Deref for OpBuilder { Target = Builder }`, and `ImplicitLocOpBuilder`
+// Derefs to `OpBuilder`, so all eight resolve on a t440/t441 receiver through the
+// Deref chain with no delegating method.
+//
+// ⭐ THE RECEIVER IS `mlir::OpBuilder &`, NOT `mlir::Builder &`.  All 148 sites
+// are `builder.getX(...)` / `odsBuilder.getX(...)` -- the census measured
+// `<recv>::[A-Za-z_0-9]*` = 0 for both builder types, so NOTHING is reached by
+// qualification -- and the declaring variables are t440/t441-typed.  `mlir::Builder`
+// itself is t59 -> `()`, so a `mlir::Builder &` receiver would type `a0` as `&()`
+// (see f124, which is exactly that) and no factory method exists on `()`.
+//
+// ⛔ ONE NAME IS LEFT OUT ON PURPOSE: `getIntegerType` (1 site).  The model has
+// `get_integer_type(width: u32) -> ir::Ty`, but C++ returns `mlir::IntegerType`,
+// declared at :790 with NO `using tN =` -- UNMAPPED.  A key would have to name a
+// target type this module does not define.  LEFT LOUD.  `createOrFold` is absent
+// from the model on purpose and the corpus does not ask for it.
+//
+// ⛔ VALUE AND KIND ARE PRESERVED, which is the `PassOptions::Option<bool>`
+// lesson: `f402` forwards `a1` unchanged so `get_bool_attr(false)` and
+// `get_bool_attr(true)` cannot collapse, and the two byte-carrying keys decode the
+// WHOLE payload up to the NUL with f365/f366's own idiom (`String::from_utf8_lossy`
+// is what `libcc2rs::Ptr::to_rust_string` uses, so this is the module's
+// established decode, not a new one).  Each `aN` is named EXACTLY ONCE -- the
+// `take_while` form is preferred over f365's `take(a1.len()-1)` precisely because
+// the latter mentions `a1` twice and a rule body is inlined as one expression.
+//
+// ⛔ `getDictionaryAttr` RETURNS `ir::AttrDict`, NOT `ir::Attr` -- consistent with
+// t9 (`mlir::DictionaryAttr` -> `ir::AttrDict`) and t261
+// (`mlir::NamedAttrList` -> `ir::AttrDict`), so a nested dictionary used as an
+// attribute VALUE stays a rustc type error by design.
+// ⛔ `getNamedAttr` returns t21's `(String, Attr)` TUPLE, not the model's
+// `ir::NamedAttribute` STRUCT; f400 destructures rather than changing t21, which
+// other keys already depend on.  The pair is carried whole, so nothing is lost.
+// ===========================================================================
+mlir::NamedAttribute f400(mlir::OpBuilder &a0, llvm::StringRef a1,
+                          mlir::Attribute a2) {
+  return a0.getNamedAttr(a1, a2);
+}
+
+mlir::DictionaryAttr f401(mlir::OpBuilder &a0,
+                          llvm::ArrayRef<mlir::NamedAttribute> a1) {
+  return a0.getDictionaryAttr(a1);
+}
+
+mlir::BoolAttr f402(mlir::OpBuilder &a0, bool a1) { return a0.getBoolAttr(a1); }
+
+mlir::StringAttr f403(mlir::OpBuilder &a0, const llvm::Twine &a1) {
+  return a0.getStringAttr(a1);
+}
+
+mlir::IntegerAttr f404(mlir::OpBuilder &a0, mlir::Type a1, int64_t a2) {
+  return a0.getIntegerAttr(a1, a2);
+}
+
+mlir::ArrayAttr f405(mlir::OpBuilder &a0, llvm::ArrayRef<int64_t> a1) {
+  return a0.getI64ArrayAttr(a1);
+}
+
+mlir::ArrayAttr f406(mlir::OpBuilder &a0, llvm::ArrayRef<llvm::StringRef> a1) {
+  return a0.getStrArrayAttr(a1);
+}
