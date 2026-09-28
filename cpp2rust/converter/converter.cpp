@@ -3860,6 +3860,12 @@ bool Converter::VisitImplicitCastExpr(clang::ImplicitCastExpr *expr) {
     break;
   }
   case clang::CastKind::CK_ConstructorConversion:
+  // A `CK_UserDefinedConversion` node is pure noise: its sub-expression is the
+  // `CXXMemberCallExpr` on the conversion operator, which already carries the
+  // conversion's result type. It was absent from this switch and so landed in
+  // `default:`, which synthesised a spurious `as T` around the call whenever
+  // the target mapped to a different Rust type -- the `(id as TypeID)()` shape.
+  case clang::CastKind::CK_UserDefinedConversion:
   case clang::CastKind::CK_DerivedToBase:
     Convert(sub_expr);
     break;
@@ -5001,12 +5007,76 @@ void Converter::ConvertMemberExpr(clang::MemberExpr *expr) {
       method && IsOverloadedMethod(method)) {
     StrCat(token::kDot);
     StrCat(GetMethodName(method));
+  } else if (auto *conversion =
+                 clang::dyn_cast<clang::CXXConversionDecl>(member)) {
+    // A LOST USER-DEFINED CONVERSION used to land in the silent fall-off below.
+    //
+    // A `CXXConversionDecl`'s DeclName kind is `CXXConversionFunctionName`, NOT
+    // an identifier, so the `isIdentifier()` arm was false; it is not an
+    // overloaded operator and a record cannot declare two conversions to the
+    // same type, so `IsOverloadedMethod` (converter_lib.cpp:344, which needs a
+    // same-name count > 1) was false too. With no terminal `else`, the member
+    // name was DISCARDED: only the base printed, and `EmitArgList` then
+    // appended `()`, so `if (attr)` on a class with `operator bool` came out as
+    // `if (unsafe { attr() })` -- a call on a value that is not a function.
+    // That is silently-wrong output wherever the name happens to resolve.
+    //
+    // `GetMethodName` already routes `CXXConversionDecl` to `GetConversionName`
+    // (:1410), which is what emits the `to_bool` / `to_TypeID` names the
+    // declaration side has always produced -- and which, before this fix, were
+    // dead code with ZERO call sites in the whole emitted corpus.
+    StrCat(token::kDot);
+    StrCat(GetMethodName(conversion));
   } else if (!name_override.empty()) {
     StrCat(token::kDot, name_override);
   } else if (member->getDeclName().isIdentifier()) {
     StrCat(token::kDot);
     StrCat(GetNamedDeclAsString(member));
+  } else {
+    // THE MISSING `else` WAS THE ENTIRE DEFECT. Any DeclName kind that is
+    // neither an identifier nor one of the arms above (`CXXOperatorName`,
+    // `CXXLiteralOperatorName`, `CXXDeductionGuideName`, ...) used to fall off
+    // the end of this function emitting NOTHING AT ALL -- no `.`, no name --
+    // leaving a bare base expression that the caller then decorated with an
+    // argument list. Refuse loudly instead, and emit no token: a fabricated or
+    // plausible-looking name could silently resolve to an unrelated item.
+    ReportUnsupportedMemberName(expr, member);
   }
+}
+
+// A `MemberExpr` whose member name has no lowering in `ConvertMemberExpr`.
+//
+// This is the terminal `else` that did not exist until the lost-conversion row.
+// It MUST NOT emit a token and MUST stop the run: the failure mode it replaces
+// is the silent-drop class (nothing emitted, converter exits 0, the member
+// access turns into a call on the base), which the playbook ranks strictly
+// worse than a loud abort. No `todo!()`, no `unimplemented!()`, no
+// `UNSUPPORTED`, no placeholder identifier -- an unnamed member is not an
+// unmappable construct with a known site, it is a converter gap, and naming it
+// at translate time is the only way it cannot be mistaken for working output.
+//
+// Under --survey this RECORDs and returns, because a survey run must enumerate
+// every gap in one pass (same contract as ReportUnsupportedException).
+void Converter::ReportUnsupportedMemberName(const clang::MemberExpr *expr,
+                                            const clang::NamedDecl *member) {
+  const std::string loc =
+      expr->getExprLoc().printToString(ctx_.getSourceManager());
+  std::string full =
+      std::string("member access whose DeclName kind (") +
+      std::to_string(static_cast<int>(member->getDeclName().getNameKind())) +
+      ") has no name lowering, spelled `" +
+      member->getDeclName().getAsString() + "`, on member of class `" +
+      std::string(member->getDeclKindName()) + "`";
+  if (curr_function_ != nullptr) {
+    full += ", reached while converting `" +
+            curr_function_->getQualifiedNameAsString() + "`";
+  }
+  if (survey::Enabled()) {
+    survey::Record(survey::GapKind::kUnsupportedConstruct, full, loc);
+    return;
+  }
+  llvm::report_fatal_error(llvm::Twine("unsupported ") + full + " at " + loc,
+                           /*gen_crash_diag=*/false);
 }
 
 bool Converter::VisitCXXThisExpr(clang::CXXThisExpr *expr) {

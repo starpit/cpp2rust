@@ -482,6 +482,11 @@ public:
   void ReportThisWithoutEnclosingFunction(const clang::Expr *expr,
                                          const std::string &what);
 
+  // Loud, named refusal for the terminal `else` of ConvertMemberExpr: a member
+  // whose DeclName kind has no name lowering. Emits no token and is fatal.
+  void ReportUnsupportedMemberName(const clang::MemberExpr *expr,
+                                   const clang::NamedDecl *member);
+
   virtual bool VisitMemberExpr(clang::MemberExpr *expr);
 
   virtual bool VisitCXXThisExpr(clang::CXXThisExpr *expr);
