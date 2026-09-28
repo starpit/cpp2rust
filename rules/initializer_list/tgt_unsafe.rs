@@ -10,3 +10,9 @@ fn t1<T1>() -> Vec<T1> {
 unsafe fn f1<T1>(a0: Vec<T1>) -> usize {
     a0.len()
 }
+
+// The empty `{}` initializer_list. Nullary, so there is no argument to
+// substitute and none of the `&(*s)`-textual-append hazard applies.
+unsafe fn f2<T1>() -> Vec<T1> {
+    Vec::new()
+}
