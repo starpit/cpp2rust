@@ -1770,6 +1770,99 @@ std::string Converter::GetCtorName(clang::CXXConstructorDecl *decl) {
              : "new";
 }
 
+// True when `stmt` reads through `this` anywhere in its subtree.  Detecting
+// `CXXThisExpr` covers both emission entry points (ConvertMemberExpr's
+// base_is_this arm and VisitCXXThisExpr).
+static bool StmtMentionsThis(const clang::Stmt *stmt) {
+  llvm::SmallVector<const clang::Stmt *, 16> work{stmt};
+  while (!work.empty()) {
+    const clang::Stmt *cur = work.pop_back_val();
+    if (cur == nullptr) {
+      continue;
+    }
+    if (clang::isa<clang::CXXThisExpr>(cur)) {
+      return true;
+    }
+    // ⛔ `CXXDefaultInitExpr::children()` IS EMPTY -- the NSDMI it stands for
+    // hangs off the FieldDecl, not off this node.  Measured: without this hop
+    // the `dsc/designSpaceConfig.cpp` witness was missed entirely, because
+    // clang materialises an IMPLICIT CXXCtorInitializer per NSDMI field and its
+    // getInit() is exactly a CXXDefaultInitExpr, so the walk terminated at
+    // depth 0 and reported "no `this`" for the 240-site initializer that
+    // demonstrably emits `&mut this.N_.in__`.  Same shape for a defaulted
+    // argument.
+    if (const auto *die = clang::dyn_cast<clang::CXXDefaultInitExpr>(cur)) {
+      work.push_back(die->getExpr());
+      continue;
+    }
+    if (const auto *dae = clang::dyn_cast<clang::CXXDefaultArgExpr>(cur)) {
+      work.push_back(dae->getExpr());
+      continue;
+    }
+    for (const clang::Stmt *child : cur->children()) {
+      work.push_back(child);
+    }
+  }
+  return false;
+}
+
+// True when the field-initializer list this constructor will EMIT (i.e. the one
+// EmitConstructorFieldInits selects: mem-initializer first, NSDMI second,
+// type-default last) contains an initializer that reads through `this`.
+//
+// ⛔ WHY THIS EXISTS -- the use-before-binding defect this predicate gates.
+// ConvertCXXConstructorBody's normal shape is
+//     let mut this = Self { f: <init>, ... };
+// so an initializer that reads `this` is emitted INSIDE the very literal that
+// binds `this`.  Measured on `dsc/designSpaceConfig.cpp` (emitted line ~22861):
+// `DesignSpaceConfig`'s 240-entry NSDMI `paramNameToVal = {{"nin", &N_.in_}, ...}`
+// emits `(&mut this.N_.in__ as *mut f64).into()` inside that literal -- an E0425
+// use of `this` before its `let` completes, at rc=0, today.
+//
+// The pointers genuinely ALIAS the fields (C++ stores &N_.in_, not a copy), so
+// the SEMANTICS are right and only the emission ORDER is wrong.  C++ gets away
+// with it because the object is constructed AT ITS FINAL ADDRESS; `-> Self` has
+// no in-place construction guarantee, which is why the two-phase rewrite
+//     let mut __s = Self{..}; __s.f = &mut __s.g; __s
+// is NOT the fix: it compiles and is silently wrong, because returning `__s` by
+// value moves the object and leaves every raw pointer aimed at the dead frame.
+// The shape that works is an in-place constructor (`new_at(*mut Self)`) whose
+// receiver already has its final address, with `new() -> Self` delegating to it
+// so that every existing call site -- `Type::new()` as an EXPRESSION nested in
+// an enclosing struct literal, and `impl Default { fn default() -> Self {
+// unsafe { Type::new() } } }` -- keeps working unchanged.
+static bool CtorEmitsThisBearingFieldInit(clang::CXXConstructorDecl *decl) {
+  if (decl->isDelegatingConstructor()) {
+    // A delegating constructor runs no field initializers of its own.
+    return false;
+  }
+  auto *definition =
+      clang::dyn_cast_or_null<clang::CXXConstructorDecl>(decl->getDefinition());
+  if (definition == nullptr) {
+    return false;
+  }
+  for (const auto *field : decl->getParent()->fields()) {
+    const clang::CXXCtorInitializer *ctor_initializer = nullptr;
+    for (const auto *init : definition->inits()) {
+      if (init->isMemberInitializer() && init->getMember() == field) {
+        ctor_initializer = init;
+        break;
+      }
+    }
+    // An IMPLICIT in-class-init entry stands for the NSDMI; look at the NSDMI
+    // itself, which is what ConvertVarInit ultimately emits.
+    const clang::Expr *emitted =
+        (ctor_initializer != nullptr &&
+         !ctor_initializer->isInClassMemberInitializer())
+            ? ctor_initializer->getInit()
+            : field->getInClassInitializer();
+    if (emitted != nullptr && StmtMentionsThis(emitted)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool Converter::VisitCXXConstructorDecl(clang::CXXConstructorDecl *decl) {
   if (decl->isOutOfLine() ||
       (decl->isImplicit() && !IsConvertibleImplicitMember(decl))) {
@@ -1789,8 +1882,19 @@ bool Converter::VisitCXXConstructorDecl(clang::CXXConstructorDecl *decl) {
   if (!in_trait_body_) {
     ConvertFunctionQualifiers(decl);
   }
-  StrCat(keyword_unsafe_, keyword::kFn, GetCtorName(decl),
-         GetLifetimeBinders(decl));
+  auto ctor_name = GetCtorName(decl);
+
+  // ⭐ IN-PLACE ARM.  See CtorEmitsThisBearingFieldInit above for why `-> Self`
+  // cannot express this constructor at all.  `in_trait_body_` is excluded because
+  // `MaybeUninit::<Self>::uninit()` in a trait default body needs `Self: Sized`,
+  // which a trait does not imply; an abstract class with a `this`-bearing NSDMI
+  // would therefore trade one error for another.
+  if (!in_trait_body_ && CtorEmitsThisBearingFieldInit(decl)) {
+    EmitInPlaceConstructor(decl, ctor_name);
+    return false;
+  }
+
+  StrCat(keyword_unsafe_, keyword::kFn, ctor_name, GetLifetimeBinders(decl));
   {
     PushParen paren(*this);
     ConvertFunctionParameters(decl);
@@ -1802,6 +1906,96 @@ bool Converter::VisitCXXConstructorDecl(clang::CXXConstructorDecl *decl) {
   }
 
   return false;
+}
+
+// `{name}_at(__cc2_this: *mut Self, ..)` -- the real constructor -- plus
+// `{name}(..) -> Self` delegating to it.  The split is what makes a
+// `this`-bearing field initializer expressible: inside `_at` the object already
+// has its final address, so `this` is bound (to `&mut *__cc2_this`) BEFORE any
+// initializer runs, and `&mut this.f` is a well-formed pointer to the field of
+// the object being constructed rather than a read of a not-yet-bound `let`.
+//
+// The whole literal is still built in ONE `ptr::write`, deliberately: the field
+// ADDRESSES are what the initializers capture, and those are fixed by
+// `__cc2_this` alone, so overwriting the (uninitialised) contents afterwards
+// leaves every captured pointer valid.  A field-by-field two-phase assignment
+// would instead need a default value for each aliased field and would drop any
+// field whose type has no `Default`.
+//
+// ⚠️ The `-> Self` wrapper necessarily MOVES the finished object out of the
+// local slot, so for a self-referential class the wrapper is a fidelity
+// compromise, not a fix; `_at` is the entry point that is actually correct, and
+// it is emitted so that a caller which owns a place can use it.  The wrapper
+// exists because every measured call site is an EXPRESSION producing a value
+// into an enclosing literal (`<DataStructDims>::default()` nested in another
+// struct literal, `impl Default ... unsafe { T::new() }`), i.e. no caller owns a
+// place -- which is exactly why an `__init_nsdmi(&mut self)` convention that
+// demands one does not fit and was not taken.
+void Converter::EmitInPlaceConstructor(clang::CXXConstructorDecl *decl,
+                                       const std::string &ctor_name) {
+  // Mirror ConvertFunctionParameters: the DEFINITION's parameter names are the
+  // ones its emitted signature will use, so forward exactly those.
+  const clang::FunctionDecl *definition = decl->getDefinition();
+  if (definition == nullptr) {
+    definition = decl;
+  }
+
+  StrCat(keyword_unsafe_, keyword::kFn, ctor_name + "_at",
+         GetLifetimeBinders(decl));
+  {
+    PushParen paren(*this);
+    StrCat("__cc2_this: *mut Self", token::kComma);
+    ConvertFunctionParameters(decl);
+  }
+  {
+    PushBrace brace(*this);
+    EmitFunctionPreamble(decl);
+    // `this` is a real reference to the final storage, established before any
+    // initializer is converted.  ConvertMemberExpr/VisitCXXThisExpr already spell
+    // a constructor's receiver `this`, so nothing else has to change.
+    StrCat(keyword::kLet, "this", token::kColon, "&mut Self", token::kAssign,
+           "&mut *__cc2_this", token::kSemiColon);
+    StrCat("::std::ptr::write");
+    {
+      PushParen write_paren(*this);
+      StrCat("__cc2_this", token::kComma);
+      StrCat("Self");
+      {
+        PushBrace this_init(*this);
+        EmitConstructorFieldInits(decl);
+      }
+    }
+    StrCat(token::kSemiColon);
+    ConvertBodyStmts(decl->getBody());
+  }
+
+  if (!in_trait_body_) {
+    ConvertFunctionQualifiers(decl);
+  }
+  StrCat(keyword_unsafe_, keyword::kFn, ctor_name, GetLifetimeBinders(decl));
+  {
+    PushParen paren(*this);
+    ConvertFunctionParameters(decl);
+  }
+  StrCat(token::kArrow, "Self");
+  {
+    PushBrace brace(*this);
+    StrCat("let mut __cc2_slot = ::std::mem::MaybeUninit::<Self>::uninit()",
+           token::kSemiColon);
+    StrCat(std::format("Self::{}_at", ctor_name));
+    {
+      PushParen paren(*this);
+      StrCat("__cc2_slot.as_mut_ptr()", token::kComma);
+      for (auto *parameter : definition->parameters()) {
+        StrCat(GetNamedDeclAsString(parameter), token::kComma);
+      }
+      if (decl->isVariadic()) {
+        StrCat("__args", token::kComma);
+      }
+    }
+    StrCat(token::kSemiColon);
+    StrCat("__cc2_slot.assume_init()");
+  }
 }
 
 void Converter::ConvertCXXConstructorBody(clang::CXXConstructorDecl *decl) {
@@ -7173,25 +7367,9 @@ GetUserProvidedDefaultConstructorDecl(const clang::CXXRecordDecl *decl) {
 // and ConvertMemberExpr / VisitCXXThisExpr reach ReportThisWithoutEnclosingFunction.
 // Detecting `CXXThisExpr` anywhere in the initializer covers both entry points.
 static bool HasThisBearingFieldInit(const clang::RecordDecl *decl) {
-  auto mentions_this = [](const clang::Stmt *stmt) {
-    llvm::SmallVector<const clang::Stmt *, 16> work{stmt};
-    while (!work.empty()) {
-      const clang::Stmt *cur = work.pop_back_val();
-      if (cur == nullptr) {
-        continue;
-      }
-      if (clang::isa<clang::CXXThisExpr>(cur)) {
-        return true;
-      }
-      for (const clang::Stmt *child : cur->children()) {
-        work.push_back(child);
-      }
-    }
-    return false;
-  };
   for (const auto *field : decl->fields()) {
     if (const auto *init = field->getInClassInitializer();
-        init != nullptr && mentions_this(init)) {
+        init != nullptr && StmtMentionsThis(init)) {
       return true;
     }
   }

@@ -168,6 +168,11 @@ public:
 
   virtual void ConvertCXXConstructorBody(clang::CXXConstructorDecl *decl);
   void EmitConstructorFieldInits(clang::CXXConstructorDecl *decl);
+  // Emits `{ctor_name}_at(__cc2_this: *mut Self, ..)` plus a `{ctor_name}(..) ->
+  // Self` wrapper delegating to it -- the only shape in which a field
+  // initializer that reads through `this` can be lowered.
+  void EmitInPlaceConstructor(clang::CXXConstructorDecl *decl,
+                             const std::string &ctor_name);
 
   virtual bool VisitCXXConstructorDecl(clang::CXXConstructorDecl *decl);
 
