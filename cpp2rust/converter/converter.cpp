@@ -900,6 +900,85 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
       return true;
     }
   }
+  // ---- RAW-POINTER-DEREF branch, routed to the FIELD-POINTER lowering ----
+  // Measured shape (util/variabledefinition/VariableDefinition.cpp:95, inside
+  // VariableDefinition::exportJsonStr, where `def` comes from
+  // `for (const auto* def : sorted)`):
+  //     const auto& [var, expr] = *def;
+  //   DecompositionDecl 'const std::pair<const long, VariableDefinition::ExprType> &'
+  // The deref of a RAW POINTER is a plain UnaryOperator, NOT a
+  // CXXOperatorCallExpr, so the map-iterator branch above is never entered; and
+  // the second element is a CLASS type, so the scalars-only filter on the
+  // const-ref-holder path below refuses it -- correctly, because that path
+  // COPIES the holder and a class element would need a clone.
+  //
+  // Nothing is copied or moved HERE: each binding becomes a raw pointer to a
+  // field of the pointed-to pair, exactly as `EmitVectorDecompositionBindings`
+  // already does for a vector element, so a class-typed element is sound and
+  // cannot hit E0507. `std::pair` is modelled as a BARE RUST 2-TUPLE
+  // (`rules/pair/tgt_unsafe.rs`), so `.0`/`.1` -- and NOT any `.first()` /
+  // `.second()` accessor, which do not exist anywhere in the rules tree -- is
+  // the only sound emission. The accessors the map branch above emits live on
+  // the map ITERATOR (libcc2rs/src/iterators.rs), not on a pair, so that
+  // branch's style must NOT be copied here.
+  if (const auto *deref = clang::dyn_cast<clang::UnaryOperator>(
+          decl->getInit()->IgnoreParenImpCasts());
+      deref != nullptr && deref->getOpcode() == clang::UO_Deref &&
+      decl->getType()->isLValueReferenceType() &&
+      decl->getType().getNonReferenceType().isConstQualified()) {
+    // Re-emitting the pointer expression once per binding is only sound if it
+    // is evaluation-free, so the operand is restricted to a plain variable
+    // reference of pointer type -- the measured shape. Anything else stays on
+    // the loud refusal path rather than being evaluated twice.
+    const auto *ptr_ref = clang::dyn_cast<clang::DeclRefExpr>(
+        deref->getSubExpr()->IgnoreParenImpCasts());
+    bool bindings_ok = true;
+    for (const auto *binding : bindings) {
+      if (binding->getType()->isReferenceType()) {
+        bindings_ok = false;
+      }
+    }
+    if (bindings_ok && ptr_ref != nullptr &&
+        clang::isa<clang::VarDecl>(ptr_ref->getDecl()) &&
+        ptr_ref->getType()->isPointerType()) {
+      auto value_type =
+          decl->getType().getNonReferenceType().getUnqualifiedType();
+      // The model must be a Rust tuple for `.0` / `.1` to mean the C++
+      // elements. With exactly two bindings a parenthesised model can only be a
+      // 2-tuple -- any other arity would not have type-checked in C++.
+      if (Mapper::Contains(value_type)) {
+        const std::string model = Mapper::Map(value_type);
+        if (model.size() >= 2 && model.front() == '(' && model.back() == ')') {
+          // REFCOUNT IS REFUSED for the same reason as on both paths around
+          // this one: that model wraps every local in `Rc<RefCell<..>>`, so the
+          // per-use deref these bindings need is not what it would emit. Gate
+          // BEFORE any emission, and register ptr_bindings_ only after we have
+          // committed to emitting.
+          if (keyword_unsafe_ == nullptr || *keyword_unsafe_ == '\0') {
+            return false;
+          }
+          std::string ptr_text;
+          {
+            Buffer buf(*this);
+            Convert(const_cast<clang::Expr *>(
+                static_cast<const clang::Expr *>(ptr_ref)));
+            ptr_text = std::move(buf).str();
+          }
+          if (!EmitVectorDecompositionBindings(decl, ptr_text)) {
+            return false;
+          }
+          // NOT scoped, for the same reason as the map branch above (:895): a
+          // standalone DeclStmt has its uses in the REST of the enclosing
+          // CompoundStmt, outside any guard's dynamic extent, and a
+          // BindingDecl* is unique per source site.
+          for (const auto *binding : bindings) {
+            ptr_bindings_.insert(binding);
+          }
+          return true;
+        }
+      }
+    }
+  }
   auto type = decl->getType();
   // A CONST LVALUE REFERENCE holder is accepted, a mutable or rvalue one is
   // not. Measured shape (5 of 18 first-abort-sampled TUs, all of them the SAME
