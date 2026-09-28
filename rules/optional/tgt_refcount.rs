@@ -95,7 +95,7 @@ fn f15<T1: Clone + ByteRepr>(a0: &Option<Value<T1>>, a1: Ptr<T1>) -> T1 {
 }
 
 fn f16<T1>(a0: &mut Option<Value<T1>>) {
-    *a0 = None
+    a0.take();
 }
 
 fn f17<T1>(a0: &Option<Value<T1>>, a1: ()) -> bool {

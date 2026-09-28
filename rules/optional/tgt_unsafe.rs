@@ -42,15 +42,22 @@ unsafe fn f5<T1>(a0: &mut Option<T1>) -> Option<T1> {
 }
 
 unsafe fn f6<T1>(a0: &mut Option<T1>, a1: ()) {
-    *a0 = None
+    a0.take();
 }
 
 unsafe fn f7<T1>(a0: &mut Option<T1>, a1: T1) {
-    *a0 = Some(a1)
+    a0.replace(a1);
 }
 
 unsafe fn f8<T1: Clone>(a0: &mut Option<T1>, a1: &Option<T1>) {
-    *a0 = a1.clone()
+    match a1.clone() {
+        Some(v) => {
+            a0.replace(v);
+        }
+        None => {
+            a0.take();
+        }
+    }
 }
 
 unsafe fn f9<T1>(a0: &Option<T1>) -> bool {
@@ -79,13 +86,13 @@ unsafe fn f14<T1>(a0: &Option<T1>) -> &T1 {
 
 unsafe fn f15<T1: Clone>(a0: &Option<T1>, a1: &mut T1) -> T1 {
     match a0.as_ref() {
-        Some(v) => T1::clone(v),
-        None => T1::clone(a1),
+        Some(v) => v.clone(),
+        None => a1.clone(),
     }
 }
 
 unsafe fn f16<T1>(a0: &mut Option<T1>) {
-    *a0 = None
+    a0.take();
 }
 
 unsafe fn f17<T1>(a0: &Option<T1>, a1: ()) -> bool {
@@ -127,7 +134,14 @@ unsafe fn f24<T1: PartialEq>(a0: &Option<T1>, a1: &T1) -> bool {
 }
 
 unsafe fn f25<T1>(a0: &mut Option<T1>, a1: &mut Option<T1>) {
-    *a0 = a1.take()
+    match a1.take() {
+        Some(v) => {
+            a0.replace(v);
+        }
+        None => {
+            a0.take();
+        }
+    }
 }
 
 // operator-> : the converter treats the result as a PLACE of type T1, so this is
