@@ -75,4 +75,10 @@ pub use diag::*;
 mod apint;
 pub use apint::*;
 
+// `IStream`: the STICKY-FAILBIT input stream.  C++ stream error state is sticky
+// -- once extraction fails, every later `>>` is a no-op -- so the flag has to
+// live in the stream object, not in a per-call `Result`.  See istream.rs.
+mod istream;
+pub use istream::*;
+
 pub use libcc2rs_macros::{ByteRepr, goto, goto_block, switch};
