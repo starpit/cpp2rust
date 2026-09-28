@@ -4731,25 +4731,125 @@ using t304 = mlir::OpTrait::detail::MultiOperandTraitBase<mlir::ktdf::PrivateYie
 using t320 = mlir::OpTrait::OneRegion<mlir::ModuleOp>;
 
 // ---------------------------------------------------------------------------
-// ⛔ NEW REFUSAL, RECORDED SO THE NEXT SLOT DOES NOT SPEND A SLOT ON IT -- and it is the single
-// biggest remaining `mlir_` survivor that LOOKS like the falsified `mlir::ktdf` row and IS NOT:
-//     Cpp2RustUnmapped_mlir_detail_SymbolOpInterfaceTrait_mlir_ktdf_arch_DeviceOp_   18 occurrences
-// 18 occurrences is more than t300-t304 moved COMBINED, so the temptation is real.  ⛔ REFUSED:
-// `grep -nE "struct mlir_ktdf_arch_DeviceOp\b"` against dataflow_ods.rs = **0 hits**, and so is
-// `grep -oE "mlir_ktdf_arch[A-Za-z0-9_]*"` -- the prefix does not occur at all, and neither does
-// any `*DeviceOp`.  A key here would record fine, pass the load smoke test, and FAIL AT RUSTC.
+// t400 -- `mlir::detail::SymbolOpInterfaceTrait<mlir::ktdf_arch::DeviceOp>`, THE SINGLE BIGGEST
+// REMAINING `mlir_` SURVIVOR IN THE SWEEP (18 occurrences, 9 files).  This block REPLACES the
+// refusal that stood here, and records the falsification rather than deleting it.
 //
-// ⭐⭐ THE FINDING THAT MAKES THIS WORTH WRITING DOWN: `mlir::ktdf::arch` IS A DIFFERENT DIALECT
-// FROM `mlir::ktdf`, AND THE `.td` COVERAGE CLOSURE DID NOT COVER IT.  Enumerating every generated
-// def, `grep -oE "struct mlir_ktdf[A-Za-z0-9_]*"` returns 18 names: sixteen plain `mlir_ktdf_*`
-// (BufferPhaseOp CreateTokenOp DataTransferOp FifoAllocateOp ParallelOp ParallelYieldOp PipelineOp
-// PrivateOp PrivateYieldOp ReadFromFifoOp SelectMemrefOp StageOp TilingDeriveSizeOp
-// TilingLinearizeIndexOp TilingReserveSizeOp WriteToFifoOp) plus TWO from the `ktdf::lowering`
-// SUB-dialect (`mlir_ktdf_lowering_ExecuteOnOp`, `mlir_ktdf_lowering_SignalOp`) -- and ZERO from
-// `ktdf::arch`.  ⚠️ So sub-dialect coverage is PER-SUB-DIALECT: `ktdf::lowering` is covered while
-// `ktdf::arch` is not, and "the ktdf gap is closed" must NOT be generalised to `mlir::ktdf::*`.
-// This is a live dataflowir-gen `.td` coverage gap and those 18 occurrences must stay LOUD so the
-// coverage question keeps its evidence.  Re-test it the same way: the grep above, both routes.
+// ⛔⛔ WHAT THE REFUSAL SAID, AND WHY IT WAS RIGHT WHEN WRITTEN: it recorded
+// `grep -nE "struct mlir_ktdf_arch_DeviceOp\b"` against dataflow_ods.rs as **0 hits**, plus
+// `grep -oE "struct mlir_ktdf[A-Za-z0-9_]*"` = 18 names of which ZERO were `ktdf::arch`, and
+// concluded that `mlir::ktdf::arch` was a live dataflowir-gen `.td` coverage gap that had to stay
+// LOUD.  It also warned that a key naming an absent DEF "would record fine, pass the load smoke
+// test, and FAIL AT RUSTC".  Both halves were correct at the time.
+//
+// ⭐⭐ THE GAP IS CLOSED BY `dataflowir-gen` COMMIT `ee457cc` ("add LLVM, math, memref and
+// ktdf_arch dialects"), and the refusal's OWN TEST is the proof.  Re-run 2026-09-28 against
+//   dataflowir-gen-654e676bccb4a05f/out/dataflow_ods.rs   (mtime 2026-09-28 16:30:18, i.e. built
+//   AFTER ee457cc -- a stale build dir would lie here, so the mtime is part of the evidence)
+// the identical `grep -cE '^ *pub struct mlir_ktdf_arch_DeviceOp;'` returns **1**, i.e. 0 -> 1.
+// So the DEF exists and the absent-DEF hazard does not apply to this key.
+//
+// ⭐ THE C++ NAMESPACE IS `mlir::ktdf_arch`, NOT `mlir::ktdf::arch` (KTDFArchDialect.td:32), which
+// is why `ktdf_arch` is ONE identifier here and why the mangled marker is
+// `..._mlir_ktdf_arch_DeviceOp_` with a single `_arch_` segment and no separate `arch` level.  The
+// emitted placeholder name is itself the confirmation, and it is what this key is written against
+// -- the ground truth, not any reconstruction from the C++ spelling.
+//
+// ⛔ ARITY 0, FULLY CONCRETE -- the t166 / t37-t39 / t217-t235 / t320 reason.  `GetTypeMapKey`
+// truncates at the first `<` so arity is not in the key, and `matchTemplate`'s capture
+// (`findNextLiteralSameDepth`, mapper.cpp:173) never runs at arity 0, so the swallow bug cannot
+// occur here at all.  A generic `SymbolOpInterfaceTrait<T1>` would additionally be the SOLE
+// candidate in a previously-empty bucket, where `search()`'s longer-src tie-break
+// (mapper.cpp:430-437) could not protect it.
+//
+// ⛔ THE :3707 REFUSAL'S NARROWER GROUND IS ALSO ANSWERED, and it is the half that mattered most.
+// That note refused g088 on the ground that `mlir::detail::` INTERFACE traits carry DEFAULT METHOD
+// IMPLEMENTATIONS rather than being pure tags, so "no member is read" needed proving FOR THIS
+// SPELLING.  It proved it: any default method the trait supplies (`getName`/`setName`) is called in
+// the corpus THROUGH THE OP (`op.getName()`), so it records against the Op or the OpInterface and
+// NEVER against the trait class type.  ⭐ RE-CONFIRMED HERE BY LOOKING AT THE EMITTED SITES rather
+// than at the C++: all 18 occurrences are in `... as Cpp2RustUnmapped_mlir_detail_
+// SymbolOpInterfaceTrait_mlir_ktdf_arch_DeviceOp_)` position -- a bare `as` CAST TARGET, 2 per file
+// across 9 files.  Not one site reads a member off it, not one default-constructs it.  ⚠️ That
+// check is not optional politeness: AN UNMAPPED MEMBER DOES NOT ABORT -- the converter emits the
+// call TEXTUALLY at rc=0 with no placeholder token, invisible to every census and to
+// no-placeholders.sh -- so "nothing reads a member" is the ONLY thing that makes a bare type key
+// complete.  Here it holds, which makes the key trivial rather than dead.
+//
+// ⛔ NO `fN`: nothing constructs a trait base, and no site default-constructs this one.  MODEL: the
+// trait base of an op IS that op (the t161/t162 precedent, as t320 and t300-t304 already apply it),
+// so the target is `ops::mlir_ktdf_arch_DeviceOp`'s own DEF.
+namespace mlir {
+namespace detail {
+// SymbolInterfaces.h.inc:262 -- `template <typename ConcreteType> class SymbolOpInterfaceTrait`.
+// Declared here ONLY so t400 can be SPELLED; no member of it is mapped, per the block above.
+template <typename ConcreteType> class SymbolOpInterfaceTrait {};
+} // namespace detail
+namespace ktdf_arch {
+// The ODS-generated `mlir::ktdf_arch` op class named by t400.  `Operation *` through its `OpState`
+// base, declared for the t161 reason and nothing more.  ⚠️ `namespace ktdf_arch` is ALREADY OPEN at
+// :791 for `MemoryType` / `ExecutionUnitType`; this is a second block in the same namespace, not a
+// redeclaration of those.  `DeviceOp` is declared nowhere else in this file.
+class DeviceOp {};
+} // namespace ktdf_arch
+} // namespace mlir
+// t400 -- Cpp2RustUnmapped_mlir_detail_SymbolOpInterfaceTrait_mlir_ktdf_arch_DeviceOp_, 18
+// occurrences in 9 files.  DEF `ops::mlir_ktdf_arch_DeviceOp` present (verified 0 -> 1 above).
+using t400 = mlir::detail::SymbolOpInterfaceTrait<mlir::ktdf_arch::DeviceOp>;
+
+// ---------------------------------------------------------------------------
+// ⛔ THE REST OF `ee457cc`'s 31 NEWLY-GENERATABLE SPELLINGS, AND WHY ONLY ONE MORE GROUP OF THEM
+// IS EVEN A CANDIDATE.  All 31 DEFs were confirmed present by the same `grep -cE '^ *pub struct
+// <name>;'` test against the same dataflow_ods.rs, all 31 returning 1 (and `pub struct mlir_llvm_`
+// returning 0, so there is no lowercase variant to chase -- the generator keys the marker off the
+// cppNamespace `::mlir::LLVM`, not off the printed dialect name `llvm`).  ⛔ BUT A CONFIRMED DEF IS
+// NOT A REASON TO WRITE A KEY.  Censusing the emitted corpus -- all 58 bucket-A `.rs` at
+// fresh30/out, tree-wide `Cpp2RustUnmapped` control total 7,127 -- with
+//   grep -ohE 'Cpp2RustUnmapped_[A-Za-z0-9_]*' *.rs | sort | uniq -c
+// the ONLY survivors naming any of the four new dialects are:
+//     18  Cpp2RustUnmapped_mlir_detail_SymbolOpInterfaceTrait_mlir_ktdf_arch_DeviceOp_   -> t400
+//      3  Cpp2RustUnmapped_mlir_memref_MemorySpaceCastOp
+//      3  Cpp2RustUnmapped_mlir_memref_CastOp
+//      2  Cpp2RustUnmapped_mlir_memref_ReinterpretCastOp
+//      2  Cpp2RustUnmapped_llvm_function_ref_std_unique_ptr_mlir_ktdf_arch_DeviceView___const_
+//         mlir_ktdf_arch_Device_ref__
+// ⛔ ALL SIXTEEN `mlir::LLVM` SPELLINGS AND ALL SIX `mlir::math` SPELLINGS HAVE **ZERO** SITES, and
+// that is measured twice over: not one `Cpp2RustUnmapped_` name contains them, and the broader
+// unanchored `grep -ohE '[A-Za-z0-9_]*LLVM[A-Za-z0-9_]*'` over the same 58 files returns exactly
+// ONE token in total (`mlir_ktdf_arch_LinkDirection_LLVM_BITMASK_LARGEST_ENUMERATOR`, an enum
+// sentinel, not an op) while `'[A-Za-z0-9_]*_math_[A-Za-z0-9_]*'` returns NOTHING AT ALL.
+// ⚠️ SO THE CIRCULATED "45 occurrences for LLVM/math/memref" DOES NOT REPRODUCE against this
+// corpus: the true figure is **8, all of them memref**.  `mlir::LLVM::UndefOp` and
+// `mlir::math::AbsIOp` -- the two spellings named all day as the exemplars of the absent-DEF hazard
+// -- are no longer absent, but they are also not USED here, so a key for either could not be
+// gated: the only gate that distinguishes a landed key from a dead one is an anchored count on an
+// emitted `.rs` moving, and a count of 0 cannot move.  Twenty-two keys whose effect is unmeasurable
+// is precisely the shape of the twelve keys (t236-t242, setvector t1/t3-t6) that recorded cleanly,
+// passed check-ir.sh in both models, passed the byte-diff and moved 3->3 with the emitted files
+// byte-identical.  LEFT OUT DELIBERATELY, not overlooked; re-test by re-running the census above
+// against a sweep that actually emits a `mlir::LLVM` or `mlir::math` site.
+//
+// ⛔ THE THREE `mlir::memref` SPELLINGS THAT DO HAVE SITES ARE ALSO LEFT OUT, ON A DIFFERENT AND
+// SHARPER GROUND -- read the sites, not the count.  All 8 occurrences are in ONE file,
+// `dataflow-scheduler__lib__Conversion__backend__ScheduleIRToDFIR__KTDFLowToDFIR__
+// LogicalMemoryViewBuilder.cpp.rs`, and they are NOT cast-target-only:
+//     15258  let mut mc: Cpp2RustUnmapped_mlir_memref_CastOp =
+//     15259      <Cpp2RustUnmapped_mlir_memref_CastOp>::default();
+//     15617  let mut mc: Cpp2RustUnmapped_mlir_memref_CastOp = (unsafe { dyn_cast_357(user) });
+// i.e. every one of the three is DEFAULT-CONSTRUCTED as a local before being overwritten by a
+// `dyn_cast`.  ⛔ A type key alone therefore reproduces the f42 / `MemRefType` failure EXACTLY as
+// that key's own note states it: "a `using tN =` alone gives rc=0 and then E0433" -- the placeholder
+// count would drop by 8 while the file still did not compile, which is the worst possible outcome
+// because it buys a green census with no green rustc.  ⛔ AND THE OBVIOUS FIX IS A SEMANTIC LIE:
+// `dataflowir_gen::fmt::OpInst` derives `Clone` ONLY (fmt.rs:390) and NOT `Default`, so an `fN`
+// would have to return `OpInst::new(<DEF>)` -- a REAL op instance standing for a
+// DEFAULT-CONSTRUCTED MLIR op wrapper, which in MLIR is a NULL handle (`state == nullptr`).  Every
+// null test on such a local would then read as a live op.  These three need a null-handle model for
+// the ODS op wrappers first; until that exists they must stay LOUD, which is what leaving the key
+// out achieves.  ⛔ And the `llvm::function_ref<std::unique_ptr<ktdf_arch::DeviceView>(const
+// ktdf_arch::Device &)>` row is out on the ORIGINAL ground, undisturbed by ee457cc: `DeviceView`
+// and `Device` are not ODS ops, so `grep -cE '^ *pub struct mlir_ktdf_arch_Device(View)?;'` is 0
+// and that IS still an absent DEF.
 
 // ---------------------------------------------------------------------------
 // t236-t242 -- `llvm::SmallSet` and `llvm::detail::DenseSetImpl`, the two

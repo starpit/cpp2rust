@@ -2445,3 +2445,17 @@ fn t320() -> dataflowir_gen::fmt::OpInst {
         <dataflowir_gen::ops::mlir_ModuleOp as dataflowir_gen::MlirOp>::DEF,
     )
 }
+
+// t400 -- `mlir::detail::SymbolOpInterfaceTrait<mlir::ktdf_arch::DeviceOp>`, 18 occurrences in 9
+// files, the biggest remaining `mlir_` survivor.  The trait base of an op IS that op (t161/t162,
+// as t300-t304 and t320 already apply it), so the model is the concrete op's own DEF.
+// ⭐ DEF VERIFIED 0 -> 1 BEFORE THIS KEY WAS WRITTEN, which is the whole point of the row: the
+// refusal this replaces measured `pub struct mlir_ktdf_arch_DeviceOp;` at 0 hits and was right to
+// refuse; `dataflowir-gen` ee457cc added the `ktdf_arch` dialect and the identical grep against
+// dataflowir-gen-654e676bccb4a05f/out/dataflow_ods.rs (mtime 2026-09-28 16:30:18, newer than
+// ee457cc) now returns 1.
+fn t400() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_ktdf_arch_DeviceOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
