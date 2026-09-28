@@ -236,3 +236,72 @@ std::map<T1, T2> f35(const std::initializer_list<std::pair<const T1, T2>> &a0,
 // converter-lowered range-for, which would iterate ASCENDING.  See the report.
 template <typename T1, typename T2, typename T3>
 using t4 = std::map<T1, T2, T3>;
+
+// --- llvm::MapVector -------------------------------------------------------
+//
+// llvm/ADT/MapVector.h:32 --
+//   template <typename KeyT, typename ValueT,
+//             typename MapType = DenseMap<KeyT, unsigned>,
+//             typename VectorType = SmallVector<std::pair<KeyT, ValueT>, 0>>
+//   class MapVector {
+//     MapType Map;        // key -> index into Vector
+//     VectorType Vector;  // THE STORAGE, in insertion order
+//     ...
+//   };
+//
+// ⛔ WHY THIS LIVES IN rules/map AND NOT IN A NEW rules/mapvector: creating a
+// 95th module would break the 94-module gate for every other live slot in the
+// same cut.  A module is only a key container; the bucket is keyed off the
+// spelling (`llvm::MapVector`), which `GetTypeMapKey`'s truncate-at-first-`<`
+// puts in a DIFFERENT bucket from `std::map`, so t5 can neither swallow nor be
+// swallowed by t1/t4.
+//
+// MODEL: `Vec<(KeyT, <boxed>ValueT)>`, i.e. the `Vector` member itself.
+// ⭐ THE INSERTION ORDER IS THE WHOLE POINT OF THE TYPE.  MapVector exists in
+// LLVM precisely because DenseMap's iteration order is nondeterministic and a
+// compiler pass that iterates it emits nondeterministic output.  Every corpus
+// use is an ordered walk (dbo SymbolDefinitions, dcc unit_to_ops /
+// equivalence_classes, dataflow-scheduler memref_to_groups / buffer_to_loop_ivs
+// / nodes_).  So:
+//   * `HashMap` would be SILENTLY WRONG -- it destroys the one property the
+//     type was chosen for, while type-checking and compiling.
+//   * `BTreeMap` (this module's model for std::map) would be SILENTLY WRONG in
+//     the same way -- it iterates in KEY order, not insertion order, so a pass
+//     would still be deterministic but would emit a DIFFERENT order than C++.
+//     That is the harder bug to see, which is why it is named here.
+//   * `Vec<(K, V)>` reproduces insertion order exactly.  The `Map` member is a
+//     pure index -- redundant state, not information -- so dropping it loses
+//     nothing semantically; it costs lookup O(n) instead of O(1), which is a
+//     performance difference, not a fidelity one.
+// The value is BOXED (`Box`/`Value`) for the same reason t1 boxes it: a Vec
+// reallocates, and MapVector's `operator[]` returns `ValueT &`, so the payload
+// needs a stable address before any member can be keyed honestly.
+//
+// ⛔ ONLY THE TYPE IS KEYED; EVERY MEMBER IS DELIBERATELY LEFT OUT, so each one
+// fails LOUDLY at translate time rather than quietly.  This key exists because
+// the measured first abort of
+// dbo/src/Transforms/sdsc_bundle/CopyProgramBinaries.cpp is
+//   `unsupported unmapped type llvm::MapVector<long, std::pair<...>> has no
+//    model in types_, while mapping llvm::FailureOr<llvm::MapVector<...>>`
+// i.e. the OUTER `llvm::FailureOr<T1>` (rules/support t3) ALREADY MATCHES and
+// binds T1; the row is gated purely on T1 having no model.  A type model is
+// therefore the minimum and the maximum that this observer justifies -- writing
+// `insert`/`lookup`/`operator[]` bodies here would be unobserved guesswork, and
+// a second key beside an unproven one is how the six-dead-key misdiagnosis in
+// rules/support happened.
+//
+// RESTATED WITH TWO TEMPLATE PARAMETERS, NOT FOUR, ON PURPOSE.  The recorder
+// drops TRAILING DEFAULTED template arguments, so every corpus site searches as
+// the 2-ary spelling (queue g271/g973-g977 all show
+// `searched as: llvm::FailureOr<llvm::MapVector<long, std::pair<VariableOperator,
+// std::vector<VariableDefinition::OperandType>>>>` -- 2 args -- against a
+// `from decl` line carrying all four).  A 4-ary restatement would need
+// DenseMap/DenseMapInfo/detail::DenseMapPair/SmallVector restated too, none of
+// which cpp-rule-preprocessor's fixed flag set can reach, and would record a
+// 4-ary key that the 2-ary search can never find.  The rule file fixes only the
+// SPELLING of the key, and this is the spelling that is searched.
+namespace llvm {
+template <typename KeyT, typename ValueT> class MapVector {};
+} // namespace llvm
+
+template <typename T1, typename T2> using t5 = llvm::MapVector<T1, T2>;

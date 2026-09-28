@@ -180,3 +180,10 @@ unsafe fn f36<T1: Ord, T2: Ord>(
 ) -> bool {
     a0 >= a1
 }
+
+// llvm::MapVector<KeyT, ValueT> -> the `Vector` member itself: insertion-ordered
+// storage.  NOT a BTreeMap/HashMap -- see the src.cpp comment; key order is not
+// insertion order, and MapVector is chosen in LLVM exactly to get insertion order.
+fn t5<T1, T2>() -> Vec<(T1, Box<T2>)> {
+    Vec::new()
+}

@@ -2768,6 +2768,147 @@ fn t482() -> std::collections::HashSet<Vec<libc::c_char>> {
     std::collections::HashSet::new()
 }
 
+// f400-f406 -- the `mlir::Builder` attribute factory on a t440/t441 receiver.
+// 148 sites; argued in full at `f400` in src.cpp.  `getIntegerType` is LEFT OUT
+// (its C++ return type `mlir::IntegerType` is unmapped), so its 1 site stays loud.
+
+// f400 -- `getNamedAttr(StringRef, Attribute)`, 79 sites.  t21 maps
+// `mlir::NamedAttribute` to the TUPLE `(String, Attr)`, so the model struct is
+// destructured here rather than changing t21.  Both halves are carried.
+fn f400(
+    a0: &dataflowir_gen::OpBuilder,
+    a1: Vec<::libc::c_char>,
+    a2: dataflowir_gen::ir::Attr,
+) -> (::std::string::String, dataflowir_gen::ir::Attr) {
+    let __na = a0.get_named_attr(
+        ::std::string::String::from_utf8_lossy(
+            &a1.iter().map(|&c| c as u8).take_while(|b| *b != 0).collect::<Vec<u8>>(),
+        )
+        .into_owned(),
+        a2,
+    );
+    (__na.name, __na.attr)
+}
+
+// f401 -- `getDictionaryAttr(ArrayRef<NamedAttribute>)`, 51 sites.  t19 maps
+// `llvm::ArrayRef<T>` to `Vec<T>` and t21 maps the element to a tuple, so the
+// pairs are rebuilt as model `NamedAttribute`s.  Returns `ir::AttrDict` (t9).
+fn f401(
+    a0: &dataflowir_gen::OpBuilder,
+    a1: Vec<(::std::string::String, dataflowir_gen::ir::Attr)>,
+) -> dataflowir_gen::ir::AttrDict {
+    a0.get_dictionary_attr(
+        &a1.iter()
+            .map(|p| dataflowir_gen::ir::NamedAttribute::new(p.0.clone(), p.1.clone()))
+            .collect::<Vec<dataflowir_gen::ir::NamedAttribute>>(),
+    )
+}
+
+// f402 -- `getBoolAttr(bool)`, 6 sites.  `a1` is forwarded UNCHANGED: this is the
+// `PassOptions::Option<bool>` lesson, so `true` and `false` cannot collapse.
+fn f402(a0: &dataflowir_gen::OpBuilder, a1: bool) -> dataflowir_gen::ir::Attr {
+    a0.get_bool_attr(a1)
+}
+
+// f403 -- `getStringAttr(const Twine &)`, 4 sites.  f365/f366 decode idiom, but
+// `take_while` on the NUL rather than `take(a1.len()-1)`: that form names `a1`
+// TWICE and a rule body is inlined as one expression.
+fn f403(a0: &dataflowir_gen::OpBuilder, a1: &Vec<::libc::c_char>) -> dataflowir_gen::ir::Attr {
+    a0.get_string_attr(
+        ::std::string::String::from_utf8_lossy(
+            &a1.iter().map(|&c| c as u8).take_while(|b| *b != 0).collect::<Vec<u8>>(),
+        )
+        .into_owned(),
+    )
+}
+
+// f404 -- `getIntegerAttr(Type, int64_t)`, 1 site.  TYPE FIRST, as MLIR.
+fn f404(
+    a0: &dataflowir_gen::OpBuilder,
+    a1: dataflowir_gen::ir::Ty,
+    a2: i64,
+) -> dataflowir_gen::ir::Attr {
+    a0.get_integer_attr(a1, a2)
+}
+
+// f405 -- `getI64ArrayAttr(ArrayRef<int64_t>)`, 2 sites.
+fn f405(a0: &dataflowir_gen::OpBuilder, a1: Vec<i64>) -> dataflowir_gen::ir::Attr {
+    a0.get_i64_array_attr(&a1)
+}
+
+// f406 -- `getStrArrayAttr(ArrayRef<StringRef>)`, 4 sites.
+fn f406(a0: &dataflowir_gen::OpBuilder, a1: Vec<Vec<::libc::c_char>>) -> dataflowir_gen::ir::Attr {
+    a0.get_str_array_attr(
+        &a1.iter()
+            .map(|s| {
+                ::std::string::String::from_utf8_lossy(
+                    &s.iter().map(|&c| c as u8).take_while(|b| *b != 0).collect::<Vec<u8>>(),
+                )
+                .into_owned()
+            })
+            .collect::<Vec<::std::string::String>>(),
+    )
+}
+
+// t540 -- `mlir::DenseArrayAttr` -> `dataflowir_gen::ir::Attr`, the same closed
+// union every other *Attr key lands on (t6/t7/t9/t10/t11/t12 and the already-mapped
+// `DenseArrayAttrImpl<T>` at t26/t29).  See src.cpp for why it is NOT
+// `Attr::Array`/`Attr::I32Array` (those two are `mlir::ArrayAttr`, a different MLIR
+// type with different rendered text) and why no member is keyed.
+fn t540() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(::std::string::String::new())
+}
+
+// t541/t542/t543 -- `mlir::RewriterBase` / `mlir::PatternRewriter` /
+// `mlir::IRRewriter` -> `dataflowir_gen::OpBuilder` (build.rs:461), the SAME type
+// t440 lands `mlir::OpBuilder` on, because PatternMatch.h:368/780/799 make all
+// three OpBuilders by inheritance.  The type carrier is t440's body verbatim.
+// ⛔ NO rewrite verb is keyed -- see src.cpp: they take `mlir::Operation *`
+// (t1 -> `fmt::OpInst`, a DETACHED record) and only `OpHandle` reaches an op in its
+// block, so a key would silently mutate a copy.  They stay loud at rustc.
+fn t541() -> dataflowir_gen::OpBuilder {
+    dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
+}
+
+fn t542() -> dataflowir_gen::OpBuilder {
+    dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
+}
+
+fn t543() -> dataflowir_gen::OpBuilder {
+    dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
+}
+
+// ===========================================================================
+// t560 / t561 / f460 / f461 -- the `llvm::simple_ilist<mlir::Block>` row (64
+// asks / 16 emitted placeholder sites) and `llvm::iplist<mlir::Block>` (32 asks
+// / 9 sites).  See src.cpp for the shape of all 16 sites, the all-or-nothing
+// argument, and the bucket/swallow safety.  `fmt::Region { pub blocks:
+// Vec<Block> }` (fmt.rs:513), and `iplist<T>` derives from `simple_ilist<T>`, so
+// both keys are the SAME container and get the SAME body.  ⭐ IDENTICAL to the
+// refcount model here: the container is an owning `Vec` in both, and only the
+// ITERATOR representation differs (t245).
+fn t560() -> Vec<dataflowir_gen::fmt::Block> {
+    Vec::new()
+}
+
+fn t561() -> Vec<dataflowir_gen::fmt::Block> {
+    Vec::new()
+}
+
+// f460 -- `mlir::Region::getBlocks()` -> `fmt::Region::get_blocks_mut()`
+// (fmt.rs:557).  ⚠️ `a0` named EXACTLY ONCE, method call only.
+unsafe fn f460(a0: &mut dataflowir_gen::fmt::Region) -> &mut Vec<dataflowir_gen::fmt::Block> {
+    a0.get_blocks_mut()
+}
+
+// f461 -- `llvm::simple_ilist<mlir::Block>::begin()` -> t245's
+// `*mut fmt::Block`.  ⭐ AN INTERIOR POINTER INTO THE LIVE BUFFER, not a copy:
+// rules/vector f13's body verbatim (`a0.as_mut_ptr()`), so the 16 sites'
+// `(*it).getArgument(0)` reads the first block in place.  t245's `null_mut()`
+// init is the no-position default and would trap here, which is why begin() must
+// have its own body.
+unsafe fn f461(a0: &mut Vec<dataflowir_gen::fmt::Block>) -> *mut dataflowir_gen::fmt::Block {
+    a0.as_mut_ptr()
 // ---------------------------------------------------------------------------
 // t520 / f420 / f421 -- `mlir::MutableOperandRange` AS A WRITE-THROUGH VIEW.
 //

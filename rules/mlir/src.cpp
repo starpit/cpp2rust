@@ -81,6 +81,38 @@ template <typename T> class ArrayRef;
 // rules/stringref.  ⛔ Do NOT add `using tN = llvm::APInt` here: that would be a
 // DUPLICATE key against rules/apint t2.
 class APInt {};
+// ⭐ AND `StringRef` / `Twine`, FORWARD ONLY, for the f400-f406 row: the
+// `mlir::Builder` attribute factory (`class Builder` at :978, inside `namespace
+// mlir`) declares `getNamedAttr(StringRef, Attribute)` and
+// `getStringAttr(const Twine &)` with the REAL parameter types from
+// `mlir/IR/Builders.h`, and the real `class StringRef {}` / `class Twine {}`
+// definitions in this file do not open until :1242/:1255 -- i.e. AFTER
+// `namespace mlir` closes.  A function DECLARATION may name an incomplete
+// parameter type, so forward declarations are enough here; the f400-f406
+// DEFINITIONS sit at the end of the file where both are complete.  ⛔ The
+// parameter types must be the header's own (`StringRef`, `const Twine &`) and
+// not a convenient substitute: the recorded src key carries them, so keying
+// `getStringAttr(StringRef)` against a corpus call that resolves to
+// `getStringAttr(const Twine &)` is a DEAD key -- silently, at rc=0.
+// They declare no member and no `using tN =` here, so they map nothing;
+// rules/stringref t1 and rules/twine t1 own them (both `Vec<libc::c_char>` in
+// the unsafe overlay, `Vec<u8>` in the refcount one).
+class StringRef;
+class Twine;
+} // namespace llvm
+
+namespace llvm {
+// Forward declarations only, so that `mlir::Region::getBlocks()`'s RETURN TYPE
+// (`llvm::iplist<mlir::Block> &`, Region.h:44-45) can be SPELLED on the class
+// below.  Real LLVM declares both as `template <typename T, class... Options>`;
+// the empty pack prints nothing, so a single-parameter declaration renders the
+// identical spelling `llvm::simple_ilist<mlir::Block>` that the queue records
+// (g074 `searched as:`) -- and unlike a defaulted parameter a pack cannot be
+// dropped by `SuppressDefaultTemplateArgs`.  The keys and the two member
+// deductions are at the BOTTOM of this file (t560/t561, f460/f461); they cannot
+// live here because `llvm::ilist_iterator` is not declared until t243.
+template <typename T> class simple_ilist;
+template <typename T> class iplist;
 } // namespace llvm
 
 namespace mlir {
@@ -89,7 +121,16 @@ class Operation;
 
 class Block {};
 
-class Region {};
+// ⚠️ `getBlocks()` IS DECLARED HERE AND NOT LATER, because a C++ class cannot be
+// reopened -- see f460 at the bottom of this file for the whole deduction.
+// mlir/IR/Region.h:45 `BlockListType &getBlocks() { return blocks; }`, with
+// `using BlockListType = llvm::iplist<Block>;` at :44.  There is NO const
+// overload in Region.h, so this one declaration is the entire `getBlocks`
+// surface and the corpus's non-const asks can only resolve to it.
+class Region {
+public:
+  llvm::iplist<Block> &getBlocks();
+};
 
 // `Value`, `Type` and `Attribute` are HANDLES in real MLIR -- each wraps one
 // pointer into the uniquer/the defining op, and each is DEFAULT-CONSTRUCTIBLE to
@@ -1061,6 +1102,40 @@ public:
 class Builder {
 public:
   Location getUnknownLoc();
+  // ⭐ THE ATTRIBUTE/TYPE FACTORY HALF OF `mlir::Builder` (Builders.h:53-220),
+  // added 2026-09-28 for f400-f406.  `dataflowir-gen` commit 2f78cb6 built the
+  // model these name (`src/build.rs:488-561`, `pub struct Builder` with
+  // `get_named_attr` / `get_dictionary_attr` / `get_bool_attr` /
+  // `get_string_attr` / `get_integer_attr` / `get_integer_type` /
+  // `get_str_array_attr` / `get_i64_array_attr`, all `&self`), which VOIDS the
+  // refusal recorded at `using t440 =` below -- that refusal's stated reason was
+  // "build.rs models only the INSERTION half", and it now models both.
+  //
+  // ⭐ WHY THEY GO HERE AND NOT ON `OpBuilder`.  Every one of the 148 corpus
+  // sites is `builder.getX(...)` / `odsBuilder.getX(...)` on an `OpBuilder` or
+  // `ImplicitLocOpBuilder` receiver, and in real MLIR all of them RESOLVE to
+  // `mlir::Builder::getX` through `class OpBuilder : public Builder`.  Declaring
+  // them on the BASE reproduces that resolution exactly, so whether the
+  // converter keys on the receiver's static type or on the declaring class, this
+  // rule and the corpus site compute the SAME key -- and ONE set of keys covers
+  // BOTH receivers instead of two near-duplicate sets.  (`OpBuilder` is given
+  // its `: public Builder` base at :1019 for this reason; before this row it had
+  // no base at all, which is why the member census found these 148 unmapped.)
+  //
+  // ⛔ `getIntegerType` IS DELIBERATELY ABSENT.  The model has
+  // `get_integer_type(width: u32) -> ir::Ty`, but C++ returns
+  // `mlir::IntegerType`, which is declared at :790 with NO `using tN =` -- it is
+  // UNMAPPED.  A key would have to claim a target type the module does not
+  // define.  1 site, LEFT LOUD.  Its two-argument sibling
+  // `getIntegerType(width, isSigned)` is absent from the model on purpose
+  // (`ir::Ty` cannot carry signedness, so `si32` would print `i32`).
+  NamedAttribute getNamedAttr(llvm::StringRef name, Attribute val);
+  DictionaryAttr getDictionaryAttr(llvm::ArrayRef<NamedAttribute> value);
+  BoolAttr getBoolAttr(bool value);
+  StringAttr getStringAttr(const llvm::Twine &bytes);
+  IntegerAttr getIntegerAttr(Type type, int64_t value);
+  ArrayAttr getI64ArrayAttr(llvm::ArrayRef<int64_t> values);
+  ArrayAttr getStrArrayAttr(llvm::ArrayRef<llvm::StringRef> values);
 };
 
 // `mlir::ModuleOp` -- BuiltinOps.h.inc:199, reached as the RETURN type of
@@ -1099,7 +1174,14 @@ class PassManager {};
 // itself is NOT mapped (no `using tN =` names it) -- a previous slot landed
 // `IROperandBase` in `llvm::detail` by reopening the wrong `detail`, and this is
 // the same hazard one level down: get the ENCLOSER wrong and the key is dead.
-class OpBuilder {
+// ⭐ `: public Builder` ADDED 2026-09-28 for the f400-f406 row.  Real MLIR is
+// `class OpBuilder : public Builder` (Builders.h:212), so this makes the rule
+// source's inheritance match the header it is keying against; without it the
+// f400-f406 bodies do not compile (`no member named 'getNamedAttr'`), which is a
+// regen failure rather than a converter gap.  t440's key is unaffected: it is
+// ARITY 0, FULLY CONCRETE, so the key is the bare name `mlir::OpBuilder` and a
+// base class does not enter it.
+class OpBuilder : public Builder {
 public:
   struct Listener {};
 };
@@ -5414,7 +5496,12 @@ template <class T, bool EnableSentinelTracking, bool IsSentinelTrackingExplicit,
           class TagT, bool HasIteratorBits, class ParentTy>
 struct node_options;
 } // namespace ilist_detail
-template <class OptionsT, bool IsReverse, bool IsConst> class ilist_iterator;
+// ⚠️ DEFINED (empty) rather than forward-declared ONLY so that f461 can RETURN
+// one BY VALUE: a function definition needs a COMPLETE return type, and
+// `simple_ilist<mlir::Block>::begin()` returns the iterator by value.  The
+// printed SPELLING is unchanged, so t243-t246 match exactly as before -- an empty
+// body adds no member and maps nothing.
+template <class OptionsT, bool IsReverse, bool IsConst> class ilist_iterator {};
 } // namespace llvm
 
 // t243 -- Cpp2RustUnmapped_llvm_ilist_iterator_..._mlir_Operation_..._false_false_, 24 rows.
@@ -6125,6 +6212,321 @@ using t481 = llvm::SmallDenseSet<unsigned int>;
 
 // t482 -- row g1129.  Recorded key: `llvm::SmallDenseSet<llvm::StringRef>`.
 using t482 = llvm::SmallDenseSet<llvm::StringRef>;
+// ===========================================================================
+// f400-f406 -- THE `mlir::Builder` ATTRIBUTE FACTORY, 148 SITES.
+//
+// ⭐ THIS IS THE ROW t440/t441 NAMED AND DELIBERATELY LEFT OUT.  Its refusal was
+// "`build.rs` models only the INSERTION half [...] keying them would name
+// functions that do not exist, trading 148 loud failures for 148 silent ones."
+// `dataflowir-gen` commit 2f78cb6 built the factory half (`src/build.rs:488-561`,
+// `pub struct Builder` + eight `&self` methods, re-exported at the crate root),
+// so the reason no longer holds.  Each name below was CHECKED against that file,
+// not against the C++ header, because an unmapped member does NOT abort -- the
+// converter emits the call TEXTUALLY at rc=0 with no placeholder token.
+//
+// ⭐ REACHABILITY: `OpBuilder` has a `base: Builder` field and
+// `impl Deref for OpBuilder { Target = Builder }`, and `ImplicitLocOpBuilder`
+// Derefs to `OpBuilder`, so all eight resolve on a t440/t441 receiver through the
+// Deref chain with no delegating method.
+//
+// ⭐ THE RECEIVER IS `mlir::OpBuilder &`, NOT `mlir::Builder &`.  All 148 sites
+// are `builder.getX(...)` / `odsBuilder.getX(...)` -- the census measured
+// `<recv>::[A-Za-z_0-9]*` = 0 for both builder types, so NOTHING is reached by
+// qualification -- and the declaring variables are t440/t441-typed.  `mlir::Builder`
+// itself is t59 -> `()`, so a `mlir::Builder &` receiver would type `a0` as `&()`
+// (see f124, which is exactly that) and no factory method exists on `()`.
+//
+// ⛔ ONE NAME IS LEFT OUT ON PURPOSE: `getIntegerType` (1 site).  The model has
+// `get_integer_type(width: u32) -> ir::Ty`, but C++ returns `mlir::IntegerType`,
+// declared at :790 with NO `using tN =` -- UNMAPPED.  A key would have to name a
+// target type this module does not define.  LEFT LOUD.  `createOrFold` is absent
+// from the model on purpose and the corpus does not ask for it.
+//
+// ⛔ VALUE AND KIND ARE PRESERVED, which is the `PassOptions::Option<bool>`
+// lesson: `f402` forwards `a1` unchanged so `get_bool_attr(false)` and
+// `get_bool_attr(true)` cannot collapse, and the two byte-carrying keys decode the
+// WHOLE payload up to the NUL with f365/f366's own idiom (`String::from_utf8_lossy`
+// is what `libcc2rs::Ptr::to_rust_string` uses, so this is the module's
+// established decode, not a new one).  Each `aN` is named EXACTLY ONCE -- the
+// `take_while` form is preferred over f365's `take(a1.len()-1)` precisely because
+// the latter mentions `a1` twice and a rule body is inlined as one expression.
+//
+// ⛔ `getDictionaryAttr` RETURNS `ir::AttrDict`, NOT `ir::Attr` -- consistent with
+// t9 (`mlir::DictionaryAttr` -> `ir::AttrDict`) and t261
+// (`mlir::NamedAttrList` -> `ir::AttrDict`), so a nested dictionary used as an
+// attribute VALUE stays a rustc type error by design.
+// ⛔ `getNamedAttr` returns t21's `(String, Attr)` TUPLE, not the model's
+// `ir::NamedAttribute` STRUCT; f400 destructures rather than changing t21, which
+// other keys already depend on.  The pair is carried whole, so nothing is lost.
+// ===========================================================================
+mlir::NamedAttribute f400(mlir::OpBuilder &a0, llvm::StringRef a1,
+                          mlir::Attribute a2) {
+  return a0.getNamedAttr(a1, a2);
+}
+
+mlir::DictionaryAttr f401(mlir::OpBuilder &a0,
+                          llvm::ArrayRef<mlir::NamedAttribute> a1) {
+  return a0.getDictionaryAttr(a1);
+}
+
+mlir::BoolAttr f402(mlir::OpBuilder &a0, bool a1) { return a0.getBoolAttr(a1); }
+
+mlir::StringAttr f403(mlir::OpBuilder &a0, const llvm::Twine &a1) {
+  return a0.getStringAttr(a1);
+}
+
+mlir::IntegerAttr f404(mlir::OpBuilder &a0, mlir::Type a1, int64_t a2) {
+  return a0.getIntegerAttr(a1, a2);
+}
+
+mlir::ArrayAttr f405(mlir::OpBuilder &a0, llvm::ArrayRef<int64_t> a1) {
+  return a0.getI64ArrayAttr(a1);
+}
+
+mlir::ArrayAttr f406(mlir::OpBuilder &a0, llvm::ArrayRef<llvm::StringRef> a1) {
+  return a0.getStrArrayAttr(a1);
+}
+
+// ---------------------------------------------------------------------------
+// THE REWRITER FAMILY -- t541/t542/t543 -- AND mlir::DenseArrayAttr -- t540.
+//
+// ⭐ WHY THIS IS NOW WRITABLE.  The three rewriter types were refused all day for
+// ONE stated reason, recorded at line 3760 ("the `mlir::OpBuilder` / `RewriterBase`
+// refusal") and line 5802: they are `mlir::OpBuilder` BY INHERITANCE
+// (PatternMatch.h:368 `class RewriterBase : public OpBuilder`, :780
+// `class IRRewriter : public RewriterBase`, :799
+// `class PatternRewriter : public RewriterBase`) and OpBuilder had no model.
+// ⛔ THAT BASIS IS VOID: t440 maps `mlir::OpBuilder -> dataflowir_gen::OpBuilder`
+// and t441 `mlir::ImplicitLocOpBuilder`, both landed and gated.  So a rewriter IS
+// an OpBuilder plus a few rewrite verbs, and the TYPE is exactly OpBuilder.
+//
+// ⭐ THE MEMBER CENSUS, BOTH READS (t440's discipline, because only the emitted
+// corpus can see an unmapped MEMBER -- it emits TEXTUALLY at rc=0 with no
+// placeholder token, invisible to every census and to pin/no-placeholders.sh):
+//   (1) the ask logs of the freshest full sweep (fresh34, 84 logs),
+//       `grep -o 'searched as: mlir::(PatternRewriter|RewriterBase|IRRewriter)[^;]*'`:
+//            41  searched as: mlir::PatternRewriter
+//            18  searched as: mlir::IRRewriter
+//             8  searched as: mlir::RewriterBase
+//       and NOTHING else -- 67 TYPE asks, ZERO member asks, and no `&`/`*`
+//       spelling, so ONE key per type is the whole ask (t440 measured the same).
+//   (2) the emitted corpus, all 58 `.rs`.  `<placeholder>::[A-Za-z_0-9]*` returns
+//       ZERO for all three (no `::` member reached), so every use is through a
+//       VARIABLE.  The variables declared with these types are, by declaration
+//       count, `_rewriter` 6 / `rewriter` 5 (PatternRewriter) and `rewriter` 5 /
+//       `_rewriter` 5 (IRRewriter).  Censusing `<var>[.][A-Za-z_0-9]*` over the
+//       whole corpus returns **ZERO HITS for both `rewriter.` and `_rewriter.`**:
+//       in the emitting TUs these are only DECLARED and PASSED, never dotted.
+//       ⭐ So there is no unmapped-member hole to open here at all -- the type key
+//       is the complete row for this corpus.
+//
+// ⛔ EVERY REWRITE VERB IS DELIBERATELY LEFT OUT, and this is the reason, which is
+// sharper than "no counterpart".  A repo-wide census of `rewriter.<member>` over
+// dt_src C++ (which reaches non-A TUs the corpus above does not) finds the verbs
+//     replaceOp 49, eraseOp 30, replaceOpWithNewOp 15, notifyMatchFailure 9,
+//     modifyOpInPlace 6, inlineRegionBefore 6, replaceAllUsesWith 3,
+//     inlineBlockBefore 3, eraseBlock 3, applySignatureConversion 1, clone 1
+// plus the INHERITED Builder/OpBuilder half (getContext 21, setInsertionPoint 20,
+// getI32IntegerAttr 16, getZeroAttr 12, getIndexType 12, ...), which is t440's
+// already-recorded row and not reopened here.
+// ⭐ THE BLOCKER FOR THE MUTATING VERBS IS ONE FACT: they all take
+// `mlir::Operation *`, and `mlir::Operation` is t1 -> `dataflowir_gen::fmt::OpInst`
+// -- a DETACHED op record, NOT an `OpHandle`.  `OpHandle` is the only thing in the
+// builder model that reaches an op IN ITS BLOCK (`with_op_mut`, `erase`, identity
+// by `(Rc::as_ptr(list), OpId)` rather than content), and there is no
+// `OpInst*` -> `OpHandle` mapping available to a rule body.  ⛔⛔ A key for
+// `eraseOp`/`replaceOp`/`modifyOpInPlace` written against `fmt::OpInst` would
+// therefore mutate (or drop) a DETACHED COPY and lose every rewrite SILENTLY at
+// rc=0 -- the exact failure mode a rewriter model must not have.  So all of them
+// stay LOUD instead: an unmapped member emits textually and fails at rustc with
+// `no method named replaceOp on dataflowir_gen::OpBuilder`.
+// ⭐ THE `dataflowir-gen` METHOD THAT DOES NOT EXIST AND WOULD UNBLOCK THEM:
+// a way to obtain an `OpHandle` for an op already in a `BlockList` from the op
+// itself -- e.g. `OpBuilder::handle_of(&OpInst) -> Option<OpHandle>` or
+// `BlockList::find_op(&OpInst) -> Option<OpHandle>` -- plus, on top of it,
+// `OpHandle::replace_all_uses_with(&[Value])` for `replaceOp`.  Named precisely
+// so the coordinator can hand it to one of the live dataflowir-gen slots.
+//
+// ⭐ ARITY 0, FULLY CONCRETE for all four -- the t440/t441 precedent.
+// `GetTypeMapKey` truncates at the first `<`, so no template argument enters the
+// key and matchTemplate's same-depth capture (the swallow bug) never runs.
+//
+// t540 `mlir::DenseArrayAttr` (BuiltinAttributes.h.inc:85) is the arity-0 BASE of
+// the already-mapped `mlir::detail::DenseArrayAttrImpl<T>` (t26/t29, both ->
+// `ir::Attr`).  Its 32 asks are all `IntrinsicAttr<..., DenseArrayAttrImpl<int64_t>>
+// ::getAttrName`, i.e. the type appears as a TEMPLATE ARGUMENT and a return type,
+// never constructed and never printed, so the row is a pure type-identity row.
+// It maps to `dataflowir_gen::ir::Attr` for the same reason t6/t7/t9/t10/t11/t12 do:
+// in real MLIR every *Attr is a derived HANDLE over the one uniqued Attribute
+// hierarchy, and `ir::Attr` is the closed union of that hierarchy.
+// ⛔ NOT `ir::Attr::Array`/`I32Array` AND THIS MATTERS: those two variants model
+// `mlir::ArrayAttr` (ir.rs:495-522 says so in both doc comments) -- an array of
+// *Attr elements, printed `[1 : i32]` -- whereas `DenseArrayAttr` is the dense
+// inline form printed `array<i64: 1, 2>`.  They are different MLIR types with
+// different rendered text, so nothing here claims one is the other; the key names
+// the UNION type, exactly as t6 `mlir::Attribute` does, and no member is keyed.
+namespace mlir {
+
+// BuiltinAttributes.h.inc:85.  Declared as a bare complete class: only the NAME
+// enters a type key, and no member of it is keyed.
+class DenseArrayAttr {};
+
+// PatternMatch.h:368 / :780 / :799.  The inheritance is restated as LLVM writes it
+// even though a type key does not need it, so the next reader can see that these
+// three ARE OpBuilders and does not re-derive the refusal.  ⛔ `OpBuilder` is NOT
+// redeclared -- it is already declared complete at line 1019, and a second
+// declaration is `error: redefinition` and aborts the whole module regen.
+class RewriterBase : public OpBuilder {};
+class PatternRewriter : public RewriterBase {};
+class IRRewriter : public RewriterBase {};
+
+} // namespace mlir
+
+// t540 -- 32 asks; recorded key `mlir::DenseArrayAttr`.
+using t540 = mlir::DenseArrayAttr;
+
+// t541 -- 8 asks; recorded key `mlir::RewriterBase`.
+using t541 = mlir::RewriterBase;
+
+// t542 -- 41 asks; recorded key `mlir::PatternRewriter`.  Witness spelling.
+using t542 = mlir::PatternRewriter;
+
+// t543 -- 18 asks; recorded key `mlir::IRRewriter`.
+using t543 = mlir::IRRewriter;
+
+// ===========================================================================
+// t560 / t561 / f460 / f461 -- the `llvm::simple_ilist<mlir::Block>` ROW.
+// FOUR SLOTS BOTTOMED OUT ON THIS AND IT IS LANDED AS ONE ATOMIC SET.
+//
+// THE ROW.  Freshest sweep: `llvm::simple_ilist<mlir::Block>` 64 ASKS / 16
+// EMITTED PLACEHOLDER SITES (asks run ~5x sites; both numbers reported).
+// `llvm::iplist<mlir::Block>` 32 asks / 9 emitted placeholder sites.  Queue row
+// g074 gives the type spelling verbatim:
+//     searched as: llvm::simple_ilist<mlir::Block>
+//     from decl (NOT a key -- canonicalised, defaulted args kept):
+//                 llvm::simple_ilist<mlir::Block>
+// -- identical, so there is no defaulted-argument dead duplicate to dodge.
+//
+// ONE SHAPE, 16 SITES, e.g. KTDFLowToDFIR/DataTransferLowering.cpp (8 of them)
+// and dsc-based-utils/DSC2ToDataflowIR/V3/SNTransferLowering.cpp:
+//     (*(unsafe { ((*(unsafe { (*(unsafe { ...::getRegion(self) })).getBlocks() }))
+//         as Cpp2RustUnmapped_llvm_simple_ilist_mlir_Block_).begin() })).getArgument(0)
+// i.e. region -> block list -> FIRST BLOCK -> block argument 0.
+//
+// ⛔⛔ WHY THE TYPE KEY ALONE IS FORBIDDEN, AND WHY THIS IS ALL-OR-NOTHING.
+// An UNMAPPED MEMBER DOES NOT ABORT -- the converter emits it TEXTUALLY, rc=0,
+// with NO placeholder token, invisible to every census and to
+// `pin/no-placeholders.sh`.  So a lone `t560` would swap a LOUD placeholder for
+// a SILENT call to `Vec::<fmt::Block>::getBlocks()`, which does not exist: that
+// is the `OperationState -> ()` bargain, and it is why this row was refused
+// twice.  Hence t560 + t561 + f460 + f461 together, or none.
+//
+// THE MODEL, AND IT IS NOT NEW.  `fmt::Region { pub blocks: Vec<Block> }`
+// (dataflowir-gen fmt.rs:513), so the block list IS a `Vec<fmt::Block>` and both
+// container spellings map to it.  `llvm::iplist<T>` derives from
+// `iplist_impl<simple_ilist<T>>` which derives from `simple_ilist<T>`
+// (ilist.h:110/:327), so they are the SAME container at two points of the
+// hierarchy -- the t37-t39 / t166 "the base IS the range" discipline, one body
+// for both keys.  This is why the emitted text casts to
+// `simple_ilist<mlir::Block>` before `.begin()`: `begin()` is declared on the
+// BASE (simple_ilist.h:118), so the converter upcasts first, and the `begin`
+// deduction below therefore keys the BASE receiver, not `iplist`.
+//
+// SWALLOW-SAFETY, argued for the buckets rather than assumed.  `GetTypeMapKey`
+// truncates at the first `<`, giving buckets `llvm::simple_ilist` and
+// `llvm::iplist`.  `grep -rn 'simple_ilist|llvm::iplist' rules/*/src.cpp` finds
+// NO other module naming either (there is no `rules/ilist`), so each bucket
+// holds exactly ONE candidate -- mine.  Both are FULLY CONCRETE: no `T<digits>`
+// appears in either spelling, so `matchTemplate`'s placeholder capture
+// (`findNextLiteralSameDepth`) NEVER RUNS and the same-depth-comma swallow is
+// ruled out by construction, the t243-t246 / t250-t251 argument.
+//
+// ⛔ REPORT-ONLY, DELIBERATELY NOT KEYED HERE:
+// `llvm::iplist_impl<llvm::simple_ilist<mlir::Block>, llvm::ilist_traits<mlir::Block>>`
+// (queue g1470, 1 TU) and the `mlir::Operation` twins (g1481, g108).  The
+// Operation-element spellings need `Vec<fmt::OpInst>` and a separate member
+// census; `iplist_impl` needs `llvm::ilist_traits` declared and carries 1 TU.
+// Neither is on the path of these 16 sites, and mixing them in would put a
+// third, differently-argued type into the measurement.
+
+// f460 -- `llvm::iplist<mlir::Block> & mlir::Region::getBlocks()`.
+// ⭐ THE RECEIVER IS ALREADY MAPPED: t3 `mlir::Region -> fmt::Region`, and the
+// dataflowir-gen witness already declares `getRegion(&mut self) -> *mut
+// fmt::Region`, so the whole chain up to this call is live TODAY -- this member
+// is the only missing link, and it is missing SILENTLY.
+// THE FORM IS f150-f157's: a free function whose FIRST parameter is the
+// receiver, body calling nothing but the member.
+// ⚠️ `get_blocks_mut` (fmt.rs:557) IS THE CORRECT HALF, not `get_blocks`
+// (:549): the receiver in every emitted site is a `*mut fmt::Region`
+// dereference, i.e. a mutable lvalue, and C++ `getBlocks()` is non-const and
+// returns a MUTABLE reference.  ⚠️ AND `get_blocks_mut` IS snake_case ON
+// PURPOSE: a camelCase target name would let the *other*, still-unmapped C++
+// members of this class resolve BY ACCIDENT against dataflowir-gen and destroy
+// the diagnostic.  Renaming is this key's job.
+// ⛔ `take_block_list()` is NOT what this body wants: it leaves the region
+// EMPTY.  `getBlocks()` is a pure accessor, so the aliasing `&mut` borrow is the
+// faithful body and the `Rc` bridge stays unused here.
+llvm::iplist<mlir::Block> &f460(mlir::Region &r) { return r.getBlocks(); }
+
+namespace llvm {
+// ⚠️ EXPLICIT SPECIALISATION, not a member on the primary template, so that
+// `begin()`'s return type is WRITTEN OUT and cannot be rendered through a
+// dependent `typename ...::iterator` that would never match the recorded key.
+// simple_ilist.h:95 `using iterator = ilist_select_iterator_type<OptionsT,
+// false, false>` and :118 `iterator begin()`, which at `T = mlir::Block`
+// resolves to EXACTLY t245's spelling -- the key `begin()` must match.
+// simple_ilist.h:119 `const_iterator begin() const` is the OTHER overload and is
+// deliberately NOT declared: the corpus receiver is a mutable lvalue, and
+// declaring only one overload makes a const ask FAIL LOUDLY instead of silently
+// binding to the wrong iterator constness (t246's IsReverse=true rbegin/rend
+// half is likewise absent because nothing asks for it).
+template <> class simple_ilist<mlir::Block> {
+public:
+  ilist_iterator<ilist_detail::node_options<mlir::Block, false, false, void,
+                                            false, void>,
+                 false, false>
+  begin();
+};
+} // namespace llvm
+
+// f461 -- `llvm::simple_ilist<mlir::Block>::begin()`, returning t245.
+// ⭐⭐ THE ALIASING REQUIREMENT, WHICH IS WHAT KILLED THIS ROW TWICE.  The next
+// thing all 16 sites do is DEREFERENCE the result and call `getArgument(0)`, so
+// `begin()` must hand back an iterator that ALIASES the live block list.  Every
+// ALLOCATING `Ptr` constructor is therefore wrong: `Ptr::null()` would deref
+// null, and `Ptr::alloc(a0[0].clone())` fabricates a COPY so any mutation
+// through the iterator is lost.  ⭐ The settled precedent is rules/vector's f13
+// (`std::vector<T1>::begin()`), whose refcount formal IS `Ptr<T1>` and whose
+// body is the bare `a0`: the converter hands a rule a BORROW of the owner's
+// `Value<Vec<T>>` (`PtrKind::StackVec(Rc::downgrade(owner))`, rc.rs:1047 --
+// the same provenance `Ptr::borrow_vec` names at rc.rs:281), so NOTHING IS
+// ALLOCATED and writes land in the owner.  libcc2rs' own test asserts that
+// provenance (`assert!(matches!(begin.kind, PtrKind::StackVec(_)))`,
+// rc.rs:1340).  The unsafe half is rules/vector f13's `a0.as_mut_ptr()`, an
+// interior pointer into the same buffer.
+// ⚠️ `delete()` on a borrow-provenance `Ptr` panics `"ub: invalid delete"` BY
+// DESIGN, which is correct: deleting a block through this iterator is UB in C++
+// too.
+// ⛔ NO `operator++`, `operator*`, `end()`, `empty()` OR ANY OTHER MEMBER IS
+// KEYED, the t243-t246 discipline.  `getArgument(0)` on the RESULT is a
+// `fmt::Block` member and resolves in dataflowir-gen, not here.
+llvm::ilist_iterator<
+    llvm::ilist_detail::node_options<mlir::Block, false, false, void, false,
+                                     void>,
+    false, false>
+f461(llvm::simple_ilist<mlir::Block> &l) {
+  return l.begin();
+}
+
+// t560 -- `llvm::simple_ilist<mlir::Block>`, queue g074, 41 TUs / 64 asks /
+// 16 emitted placeholder sites.  THE receiver of f461 and the cast target in
+// every one of the 16 sites.
+using t560 = llvm::simple_ilist<mlir::Block>;
+
+// t561 -- `llvm::iplist<mlir::Block>`, 32 asks / 9 emitted placeholder sites.
+// NOT optional: it is the RETURN type f460 is spelled with, so without it f460
+// cannot resolve at all.  Same body as t560 -- the same container.
+using t561 = llvm::iplist<mlir::Block>;
 
 // ---------------------------------------------------------------------------
 // t520 / f420 / f421 -- `mlir::MutableOperandRange`, THE WRITE-THROUGH VIEW.
