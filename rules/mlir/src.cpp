@@ -5308,3 +5308,135 @@ mlir::InFlightDiagnostic &&f157(mlir::InFlightDiagnostic &&d,
                                 const llvm::StringRef &s) {
   return std::move(d).operator<<(s);
 }
+
+// ---------------------------------------------------------------------------
+// t340 / f240 -- `mlir::OpaqueProperties`, mlir/IR/OperationSupport.h:69-80.
+// THE WHOLE DECLARATION IS SIX LINES AND ITS MEMBER SURFACE WAS CENSUSED IN FULL
+// BEFORE THIS KEY WAS WRITTEN, which is the thing the `simple_ilist<mlir::Block>`
+// and `OperationState` refusals could not do:
+//
+//     class OpaqueProperties {
+//     public:
+//       OpaqueProperties(void *prop) : properties(prop) {}
+//       operator bool() const { return properties != nullptr; }
+//       template <typename Dest> Dest as() const {
+//         return static_cast<Dest>(const_cast<void *>(properties));
+//       }
+//     private:
+//       void *properties;
+//     };
+//
+// ⭐ THE REPRESENTATION IS THE `void *` ITSELF, not a wrapper.  The class has one
+// data member, a `void *`, a converting constructor from `void *`, and no
+// destructor (`grep -rn '~OpaqueProperties' $LLVM_ROOT/include/mlir` = 0 hits, the
+// same test t85 passes).  So `*mut ::libc::c_void` is not an opaque stand-in: it is
+// the type's exact layout and exact semantics.  `operator bool()` would be
+// `!is_null()` and `as<Dest>()` a pointer cast IF a site ever asked -- see the
+// deliberate omission below.
+//
+// ⭐ ARITY 0, FULLY CONCRETE, SO THE SWALLOW CANNOT APPLY.  `GetTypeMapKey`
+// truncates at the first `<` so arity is not in the key at all, and
+// `matchTemplate`'s `findNextLiteralSameDepth` capture never runs for a key with
+// no template arguments -- the t166 / t37-t39 / t320 precedent.
+//
+// ⭐ WHERE THE 30 SITES ARE, measured over the 58 bucket-A `.rs` of fresh30/out
+// (total tree-wide `Cpp2RustUnmapped` = 7,127):
+//     Cpp2RustUnmapped_mlir_OpaqueProperties   30   (the LONG spelling)
+//     bare `OpaqueProperties` substring total   60   -> 60 - 30 = 30 BARE
+// and the 30 bare ones are all ONE spelling, `mlir_OpaqueProperties::new` -- i.e.
+// this row is a TYPE key AND a FABRICATED-CTOR key, which is why f240 exists.  A
+// type key alone leaves `E0433: cannot find mlir_OpaqueProperties` behind.
+// Four files: ddc/ddl/Dialect/DdlOps.cpp (46 occ), dialects/Init/InitOps.cpp (6),
+// dialects/ExPlan/ExPlanOps.cpp (4), dataflow-scheduler/.../Dialect/Symbol/Symbol.cpp (2).
+//
+// ⭐ THE MEMBER CENSUS, and it is COMPLETE rather than sampled.  Two independent
+// reads agree:
+//   (1) `-verbose` on dialects/Init/InitOps.cpp, converter RC=0, log 100,589 lines,
+//       emitted 4,611 lines == the non-verbose leg's 4,611 (so the log is NOT
+//       truncated -- trap 5/6c).  `grep -o 'searched as: [^;]*OpaqueProperties[^;]*'`
+//       returns exactly `3 searched as: mlir::OpaqueProperties` and NOTHING else:
+//       three TYPE asks, ZERO member asks.
+//   (2) the emitted corpus, which is where an unmapped MEMBER actually shows up
+//       (it does not abort -- the converter emits the call textually at rc=0 with
+//       no placeholder token).  Anchored over all 58 files:
+//         `mlir_OpaqueProperties::[A-Za-z_0-9]*`  ->  30 `::new`, nothing else
+//         `properties[.][A-Za-z_0-9]*`            ->  30 `properties.clone`, nothing else
+//       So the ONLY things the corpus does to an OpaqueProperties value are
+//       CONSTRUCT it from a `void *` and COPY it.  A raw pointer is `Copy` in Rust
+//       and `.clone()` on it type-checks, so both are satisfied by the model above
+//       and NEITHER is emitted textually against a member that does not exist.
+//
+// ⛔ DELIBERATELY LEFT OUT -- `operator bool()` and `as<Dest>()`.  Both are
+// trivially expressible (`!a0.is_null()`; `a0 as *mut Dest`), and that is exactly
+// why leaving them out is the right call rather than a gap: ZERO sites in the
+// corpus ask for either (the two greps above are the proof, not an assumption), so
+// keying them would be writing rules against no evidence, and `as<Dest>()` in
+// particular would have to be keyed once per concrete `Dest` -- a set the corpus
+// does not name.  Absent, they FAIL LOUDLY the moment a site does ask.
+//
+// ⚠️ WHAT THIS ROW DOES *NOT* FIX, stated so the next slot does not read the
+// placeholder drop as "the properties block now compiles".  Each of the 30 sites
+// sits inside an ODS-generated block that goes on to call
+// `setOpPropertiesFromAttribute` on an `Option<dataflowir_gen::TdOpDef>` and to
+// build an `llvm::function_ref<...>` via a fabricated `::new_4`.  BOTH are
+// unmapped, and `grep -rn 'setOpPropertiesFromAttribute' dataflowir-gen/src/*.rs`
+// is ZERO hits, so neither is in the model.  They are emitted TEXTUALLY, at rc=0,
+// invisible to every census -- a SEPARATE row (the unmapped-member half), not this
+// one.  t340/f240 is correct in itself; it is not sufficient for these TUs to
+// build.
+namespace mlir {
+class OpaqueProperties {
+public:
+  OpaqueProperties(void *prop);
+};
+} // namespace mlir
+
+using t340 = mlir::OpaqueProperties;
+
+// f240 -- THE CONVERTING CONSTRUCTOR, `OpaqueProperties(void *prop)`.  It is the
+// class's ONLY constructor (there is no default ctor), and it is the one all 30
+// sites reach: the emitted argument is already `(... as *mut ::libc::c_void)`, so
+// the target is the identity.
+mlir::OpaqueProperties f240(void *a0) { return mlir::OpaqueProperties(a0); }
+
+// ---------------------------------------------------------------------------
+// ⛔ NEW REFUSAL -- `mlir::DialectBytecodeReader` (30 sites) and
+// `mlir::DialectBytecodeWriter` (30 sites).  Scoped to this slot as "same shape as
+// t340, take them if the primary lands early".  THEY ARE NOT THE SAME SHAPE, and
+// the difference is the whole point of the unmapped-MEMBER trap.
+//
+// ⭐ THE SHAPE, measured over the 58 bucket-A `.rs` of fresh30/out.  Both types are
+// 30 LONG-spelling occurrences and ZERO bare ones
+// (`grep -o 'Cpp2RustUnmapped_mlir_DialectBytecodeReader'` = 30 and
+// `grep -o 'DialectBytecodeReader'` = 30, so 30 - 30 = 0 bare; same for Writer) --
+// i.e. NO fabricated constructor, unlike t340.  All 60 sites are in ONE position:
+// a parameter, `reader: *mut Cpp2RustUnmapped_mlir_DialectBytecodeReader` /
+// `writer: *mut ...Writer`, on the ODS-generated `readProperties`/`writeProperties`.
+// That looks like a name-only key -- the t25/t320 cast-target shape.
+//
+// ⛔ IT IS NOT, BECAUSE THE MEMBERS *ARE* READ, AND AN UNMAPPED MEMBER DOES NOT
+// ABORT -- it is emitted TEXTUALLY at rc=0 with no placeholder token, invisible to
+// every census and to pin/no-placeholders.sh.  Anchored over the same 58 files:
+//     (*reader).readAttribute            46      (*writer).writeAttribute            46
+//     (*reader).readOptionalAttribute    33      (*writer).writeOptionalAttribute    33
+//     (*reader).getBytecodeVersion       12      (*writer).getBytecodeVersion        12
+//     (*reader).readSparseArray           6      (*writer).writeSparseArray           6
+//     (*reader).emitError                 6
+//                                   --- 103                                    --- 97
+// and in each file the ONLY `reader:`/`writer:` declaration reaching those calls is
+// the parameter above (the other `writer:` decls in the corpus are
+// `mlir::IRRewriter`/`mlir::PatternRewriter`, a different row).  So a TYPE key here
+// would drop 60 placeholders and leave 200 textual method calls on a Rust type that
+// has none of them -- trading a LOUD failure for a SILENT one, which is the exact
+// trade this tree forbids.
+//
+// ⛔ AND THE MEMBERS CANNOT BE KEYED, checked BOTH routes because a DEF can arrive
+// by either.  For all seven method names plus `DialectBytecode` itself:
+//     grep -c over dataflowir-gen/src/*.rs (HAND-WRITTEN: fmt.rs, ir.rs, td*.rs)  = 0
+//     grep -c over the generated out/dataflow_ods.rs (TD_OPS_MORE route)          = 0
+// There is no bytecode stream in the model at all -- no reader, no writer, no
+// version.  Supplying one would mean PORTING MLIR, which is out of bounds: mlir
+// types get models from the dataflowir-gen `.td` parser, never a hand-written
+// stand-in.  So both rows stay LOUD, deliberately, and this is a
+// `dataflowir-gen` capability question (bytecode (de)serialisation) rather than a
+// rules row.  ⚠️ Re-test it with the two greps above before reopening.
