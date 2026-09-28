@@ -92,3 +92,12 @@ fn f19<T1>(a0: &Option<Value<T1>>, a1: &Option<Value<T1>>) -> bool {
         _ => false,
     }
 }
+
+// f20 -- shared_ptr(nullptr).  The `let _: () = a0` ANNOTATION IS LOAD-BEARING,
+// for the same reason it is on f17/f18: the converter inlines the nullptr literal
+// as a BARE UNTYPED `Default::default()`, and `let _ = Default::default();` is
+// error[E0790] on its own.
+fn f20<T1>(a0: ()) -> Option<Value<T1>> {
+    let _: () = a0;
+    None
+}

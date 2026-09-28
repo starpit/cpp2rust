@@ -109,3 +109,35 @@ template <typename T1>
 bool f19(const std::shared_ptr<T1> &a, const std::shared_ptr<T1> &b) {
   return operator==(a, b);
 }
+
+// ---------------------------------------------------------------------------
+// f20 -- `std::shared_ptr<T1>(std::nullptr_t)`.
+//
+// MEASURED ABSENT, verbatim from a `-verbose` run of
+// sys-arch-spec/initpacket/initpacket.cpp against pin/ir.v20 (16 occurrences in
+// that one log):
+//     search expr void std::shared_ptr<HeaderInitSlice>::shared_ptr(std::nullptr_t), result:
+//     None
+// while the sibling search one line away RESOLVES:
+//     search expr void std::shared_ptr<HeaderInitSlice>::shared_ptr(), result:
+//     Matching: void std::shared_ptr<T1>::shared_ptr()
+// -- so this is a MISSING OVERLOAD (a missing DEDUCTION on the argument), not a
+// missing type, and f4's nullary key does NOT cover it.  That pairing is the
+// whole evidence: the abort/None spelling names `std::nullptr_t` explicitly.
+//
+// The site shape is `std::shared_ptr<HeaderInitSlice> myHeader = nullptr;` at
+// sys-arch-spec/initpacket/initpacket.h:115/124/133/142 -- a MEMBER INITIALIZER in
+// a shared header, which is why the corpus-wide count is 220 sites across 55
+// emitted files but only ONE C++ row.
+//
+// `std::nullptr_t` carries no information -- the converter emits the `nullptr`
+// literal as `Default::default()` -- so the target binds the operand to `()` and
+// leaves it deliberately unused, the same treatment f17/f18 already give the null
+// TESTS in this module.
+//
+// OWNERSHIP: nothing is lost.  A null shared_ptr owns nothing and aliases
+// nothing, so `None` is exact in both models and no mapped operation (use_count,
+// operator bool, Rc::ptr_eq via f19) can observe a difference.
+template <typename T1> std::shared_ptr<T1> f20(std::nullptr_t n) {
+  return std::shared_ptr<T1>(n);
+}

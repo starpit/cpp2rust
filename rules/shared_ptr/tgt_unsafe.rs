@@ -104,3 +104,8 @@ unsafe fn f19<T1>(a0: &Option<Rc<T1>>, a1: &Option<Rc<T1>>) -> bool {
         _ => false,
     }
 }
+
+unsafe fn f20<T1>(a0: ()) -> Option<Rc<T1>> {
+    let _: () = a0;
+    None
+}
