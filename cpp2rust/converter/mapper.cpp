@@ -131,13 +131,171 @@ std::string GetExprMapKey(const std::string &str) {
 
 constexpr const char kPackMarker[] = "&&...";
 
+// ARROW ARITY -- the number of parameters in the function type that sits
+// DIRECTLY inside a template argument list, i.e. the `(...)` of
+// `std::function<T1 (T2, T3)>` / `llvm::function_ref<T1 ()>`.
+// Returns nullopt when `str` carries no such function type, which is the case
+// for the overwhelming majority of type spellings.
+//
+// WHY THIS EXISTS. `GetTypeMapKey` buckets a type key on the text before the
+// first `<`, so every arity of `std::function` shared ONE bucket and
+// `matchTemplate` alone had to tell them apart. It cannot: a trailing
+// placeholder absorbs whatever is left, so `std::function<T1 (T2, T3)>` unified
+// with a FOUR-argument instantiation (T3 = "c, d") and the emitted code then
+// called a rule body written for a two-argument callable. A WRONG-ARITY MATCH
+// RESOLVES AND COMPILES, so nothing downstream catches it. Putting the arity in
+// the BUCKET makes the mismatch structurally impossible while leaving
+// `matchTemplate`'s capture untouched -- so a key that deliberately relies on a
+// trailing placeholder swallowing DEFAULTED template arguments
+// (`llvm::SmallVector<T1>` vs `llvm::SmallVector<T1, _>`, `std::unique_ptr<T1>`
+// vs its 2-arg `std::default_delete` spelling) keeps working exactly as before.
+// That is why this is the safe half of the fix and "stop the placeholder scan at
+// a depth-0 `,`" is not.
+//
+// THE ORPHANING HAZARD AND WHAT RULES IT OUT. The arity must be read off the
+// SAME structural position on both sides (this function runs on the load side at
+// AddTypeRule/:797 and on the ask side at :643/:665/:679/:1751), or a key with
+// no `(` would be orphaned by an ask that has one somewhere. Hence:
+//   * only parens at ANGLE DEPTH 1 count, so `std::vector<std::function<void ()>>`
+//     keeps bucket `std::vector` -- the `()` lives at depth 2;
+//   * there must be EXACTLY ONE such group, which excludes the two-group
+//     declarator shapes `void (*)(int)` and `T1 (T2::*)(T3)`;
+//   * a group whose content starts with `*` or `&` is a declarator, not a
+//     parameter list, so `std::vector<int (*)[3]>` keeps bucket `std::vector`.
+// ⚠️ A VARIADIC key (a `kPackMarker` pack inside the parens) has no fixed arity
+// and would be orphaned by this. There is none today -- the only paren-bearing
+// TYPE keys in the tree are `std::function`/`llvm::function_ref` arities 0..5,
+// twelve keys, all spelled out -- and adding one would fail LOUDLY as an
+// unmapped type, never silently.
+std::optional<size_t> GetArrowArity(const std::string &str) {
+  const size_t lt = str.find('<');
+  if (lt == std::string::npos) {
+    return std::nullopt;
+  }
+  int ang = 0;
+  int par = 0;
+  int sq = 0;
+  size_t groups = 0;
+  size_t open = std::string::npos;
+  size_t close = std::string::npos;
+  for (size_t i = lt; i < str.size(); ++i) {
+    switch (str[i]) {
+    case '<':
+      ++ang;
+      break;
+    case '>':
+      if (--ang < 0) {
+        return std::nullopt;
+      }
+      break;
+    case '(':
+      if (ang == 1 && par == 0 && sq == 0) {
+        if (++groups == 1) {
+          open = i;
+        }
+      }
+      ++par;
+      break;
+    case ')':
+      if (--par < 0) {
+        return std::nullopt;
+      }
+      if (par == 0 && groups == 1 && close == std::string::npos) {
+        close = i;
+      }
+      break;
+    case '[':
+      ++sq;
+      break;
+    case ']':
+      if (--sq < 0) {
+        return std::nullopt;
+      }
+      break;
+    default:
+      break;
+    }
+    // The outermost template argument list has closed; anything after it (a
+    // trailing `&`, a nested declarator) is not part of this bucket's head.
+    if (ang == 0 && i > lt) {
+      break;
+    }
+  }
+  if (ang != 0 || par != 0 || sq != 0) {
+    return std::nullopt; // unbalanced: fall back to today's bucket, symmetrically
+  }
+  if (groups != 1 || open == std::string::npos ||
+      close == std::string::npos) {
+    return std::nullopt;
+  }
+  size_t a = open + 1;
+  size_t b = close;
+  while (a < b && std::isspace((unsigned char)str[a])) {
+    a++;
+  }
+  while (b > a && std::isspace((unsigned char)str[b - 1])) {
+    b--;
+  }
+  if (a == b) {
+    return 0; // `()` -- a nullary callable
+  }
+  if (str[a] == '*' || str[a] == '&') {
+    return std::nullopt; // `(*)` / `(&)` declarator, not a parameter list
+  }
+  size_t arity = 1;
+  int g_ang = 0;
+  int g_par = 0;
+  int g_sq = 0;
+  for (size_t i = a; i < b; ++i) {
+    switch (str[i]) {
+    case '<':
+      ++g_ang;
+      break;
+    case '>':
+      --g_ang;
+      break;
+    case '(':
+      ++g_par;
+      break;
+    case ')':
+      --g_par;
+      break;
+    case '[':
+      ++g_sq;
+      break;
+    case ']':
+      --g_sq;
+      break;
+    case ',':
+      if (g_ang == 0 && g_par == 0 && g_sq == 0) {
+        ++arity;
+      }
+      break;
+    default:
+      break;
+    }
+  }
+  return arity;
+}
+
 std::string GetTypeMapKey(const std::string &str) {
   auto n = str.find_first_of("<[");
+  std::string key;
   if (n == std::string::npos || str[n] == '<') {
-    return str.substr(0, n);
+    key = str.substr(0, n);
+  } else {
+    // something like int[][] or T1[] -> []
+    key = str.substr(n + 1);
   }
-  // something like int[][] or T1[] -> []
-  return str.substr(n + 1);
+  // Symmetric on both sides by construction: the suffix is a pure function of
+  // the spelling, so no existing key can be orphaned unless the ask's spelling
+  // really does carry a different arrow arity -- which is exactly the case we
+  // want to stop matching.
+  if (auto arity = GetArrowArity(str)) {
+    key += '#';
+    key += std::to_string(*arity);
+  }
+  return key;
 }
 
 void AddTypeRule(std::string src, TranslationRule::TypeRule &&rule) {
