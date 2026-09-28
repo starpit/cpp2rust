@@ -2306,3 +2306,22 @@ fn t245() -> libcc2rs::Ptr<dataflowir_gen::fmt::Block> {
 fn t246() -> libcc2rs::Ptr<dataflowir_gen::fmt::Block> {
     libcc2rs::Ptr::<dataflowir_gen::fmt::Block>::null()
 }
+
+// t250 / t251 -- `mlir::TypeRange` and its CRTP base at
+// `DerivedT = mlir::TypeRange` (queue row g111; 12,045 + 2,098 ground-truth
+// emitted sites).  SAME body for both, because the base IS the range -- the
+// t37-t39 / t166 discipline.  Element model is `ir::Ty` (t5), NOT `ir::Value`:
+// TypeRange's element type is `mlir::Type`, which is the whole reason t166 could
+// not be shared.  Returned BY VALUE, so nothing can dangle under refcount.
+// ⚠️ Plain `fn`, not `unsafe fn`: the t37-t39 / t166 convention for a TYPE rule.
+// See src.cpp for the spelling read off TypeRange.h:33-37, the arity-0
+// swallow-safety argument, and the aliasing licence RE-DERIVED for TypeRange
+// (no member function of any kind on its public surface, so unlike
+// mlir::MutableOperandRange there is nothing to write through).
+fn t250() -> Vec<dataflowir_gen::ir::Ty> {
+    Default::default()
+}
+
+fn t251() -> Vec<dataflowir_gen::ir::Ty> {
+    Default::default()
+}

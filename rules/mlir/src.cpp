@@ -4833,3 +4833,98 @@ using t246 = llvm::ilist_iterator<
     llvm::ilist_detail::node_options<mlir::Block, false, false, void, false,
                                      void>,
     true, false>;
+
+// ---- t250 / t251: `mlir::TypeRange` and its CRTP base ----------------------
+// Queue row g111, and the BIGGEST rules row on the board by ground-truth emitted
+// counts (GROUND-TRUTH-UNMAPPED.txt lines 3 and 10, re-measured off emitted `.rs`,
+// not off a queue `searched as:` line):
+//     Cpp2RustUnmapped_mlir_TypeRange                             12045 sites / 38 files
+//     Cpp2RustUnmapped_llvm_detail_indexed_accessor_range_base_mlir_TypeRange__llvm_PointerUnion_const_mlir_Value_ptr__const_mlir_Type_ptr__mlir_OpOperand_ptr__mlir_detail_OpResultImpl_ptr___mlir_Type__mlir_Type__mlir_Type_
+//                                                                  2098 sites / 16 files
+// ⭐ THE TYPE KEY COMES FIRST: `mlir::TypeRange` was UNMAPPED ANYWHERE in this
+// module (grep before this edit found it only in PROSE at :3519/:3935/:3970-3978),
+// which is why the short name carries six times the sites of the base name.
+//
+// SPELLING.  Read off mlir/IR/TypeRange.h:33-37 in the pinned toolchain
+// (toolchain/llvm/LLVM-22.1.3-Linux-X64/include/mlir/IR/TypeRange.h), and it agrees
+// ARGUMENT-FOR-ARGUMENT with the emitted mangled name above:
+//     class TypeRange : public llvm::detail::indexed_accessor_range_base<
+//                           TypeRange,
+//                           llvm::PointerUnion<const Value *, const Type *,
+//                                              OpOperand *, detail::OpResultImpl *>,
+//                           Type, Type, Type>
+// Three measured differences from t166 (`mlir::ValueRange`'s base, :3980): a
+// different DerivedT, a FOUR-arm PointerUnion (t166's has three -- no
+// `const mlir::Type *`), and an element type of `mlir::Type` rather than
+// `mlir::Value`.  So the model is a Vec of `ir::Ty` (t5), NOT `ir::Value` -- which is
+// exactly why t166's paragraph refused to share one key across both rows.
+//
+// MODEL.  `Vec<dataflowir_gen::ir::Ty>`, the elementwise lift of t5
+// (`mlir::Type` -> `ir::Ty`) the same way t14/t16 are the elementwise lift of t4.
+// Nothing new is represented; both keys get the SAME body, because the base IS the
+// range (the t37-t39 / t166 discipline).  Returned BY VALUE, so nothing can dangle
+// under the refcount model.
+//
+// ⭐ THE ALIASING LICENCE, RE-DERIVED FOR `TypeRange` RATHER THAN INHERITED.  The
+// t14-t17 owning-`Vec` position holds only for a READ-ONLY view, and the
+// `mlir::MutableOperandRange` refusal at :1311 is what happens when it does not.
+// TypeRange.h:38-71 is the whole public surface and it declares NO MEMBER FUNCTION
+// AT ALL -- only constructors (`using RangeBaseT::RangeBaseT;` plus the seven
+// overloads at :40-53).  Its only other members are PRIVATE statics
+// (`offset_base`, `dereference_iterator` at :65/:67) plus a `friend RangeBaseT`,
+// and the inherited surface is `indexed_accessor_range_base`, already settled
+// read-only for t37-t39/t166.  There is NO `assign`/`append`/`erase`, no
+// non-const accessor, and no reference-returning accessor -- so unlike
+// MutableOperandRange nothing writes through the handle, and unlike
+// `std::string_view::front()` / `llvm::SMLoc::getPointer()` nothing hands a
+// borrow out of a receiver this model owns by value.  An owning `Vec<ir::Ty>` copy
+// therefore loses only UNOBSERVABLE aliasing.  (⚠️ `ValueTypeRange` at
+// TypeRange.h:120-165 DOES declare `front()`, but that is a DIFFERENT class and is
+// not keyed here.)
+//
+// ⛔ STILL NO GENERIC RULE, and the t37-t39/t166 prohibition is unchanged: a
+// generic `indexed_accessor_range_base<T1,...,T5>` would have to pick one element
+// representation for five different element types and would force the converter to
+// map the `PointerUnion` arms, turning a countable mangled name into a hard
+// mapper.cpp:722 abort.
+//
+// SWALLOW-SAFETY, argued for the bucket and not assumed.  `GetTypeMapKey`
+// (mapper.cpp:115) truncates at the first `<`, so t251 lands in the bucket
+// `llvm::detail::indexed_accessor_range_base`, shared with t37, t38, t39, t166 and
+// ONLY those.  ⭐ ALL FIVE ARE FULLY CONCRETE -- PLACEHOLDER ARITY 0.  There is no
+// `T<digits>` anywhere in any of the five spellings, so `matchTemplate`'s
+// placeholder capture (`findNextLiteralSameDepth`, :173) -- the mechanism behind the
+// `DenseMapInfo<T1>` and `__wrap_iter<T1 *>` swallows -- NEVER RUNS on this bucket.
+// That is precisely why the nested comma-bearing four-arm `PointerUnion<...>` is
+// harmless: with no placeholder in front of them, its commas are matched
+// LITERALLY, not captured past.  The five candidates are pairwise distinguished by
+// their FIRST template argument (OperandRange / ResultRange / RegionRange /
+// ValueRange / TypeRange), so a literal match selects exactly one and `search()`'s
+// longer-src tie-break (mapper.cpp:430-437) is never consulted -- which matters,
+// because that tie-break CANNOT protect a sole candidate.  t250 is a bare
+// non-template name, so it buckets as `mlir::TypeRange` alone and the same
+// argument is trivial there.
+// ⛔ NO DEFAULTED TEMPLATE ARGUMENT IS SPELLED: `indexed_accessor_range_base` has
+// five parameters and all five are written, so `SuppressDefaultTemplateArgs`
+// cannot collapse this into a silent duplicate of a shorter key (the
+// `DenseMapInfo<T1, void>` failure).
+//
+// ⛔ NO CONSTRUCTOR KEY IS WRITTEN HERE, DELIBERATELY, and `class TypeRange` below
+// is declared with NO MEMBERS so that none is recorded.  TypeRange's seven ctor
+// overloads (:40-53) are five templates plus two whose spellings the recorder
+// resolves at the call site; writing them blind is the f143 failure mode (written,
+// measured unchanged, deleted).  The TYPE key is 12,045 of the 14,143 sites and is
+// measurable on its own; the ctors are a separate, separately-measured row.
+namespace mlir {
+// mlir/IR/TypeRange.h:33 -- declared ONLY so t250 and t251 can be spelled.  No
+// member is declared because no member is mapped (the `sys::SmartMutex` /
+// `BitVector` precedent at :1229-1245).
+class TypeRange {};
+} // namespace mlir
+
+using t250 = mlir::TypeRange;
+using t251 = llvm::detail::indexed_accessor_range_base<
+    mlir::TypeRange,
+    llvm::PointerUnion<const mlir::Value *, const mlir::Type *,
+                       mlir::OpOperand *, mlir::detail::OpResultImpl *>,
+    mlir::Type, mlir::Type, mlir::Type>;
