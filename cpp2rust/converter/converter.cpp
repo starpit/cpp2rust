@@ -3310,7 +3310,137 @@ bool Converter::VisitCXXForRangeStmt(clang::CXXForRangeStmt *stmt) {
   if (GetClassName(range_init_type) == "std::basic_string") {
     return VisitCXXForRangeStmtString(stmt);
   }
+  // ⛔ THIS FALL-THROUGH IS WHERE THE POSITIONAL ASSUMPTION IS MADE: every range
+  // that is not a map and not a string is lowered as `0..range.len()` plus
+  // `range.as_ptr().add(i)` (VisitCXXForRangeStmtIndexBased +
+  // ConvertLoopVariable), which never consults `begin`/`end` and is simply wrong
+  // for a container that has no positional element access. Measured 2026-09-28:
+  // `for (const auto& written : producer_writes)` over an
+  // `llvm::SmallDenseSet<mlir::Attribute>` (ScratchpadConflicts.cpp:149) emitted
+  // `producer_writes.as_ptr()` against a Rust `std::collections::HashSet`, which
+  // is `E0599: no method named as_ptr` -- at rc=0, with no placeholder token, so
+  // NO bucket census could see it. `.len()` exists on `HashSet`, which is
+  // exactly why only real `rustc` finds this class.
+  //
+  // ⚠️ THE SET BRANCH IS ADDITIVE AND IS DELIBERATELY NOT A WIDER FIX. Maps are
+  // ALSO non-indexable, and `for (auto &kv : unordered_map)` still goes down the
+  // positional path from here -- routing it to `.iter()` would bind `kv` to a
+  // Rust `(&K, &V)` tuple where the C++ loop variable is a
+  // `std::pair<const K, V> &`, i.e. a DIFFERENT silent wrongness. Only the SET
+  // shape is lowered, because there and only there the iterator element IS the
+  // loop variable's referent.
+  if (IsSetLikeRangeInit(range_init_type)) {
+    return VisitCXXForRangeStmtSet(stmt);
+  }
   return VisitCXXForRangeStmtVector(stmt);
+}
+
+// ⭐ WHY THIS TESTS THE MAPPED RUST TYPE AND NOT THE C++ CLASS NAME, measured.
+// A C++-name allowlist is the obvious shape and it MISFIRES: `llvm::SetVector`
+// and `llvm::SmallSetVector` are set classes by name and by C++ semantics, and
+// rules/setvector deliberately models them as `Vec<T>` (tgt_unsafe.rs:9 -- the
+// insertion order is observable at every corpus site), so they ARE indexable in
+// Rust and the positional lowering is already CORRECT for them. Emitting
+// `.iter()` there would replace working output with a loop variable of the wrong
+// Rust type. The only thing that decides indexability is what the range is
+// modelled AS, so that is what gets asked.
+//
+// The predicate is therefore an allowlist of RUST target spellings, and it can
+// only fire on a container this converter already knows is a `HashSet`/
+// `BTreeSet`; everything else -- including every unmapped type, every user
+// struct and every set class modelled as a `Vec` -- takes exactly the path it
+// took before this change.
+static bool IsNonIndexableSetTargetType(const std::string &rust_type) {
+  return rust_type.starts_with("std::collections::HashSet<") ||
+         rust_type.starts_with("std::collections::BTreeSet<");
+}
+
+bool Converter::IsSetLikeRangeInit(clang::QualType range_init_type) {
+  auto unqualified = range_init_type.getUnqualifiedType();
+  // ⚠️ `Mapper::Contains` FIRST, and not as a "has a rule" test -- it is a known
+  // TRUE for any user struct in the TU, because `search()` falls through to
+  // `LooksLikeUserDefinedTypeName` and SYNTHESISES an identity rule. It is used
+  // here purely as a guard so `Mapper::Map` is never asked about a type it has
+  // no model for (which can report an unmapped system type, and that report is
+  // fatal in some builds). The real discriminator is the spelling test below,
+  // and a synthesised identity mapping hands back the user tag name, which
+  // cannot start with `std::collections::`.
+  if (!Mapper::Contains(unqualified)) {
+    return false;
+  }
+  return IsNonIndexableSetTargetType(Mapper::Map(unqualified));
+}
+
+// A range-for over a container modelled as a Rust SET. The element sequence is
+// reached through `iter()` -- the only access a `HashSet`/`BTreeSet` has -- and
+// the loop variable is then bound to exactly the same REPRESENTATION the
+// positional path would have given it, so nothing downstream of the loop
+// changes:
+//   `const T &`  ->  `*const T`   (was `range.as_ptr().add(i)`)
+//   `T &`        ->  `*mut T`     (was `range.as_mut_ptr().add(i)`)
+//   `T`          ->  a clone      (was `range[i].clone()`)
+// Keeping the raw-pointer representation is load-bearing, not conservatism: a
+// C++ reference is a raw pointer everywhere else in this model, and every USE of
+// the loop variable is emitted by VisitDeclRefExpr on that assumption. Binding
+// `&T` instead would type-check at some use sites and not others.
+//
+// `std::ptr::from_ref` / `.cast_mut()` rather than `as *const _` because the
+// inferred-target cast has no type to infer from at a `let` with no annotation,
+// and rather than a bare `&T` because of the representation point above. Neither
+// introduces an autoref, so neither can trip `dangerous_implicit_autorefs`
+// (deny-by-default in rustc 1.98).
+//
+// A DECOMPOSING loop variable never reaches here: VisitCXXForRangeStmt refuses
+// it loudly above, for every range that is not map-like or a hoist-free vector.
+// That is correct for a set -- a set element is not a key/value pair.
+bool Converter::VisitCXXForRangeStmtSet(clang::CXXForRangeStmt *stmt) {
+  auto *loop_var = stmt->getLoopVariable();
+  auto loop_var_name = GetNamedDeclAsString(loop_var);
+  // The iterator element needs its own name: the positional path reuses the loop
+  // variable's name for the INDEX and shadows it, which works only because the
+  // index is an integer. Here the element and the binding have different types,
+  // and the binding's initialiser reads the element, so shadowing would be a
+  // self-reference. Source-location-derived so it cannot collide with a user
+  // local or with a second loop in the same scope.
+  auto loc = ctx_.getSourceManager().getPresumedLoc(stmt->getBeginLoc());
+  auto elem_name =
+      loc.isValid()
+          ? std::format("__elem_{}_{}", loc.getLine(), loc.getColumn())
+          : std::format("__elem_{}", static_cast<const void *>(stmt));
+
+  StrCat("'loop_:");
+  StrCat(keyword::kFor, elem_name, keyword::kIn);
+  {
+    // The range init is emitted ONCE here -- there is no `.len()` bound to
+    // evaluate it a second time for -- so the re-evaluation hazard the
+    // positional path needs its prvalue hoist for does not exist on this path,
+    // and no hoist is added.
+    PushParen range(*this);
+    Convert(stmt->getRangeInit());
+    StrCat(token::kDot, "iter()");
+  }
+  {
+    PushBrace body(*this);
+    auto loop_var_type = loop_var->getType();
+    StrCat(keyword::kLet);
+    if (!loop_var_type.isConstQualified()) {
+      StrCat(keyword_mut_);
+    }
+    StrCat(loop_var_name);
+    StrCat(token::kAssign);
+    if (loop_var_type->isReferenceType()) {
+      if (loop_var_type->getPointeeType().isConstQualified()) {
+        StrCat(std::format("std::ptr::from_ref({})", elem_name));
+      } else {
+        StrCat(std::format("std::ptr::from_ref({}).cast_mut()", elem_name));
+      }
+    } else {
+      StrCat(std::format("{}.clone()", elem_name));
+    }
+    StrCat(token::kSemiColon);
+    ConvertForRangeBody(stmt);
+  }
+  return false;
 }
 
 std::string
@@ -5805,8 +5935,22 @@ void Converter::ReportUnmappedSystemType(const clang::RecordDecl *decl) {
     return;
   }
 
-  llvm::errs() << "unsupported " << detail << " at " << loc << '\n';
-  assert(0 && "unsupported system type: no rule in types_");
+  // ⛔ THIS WAS `llvm::errs() << ...; assert(0 && ...)` AND THE assert IS COMPILED
+  // OUT OF THE SHIPPING PIN (-DNDEBUG), so the function RETURNED having emitted NO
+  // TEXT for the type and the converter carried on with an empty spelling. Measured
+  // 2026-09-28 on the 403-TU sweep: SIX of the eight bucket-`C` "SEGV-no-diag" TUs
+  // reach this line, and the SEGV they were classified by is a DOWNSTREAM VICTIM of
+  // the empty spelling, several frames later and in four different places
+  // (EmitMaterializedTempBinding, Convert(Expr*), ConvertDeclRefExpr,
+  // std::filesystem::canonical) -- which is why the class taught us nothing. An
+  // asserts-ON build turns all six into this one named assertion.
+  // Same measured reason, and the same fix, as ReportUnsupportedException and the
+  // structured-binding refusal above: refuse LOUDLY in every build configuration
+  // rather than emitting a silently wrong lowering. `gen_crash_diag=false` because
+  // the default abort()s, which the SIGABRT handler turns into a backtrace and
+  // rc=134, i.e. a refusal that reads as a crash.
+  llvm::report_fatal_error(llvm::Twine("unsupported ") + detail + " at " + loc,
+                           /*gen_crash_diag=*/false);
 }
 
 // Report an overloaded-operator call the converter has no lowering for.
@@ -5883,13 +6027,21 @@ void Converter::ReportUnsupportedOperatorCall(
     return;
   }
 
-  // FIXME: improve error handling
-  llvm::errs() << "unsupported CXXOperatorCallExpr: " << spelling << " on ("
-               << operands << ")"
-               << (key.empty() ? std::string(" rule key: <unresolved callee>")
-                               : " rule key: " + key)
-               << " at " << loc << '\n';
-  assert(0 && "unsupported CXXOperatorCallExpr\n");
+  // ⛔ SAME `assert(0)` FALL-THROUGH AS ReportUnmappedSystemType (:5809): the assert
+  // is compiled out of the shipping pin (-DNDEBUG), so this RETURNED having emitted
+  // NO TEXT for the operator call and the converter carried on. Measured 2026-09-28
+  // on the 403-TU sweep: dcc/src/Transform/Sentient/Utils.cpp is a bucket-`C`
+  // "SEGV-no-diag" TU whose crash is a DOWNSTREAM VICTIM of this silent return, and
+  // an asserts-ON build turns it into this named assertion. Refuse loudly in every
+  // build configuration instead; `gen_crash_diag=false` so the refusal does not
+  // read as a crash (the default abort()s into a backtrace and rc=134).
+  llvm::report_fatal_error(
+      llvm::Twine("unsupported CXXOperatorCallExpr: ") + spelling + " on (" +
+          operands + ")" +
+          (key.empty() ? std::string(" rule key: <unresolved callee>")
+                       : " rule key: " + key) +
+          " at " + loc,
+      /*gen_crash_diag=*/false);
 }
 
 // True when `type` is a `std::pair` whose every element is a type for which
