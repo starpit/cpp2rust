@@ -1220,6 +1220,18 @@ class MutableArrayRef {};
 class StringRef {};
 class StringLiteral {};
 
+// llvm/ADT/Twine.h -- `class Twine`.  Declared here for EXACTLY the reason
+// StringRef above is, and with exactly the same inert status: only so the two
+// f150/f151 InFlightDiagnostic `<<` keys that take a Twine can be SPELLED.  It
+// gets NO `using tN =` in this module -- rules/twine already owns the type rule
+// (t1 -> Vec<libc::c_char> / Vec<u8>, the NUL-terminated bytes the rope denotes)
+// and a second mapping of the same C++ type from a second module is a key
+// collision.  Complete rather than forward-declared because f150 takes one BY
+// VALUE; the member layout is irrelevant to signature matching, which is why
+// rules/twine's own restatement (which this must and does agree with on the
+// spelling `llvm::Twine`) can differ in its private members.
+class Twine {};
+
 // llvm/ADT/PointerUnion.h -- declared ONLY so the RegionRange base key can be
 // spelled.  NOT mapped (no `using tN =`).
 template <typename... PTs>
@@ -5054,3 +5066,110 @@ using t260 = mlir::SelfOwningTypeID;
 // DEF, so the missing-DEF wave that hit mlir::LLVM/ktdf/linalg cannot apply.
 using t261 = mlir::NamedAttrList;
 
+
+// ---------------------------------------------------------------------------
+// f150-f157: EIGHT MORE DEDUCTIONS OF THE SAME `InFlightDiagnostic` `<<` MEMBER
+// TEMPLATE (Diagnostics.h:344-349) THAT f21-f38 DO NOT COVER.
+//
+// PROVENANCE, NOT GUESSWORK.  Each key text below is copied character-for-
+// character out of the PIN's OWN reporter lines in the fresh28 + fresh29 sweeps
+// (`unsupported CXXOperatorCallExpr: << on (mlir::InFlightDiagnostic, ...) rule
+// key: <text>`).  A reporter line for a key IS the mapper's verdict that it
+// searched and found nothing, so these eight are proven ABSENT by the converter
+// itself rather than by a readback.  Census over both sweeps:
+//     6  mlir::InFlightDiagnostic && operator shl(llvm::Twine &&) &&           f150
+//     2  mlir::InFlightDiagnostic && operator shl(const llvm::Twine &) &&      f151
+//     4  mlir::InFlightDiagnostic && operator shl(unsigned long &) &&          f152
+//     4  mlir::InFlightDiagnostic && operator shl(mlir::Type &&) &&            f153
+//     2  mlir::InFlightDiagnostic && operator shl(long &&) &&                  f154
+//     2  mlir::InFlightDiagnostic && operator shl(int &&) &&                   f155
+//     2  mlir::InFlightDiagnostic && operator shl(const unsigned long &) &&    f156
+//     2  mlir::InFlightDiagnostic && operator shl(const llvm::StringRef &) &&  f157
+//
+// DIFFED AGAINST f21-f38 BEFORE WRITING, param-list by param-list.  The existing
+// eighteen are: `const char (&)[_]`, `StringRef&&`, `StringRef&`, `std::string&`,
+// `mlir::Type&`, `unsigned int&`, `int&`, `long&`, `const long&`, `const int&`,
+// `const unsigned int&`, `unsigned int&&`, `unsigned long&&`, `const std::string&`,
+// `std::string&&`, `mlir::Attribute&`, `mlir::StringAttr&&`, `StringLiteral&&`.
+// So every pairing below is the MISSING half of a reference-kind pair the family
+// already has one side of: f152/f156 against f33's `unsigned long&&`, f153
+// against f25's `mlir::Type&`, f154 against f28's `long&`, f155 against f27's
+// `int&`, f157 against f22/f23's two StringRef kinds.  NONE duplicates an
+// existing key (`Arg&&` is forwarding, so `T&` and `T` are different deductions
+// and different keys -- the f22-f38 header block states this).
+//
+// ⚠️ A PARAMETER DECLARED BY VALUE IS AN LVALUE INSIDE THE BODY.  To deduce
+// `Arg = T` (the `T &&` key) the argument at the call in the rule body must be an
+// XVALUE, so every by-value parameter is passed on as `std::move(v)`; writing it
+// bare would deduce `Arg = T&` and record a DEAD DUPLICATE of the `T &` key that
+// f22-f38 already hold.  That trap has burned two slots.
+//
+// All eight use the EXPLICIT member-call form `std::move(d).operator<<(x)` for
+// exactly f21's reason: the recorded callee must unambiguously be this
+// `&&`-qualified member and not a free ADL `operator<<` candidate.
+//
+// ⛔ THE 331-SITE `OpAsmPrinter`/`AsmPrinter` `<<` FAMILY IS NOT TOUCHED HERE.
+// It stands REFUSED at the dated refusal in this file (src.cpp:3481-3521) and
+// this block does not reopen it; these eight are `InFlightDiagnostic` receivers
+// only, which already has a real `libcc2rs` struct with a reporting `Drop` (t70).
+//
+// FIDELITY.  `llvm::Twine` has a real model (rules/twine): the NUL-terminated
+// byte string the rope denotes, `Vec<u8>` in refcount and `Vec<libc::c_char>` in
+// unsafe.  Streaming it appends exactly those bytes, and `shl_bytes` stops at the
+// NUL, so the terminator the model carries is not appended -- the same asymmetry
+// f21 already relies on.  `mlir::Type&&` prints via `Display`, which f25 already
+// established is MLIR's builtin-type syntax (ir.rs:50); f153 differs from f25
+// only in taking the value rather than a shared reference, which is correct
+// because an rvalue argument cannot be a caller variable a move could damage.
+// ---------------------------------------------------------------------------
+
+// f150 -- `llvm::Twine &&`, 6 sites (witness: ddc/ddl/Dialect/DdlOps.cpp, A rc=0,
+// at gen-inc/ddc/ddl/Dialect/DdlOps.cpp.inc:196:9).
+mlir::InFlightDiagnostic &&f150(mlir::InFlightDiagnostic &&d, llvm::Twine s) {
+  return std::move(d).operator<<(std::move(s));
+}
+
+// f151 -- `const llvm::Twine &`, 2 sites.  ⚠️ OBSERVED ONLY on
+// dxp/tools/DxpOptMain.cpp:109:51, which is BUCKET B (it aborts earlier on
+// `llvm::ToolOutputFile`), so this key has NO bucket-A witness today and its
+// reach is NOT claimed -- it is written because the pin reported the key and the
+// body is the same member as f150's at the other reference kind.
+mlir::InFlightDiagnostic &&f151(mlir::InFlightDiagnostic &&d,
+                                const llvm::Twine &s) {
+  return std::move(d).operator<<(s);
+}
+
+// f152 -- `unsigned long &`, 4 sites.  f33's lvalue half.
+mlir::InFlightDiagnostic &&f152(mlir::InFlightDiagnostic &&d,
+                                unsigned long &v) {
+  return std::move(d).operator<<(v);
+}
+
+// f153 -- `mlir::Type &&`, 4 sites.  f25's rvalue half; see the fidelity note.
+mlir::InFlightDiagnostic &&f153(mlir::InFlightDiagnostic &&d, mlir::Type t) {
+  return std::move(d).operator<<(std::move(t));
+}
+
+// f154 -- `long &&`, 2 sites.  f28's rvalue half.
+mlir::InFlightDiagnostic &&f154(mlir::InFlightDiagnostic &&d, long v) {
+  return std::move(d).operator<<(std::move(v));
+}
+
+// f155 -- `int &&`, 2 sites.  f27's rvalue half.
+mlir::InFlightDiagnostic &&f155(mlir::InFlightDiagnostic &&d, int v) {
+  return std::move(d).operator<<(std::move(v));
+}
+
+// f156 -- `const unsigned long &`, 2 sites.  The const-lvalue third kind, as f29
+// is to f28 and f31 is to f26.
+mlir::InFlightDiagnostic &&f156(mlir::InFlightDiagnostic &&d,
+                                const unsigned long &v) {
+  return std::move(d).operator<<(v);
+}
+
+// f157 -- `const llvm::StringRef &`, 2 sites.  The const-lvalue third kind next
+// to f22 (`StringRef&&`) and f23 (`StringRef&`).
+mlir::InFlightDiagnostic &&f157(mlir::InFlightDiagnostic &&d,
+                                const llvm::StringRef &s) {
+  return std::move(d).operator<<(s);
+}

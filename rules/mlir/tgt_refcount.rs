@@ -2353,3 +2353,57 @@ fn t260() -> () {
 fn t261() -> dataflowir_gen::ir::AttrDict {
     dataflowir_gen::ir::AttrDict::new()
 }
+
+// ---------------------------------------------------------------------------
+// f150-f157 -- eight more deductions of the InFlightDiagnostic `<<` member
+// template.  src.cpp carries the census, the f22-f38 diff and the fidelity
+// argument.  The two invariants of every body in this family hold here too:
+//   * `a0` AND `a1` ARE EACH MENTIONED EXACTLY ONCE (a rule body is inlined as
+//     one expression, so a second mention re-evaluates and would emit a second
+//     diagnostic / re-run whatever produced the streamed value).
+//   * exactly-once reporting comes from `self` BY VALUE.
+// An lvalue-reference argument takes a Rust SHARED REFERENCE so inlining cannot
+// move the caller's variable (E0382).
+// ---------------------------------------------------------------------------
+
+// f150 -- `llvm::Twine &&`.  A Twine is the NUL-terminated byte string it denotes
+// (rules/twine), `Vec<u8>` in this model; `shl_bytes` stops at the NUL, so the
+// terminator is not appended.
+fn f150(a0: libcc2rs::InFlightDiagnostic, a1: Vec<u8>) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_bytes(a0, &a1)
+}
+
+// f151 -- `const llvm::Twine &`
+fn f151(a0: libcc2rs::InFlightDiagnostic, a1: &Vec<u8>) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_bytes(a0, a1)
+}
+
+// f152 -- `unsigned long &`
+fn f152(a0: libcc2rs::InFlightDiagnostic, a1: &u64) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f153 -- `mlir::Type &&` -- Display is MLIR's type syntax (ir.rs:50), as f25
+fn f153(a0: libcc2rs::InFlightDiagnostic, a1: dataflowir_gen::ir::Ty) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f154 -- `long &&`
+fn f154(a0: libcc2rs::InFlightDiagnostic, a1: i64) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f155 -- `int &&`
+fn f155(a0: libcc2rs::InFlightDiagnostic, a1: i32) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f156 -- `const unsigned long &`
+fn f156(a0: libcc2rs::InFlightDiagnostic, a1: &u64) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f157 -- `const llvm::StringRef &`
+fn f157(a0: libcc2rs::InFlightDiagnostic, a1: &Vec<u8>) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_bytes(a0, a1)
+}

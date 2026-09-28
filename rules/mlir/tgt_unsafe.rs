@@ -2471,3 +2471,54 @@ fn t260() -> () {
 fn t261() -> dataflowir_gen::ir::AttrDict {
     dataflowir_gen::ir::AttrDict::new()
 }
+
+// ---------------------------------------------------------------------------
+// f150-f157 -- eight more deductions of the InFlightDiagnostic `<<` member
+// template.  src.cpp carries the census, the f22-f38 diff and the fidelity
+// argument.  Same two invariants as the rest of the family: `a0` and `a1` each
+// mentioned EXACTLY ONCE, and exactly-once reporting from `self` by value.  An
+// lvalue-reference argument takes a shared reference, not a value.
+// A Twine is `Vec<libc::c_char>` in THIS model (rules/twine's unsafe overlay),
+// `Vec<u8>` in the refcount one, so the byte sink here is `shl_c_chars` and there
+// `shl_bytes` -- exactly the f22/f23/f34 split.  Both stop at the NUL.
+// ---------------------------------------------------------------------------
+
+// f150 -- `llvm::Twine &&`
+unsafe fn f150(a0: libcc2rs::InFlightDiagnostic, a1: Vec<libc::c_char>) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_c_chars(a0, &a1)
+}
+
+// f151 -- `const llvm::Twine &`
+unsafe fn f151(a0: libcc2rs::InFlightDiagnostic, a1: &Vec<libc::c_char>) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_c_chars(a0, a1)
+}
+
+// f152 -- `unsigned long &`
+unsafe fn f152(a0: libcc2rs::InFlightDiagnostic, a1: &u64) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f153 -- `mlir::Type &&` -- Display is MLIR's type syntax (ir.rs:50), as f25
+unsafe fn f153(a0: libcc2rs::InFlightDiagnostic, a1: dataflowir_gen::ir::Ty) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f154 -- `long &&`
+unsafe fn f154(a0: libcc2rs::InFlightDiagnostic, a1: i64) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f155 -- `int &&`
+unsafe fn f155(a0: libcc2rs::InFlightDiagnostic, a1: i32) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f156 -- `const unsigned long &`
+unsafe fn f156(a0: libcc2rs::InFlightDiagnostic, a1: &u64) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_display(a0, a1)
+}
+
+// f157 -- `const llvm::StringRef &`
+unsafe fn f157(a0: libcc2rs::InFlightDiagnostic, a1: &Vec<libc::c_char>) -> libcc2rs::InFlightDiagnostic {
+    libcc2rs::InFlightDiagnostic::shl_c_chars(a0, a1)
+}
