@@ -5648,6 +5648,16 @@ bool Converter::VisitLambdaExpr(clang::LambdaExpr *expr) {
   PushCurrFunction push_fn(*this, call_op);
   ConvertFunctionBody(curr_function_);
   StrCat('}');
+  // A closure expression is a fresh, owned VALUE. This must be set AFTER
+  // ConvertFunctionBody, because converting the body leaves
+  // `computed_expr_type_` describing whatever the body's last expression was --
+  // which is a statement of the closure's INTERIOR, not of the closure
+  // expression itself. Without this the `Convert(clang::Expr*)` sentinel at
+  // :2630 fires with `computed_expr_type_ not set by LambdaExpr` (or by the
+  // MaterializeTemporaryExpr that wraps it, when the lambda is bound to a
+  // temporary), which is `llvm::report_fatal_error` -- a hard abort AFTER the
+  // closure text was already emitted.
+  computed_expr_type_ = ComputedExprType::FreshValue;
   return false;
 }
 
