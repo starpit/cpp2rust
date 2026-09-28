@@ -200,7 +200,17 @@ public:
   // for the non-pointer instantiations; a pointer-keyed `DenseSet<Operation *>` /
   // `DenseMap<Operation *, X>` would print a different parameter and needs its
   // own key.  That key is NOT written here because it has not been measured --
-  // guessing it would record a dead rule, and its absence aborts LOUDLY.
+  // guessing it would record a dead rule.
+  // ⛔ CORRECTED 2026-09-28: this comment previously said "its absence aborts
+  // LOUDLY".  THAT IS FALSE and the claim is withdrawn.  AN UNMAPPED MEMBER DOES
+  // NOT ABORT: the converter emits the call TEXTUALLY against the receiver's
+  // target type, so an unkeyed member reaches the emitted Rust as a call to a
+  // method defined NOWHERE, at rc=0, with no placeholder token.  Measured on
+  // `llvm::DenseMapInfo<unsigned int>` in 3 of 3 bucket-A rc=0 TUs (verbose leg
+  // exited 0): see the t6 note below for the verbatim `result: None` strings.
+  // The absence of a pointer-keyed rule is therefore SILENT, not loud -- the
+  // consequence is an rc=0 translation that fails only at rustc time, so this
+  // row is a MEASUREMENT DEBT, not a safe refusal.
   //
   // RETURN TYPES ARE HARVESTED FROM THE REAL HEADER, NOT ASSUMED, and three of
   // them differ from the std:: containers rules/unordered_map models:
@@ -339,8 +349,31 @@ bool f4(const llvm::DenseMapIterator<T1, T2, llvm::DenseMapInfo<T1>,
 //
 // WHY THIS IS NOT A REVERSAL OF THE STANDING REFUSAL.  The refusal is about
 // synthesising DenseMapInfo's BEHAVIOUR -- getEmptyKey / getTombstoneKey /
-// getHashValue / isEqual -- and it stands: NONE of them is mapped here, so any
-// call to one still aborts LOUDLY rather than silently inventing a sentinel.
+// getHashValue / isEqual -- and it stands only as a decision NOT to guess; NONE
+// of them is mapped here.
+// ⛔ CORRECTED 2026-09-28: this comment previously claimed "any call to one still
+// aborts LOUDLY rather than silently inventing a sentinel".  THAT IS FALSE, and
+// it is falsified on THIS EXACT RECEIVER.  An unmapped MEMBER does not abort --
+// only a missing CONSTRUCTOR fabricates visibly (as `::new_N`).  MEASURED on
+// `dialects/ExPlan/ExPlanOps.cpp` (bucket A, rc=0, 4,250 emitted lines; the
+// --verbose leg EXITED 0 at 90,747 log lines), verbatim searches, each followed
+// by `None` and zero `Matching:` lines:
+//   unsigned int llvm::DenseMapInfo<unsigned int>::getEmptyKey()            x4
+//   unsigned int llvm::DenseMapInfo<unsigned int>::getTombstoneKey()        x4
+//   unsigned int llvm::DenseMapInfo<unsigned int>::getHashValue(const unsigned int &)  x4
+// Reproduced in KTDFTypes.cpp (4/4/4) and KtdpAttrs.cpp (8/8/8) -- 3 of 3 TUs,
+// 36 miss asks, 0 hits, NOT ONE abort.  What is actually emitted, out of
+// `explanops.rs` lines 99-113 at rc=0, is a call to a type that exists nowhere:
+//   pub unsafe fn getEmptyKey() -> mlir_explan_Phase {
+//       return ((unsafe { llvm_DenseMapInfo_unsigned_int__void_::getEmptyKey() })
+//           as mlir_explan_Phase);
+//   }
+// So the honest statement is: the members are UNMAPPED AND THE MISS IS SILENT.
+// Leaving them out does NOT protect the translation; it defers the failure to
+// rustc.  They are keyable (all three return BY VALUE, so the refcount
+// dangling-reference criterion does not bite) and remain unwritten only because
+// the sentinel VALUES were not measured out of the header -- see the block
+// below t8 for exactly what a future slot must read.
 // What is added is only the TYPE, which the mapper needs for a different reason:
 // t3 (`llvm::DenseMapBase<T1..T5>`) matches the concrete instantiation and then
 // MAPS EACH OF ITS FIVE ARGUMENTS, and argument 4 is `llvm::DenseMapInfo<K>`.
@@ -565,8 +598,16 @@ llvm::DenseMap<T1, T2> f21(unsigned a0) {
 //   overwrite.  A key-for-key mapping onto `insert` would therefore be SILENTLY
 //   wrong for any re-inserted key; the faithful shape is
 //   `entry(k).or_insert_with(..)`, but that still cannot produce the
-//   `pair<iterator, bool>`.  So it is left UNMAPPED, which aborts loudly at the
-//   call site, rather than approximated.
+//   `pair<iterator, bool>`.  So it is left UNMAPPED rather than approximated.
+//   ⛔ CORRECTED 2026-09-28: this previously said the unmapped member "aborts
+//   loudly at the call site".  THAT IS FALSE -- an unmapped member is emitted
+//   TEXTUALLY at rc=0 and fails only at rustc (measured on
+//   `llvm::DenseMapInfo<unsigned int>`, 36 `result: None` asks across 3 bucket-A
+//   rc=0 TUs, none aborting; see the t6 note).  The refusal to APPROXIMATE
+//   `try_emplace` onto `insert` still stands on its own merits -- `insert`
+//   overwrites and `try_emplace` does not, which would be silently wrong -- but
+//   it must not be defended as "safe because it aborts".  It is not safe; it is
+//   a silent gap, and the `pair<iterator, bool>` return is the real blocker.
 
 template <typename T1, typename T2>
 bool f22(const llvm::DenseMapBase<llvm::DenseMap<T1, T2>, T1, T2,
@@ -653,7 +694,31 @@ template <typename T1> llvm::DenseSet<T1> f30(unsigned a0) {
 // CLASS.  Added 2026-09-28 against a MEASURED first abort, and it is NOT a
 // reversal of the standing refusal above: exactly as with t6, only the TYPE is
 // keyed, and NO member (getEmptyKey / getTombstoneKey / getHashValue / isEqual)
-// is mapped, so any call to one still aborts LOUDLY.
+// is mapped.
+// ⛔ CORRECTED 2026-09-28: this comment previously ended "so any call to one
+// still aborts LOUDLY".  THAT IS FALSE, measured on this module's own receiver
+// (36 `result: None` member asks across 3 bucket-A rc=0 TUs, 0 hits, 0 aborts;
+// the emitted Rust calls `llvm_DenseMapInfo_unsigned_int__void_::getEmptyKey()`,
+// a method defined nowhere).  Adding the TYPE without the members is still the
+// right call for the reason t6 gives -- it unblocks t3's argument mapping -- but
+// the member gap is SILENT, so it is an open debt, not a safe refusal.
+//
+// ⭐ WHAT A FUTURE SLOT MUST MEASURE TO CLOSE IT (do not guess these):
+// llvm/ADT/DenseMapInfo.h in this toolchain has NO `template <> struct
+// DenseMapInfo<unsigned>`; the integral keys are served by the constrained
+// partial specialisation at DenseMapInfo.h:114-123, whose bodies are
+// `getEmptyKey() { return std::numeric_limits<T>::max(); }`, a getTombstoneKey
+// built from it, and a `getHashValue(const T &)`.  Read those three bodies
+// EXACTLY before writing a key: a sentinel that is off by one silently changes
+// which key a DenseMap treats as empty, which is worse than the current gap.
+// All three return BY VALUE, so the refcount dangling-reference criterion that
+// refused `string_view::front()` and `SMLoc::getPointer()` does NOT apply here.
+// SWALLOW NOTE for whoever writes them: these are EXPR keys on a CONCRETE
+// receiver, so they carry no placeholder for matchTemplate to over-capture; but
+// the converter's mangled receiver is `llvm_DenseMapInfo_unsigned_int__void_`
+// (TWO arguments, the defaulted `void` SPELLED), while the search expr is the
+// ONE-argument `llvm::DenseMapInfo<unsigned int>` -- compare the READBACK to
+// the spelling you wrote, never to what you typed.
 //
 // WHY A SECOND ARITY IS NEEDED, and it is a SWALLOW BUG IN t6, not a converter
 // defect.  MEASURED on dataflow-scheduler/external/ktir-mlir-frontend/lib/Ktdp/
