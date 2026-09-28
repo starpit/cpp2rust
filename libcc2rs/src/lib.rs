@@ -81,4 +81,12 @@ pub use apint::*;
 mod istream;
 pub use istream::*;
 
+// `llvm::ToolOutputFile`: an output file that its DESTRUCTOR UNLINKS unless
+// `keep()` ran.  Both of the port goal's own drivers (dxp-driver.cpp:79-84,
+// DxpOptMain.cpp:283-289) return on the failure path WITHOUT calling `keep()`,
+// so a value model over a bare file handle would silently leave a truncated
+// output file behind.  rules/tooloutputfile maps to it.
+mod tool_output_file;
+pub use tool_output_file::*;
+
 pub use libcc2rs_macros::{ByteRepr, goto, goto_block, switch};
