@@ -2645,3 +2645,22 @@ fn t441() -> dataflowir_gen::ImplicitLocOpBuilder {
         dataflowir_gen::new_block_list_with_entry(),
     )
 }
+
+// t480..t482 -- llvm::SmallDenseSet<T>.  Rows g1129, g1130, g1131, g1136, g1137,
+// g1138.  Same HashSet in both models: a set hands out no mapped value, so there is
+// nothing for the refcount model to share and the two spellings differ only where
+// the ELEMENT does.
+fn t480() -> std::collections::HashSet<i64> {
+    std::collections::HashSet::new()
+}
+
+fn t481() -> std::collections::HashSet<u32> {
+    std::collections::HashSet::new()
+}
+
+// ⚠️ THE ELEMENT DIFFERS FROM THE REFCOUNT MODEL: `llvm::StringRef` is
+// `Vec<libc::c_char>` here (f22/f23 above) and `Vec<u8>` there.  `Vec<i8>` is
+// Hash + Eq, so the set is usable in both.
+fn t482() -> std::collections::HashSet<Vec<libc::c_char>> {
+    std::collections::HashSet::new()
+}
