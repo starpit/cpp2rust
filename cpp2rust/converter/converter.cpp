@@ -6988,8 +6988,17 @@ std::string Converter::ConvertPlaceholderImpl(clang::Expr *expr,
   }
 
   if (ph_ctx.declared_in_rule_as_rust_ptr && arg->getType()->isArrayType()) {
+    // An array (or a `c"..."` literal) does NOT `as`-cast to a raw pointer in
+    // Rust -- that is E0606 "casting `&CStr` as `*const i8` is invalid". Take
+    // its address with `.as_ptr()`, which is the SAME spelling the
+    // CK_ArrayToPointerDecay path already emits at :3833-3837. That path is
+    // reached when the C++ parameter is `const char *` (the argument decays);
+    // here the C++ parameter is a REFERENCE TO ARRAY, so clang inserts no
+    // decay node and we must take the address ourselves. The trailing
+    // pointer-to-pointer `as` is kept so the pointee type still matches the
+    // rule's declared parameter type (legal, and value-preserving).
     return std::format(
-        "({} as {})", ConvertFreshPointer(arg),
+        "({}.as_ptr() as {})", ConvertFreshPointer(arg),
         Mapper::GetParamType(GetCalleeOrExpr(expr), ph_ctx.arg_idx));
   }
 
