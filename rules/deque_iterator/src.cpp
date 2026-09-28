@@ -58,6 +58,49 @@
 template <typename T1> using t1 = typename std::deque<T1>::iterator;
 template <typename T1> using t2 = typename std::deque<T1>::const_iterator;
 
+// t3/t4 -- POINTER-MONOMORPHISED SIBLINGS.  These add NO model; they exist
+// because t1/t2's keys cannot TEXTUALLY match an instantiation whose element
+// type is itself a pointer.
+//
+// MEASURED, queue rows g2811/g2812, first abort on
+// `L3DlOpsScheduler::getInsertionNode`:
+//   system type has no rule: `std::__deque_iterator<dsc2::ScheduleNode *,
+//   dsc2::ScheduleNode *const *, dsc2::ScheduleNode *const &,
+//   dsc2::ScheduleNode *const *const *, long>`
+// t2 records as `std::__deque_iterator<T1, const T1 *, const T1 &,
+// const T1 *const *, long>`.  When T1 is a pointer, clang prints the
+// const-qualified pointer with const to the RIGHT of the star
+// (`dsc2::ScheduleNode *const *`, not `const dsc2::ScheduleNode **`), so
+// matchTemplate -- which is purely textual -- has nothing to match t2's literal
+// `, const ` segment against and the key misses.  It looks exactly like a
+// MISSING key in a census; it is not.  Same defect family as rules/vector t8.
+//
+// The cure is the same as rules/vector t8's: state the pointer element type in
+// the C++ source so clang emits the `T1 *const *` spelling directly.
+//
+// SWALLOW-SAFETY.  GetTypeMapKey truncates at the first `<`, so t1/t2/t3/t4 all
+// share the one `std::__deque_iterator` bucket and search() picks among them by
+// the longer-src tie-break (mapper.cpp:430-437).  The tie-break cannot rescue a
+// SOLE candidate, so each direction is checked on the literals themselves:
+//   * t3 cannot match a non-const iterator (`<X *, X **, ...>`): t3's literal
+//     after the first placeholder is ` *, ` then ` *const *, `, and a non-const
+//     spelling has no `const` anywhere.
+//   * t3 cannot match t2's own spelling (`<X, const X *, ...>`): that one is
+//     LEADING-const and contains no ` *const *, ` at argument 2.
+//   * Conversely t2 cannot match t3's spelling, because t2's literal prefix
+//     after the first placeholder is `, const ` -- the miss this row is about.
+//     So t3 is the only candidate for the pointer-element const spelling, and it
+//     does not need the tie-break to win.
+//   * t4 (`<T1 *, T1 **, T1 *&, T1 ***, long>`) DOES overlap t1
+//     (`<T1, T1 *, T1 &, T1 **, long>`) on a pointer-element instantiation --
+//     both can match `<X *, X **, X *&, X ***, long>`.  t4's src is strictly
+//     LONGER than t1's (every argument gains a star), so the longer-src
+//     tie-break selects t4, and t1 keeps every non-pointer element type because
+//     t4's literals demand the extra star.  Both map to the same
+//     representation, so either choice is representation-identical anyway.
+template <typename T1> using t3 = typename std::deque<T1 *>::const_iterator;
+template <typename T1> using t4 = typename std::deque<T1 *>::iterator;
+
 template <typename T1>
 typename std::deque<T1>::iterator f1(std::deque<T1> &o) {
   return o.begin();

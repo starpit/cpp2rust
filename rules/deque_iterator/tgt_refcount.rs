@@ -22,6 +22,17 @@ fn t2<T1>() -> Ptr<T1> {
     Ptr::null()
 }
 
+// t3/t4 -- the pointer-monomorphised siblings of t2/t1 (see src.cpp).  The
+// element is itself a pointer, so this is `Ptr<Ptr<T1>>`, exactly as
+// rules/vector tgt_refcount t8.
+fn t3<T1>() -> Ptr<Ptr<T1>> {
+    Ptr::null()
+}
+
+fn t4<T1>() -> Ptr<Ptr<T1>> {
+    Ptr::null()
+}
+
 fn f1<T1>(a0: Ptr<T1>) -> Ptr<T1> {
     a0
 }

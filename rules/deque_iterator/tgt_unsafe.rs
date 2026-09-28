@@ -16,6 +16,17 @@ fn t2<T1>() -> *const T1 {
     Default::default()
 }
 
+// t3/t4 -- the pointer-monomorphised siblings of t2/t1 (see src.cpp).  Same
+// representation, one more level of indirection because the ELEMENT is a
+// pointer: identical to rules/vector t8's `*const *mut T1`.
+fn t3<T1>() -> *const *mut T1 {
+    Default::default()
+}
+
+fn t4<T1>() -> *mut *mut T1 {
+    Default::default()
+}
+
 unsafe fn f1<T1>(a0: &mut Vec<T1>) -> *mut T1 {
     a0.as_mut_ptr()
 }
