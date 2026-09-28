@@ -682,12 +682,55 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
     return false;
   }
   auto type = decl->getType();
+  // A CONST LVALUE REFERENCE holder is accepted, a mutable or rvalue one is
+  // not. Measured shape (5 of 18 first-abort-sampled TUs, all of them the SAME
+  // single source site, foldInfrastructure.h:1992:23):
+  //     const auto& [fp_dim, func] = dim_prop_.at(i);
+  //   DecompositionDecl        'const value_type &'  (= const std::pair<const
+  //                                                    FoldDimProp *, BaseFuncType> &)
+  //   BindingDecl fp_dim      'const FoldDimProp *const'   <- NOT a reference
+  //   BindingDecl func        'const BaseFuncType'         <- NOT a reference
+  // so the reference-ness is entirely in the HOLDER; the bindings clang builds
+  // for a tuple-like `const pair &` are const NON-reference tuple_element_t.
+  // That is why a copy of the holder is sound HERE and only here: every
+  // binding is const, so no write can travel back through the alias, and each
+  // binding's type is a scalar (pointer / enum / arithmetic), so the element
+  // copy is bit-for-bit and needs no clone. A NON-const reference holder, or
+  // any binding that is itself a reference or a class type, still ALIASES
+  // observably and stays on the loud refusal path -- see the REFERENCE
+  // paragraph above.
   if (type->isReferenceType()) {
-    return false;
-  }
-  for (const auto *binding : bindings) {
-    if (binding->getType()->isReferenceType()) {
+    if (!type->isLValueReferenceType()) {
       return false;
+    }
+    auto pointee = type.getNonReferenceType();
+    if (!pointee.isConstQualified()) {
+      return false;
+    }
+    for (const auto *binding : bindings) {
+      auto bt = binding->getType();
+      if (bt->isReferenceType() || !bt.isConstQualified()) {
+        return false;
+      }
+      // Scalars only: a class-typed element would need a clone whose semantics
+      // this function cannot establish, and a pointer-to-non-const element
+      // would let a write reach the aliased pair.
+      if (!bt->isPointerType() && !bt->isEnumeralType() &&
+          !bt->isIntegralType(ctx_) && !bt->isFloatingType()) {
+        return false;
+      }
+      if (bt->isPointerType() &&
+          !bt->getPointeeType().isConstQualified()) {
+        return false;
+      }
+    }
+    // Everything below is written against the VALUE type.
+    type = pointee;
+  } else {
+    for (const auto *binding : bindings) {
+      if (binding->getType()->isReferenceType()) {
+        return false;
+      }
     }
   }
   if (!Mapper::Contains(type.getUnqualifiedType())) {
