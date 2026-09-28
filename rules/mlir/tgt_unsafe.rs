@@ -2849,3 +2849,127 @@ fn f406(a0: &dataflowir_gen::OpBuilder, a1: Vec<Vec<::libc::c_char>>) -> dataflo
             .collect::<Vec<::std::string::String>>(),
     )
 }
+
+// ===========================================================================
+// t580/t581 + f480-f487 -- THE BYTECODE STREAM.  60 placeholder sites, 200
+// member calls.  Argued in full at `t580` in src.cpp; the short version is that
+// an unmapped member is emitted TEXTUALLY at rc=0, so the type keys without the
+// member keys would have traded 60 loud placeholders for 200 silent calls.
+// `dataflowir-gen` a235c65, `src/bytecode.rs`.
+// ⛔ `readSparseArray` (6 sites) IS LEFT OUT: t46 maps `MutableArrayRef<T>` to an
+// OWNING `Vec<T>` by value, so the decoded values could not reach the caller's
+// buffer.  It stays spelled `readSparseArray`, which the snake_case target struct
+// does not have, so it fails at Rust compile time instead of succeeding wrongly.
+// ===========================================================================
+
+// t580 -- `mlir::DialectBytecodeReader` -> `dataflowir_gen::DialectBytecodeReader`.
+// ⭐ `new(&[1u8])` CANNOT FAIL, and the byte is not arbitrary: a VarInt whose
+// length is in the trailing zeros of byte 0 encodes 0 as `0b00000001`, so this is
+// "a table of zero attributes, empty body" -- `decode_var_int` returns (0, 1), the
+// decode loop runs zero times, and `bytes[1..]` is the empty body.  The reader has
+// no `Default` (it FAILS rather than defaults on a malformed table, deliberately),
+// so the empty-but-valid stream is the honest zero value.
+unsafe fn t580() -> dataflowir_gen::DialectBytecodeReader {
+    dataflowir_gen::DialectBytecodeReader::new(&[1u8]).unwrap()
+}
+
+// t581 -- `mlir::DialectBytecodeWriter` -> `dataflowir_gen::DialectBytecodeWriter`.
+// An empty sink with an empty attribute table.
+unsafe fn t581() -> dataflowir_gen::DialectBytecodeWriter {
+    dataflowir_gen::DialectBytecodeWriter::new()
+}
+
+// f480 -- `LogicalResult readAttribute(mlir::Attribute &)`, 46 sites.
+// rules/support t1 models LogicalResult as `bool`, true == success.
+// ⭐ `a1` IS NAMED EXACTLY ONCE, in one arm, because a `&mut` parameter's `aN`
+// re-expands to the bare lvalue at the call site.
+unsafe fn f480(
+    a0: &mut dataflowir_gen::DialectBytecodeReader,
+    a1: &mut dataflowir_gen::ir::Attr,
+) -> bool {
+    match a0.read_attribute() {
+        Ok(__v) => {
+            *a1 = __v;
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+// f481 -- `LogicalResult readOptionalAttribute(mlir::Attribute &)`, 33 sites.
+// ⭐ A DIFFERENT BODY FROM f480, not a copy: the model's `read_optional_attribute`
+// returns `Option`, and the `Ok(None)` arm LEAVES THE STORAGE UNTOUCHED rather
+// than writing a default-constructed Attr.  C++ leaves the caller's `Attribute`
+// NULL in that case; `ir::Attr` has no null state, so "untouched" is the closest
+// faithful behaviour available and is the one place this key is weaker than its
+// source.  ⛔ It is NOT the "absence becomes a default" failure: nothing is
+// fabricated into the slot, and `Err` is still reported as failure.
+unsafe fn f481(
+    a0: &mut dataflowir_gen::DialectBytecodeReader,
+    a1: &mut dataflowir_gen::ir::Attr,
+) -> bool {
+    match a0.read_optional_attribute() {
+        Ok(Some(__v)) => {
+            *a1 = __v;
+            true
+        }
+        Ok(None) => true,
+        Err(_) => false,
+    }
+}
+
+// f482 -- `uint64_t getBytecodeVersion() const` on the READER, 12 sites.
+// ⚠️ `u64` HERE, `i64` AT f486.  Not a typo and not to be tidied: it is the real
+// C++ split (BytecodeImplementation.h:65 vs :405) and the emitted sites already
+// compare against `6_u64` here and `6_i64` there.
+unsafe fn f482(a0: &dataflowir_gen::DialectBytecodeReader) -> u64 {
+    a0.get_bytecode_version()
+}
+
+// f483 -- `InFlightDiagnostic emitError(const llvm::Twine &) const`, 6 sites.
+// `&self`, not `&mut self`: the model keeps C++'s `const` receiver by holding the
+// failure flag in a `Cell<bool>`.  ⭐ THE LATCH SURVIVES THIS KEY -- calling it
+// poisons the reader, so a reader that reported an error can never afterwards
+// hand back a value, which is what makes the downstream `failed(...)` tests mean
+// something.  The return is a real `libcc2rs::InFlightDiagnostic` (t70), so the
+// `emitError(...) << x << y` chains at the sites keep working and it reports once
+// on Drop.
+unsafe fn f483(
+    a0: &dataflowir_gen::DialectBytecodeReader,
+    a1: &Vec<libc::c_char>,
+) -> libcc2rs::InFlightDiagnostic {
+    a0.emit_error(&::std::string::String::from_utf8_lossy(
+        &a1.iter().map(|&c| c as u8).take_while(|b| *b != 0).collect::<Vec<u8>>(),
+    ))
+}
+
+// f484 -- `void writeAttribute(mlir::Attribute)`, 46 sites.  C++ takes the
+// attribute BY VALUE; the model borrows, so the owned parameter is lent.
+unsafe fn f484(a0: &mut dataflowir_gen::DialectBytecodeWriter, a1: dataflowir_gen::ir::Attr) {
+    a0.write_attribute(&a1)
+}
+
+// f485 -- `void writeOptionalAttribute(mlir::Attribute)`, 33 sites.
+// ⭐ A DIFFERENT BODY FROM f484, and it has to be: the optional form emits
+// `index + 1` with 0 reserved as the null sentinel, while the bare form emits the
+// index itself.  The two are DIFFERENT ON THE WIRE, so one body cannot serve both.
+// `Some(&a1)` is unconditional because `ir::Attr` has no null state -- the same
+// asymmetry f481 records from the reading side.
+unsafe fn f485(a0: &mut dataflowir_gen::DialectBytecodeWriter, a1: dataflowir_gen::ir::Attr) {
+    a0.write_optional_attribute(Some(&a1))
+}
+
+// f486 -- `int64_t getBytecodeVersion() const` on the WRITER, 12 sites.
+// ⚠️ `i64`, against f482's `u64`.  See f482.
+unsafe fn f486(a0: &dataflowir_gen::DialectBytecodeWriter) -> i64 {
+    a0.get_bytecode_version()
+}
+
+// f487 -- `void writeSparseArray(llvm::ArrayRef<int>)`, 6 sites, keyed at the ONE
+// corpus instantiation `T = int`.  ⭐ THE WRITE SIDE IS KEYABLE WHERE THE READ SIDE
+// IS NOT: the writer only READS the array, so t19's by-value `ArrayRef<int> ->
+// Vec<i32>` copy loses nothing, whereas readSparseArray's out-param writes would
+// have been dropped into a temporary (see the refusal at t580).
+unsafe fn f487(a0: &mut dataflowir_gen::DialectBytecodeWriter, a1: Vec<i32>) {
+    a0.write_sparse_array(&a1)
+}

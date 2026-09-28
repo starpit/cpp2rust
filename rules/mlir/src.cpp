@@ -6175,3 +6175,163 @@ mlir::ArrayAttr f405(mlir::OpBuilder &a0, llvm::ArrayRef<int64_t> a1) {
 mlir::ArrayAttr f406(mlir::OpBuilder &a0, llvm::ArrayRef<llvm::StringRef> a1) {
   return a0.getStrArrayAttr(a1);
 }
+
+// ===========================================================================
+// t580/t581 + f480-f487 -- THE BYTECODE STREAM, 60 placeholder sites hiding
+// 200 member calls.  `dataflowir-gen` commit a235c65 (`src/bytecode.rs`) built
+// the model; before it there was no bytecode stream in the model at all, which
+// is why a previous `rules/mlir` slot censused this row and CORRECTLY REFUSED it.
+//
+// ⭐ WHY THE TYPE KEY ALONE WOULD HAVE BEEN WORSE THAN NO KEY.  All 60 sites sit
+// in ONE position -- the `reader:`/`writer:` parameter of an ODS-generated
+// `readProperties`/`writeProperties` -- so the position LOOKS like a name-only
+// cast target.  It is not: the parameter's MEMBERS are called 200 times.  An
+// unmapped member does NOT abort; the converter emits it TEXTUALLY at rc=0 with
+// no placeholder token, invisible to every census and to `no-placeholders.sh`.
+// So mapping the two types without the members would have dropped 60 LOUD
+// placeholders and left 200 SILENT textual calls.  Type AND members, or nothing.
+//
+// ⭐ THE ENFORCEMENT FOR ANYTHING LEFT OUT IS THE snake_case SURFACE.  Every
+// public name in `bytecode.rs` is `snake_case` on purpose, so a member this
+// block does NOT key stays spelled `readSparseArray` in the emitted Rust and
+// cannot resolve on the target struct -- it fails at Rust compile time instead
+// of resolving by accident.  That is what makes the two omissions below safe.
+//
+// ⛔ NO BASE IS DECLARED, AND THAT IS THE HEADER'S SHAPE, NOT A SHORTCUT.
+// Checked before writing two near-duplicate sets (the f400-f406 `Builder`
+// lesson, where ONE key set covered both `OpBuilder` and `ImplicitLocOpBuilder`
+// by declaring the members on the base): `BytecodeImplementation.h` declares
+// `class DialectBytecodeReader {` (:46) and `class DialectBytecodeWriter {`
+// (:277) with NO base class -- the only `: public` in the file is
+// `BytecodeDialectInterface : public DialectInterface::Base<...>` (:421-422),
+// which is a THIRD type this block does not touch.  The two surfaces are also
+// disjoint in name (read*/write*), so there is no base worth inventing and
+// nothing for a single key set to cover.  Two sets is the correct shape here.
+//
+// ⛔ BYTE-LEVEL INTEROP WITH A REAL `.mlirbc` IS NOT CLAIMED by the model and is
+// not claimed here.  What is claimed is a self-consistent round trip.
+// ===========================================================================
+namespace mlir {
+// `mlir::DialectBytecodeReader` -- mlir/Bytecode/BytecodeImplementation.h:46.
+class DialectBytecodeReader {
+public:
+  // :101 `virtual LogicalResult readAttribute(Attribute &result) = 0;`  46 sites.
+  llvm::LogicalResult readAttribute(Attribute &result);
+  // :104 `virtual LogicalResult readOptionalAttribute(Attribute &attr) = 0;` 33 sites.
+  // ⭐ A SEPARATE DECLARATION AND A SEPARATE KEY BODY FROM readAttribute, because
+  // the two forms DIFFER ON THE WIRE (bare index vs index+1, 0 being the null
+  // sentinel).  One rule body must not serve both.
+  llvm::LogicalResult readOptionalAttribute(Attribute &attr);
+  // :65 `virtual uint64_t getBytecodeVersion() const = 0;`  12 sites.
+  // ⚠️ `uint64_t` HERE AND `int64_t` ON THE WRITER (:405).  That split is the real
+  // C++ signature split and is NOT tidied: a target signature must match its
+  // source, and the emitted call sites already compare against `6_u64` on the
+  // reader and `6_i64` on the writer.
+  uint64_t getBytecodeVersion() const;
+  // :51 `virtual InFlightDiagnostic emitError(const Twine &msg = {}) const = 0;` 6 sites.
+  // ⭐ `const` RECEIVER PRESERVED.  The model keeps it by putting the failure flag
+  // in a `Cell<bool>`, so `emit_error` takes `&self` -- and it LATCHES: a reader
+  // that has reported an error can never afterwards return a value.  The key is
+  // written so that survives (see f483).
+  // ⚠️ The DEFAULTED argument is not spelled: all 6 corpus sites pass a message.
+  InFlightDiagnostic emitError(const llvm::Twine &msg) const;
+  // ⛔ `readSparseArray` IS DELIBERATELY ABSENT -- 6 sites LEFT LOUD.  See the
+  // refusal argued at `using t580 =` below.
+};
+
+// `mlir::DialectBytecodeWriter` -- BytecodeImplementation.h:277.
+class DialectBytecodeWriter {
+public:
+  // :295 `virtual void writeAttribute(Attribute attr) = 0;`  46 sites.  BY VALUE.
+  void writeAttribute(Attribute attr);
+  // :296 `virtual void writeOptionalAttribute(Attribute attr) = 0;`  33 sites.
+  void writeOptionalAttribute(Attribute attr);
+  // :405 `virtual int64_t getBytecodeVersion() const = 0;`  12 sites.  `int64_t`.
+  int64_t getBytecodeVersion() const;
+  // :340 `template <typename T> void writeSparseArray(ArrayRef<T> array)`, keyed
+  // at its ONE corpus instantiation `T = int`.  6 sites.  ⭐ SAFE WHERE THE READ
+  // SIDE IS NOT: the writer only READS the array, so t19's by-value
+  // `ArrayRef<int> -> Vec<int>` copy loses nothing.
+  void writeSparseArray(llvm::ArrayRef<int> array);
+};
+} // namespace mlir
+
+// t580 -- `mlir::DialectBytecodeReader`.  30 emitted placeholder sites.
+//
+// ⛔⛔ `readSparseArray` IS LEFT OUT AND THIS IS THE ONE REFUSAL IN THE ROW.
+// C++ is `LogicalResult readSparseArray(MutableArrayRef<T> array)`: the view is
+// passed BY VALUE but it is a VIEW, so the decoded values land in the CALLER's
+// buffer.  `llvm::MutableArrayRef<T1>` is t46 in this module and maps to an
+// OWNING `Vec<T1>` by value -- t46's own comment already records that "writes
+// through a translated MutableArrayRef do NOT propagate to the viewed buffer".
+// A key would therefore decode the array correctly, write it into a temporary,
+// and DROP IT: `readProperties` would return success with the property still at
+// its default.  That is silently wrong, which is strictly worse than the loud
+// failure it would replace, so the 6 sites stay loud as `readSparseArray` --
+// a name the snake_case target struct does not have.
+// ⭐ AND THE CALL SITE CONFIRMS IT rather than merely permitting the worry: the
+// emitted Rust already materialises a fresh local,
+//   `let _array: Vec<i32> = llvm_MutableArrayRef_int_::new_1({ propStorage });`
+// i.e. a FABRICATED `::new_1` ctor over the property storage, so the write-back
+// path is already severed upstream of any rule I could write.
+using t580 = mlir::DialectBytecodeReader;
+
+// t581 -- `mlir::DialectBytecodeWriter`.  30 emitted placeholder sites.
+using t581 = mlir::DialectBytecodeWriter;
+
+// f480 -- `readAttribute(Attribute &)`, 46 sites.  OUT-PARAM BY REFERENCE, and
+// unlike readSparseArray this one is FAITHFUL: `mlir::Attribute` is t6 and a
+// `T &` parameter maps to `&mut <mapped>` (f145's shape), so the emitted site's
+// `&mut (*prop).memory` is written through and the decoded attribute reaches the
+// property.  Returns `llvm::LogicalResult`, which rules/support t1 models as
+// `bool` with true == success.
+llvm::LogicalResult f480(mlir::DialectBytecodeReader &a0, mlir::Attribute &a1) {
+  return a0.readAttribute(a1);
+}
+
+// f481 -- `readOptionalAttribute(Attribute &)`, 33 sites.  A SEPARATE BODY from
+// f480 on purpose: the model's `read_optional_attribute` returns `Option`, so
+// absence is reported as absence and cannot silently become a default value.
+llvm::LogicalResult f481(mlir::DialectBytecodeReader &a0, mlir::Attribute &a1) {
+  return a0.readOptionalAttribute(a1);
+}
+
+// f482 -- `getBytecodeVersion() const` on the READER, 12 sites -> `uint64_t`.
+uint64_t f482(const mlir::DialectBytecodeReader &a0) {
+  return a0.getBytecodeVersion();
+}
+
+// f483 -- `emitError(const Twine &) const`, 6 sites.  `const` receiver, and the
+// return is a REAL `libcc2rs::InFlightDiagnostic` (t70), the accumulating buffer
+// that reports on Drop -- which is what the `emitError(...) << x << y` chains at
+// the call sites need.  llvm::Twine is rules/twine's t1 (the NUL-terminated
+// bytes), decoded with the f403/f365 `take_while` idiom because a rule body is
+// inlined as one expression and must name `a1` exactly once.
+mlir::InFlightDiagnostic f483(const mlir::DialectBytecodeReader &a0,
+                              const llvm::Twine &a1) {
+  return a0.emitError(a1);
+}
+
+// f484 -- `writeAttribute(Attribute)`, 46 sites.  BY VALUE in C++; the model
+// borrows, so the body takes a reference to the owned parameter.
+void f484(mlir::DialectBytecodeWriter &a0, mlir::Attribute a1) {
+  return a0.writeAttribute(a1);
+}
+
+// f485 -- `writeOptionalAttribute(Attribute)`, 33 sites.  SEPARATE BODY from
+// f484: the model's optional form takes `Option<&Attr>` and emits the
+// index+1/0-sentinel encoding, which is a DIFFERENT wire shape.
+void f485(mlir::DialectBytecodeWriter &a0, mlir::Attribute a1) {
+  return a0.writeOptionalAttribute(a1);
+}
+
+// f486 -- `getBytecodeVersion() const` on the WRITER, 12 sites -> `int64_t`.
+int64_t f486(const mlir::DialectBytecodeWriter &a0) {
+  return a0.getBytecodeVersion();
+}
+
+// f487 -- `writeSparseArray(ArrayRef<int>)`, 6 sites.  The write side of the
+// sparse array IS keyable: the writer only reads the array.
+void f487(mlir::DialectBytecodeWriter &a0, llvm::ArrayRef<int> a1) {
+  return a0.writeSparseArray(a1);
+}
