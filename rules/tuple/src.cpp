@@ -81,3 +81,44 @@ template <typename T1, typename T2, typename T3, typename T4, typename T5, typen
 std::tuple<const T1 &, const T2 &, const T3 &, const T4 &, const T5 &, const T6 &, const T7 &, const T8 &, const T9 &, const T10 &, const T11 &, const T12 &, const T13 &, const T14 &, const T15 &, const T16 &, const T17 &, const T18 &, const T19 &, const T20 &, const T21 &, const T22 &, const T23 &, const T24 &, const T25 &, const T26 &, const T27 &> f6(const T1 &a0, const T2 &a1, const T3 &a2, const T4 &a3, const T5 &a4, const T6 &a5, const T7 &a6, const T8 &a7, const T9 &a8, const T10 &a9, const T11 &a10, const T12 &a11, const T13 &a12, const T14 &a13, const T15 &a14, const T16 &a15, const T17 &a16, const T18 &a17, const T19 &a18, const T20 &a19, const T21 &a20, const T22 &a21, const T23 &a22, const T24 &a23, const T25 &a24, const T26 &a25, const T27 &a26) {
   return std::tie(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, a23, a24, a25, a26);
 }
+
+// `std::tie` at the arities the corpus ACTUALLY uses besides 27.  Counted from
+// dt_src (`grep -rhno 'std::tie([^;]*)'`): 34 sites at arity 2, 11 at arity 3,
+// 3 at arity 4, plus the 27-ary DataStructDims::tie().  Nothing at 5-26, so
+// nothing is keyed there.
+// ELEMENTS ARE NON-CONST `TN &`, NOT `const TN &`, AND THAT IS A DIFFERENT KEY
+// FROM f6.  Measured on probe/refbind/min.cpp (`int x, y; std::tie(x, y)`), whose
+// searched key is verbatim
+//     std::tuple<int &, int &> std::tie(&&...)
+// -- `std::tie(Types&...)` deduces `Types = int` for a non-const lvalue, where
+// f6's 27 arguments are members read through a `const` member function and so
+// deduce `Types = const double`.  f6 therefore does NOT cover these sites.
+// WHY ALL THREE OF 2/3/4 AND NOT JUST 2: `GetTypeMapKey` strips at `<` so arity
+// is not in the bucket key and `matchTemplate` scans to the FINAL depth-0 `>`,
+// which means a lone 2-ary key would MATCH a 3- or 4-ary call and swallow the
+// extra elements into its last placeholder (the rules/variant defect).  With
+// every used arity present as a distinct src in the one bucket, `search()`'s
+// longer-src tie-break (mapper.cpp:433-437) resolves each call to its own key --
+// the same reason the per-arity `std::function` keys are safe.
+// THE 48 ASSIGNMENT-TARGET SITES (`std::tie(a, b) = f()`) ARE STILL NOT HANDLED,
+// DELIBERATELY: a tuple of raw pointers cannot provide assign-through-reference.
+// These keys only make the `std::tie(...)` CALL itself mapped; the enclosing
+// `std::tuple::operator=` has NO key in this module (grep: none), so an
+// assignment site now fails on that unmapped operator instead of on an
+// unmapped-function `tie_N` fallback.  Both are LOUD (an undefined name at link
+// time), so this is strictly a step forward and cannot silently drop a write.
+// Modelling assign-through-reference is a separate row and is NOT attempted here.
+template <typename T1, typename T2>
+std::tuple<T1 &, T2 &> f7(T1 &a0, T2 &a1) {
+  return std::tie(a0, a1);
+}
+
+template <typename T1, typename T2, typename T3>
+std::tuple<T1 &, T2 &, T3 &> f8(T1 &a0, T2 &a1, T3 &a2) {
+  return std::tie(a0, a1, a2);
+}
+
+template <typename T1, typename T2, typename T3, typename T4>
+std::tuple<T1 &, T2 &, T3 &, T4 &> f9(T1 &a0, T2 &a1, T3 &a2, T4 &a3) {
+  return std::tie(a0, a1, a2, a3);
+}
