@@ -6042,3 +6042,110 @@ using t481 = llvm::SmallDenseSet<unsigned int>;
 
 // t482 -- row g1129.  Recorded key: `llvm::SmallDenseSet<llvm::StringRef>`.
 using t482 = llvm::SmallDenseSet<llvm::StringRef>;
+
+// ---------------------------------------------------------------------------
+// THE REWRITER FAMILY -- t541/t542/t543 -- AND mlir::DenseArrayAttr -- t540.
+//
+// ⭐ WHY THIS IS NOW WRITABLE.  The three rewriter types were refused all day for
+// ONE stated reason, recorded at line 3760 ("the `mlir::OpBuilder` / `RewriterBase`
+// refusal") and line 5802: they are `mlir::OpBuilder` BY INHERITANCE
+// (PatternMatch.h:368 `class RewriterBase : public OpBuilder`, :780
+// `class IRRewriter : public RewriterBase`, :799
+// `class PatternRewriter : public RewriterBase`) and OpBuilder had no model.
+// ⛔ THAT BASIS IS VOID: t440 maps `mlir::OpBuilder -> dataflowir_gen::OpBuilder`
+// and t441 `mlir::ImplicitLocOpBuilder`, both landed and gated.  So a rewriter IS
+// an OpBuilder plus a few rewrite verbs, and the TYPE is exactly OpBuilder.
+//
+// ⭐ THE MEMBER CENSUS, BOTH READS (t440's discipline, because only the emitted
+// corpus can see an unmapped MEMBER -- it emits TEXTUALLY at rc=0 with no
+// placeholder token, invisible to every census and to pin/no-placeholders.sh):
+//   (1) the ask logs of the freshest full sweep (fresh34, 84 logs),
+//       `grep -o 'searched as: mlir::(PatternRewriter|RewriterBase|IRRewriter)[^;]*'`:
+//            41  searched as: mlir::PatternRewriter
+//            18  searched as: mlir::IRRewriter
+//             8  searched as: mlir::RewriterBase
+//       and NOTHING else -- 67 TYPE asks, ZERO member asks, and no `&`/`*`
+//       spelling, so ONE key per type is the whole ask (t440 measured the same).
+//   (2) the emitted corpus, all 58 `.rs`.  `<placeholder>::[A-Za-z_0-9]*` returns
+//       ZERO for all three (no `::` member reached), so every use is through a
+//       VARIABLE.  The variables declared with these types are, by declaration
+//       count, `_rewriter` 6 / `rewriter` 5 (PatternRewriter) and `rewriter` 5 /
+//       `_rewriter` 5 (IRRewriter).  Censusing `<var>[.][A-Za-z_0-9]*` over the
+//       whole corpus returns **ZERO HITS for both `rewriter.` and `_rewriter.`**:
+//       in the emitting TUs these are only DECLARED and PASSED, never dotted.
+//       ⭐ So there is no unmapped-member hole to open here at all -- the type key
+//       is the complete row for this corpus.
+//
+// ⛔ EVERY REWRITE VERB IS DELIBERATELY LEFT OUT, and this is the reason, which is
+// sharper than "no counterpart".  A repo-wide census of `rewriter.<member>` over
+// dt_src C++ (which reaches non-A TUs the corpus above does not) finds the verbs
+//     replaceOp 49, eraseOp 30, replaceOpWithNewOp 15, notifyMatchFailure 9,
+//     modifyOpInPlace 6, inlineRegionBefore 6, replaceAllUsesWith 3,
+//     inlineBlockBefore 3, eraseBlock 3, applySignatureConversion 1, clone 1
+// plus the INHERITED Builder/OpBuilder half (getContext 21, setInsertionPoint 20,
+// getI32IntegerAttr 16, getZeroAttr 12, getIndexType 12, ...), which is t440's
+// already-recorded row and not reopened here.
+// ⭐ THE BLOCKER FOR THE MUTATING VERBS IS ONE FACT: they all take
+// `mlir::Operation *`, and `mlir::Operation` is t1 -> `dataflowir_gen::fmt::OpInst`
+// -- a DETACHED op record, NOT an `OpHandle`.  `OpHandle` is the only thing in the
+// builder model that reaches an op IN ITS BLOCK (`with_op_mut`, `erase`, identity
+// by `(Rc::as_ptr(list), OpId)` rather than content), and there is no
+// `OpInst*` -> `OpHandle` mapping available to a rule body.  ⛔⛔ A key for
+// `eraseOp`/`replaceOp`/`modifyOpInPlace` written against `fmt::OpInst` would
+// therefore mutate (or drop) a DETACHED COPY and lose every rewrite SILENTLY at
+// rc=0 -- the exact failure mode a rewriter model must not have.  So all of them
+// stay LOUD instead: an unmapped member emits textually and fails at rustc with
+// `no method named replaceOp on dataflowir_gen::OpBuilder`.
+// ⭐ THE `dataflowir-gen` METHOD THAT DOES NOT EXIST AND WOULD UNBLOCK THEM:
+// a way to obtain an `OpHandle` for an op already in a `BlockList` from the op
+// itself -- e.g. `OpBuilder::handle_of(&OpInst) -> Option<OpHandle>` or
+// `BlockList::find_op(&OpInst) -> Option<OpHandle>` -- plus, on top of it,
+// `OpHandle::replace_all_uses_with(&[Value])` for `replaceOp`.  Named precisely
+// so the coordinator can hand it to one of the live dataflowir-gen slots.
+//
+// ⭐ ARITY 0, FULLY CONCRETE for all four -- the t440/t441 precedent.
+// `GetTypeMapKey` truncates at the first `<`, so no template argument enters the
+// key and matchTemplate's same-depth capture (the swallow bug) never runs.
+//
+// t540 `mlir::DenseArrayAttr` (BuiltinAttributes.h.inc:85) is the arity-0 BASE of
+// the already-mapped `mlir::detail::DenseArrayAttrImpl<T>` (t26/t29, both ->
+// `ir::Attr`).  Its 32 asks are all `IntrinsicAttr<..., DenseArrayAttrImpl<int64_t>>
+// ::getAttrName`, i.e. the type appears as a TEMPLATE ARGUMENT and a return type,
+// never constructed and never printed, so the row is a pure type-identity row.
+// It maps to `dataflowir_gen::ir::Attr` for the same reason t6/t7/t9/t10/t11/t12 do:
+// in real MLIR every *Attr is a derived HANDLE over the one uniqued Attribute
+// hierarchy, and `ir::Attr` is the closed union of that hierarchy.
+// ⛔ NOT `ir::Attr::Array`/`I32Array` AND THIS MATTERS: those two variants model
+// `mlir::ArrayAttr` (ir.rs:495-522 says so in both doc comments) -- an array of
+// *Attr elements, printed `[1 : i32]` -- whereas `DenseArrayAttr` is the dense
+// inline form printed `array<i64: 1, 2>`.  They are different MLIR types with
+// different rendered text, so nothing here claims one is the other; the key names
+// the UNION type, exactly as t6 `mlir::Attribute` does, and no member is keyed.
+namespace mlir {
+
+// BuiltinAttributes.h.inc:85.  Declared as a bare complete class: only the NAME
+// enters a type key, and no member of it is keyed.
+class DenseArrayAttr {};
+
+// PatternMatch.h:368 / :780 / :799.  The inheritance is restated as LLVM writes it
+// even though a type key does not need it, so the next reader can see that these
+// three ARE OpBuilders and does not re-derive the refusal.  ⛔ `OpBuilder` is NOT
+// redeclared -- it is already declared complete at line 1019, and a second
+// declaration is `error: redefinition` and aborts the whole module regen.
+class RewriterBase : public OpBuilder {};
+class PatternRewriter : public RewriterBase {};
+class IRRewriter : public RewriterBase {};
+
+} // namespace mlir
+
+// t540 -- 32 asks; recorded key `mlir::DenseArrayAttr`.
+using t540 = mlir::DenseArrayAttr;
+
+// t541 -- 8 asks; recorded key `mlir::RewriterBase`.
+using t541 = mlir::RewriterBase;
+
+// t542 -- 41 asks; recorded key `mlir::PatternRewriter`.  Witness spelling.
+using t542 = mlir::PatternRewriter;
+
+// t543 -- 18 asks; recorded key `mlir::IRRewriter`.
+using t543 = mlir::IRRewriter;

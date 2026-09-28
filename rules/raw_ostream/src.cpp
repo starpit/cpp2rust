@@ -255,3 +255,52 @@ llvm::raw_ostream &f18(llvm::raw_ostream &o, const void *v) {
 //   .rodata` on that archive's raw_ostream.cpp.o, or a 3-line program linked
 //   against this LLVM that prints a disengaged `std::optional<long>`.
 //   Row BLOCKED as blocked:refused-unknown-nullopt-rendering.
+
+// ---------------------------------------------------------------------------
+// t540 -- `llvm::impl::raw_ldbg_ostream`, 62 asks over the freshest full sweep
+// (fresh34, 84 logs), 59 emitted placeholder sites across 11 A-bucket `.rs` files.
+// Recorded key, taken from the log's own `searched as:` line and not from the
+// `from decl` text the recorder labels "NOT a key":
+//     searched as: llvm::impl::raw_ldbg_ostream
+// and NOTHING else -- no `&`/`*` spelling is asked, so ONE value key is the whole
+// row (unlike t1/t2/t3, whose ref and pointer spellings ARE asked separately).
+//
+// ⭐ IT IS JUST ANOTHER raw_ostream SPELLING, checked in the header rather than
+// assumed: llvm/Support/DebugLog.h:233 reads
+//     class LLVM_ABI raw_ldbg_ostream final : public raw_ostream
+// and its only job is `write_impl` splitting on '\n' to re-emit a prefix before
+// each line, forwarding everything to an underlying `raw_ostream &Os`.  So it is
+// the SAME relationship `raw_fd_ostream` (t4/t5) already has to `raw_ostream`, and
+// it gets the same model -- a `std::fs::File`.
+//
+// ⚠️ IT IS A DEBUG STREAM, AND HERE IS WHERE ITS BYTES GO, stated rather than
+// invented.  `LDBG()` builds one of these over `llvm::dbgs()`; this module already
+// decided (f3) that `dbgs()` is the process stderr, unconditionally, because the
+// refcount/unsafe models have no `-debug-only` gate.  So a raw_ldbg_ostream's bytes
+// land on stderr, which is observable, and this key does not create a sink that
+// was not already there.  ⛔ WHAT IS NOT MODELLED, named so no one reads this as
+// fidelity: the PREFIX (`[file:line]`) that is the class's entire reason to exist
+// is dropped, because the prefix is assembled from `__FILE__`/`__LINE__` of the
+// C++ TU, which a Rust rule body cannot see.  Debug-only text, no program can
+// depend on it, and the alternative was 59 loud undefined names.
+//
+// ⛔ NO MEMBER IS KEYED, and the census says none is needed.  BOTH reads:
+//   (1) the ask logs -- 62 TYPE asks, zero member asks for this type;
+//   (2) the emitted corpus, all 58 `.rs` --
+//       `Cpp2RustUnmapped_llvm_impl_raw_ldbg_ostream::[A-Za-z_0-9]*` is ZERO, so no
+//       `::` member is reached.  The insertions written against these streams are
+//       `operator<<` on the raw_ostream BASE and are already f5-f18: a member
+//       operator is keyed on its return type plus parameters, not on the receiver's
+//       class, so they match through the base decl with no new rule.
+namespace llvm {
+namespace impl {
+// DebugLog.h:233.  `final` is dropped: nothing derives from it here and the
+// keyword does not enter a type key.  Only the name and the base matter.
+class raw_ldbg_ostream : public raw_ostream {};
+} // namespace impl
+} // namespace llvm
+
+// ⚠️ INDEX t540, not the next free t6, DELIBERATELY: several slots are live in the
+// rule tree today and t6 is the index a concurrent slot would also pick.  Indices
+// are per-module and need not be dense.
+using t540 = llvm::impl::raw_ldbg_ostream;

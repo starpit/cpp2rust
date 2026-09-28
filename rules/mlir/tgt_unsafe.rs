@@ -2767,3 +2767,31 @@ fn t481() -> std::collections::HashSet<u32> {
 fn t482() -> std::collections::HashSet<Vec<libc::c_char>> {
     std::collections::HashSet::new()
 }
+
+// t540 -- `mlir::DenseArrayAttr` -> `dataflowir_gen::ir::Attr`, the same closed
+// union every other *Attr key lands on (t6/t7/t9/t10/t11/t12 and the already-mapped
+// `DenseArrayAttrImpl<T>` at t26/t29).  See src.cpp for why it is NOT
+// `Attr::Array`/`Attr::I32Array` (those two are `mlir::ArrayAttr`, a different MLIR
+// type with different rendered text) and why no member is keyed.
+fn t540() -> dataflowir_gen::ir::Attr {
+    dataflowir_gen::ir::Attr::Raw(::std::string::String::new())
+}
+
+// t541/t542/t543 -- `mlir::RewriterBase` / `mlir::PatternRewriter` /
+// `mlir::IRRewriter` -> `dataflowir_gen::OpBuilder` (build.rs:461), the SAME type
+// t440 lands `mlir::OpBuilder` on, because PatternMatch.h:368/780/799 make all
+// three OpBuilders by inheritance.  The type carrier is t440's body verbatim.
+// ⛔ NO rewrite verb is keyed -- see src.cpp: they take `mlir::Operation *`
+// (t1 -> `fmt::OpInst`, a DETACHED record) and only `OpHandle` reaches an op in its
+// block, so a key would silently mutate a copy.  They stay loud at rustc.
+fn t541() -> dataflowir_gen::OpBuilder {
+    dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
+}
+
+fn t542() -> dataflowir_gen::OpBuilder {
+    dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
+}
+
+fn t543() -> dataflowir_gen::OpBuilder {
+    dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
+}

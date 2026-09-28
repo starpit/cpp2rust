@@ -181,3 +181,16 @@ unsafe fn f18(a0: *mut std::fs::File, a1: *const ::libc::c_void) -> *mut std::fs
     let _ = ::std::io::Write::write_all(&mut *__o, __b.as_bytes());
     __o
 }
+
+// t540 -- `llvm::impl::raw_ldbg_ostream` -> `std::fs::File`, t1/t4's body verbatim.
+// It is a `raw_ostream` subclass (DebugLog.h:233), so it gets this module's
+// raw_ostream model unchanged.  See src.cpp for where its bytes go and for the
+// prefix that is deliberately not modelled.
+// ⚠️ NOT REPEATED IN tgt_refcount.rs, and that is this module's convention rather
+// than an omission: the refcount overlay's own header says the VALUE types t1/t4
+// (`std::fs::File`) "are identical in both models and are not repeated here" --
+// only the `&`/`*` spellings change shape.  t540 is a value type, and no `&`/`*`
+// spelling of it is asked.
+fn t540() -> std::fs::File {
+    std::fs::File::open("").unwrap()
+}
