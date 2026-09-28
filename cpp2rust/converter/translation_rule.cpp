@@ -3,6 +3,7 @@
 
 #include "converter/translation_rule.h"
 
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/JSON.h>
 #include <llvm/Support/MemoryBuffer.h>
 
@@ -15,6 +16,17 @@
 namespace cpp2rust::TranslationRule {
 
 namespace {
+
+// The rule-module name a JSON path belongs to, i.e. the directory holding it:
+// `<tree>/vector/ir_src.json` -> `vector`. Every load-time refusal below names
+// it, because the failure mode these refusals replace is ANONYMOUS: a bare
+// `return` (an `assert(0)` compiled out by -DNDEBUG) silently discards a whole
+// module's rules, and the author of a freshly committed key sees only that the
+// key is dead.
+std::string ModuleOf(const std::filesystem::path &json_path) {
+  auto parent = json_path.parent_path().filename().string();
+  return parent.empty() ? json_path.string() : parent;
+}
 
 TypeInfo ParseTypeInfoJSON(const llvm::json::Object &obj) {
   TypeInfo info;
@@ -34,7 +46,7 @@ TypeInfo ParseTypeInfoJSON(const llvm::json::Object &obj) {
   return info;
 }
 
-Access ParseAccessJSON(llvm::StringRef value) {
+Access ParseAccessJSON(llvm::StringRef value, llvm::StringRef ctx) {
   if (value == "borrow") {
     return Access::kBorrow;
   } else if (value == "borrow_mut") {
@@ -44,36 +56,45 @@ Access ParseAccessJSON(llvm::StringRef value) {
   } else if (value == "take") {
     return Access::kTake;
   } else {
-    llvm::errs() << "Invalid access value: " << value << '\n';
-    assert(0);
-    return Access::kBorrow;
+    // Falling back to kBorrow here would leave a LIVE rule with a silently
+    // wrong access mode, so refuse instead of guessing.
+    llvm::report_fatal_error(
+        llvm::Twine("cpp2rust: rule module '") + ctx +
+            "': invalid access value '" + value +
+            "' in rule body (expected borrow|borrow_mut|move|take); "
+            "re-run cpp-rule-preprocessor for this module",
+        /*gen_crash_diag=*/false);
   }
 }
 
 PlaceholderFragment
-ParsePlaceholderFragmentJSON(const llvm::json::Object &obj) {
+ParsePlaceholderFragmentJSON(const llvm::json::Object &obj,
+                             llvm::StringRef ctx) {
   auto access = obj.getString("access");
   return {
       (unsigned)*obj.getInteger("arg"),
-      ParseAccessJSON(*access),
+      ParseAccessJSON(*access, ctx),
       obj.getBoolean("is_index_base").value_or(false),
   };
 }
 
-std::vector<BodyFragment> ParseBodyFragmentsJSON(const llvm::json::Array &arr);
+std::vector<BodyFragment> ParseBodyFragmentsJSON(const llvm::json::Array &arr,
+                                                 llvm::StringRef ctx);
 
-MethodCallFragment ParseMethodCallFragmentJSON(const llvm::json::Object &obj) {
+MethodCallFragment ParseMethodCallFragmentJSON(const llvm::json::Object &obj,
+                                               llvm::StringRef ctx) {
   MethodCallFragment mc;
   if (auto *receiver = obj.getArray("receiver")) {
-    mc.receiver = ParseBodyFragmentsJSON(*receiver);
+    mc.receiver = ParseBodyFragmentsJSON(*receiver, ctx);
   }
   if (auto *body = obj.getArray("body")) {
-    mc.body = ParseBodyFragmentsJSON(*body);
+    mc.body = ParseBodyFragmentsJSON(*body, ctx);
   }
   return mc;
 }
 
-std::vector<BodyFragment> ParseBodyFragmentsJSON(const llvm::json::Array &arr) {
+std::vector<BodyFragment> ParseBodyFragmentsJSON(const llvm::json::Array &arr,
+                                                 llvm::StringRef ctx) {
   std::vector<BodyFragment> result;
   for (auto &frag : arr) {
     auto *frag_obj = frag.getAsObject();
@@ -84,10 +105,10 @@ std::vector<BodyFragment> ParseBodyFragmentsJSON(const llvm::json::Array &arr) {
     } else if (auto n = frag_obj->getInteger("generic")) {
       result.push_back(GenericFragment{(unsigned)*n});
     } else if (auto *ph = frag_obj->getObject("placeholder")) {
-      result.push_back(ParsePlaceholderFragmentJSON(*ph));
+      result.push_back(ParsePlaceholderFragmentJSON(*ph, ctx));
     } else if (auto *mc = frag_obj->getObject("method_call")) {
       result.push_back(std::make_unique<MethodCallFragment>(
-          ParseMethodCallFragmentJSON(*mc)));
+          ParseMethodCallFragmentJSON(*mc, ctx)));
     } else if (frag_obj->get("va_args")) {
       result.push_back(VaArgsFragment{});
     } else if (frag_obj->get("init")) {
@@ -97,7 +118,8 @@ std::vector<BodyFragment> ParseBodyFragmentsJSON(const llvm::json::Array &arr) {
   return result;
 }
 
-ExprRule ParseExprRuleJSON(const llvm::json::Object &obj) {
+ExprRule ParseExprRuleJSON(const llvm::json::Object &obj,
+                           llvm::StringRef ctx) {
   ExprRule ir;
 
   if (auto *params = obj.getObject("params")) {
@@ -138,7 +160,7 @@ ExprRule ParseExprRuleJSON(const llvm::json::Object &obj) {
   }
 
   if (auto *body = obj.getArray("body")) {
-    ir.body = ParseBodyFragmentsJSON(*body);
+    ir.body = ParseBodyFragmentsJSON(*body, ctx);
   }
 
   return ir;
@@ -160,10 +182,15 @@ void LoadTgtFromIR(ExprRules &exprs, TypeRules &types,
 
   auto parsed = llvm::json::parse((*buf)->getBuffer());
   if (!parsed) {
-    llvm::errs() << "Failed to parse IR JSON: " << json_path << ": "
-                 << llvm::toString(parsed.takeError()) << '\n';
-    assert(0);
-    return;
+    // A bare return here would drop EVERY rule of this module, anonymously.
+    llvm::report_fatal_error(llvm::Twine("cpp2rust: rule module '") +
+                                 ModuleOf(json_path) + "': malformed " +
+                                 json_path.filename().string() + " (" +
+                                 llvm::toString(parsed.takeError()) +
+                                 "); all of this module's rules would be "
+                                 "silently discarded -- re-run "
+                                 "cpp-rule-preprocessor for this module",
+                             /*gen_crash_diag=*/false);
   }
 
   auto *root = parsed->getAsObject();
@@ -177,7 +204,7 @@ void LoadTgtFromIR(ExprRules &exprs, TypeRules &types,
 
     auto name = entry_name.str();
     if (name[0] == 'f') {
-      exprs[std::move(name)] = ParseExprRuleJSON(*obj);
+      exprs[name] = ParseExprRuleJSON(*obj, ModuleOf(json_path) + "/" + name);
     } else if (name[0] == 't') {
       types[std::move(name)] = ParseTypeRuleJSON(*obj);
     }
@@ -188,17 +215,25 @@ void LoadIrSrc(ExprRules &exprs, TypeRules &types,
                const std::filesystem::path &json_path) {
   auto buf = llvm::MemoryBuffer::getFile(json_path.string());
   if (!buf) {
-    llvm::errs() << "Missing " << json_path << ", run cpp-rule-preprocessor\n";
-    assert(0);
-    return;
+    // THE "my committed key is dead" TRAP: without ir_src.json no rule of this
+    // module can ever match, and the old bare return said nothing.
+    llvm::report_fatal_error(
+        llvm::Twine("cpp2rust: rule module '") + ModuleOf(json_path) +
+            "': missing " + json_path.string() +
+            "; none of this module's rules can match -- run "
+            "cpp-rule-preprocessor for this module",
+        /*gen_crash_diag=*/false);
   }
 
   auto parsed = llvm::json::parse((*buf)->getBuffer());
   if (!parsed) {
-    llvm::errs() << "Failed to parse IR src JSON: " << json_path << ": "
-                 << llvm::toString(parsed.takeError()) << '\n';
-    assert(0);
-    return;
+    llvm::report_fatal_error(llvm::Twine("cpp2rust: rule module '") +
+                                 ModuleOf(json_path) + "': malformed " +
+                                 json_path.filename().string() + " (" +
+                                 llvm::toString(parsed.takeError()) +
+                                 "); none of this module's rules can match -- "
+                                 "re-run cpp-rule-preprocessor for this module",
+                             /*gen_crash_diag=*/false);
   }
 
   auto *root = parsed->getAsObject();
@@ -212,8 +247,14 @@ void LoadIrSrc(ExprRules &exprs, TypeRules &types,
     if (name[0] == 'f') {
       auto it = exprs.find(name);
       if (it == exprs.end()) {
-        llvm::errs() << name << '\n';
-        assert(0 && "ir_src.json expr entry has no matching IR target rule");
+        // Writing through the end iterator below is UNDEFINED BEHAVIOUR; this
+        // is the documented "rc=139 with no message".
+        llvm::report_fatal_error(
+            llvm::Twine("cpp2rust: rule module '") + ModuleOf(json_path) +
+                "': expr key '" + name + "' is in ir_src.json but in no IR "
+                "target (ir_unsafe.json/ir_refcount.json); the rule tree is "
+                "inconsistent -- re-run cpp-rule-preprocessor for this module",
+            /*gen_crash_diag=*/false);
       }
       if (auto *obj = entry_val.getAsObject()) {
         it->second.src = obj->getString("key")->str();
@@ -229,8 +270,12 @@ void LoadIrSrc(ExprRules &exprs, TypeRules &types,
     } else if (name[0] == 't') {
       auto it = types.find(name);
       if (it == types.end()) {
-        llvm::errs() << name << '\n';
-        assert(0 && "ir_src.json type entry has no matching IR target rule");
+        llvm::report_fatal_error(
+            llvm::Twine("cpp2rust: rule module '") + ModuleOf(json_path) +
+                "': type key '" + name + "' is in ir_src.json but in no IR "
+                "target (ir_unsafe.json/ir_refcount.json); the rule tree is "
+                "inconsistent -- re-run cpp-rule-preprocessor for this module",
+            /*gen_crash_diag=*/false);
       }
       it->second.src = val->str();
     }
@@ -434,9 +479,18 @@ std::pair<ExprRules, TypeRules> Load(const std::filesystem::path &dir,
   }
   for (auto &[name, rule] : types) {
     if (rule.src.empty()) {
-      llvm::errs() << name << '\n';
       rule.dump();
-      assert(0 && "Type rule loaded from IR but has no src");
+      // An empty src MATCHES THE EMPTY TYPE STRING, so carrying on here makes
+      // this rule fire on unrelated types. Refuse. (A type key present only in
+      // ir_unsafe.json and absent from ir_refcount.json is NOT this case: it is
+      // normal, and ir_src.json still gives it a src.)
+      llvm::report_fatal_error(
+          llvm::Twine("cpp2rust: rule module '") + dir.filename().string() +
+              "': type key '" + name +
+              "' has an IR target but no src in ir_src.json; an empty src "
+              "would match the empty type string -- re-run "
+              "cpp-rule-preprocessor for this module",
+          /*gen_crash_diag=*/false);
     }
   }
   return {std::move(exprs), std::move(types)};
