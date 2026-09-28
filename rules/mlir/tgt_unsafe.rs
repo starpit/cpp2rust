@@ -2574,3 +2574,23 @@ fn t400() -> dataflowir_gen::fmt::OpInst {
         <dataflowir_gen::ops::mlir_ktdf_arch_DeviceOp as dataflowir_gen::MlirOp>::DEF,
     )
 }
+
+// t340 -- `mlir::OpaqueProperties` -> `*mut ::libc::c_void`, THE TYPE'S OWN LAYOUT.
+// src.cpp carries the six-line declaration and the complete member census.  The
+// `init` is `null_mut()`, and it is UNREACHABLE from any well-formed C++ for the
+// t1 reason: OpaqueProperties has NO default constructor, only `OpaqueProperties(
+// void *)`, so no translated program can default-construct one.  It is still the
+// faithful zero value -- a null `void *` is precisely the state for which the
+// class's own `operator bool()` returns false.
+// IDENTICAL IN BOTH MODELS on purpose: `void *` cannot be refcounted, so the
+// refcount model spells it as a raw pointer too (the brotli/f6 precedent).
+fn t340() -> *mut ::libc::c_void {
+    ::std::ptr::null_mut()
+}
+
+// f240 -- `OpaqueProperties(void *prop)`, the class's only constructor.  The
+// representation IS the argument, so this is the identity; the 30 corpus sites
+// already emit `(... as *mut ::libc::c_void)` for the argument.
+fn f240(a0: *mut ::libc::c_void) -> *mut ::libc::c_void {
+    a0
+}

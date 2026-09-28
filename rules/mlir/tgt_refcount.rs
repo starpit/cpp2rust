@@ -2459,3 +2459,16 @@ fn t400() -> dataflowir_gen::fmt::OpInst {
         <dataflowir_gen::ops::mlir_ktdf_arch_DeviceOp as dataflowir_gen::MlirOp>::DEF,
     )
 }
+
+// t340 -- `mlir::OpaqueProperties` -> `*mut ::libc::c_void`.  See tgt_unsafe.rs and
+// src.cpp.  BYTE-IDENTICAL to the unsafe overlay because a `void *` has no
+// refcountable pointee: the refcount model spells an opaque `void *` as a raw
+// pointer as well (rules/brotli f6, `*mut c_void` in BOTH overlays).
+fn t340() -> *mut ::libc::c_void {
+    ::std::ptr::null_mut()
+}
+
+// f240 -- `OpaqueProperties(void *prop)`.  Identity, as in the unsafe overlay.
+fn f240(a0: *mut ::libc::c_void) -> *mut ::libc::c_void {
+    a0
+}
