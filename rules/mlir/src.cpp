@@ -309,7 +309,20 @@ public:
   ValueRange(std::vector<Value> &values);
 };
 
-// ⛔ REFUSED, RECORDED SO THE NEXT SLOT DOES NOT RE-DERIVE IT:
+// ⭐⭐ THIS REFUSAL IS LIFTED -- `mlir::MutableOperandRange` IS NOW t520, DECLARED
+// AT `class MutableOperandRange` BELOW (it has to be below `NamedAttribute`,
+// because its 4-argument constructor names one).  THE PARAGRAPH IS KEPT VERBATIM
+// BECAUSE ITS ARGUMENT IS STILL CORRECT: an owning `Vec` model is wrong here, and
+// the model that replaced it is NOT an owning Vec, it is the `(owner op, start,
+// length)` triple this very paragraph asked for -- t36 already models
+// `mlir::Operation *` as a pointer AT the op, so the triple ALIASES.  What changed
+// is that `fmt::OpInst::operands` and `TdOpDef::arguments` are now public operand-
+// list surface, which is the one thing the last sentence said was missing.
+// ⛔ WHAT IS STILL REFUSED IS THE MUTATING MEMBERS (`assign`/`append`/`erase`), and
+// for a DIFFERENT reason than this paragraph gives: not unmodellable, just
+// UNREACHED by any bucket-A file.  See t520's paragraph for the per-member list.
+//
+// ⛔ REFUSED (HISTORICAL -- SUPERSEDED, KEPT FOR THE ARGUMENT):
 // `mlir::MutableOperandRange` IS NOT MAPPED, AND THE OWNING-`Vec` PRECEDENT THAT
 // t14 (`mlir::OperandRange`, immediately above) SETS DOES NOT EXTEND TO IT.
 // `OperandRange` is a READ-ONLY borrowed view, so copying it into an owning Vec
@@ -442,6 +455,76 @@ class BoolAttr {};
 // AttrDict: MLIR's name is a StringAttr but a dictionary key is only ever its
 // text, and `print_attr_dict` (ir.rs) walks `String` keys.
 class NamedAttribute {};
+
+// mlir/include/mlir/IR/ValueRange.h:118 -- `mlir::MutableOperandRange`, t520.
+//
+// ⭐ THE REFUSAL AT :312 IS NOW LIFTED, AND THIS IS DELIBERATELY DECLARED HERE AND
+// NOT THERE: the 4-argument constructor's fourth parameter is
+// `ArrayRef<OperandSegment>` where `OperandSegment = std::pair<unsigned,
+// NamedAttribute>`, so the class cannot be SPELLED before `NamedAttribute` (:444)
+// exists.  Declaring it up at :312 next to its siblings is a compile error in the
+// rule source itself.
+//
+// ⭐ WHAT LIFTED THE REFUSAL.  The refusal's own words were "a FAITHFUL model is
+// `(owner op, start, length)` indexing into the op's operand storage, i.e. it needs
+// OPERAND-LIST SURFACE in the IR model that dataflowir_gen does not have today".
+// It has it now: `fmt::OpInst::operands` is a PUBLIC `BTreeMap<String,
+// Vec<ir::Value>>` (fmt.rs:441) and `TdOpDef::arguments` is a PUBLIC
+// `&'static [TdFieldDef]` in ODS DECLARATION ORDER (td.rs:451).  So the
+// representation is the triple, and BECAUSE t36 already models `mlir::Operation *`
+// as a POINTER AT the op (`*mut fmt::OpInst` / `Ptr<fmt::OpInst>`), the triple
+// ALIASES the op rather than copying it.  That is the whole content of the
+// refusal: an owning `Vec<Value>` would have made `assign()` write to a private
+// copy at rc=0.  A write through this triple lands in the op's own
+// `operands` map -- see tgt_unsafe.rs at t520 for the measured demonstration.
+//
+// ⛔ ONLY THE TWO CONSTRUCTORS THE CORPUS REACHES ARE DECLARED.  Every MUTATING
+// member (`assign`, `append`, `erase`, `clear`, `slice`, `operator[]`,
+// `getAsOperandRange`) is LEFT OUT ON PURPOSE and the reasons are per-member:
+//
+//   * NONE of them is reached by ANY bucket-A file.  Measured on the fresh34
+//     sweep (58 bucket-A files, 876 sites): all 71 `MutableOperandRange` sites are
+//     ODS-generated `getXMutable()` accessors that CONSTRUCT one and RETURN it,
+//     and a receiver-discriminated grep of the emitted corpus finds ZERO member
+//     calls on a value of this type (`grep -ohE '\bmutableRange[.][A-Za-z_0-9]+'`
+//     over all 226 emitted `.rs` -> no hits).  The only corpus that calls them --
+//     `dcc/src/Transform/Sentient/AddressPinningAndToggle.cpp` (`assign` x10),
+//     `RegisterTypeAssignment.cpp` (`assign`, `size`, `slice`) -- is NOT in the
+//     bucket-A set at all, so a key for them would be DEAD, and this file's own
+//     policy on dead keys (see f143's paragraph, and the six dead
+//     `llvm::FailureOr` keys rules/support accumulated) is that an unreached key
+//     makes a class LOOK handled while proving nothing.
+//   * Leaving them out is LOUD, not silent.  An unmapped MEMBER is emitted
+//     TEXTUALLY at rc=0 with no placeholder token, so `pin/no-placeholders.sh`
+//     cannot see it -- but the emitted `a.assign(v)` has no `assign` on a Rust
+//     TUPLE, so it is an E0599 at compile time.  That is the opposite of the
+//     failure the refusal existed to prevent (a write that compiles and silently
+//     goes nowhere).
+//   * `slice` additionally has a `std::optional<OperandSegment> segment = {}`
+//     third parameter, and `operator[]` returns `OpOperand &` -- a HANDLE whose
+//     pointee is one operand slot, which this model does not have a spelling for.
+//
+// ⚠️ THE FOURTH ARGUMENT IS DROPPED BY f420 AND THAT IS ONLY SOUND BECAUSE NOTHING
+// RESIZES.  `operandSegments` is the `operand_segment_sizes` bookkeeping MLIR
+// updates when `append`/`erase` CHANGE THE OPERAND COUNT.  With no resizing member
+// keyed, nothing can observe it.  ⛔ WHOEVER KEYS `append` OR `erase` MUST WIDEN
+// THE REPRESENTATION TO CARRY IT FIRST -- a resize that does not update the
+// segment attribute leaves the op inconsistent at rc=0.
+//
+// ⚠️ AND THE `start` IS A FLAT ODS OPERAND INDEX, NOT A BTreeMap POSITION.
+// `getODSOperandIndexAndLength(i)` counts operands in ODS DECLARATION order, while
+// `OpInst::operands` is keyed by NAME and a BTreeMap iterates ALPHABETICALLY.  So
+// any future member that turns `start` into a group must walk
+// `op.def.arguments` in order and keep only the names present in `op.operands`
+// (ODS `arguments` interleaves operands and attributes; only the operands get a
+// map entry).  Flattening the map directly would silently address the wrong group.
+class MutableOperandRange {
+public:
+  MutableOperandRange(Operation *owner, unsigned start, unsigned length,
+                      llvm::ArrayRef<std::pair<unsigned, NamedAttribute>>
+                          operandSegments);
+  MutableOperandRange(Operation *owner);
+};
 
 // mlir/include/mlir/IR/Dialect.h -- the registered dialect record.
 // GROUNDED, and not by analogy: dataflowir-gen's .td parser produces a real model
@@ -6042,3 +6125,71 @@ using t481 = llvm::SmallDenseSet<unsigned int>;
 
 // t482 -- row g1129.  Recorded key: `llvm::SmallDenseSet<llvm::StringRef>`.
 using t482 = llvm::SmallDenseSet<llvm::StringRef>;
+
+// ---------------------------------------------------------------------------
+// t520 / f420 / f421 -- `mlir::MutableOperandRange`, THE WRITE-THROUGH VIEW.
+//
+// 71 sites across 5 bucket-A files, the second-largest placeholder item left on
+// the board:
+//     59  ddc/ddl/Dialect/DdlOps.cpp
+//      4  .../Dialect/Symbol/Symbol.cpp
+//      4  .../Dialect/KTDFLowering/KTDFLoweringOps.cpp
+//      2  dialects/Init/InitOps.cpp
+//      2  dialects/ExPlan/ExPlanOps.cpp
+// Counted as the EXACT name `Cpp2RustUnmapped_mlir_MutableOperandRange` over the
+// emitted `.rs` only (the `.log` files carry the same token in the converter's own
+// diagnostic, which is why the naive `grep -r` over `fresh34/out` says 77).  No
+// subtraction: there is no longer spelling of this name in the corpus.
+//
+// ⭐ KEYED AGAINST MY OWN `-verbose` LOG, NOT AGAINST THE HEADER.  From
+// `dialects/Init/InitOps.cpp` (rc=0, 4,625 lines, log complete at 101,486 lines --
+// a SMALL witness chosen so the log reaches the sites, per the truncation trap):
+//     search type mlir::MutableOperandRange, result: None
+//       ... rule key: searched as: mlir::MutableOperandRange
+//     search expr void mlir::MutableOperandRange::MutableOperandRange(
+//         mlir::Operation *, unsigned int, unsigned int,
+//         llvm::ArrayRef<std::pair<unsigned int, mlir::NamedAttribute>>), result:
+//     None
+// ⚠️ NOTE WHAT THE ASK DOES **NOT** SPELL: `OperandSegment`.  The `using
+// OperandSegment = std::pair<unsigned, NamedAttribute>` alias at ValueRange.h:123
+// is CANONICALISED AWAY, and `unsigned` is spelled `unsigned int`.  Keying against
+// the header's own words would have missed on both counts.
+// ⚠️ AND THE DEFAULT ARGUMENT `= {}` IS NOT PART OF THE KEY: the ask carries all
+// four parameters, and the recorder writes the default out at the call site, so a
+// 3-parameter entry would be a MISS and not an extra overload (the f144 /
+// `RegionRange` precedent).
+//
+// ⛔ THE MOVE CONSTRUCTOR IS DELIBERATELY NOT DECLARED.  The same log shows
+//     search expr void mlir::MutableOperandRange::MutableOperandRange(
+//         mlir::MutableOperandRange &&), result: None
+// immediately after the NRVO `return mutableRange;` -- and the emitted Rust for
+// that statement is the bare `return mutableRange;`, with NO fabricated `new_N`
+// and NO placeholder.  So that ask is already satisfied by the target type being
+// a `Copy` tuple; a key for it would be dead weight (and the ValueRange copy-ctor
+// precedent at f143 is exactly this: written, measured 7 -> 7 sites, deleted).
+using t520 = mlir::MutableOperandRange;
+
+// f420 -- the 4-argument constructor, the form 35 of the 36 constructions use.
+// The body is the triple; `a3` is bound-and-dropped rather than left unmentioned so
+// that the C++ argument expression is still EVALUATED (at the DdlOps sites it
+// builds a `DenseI32ArrayAttr` out of `getProperties().operandSegmentSizes`, which
+// is pure, but a rule body that silently deletes an argument expression is a
+// pattern this file does not want).  See t520 above for why dropping the segment
+// list is sound with no resizing member keyed, and for what must happen first if
+// one is.
+mlir::MutableOperandRange f420(
+    mlir::Operation *a0, unsigned a1, unsigned a2,
+    llvm::ArrayRef<std::pair<unsigned, mlir::NamedAttribute>> a3) {
+  return mlir::MutableOperandRange(a0, a1, a2, a3);
+}
+
+// f421 -- `MutableOperandRange(Operation *owner)`, the WHOLE operand list.  1 site,
+// `ddc/ddl/Dialect/DdlOps.cpp:63197` in the emitted Rust
+// (`mlir::ddl::YieldOp::getMutableSuccessorOperands`, which returns
+// `MutableOperandRange(getOperation())`).  `start` is 0 and `length` is the op's
+// TOTAL operand count, which the target body reads off the op through the pointer
+// -- so this constructor, unlike f420, has to deref, and it is the one place in
+// this family where the two models' bodies differ (raw `*mut` vs `Ptr::with_ref`).
+mlir::MutableOperandRange f421(mlir::Operation *a0) {
+  return mlir::MutableOperandRange(a0);
+}

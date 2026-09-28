@@ -2767,3 +2767,81 @@ fn t481() -> std::collections::HashSet<u32> {
 fn t482() -> std::collections::HashSet<Vec<libc::c_char>> {
     std::collections::HashSet::new()
 }
+
+// ---------------------------------------------------------------------------
+// t520 / f420 / f421 -- `mlir::MutableOperandRange` AS A WRITE-THROUGH VIEW.
+//
+// REPRESENTATION: `(*mut fmt::OpInst, u32, u32)` == `(owner, start, length)`,
+// EXACTLY the triple the refusal at src.cpp:312 asked for and could not build.
+//
+// ⭐⭐ WHY THIS ALIASES AND DOES NOT COPY -- THE ONE THING THAT MATTERS HERE.  The
+// failure this refusal existed to prevent is a view that hands back a detached
+// `Vec<ir::Value>`: `assign()` would then write to a private copy, the operand
+// rewrite would never reach the op, and it would all be rc=0 and compile.  This
+// representation cannot do that, because it stores NO VALUES AT ALL.  It stores
+// t36's own model of `mlir::Operation *` -- a raw pointer AT the `fmt::OpInst`
+// that lives in its `Block`'s `ops: Vec<OpInst>` -- plus two indices.  Every read
+// and every write has to go back through that pointer into
+// `(*owner).operands: BTreeMap<String, Vec<ir::Value>>` (fmt.rs:441, a PUBLIC
+// field), which IS the op's operand storage.  There is nowhere for a lost write to
+// hide.
+//
+// ⭐ MEASURED, NOT ASSERTED.  `/home/agent/work/verif/mor_alias.rs` builds a
+// `fmt::Block` holding one `OpInst`, takes the `*mut OpInst` at
+// `block.ops.as_mut_ptr()`, builds f420's triple over it, WRITES a new `ir::Value`
+// through the triple, and then reads the operand back OUT OF `block` -- not out of
+// the triple.  The new value is there.  The same program also runs the
+// copy-semantics control (clone the operand group first, write to the clone) and
+// shows the op UNCHANGED, which is the failure mode this row was refused over.
+//
+// ⛔ `u32`, NOT `usize`, for `start`/`length`: the C++ parameters are `unsigned`,
+// and `getODSOperandIndexAndLength` already returns `(u32, u32)` in the emitted
+// corpus, so a `usize` here would put a cast at all 36 construction sites.
+//
+// INIT: the NULL OWNER.  `mlir::MutableOperandRange` declares no default
+// constructor (ValueRange.h:128-133 -- three constructors, all with parameters),
+// so no translated program can default-construct one and this `init` can never be
+// emitted; it is t1's situation.  `null_mut()` is nonetheless the RIGHT sentinel
+// rather than an arbitrary one: a null owner is the one state in which the view
+// provably addresses no op, and any access through it traps.
+fn t520() -> (*mut dataflowir_gen::fmt::OpInst, u32, u32) {
+    (::std::ptr::null_mut(), 0, 0)
+}
+
+// f420 -- the 4-argument constructor.  `a3` (the `operand_segment_sizes`
+// bookkeeping) is BOUND AND DROPPED, not left unmentioned: naming it exactly once
+// keeps the C++ argument expression evaluated, and a rule body must name each `aN`
+// at most once because the body is inlined as a single expression.  See src.cpp at
+// t520 for why discarding it is sound while no resizing member is keyed.
+unsafe fn f420(
+    a0: *mut dataflowir_gen::fmt::OpInst,
+    a1: u32,
+    a2: u32,
+    a3: Vec<(u32, (::std::string::String, dataflowir_gen::ir::Attr))>,
+) -> (*mut dataflowir_gen::fmt::OpInst, u32, u32) {
+    // ⛔ THE ANNOTATION IS LOAD-BEARING, AND THIS WAS MEASURED, NOT GUESSED.  The 4th
+    // argument is DEFAULTED (`= {}`) and the recorder writes the default out at the call
+    // site, so `a3` re-expands to a bare `Vec::new()` at 29 of the 30 DdlOps sites.
+    // `let __segments = a3; drop(__segments);` therefore emitted `let __segments =
+    // Vec::new(); drop(__segments);` -- E0282 `type annotations needed`, at rc=0 and with no
+    // placeholder token, i.e. invisible to every census.  Naming the element type here
+    // pins the inference at every site.
+    let __segments: Vec<(u32, (::std::string::String, dataflowir_gen::ir::Attr))> = a3;
+    drop(__segments);
+    (a0, a1, a2)
+}
+
+// f421 -- `MutableOperandRange(Operation *owner)`: the WHOLE operand list, so
+// `length` is the op's total operand count and this body has to DEREF.
+// ⛔ THE SUM IS OVER THE MAP'S VALUES AND THAT IS CORRECT *ONLY* FOR A TOTAL.  The
+// map iterates alphabetically by ODS argument name, which is NOT ODS declaration
+// order -- but a sum does not care about order.  Any member that turns `start` into
+// a particular group MUST walk `(*owner).def.arguments` instead; see src.cpp at
+// t520.
+unsafe fn f421(
+    a0: *mut dataflowir_gen::fmt::OpInst,
+) -> (*mut dataflowir_gen::fmt::OpInst, u32, u32) {
+    let __owner = a0;
+    let __n: usize = (*__owner).operands.values().map(|g| g.len()).sum();
+    (__owner, 0u32, __n as u32)
+}
