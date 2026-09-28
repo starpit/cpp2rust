@@ -9,6 +9,19 @@
 // the module is named rules/istringstream here to match the key spelling, the
 // same way rules/sstream carries std::ostringstream.)
 //
+// ⭐⭐ MODEL FLIPPED 2026-09-28: Vec<u8> -> `libcc2rs::IStream`, the sticky-failbit
+// input stream WITH A READ CURSOR added by libcc2rs 856b99d0.  This module's own
+// refusal below named the blocker exactly -- "a Vec<u8> HAS NO READ CURSOR" --
+// and that blocker is gone.  rules/basic_stringstream flipped in the same change,
+// so std::stringstream and std::istringstream still share ONE representation, and
+// it is the same one rules/iostream t4 now gives `std::istream`, which is what
+// makes the free `operator>>` key (rules/iostream f8) type-check on a receiver
+// that arrived through a DerivedToBase conversion.
+//
+// std::ostringstream (rules/sstream) is deliberately NOT flipped: it is
+// output-only, has no get side, and its Vec<u8> is already exactly right.
+//
+// SUPERSEDED MODEL NOTE, kept for the reasoning:
 // MODEL: a byte buffer, Vec<u8> -- the same model rules/sstream gives
 // std::ostringstream and rules/basic_stringstream gives std::stringstream, so a
 // buffer handed between them keeps one representation.
@@ -24,20 +37,32 @@
 // overload clang resolves here is the same one the converter resolves at the
 // call site, defaulted `openmode` argument included.
 //
-// EXTRACTION (`>>`) IS NOT COVERED, AND IT IS A REFUSAL, NOT AN OMISSION.  Two
-// independent reasons, either one sufficient:
-//   1. A Vec<u8> HAS NO READ CURSOR.  Modelling `>>` needs a position that
-//      advances, which is a different representation (std::io::Cursor<Vec<u8>>),
-//      and Cursor is not an option for this family: in the refcount model
-//      Ptr<T>'s write_all/write_fmt exist only for `T: std::io::Write +
-//      ByteRepr` (libcc2rs/src/rc.rs:571) and Cursor<Vec<u8>> is not ByteRepr.
-//      Changing the representation would also desynchronise this module from
-//      rules/sstream and rules/basic_stringstream.
-//   2. A rule body is INLINED and every `aN` RE-EXPANDS.  A receiver-consuming
-//      read would therefore CONSUME THE INPUT TWICE wherever the receiver
-//      appears more than once in the body -- silently, with no diagnostic.
-// So the rest of the istream API (getline/get/peek/eof/fail/clear/seekg) is out
-// for the same reason, as are the std::ios_base formatting manipulators and
+// EXTRACTION (`>>`) -- THE OLD REFUSAL AND WHAT ANSWERED EACH HALF OF IT.
+// The two recorded reasons were:
+//   1. "A Vec<u8> HAS NO READ CURSOR."  ANSWERED by the model flip: IStream
+//      carries `pos`.  The sub-argument that std::io::Cursor was unavailable
+//      because it is not ByteRepr still stands and is why a NEW libcc2rs type
+//      was the right answer -- `impl ByteRepr for IStream {}` is a
+//      claim-nothing impl whose methods all panic, which is honest because the
+//      bound on Ptr::with_mut is imposed by the `Reinterpreted` arm alone.
+//   2. "A rule body is INLINED and every `aN` RE-EXPANDS, so a receiver-consuming
+//      read would CONSUME THE INPUT TWICE."  ANSWERED by shape, not by luck:
+//      every libcc2rs entry point takes the stream handle ONCE and hands the SAME
+//      handle back, and rules/iostream f8 binds each `aN` to a local exactly once.
+//      The re-expansion hazard is real and is the reason for that discipline.
+// The KEY ITSELF LIVES IN rules/iostream (f8), not here: `iss >> tok` resolves to
+// the FREE `operator>>(std::istream &, std::string &)`, so the recorded key names
+// std::istream and belongs to that owner.  This module's contribution is that its
+// t1 is now the SAME Rust type, without which the call is an E0308.
+//
+// STILL OUT, and now for a DIFFERENT reason than "no cursor": the basic_ios
+// predicates (eof/good/fail/operator bool/operator!) and the member `operator>>`
+// overloads, because a MEMBER call's receiver is emitted as
+// `(iss as Cpp2RustUnmapped_std_ios)` -- a non-primitive cast no rule body can
+// remove (dip/dip.cpp.rs:5478).  `std::getline` is out because the converter
+// never rule-searches it: it emits an undefined ported call `getline_99(...)`
+// (dip/dip.cpp.rs:6414), so a key would be DEAD.  Also out: seekg (needs a put/get
+// position API nothing asks for), the std::ios_base formatting manipulators and
 // `str(const std::string &)` (a setter, which needs a &mut receiver the rule ABI
 // cannot express -- see "AN LVALUE-REFERENCE TARGET PARAMETER IS NOT
 // ENFORCEABLE").

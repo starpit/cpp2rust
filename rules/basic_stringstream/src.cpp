@@ -8,6 +8,34 @@
 // operator or method row for it anywhere in the queue, so the whole 41-TU row is
 // this type plus its default constructor.
 //
+// ⭐⭐ MODEL FLIPPED 2026-09-28: Vec<u8> -> `libcc2rs::IStream`.
+// The old model's own words were "a Vec<u8> has no read cursor at all, so an
+// extraction row would have to change the model, not extend it".  That is
+// exactly what happened: libcc2rs commit 856b99d0 added `IStream` -- buffer +
+// GET POSITION + failbit/eofbit/badbit, with a private `sentry()` that makes
+// every extractor a no-op once the failbit is set -- and this module now uses it.
+//
+// ⛔ THE PUT SIDE WAS THE HARD CONSTRAINT AND IT IS DISCHARGED IN libcc2rs, NOT
+// HERE.  A stringstream is read AND written, insertion is NOT rule-driven, and
+// the refcount lowering lands on `Ptr<T>::write_fmt`/`write_all`, which exist
+// only for `T: std::io::Write + ByteRepr` (libcc2rs/src/rc.rs:723).  So the flip
+// would have traded a read-side gap for a write-side E0599 at every `ss << x`.
+// `impl std::io::Write for IStream` (APPEND) and a claim-nothing
+// `impl ByteRepr for IStream` were added in the same change, with two tests --
+// `writing_appends_and_does_not_disturb_the_read_cursor` and
+// `a_stream_behind_a_ptr_is_writable`, the latter being the E0599 check itself.
+//
+// ⭐ NO BEHAVIOUR CHANGED ON THE PUT SIDE.  `IStream`'s `Write` APPENDS, which is
+// precisely what `Vec<u8>`'s did, so the measured construct-then-INSERT
+// divergence documented below (C++ `12cXY` vs this model's `abcXY12`) is
+// UNCHANGED -- neither fixed nor worsened -- and it stays unreachable for the
+// same 36-site corpus grep.  Likewise the converter's hardcoded
+// `write!((ss as std::fs::File), ...)` cast on the FORMATTED path is still an
+// E0605; it is a converter-side defect, was failing loudly before, and fails
+// loudly still.
+//
+// SUPERSEDED MODEL NOTE, KEPT because its reasoning is why the flip needed a
+// libcc2rs change first:
 // MODEL: a byte buffer, Vec<u8> -- the same model rules/sstream (feef166) gives
 // std::ostringstream, for the same FORCED reason.  Insertion into any ostream is
 // not rule-driven (converter_lib.cpp:552 IsCallToOstream matches on the RESULT
@@ -98,11 +126,24 @@
 // NOT COVERED, deliberately, each because it needs its own harvested key and
 // none has one: `str(const std::string &)` (a SETTER; it needs a `&mut`
 // receiver the rule ABI cannot express), the (openmode)-only constructor,
-// EXTRACTION
-// (`>>`) and the other istream API (getline/get/peek/eof/fail/clear/seekg) --
-// a Vec<u8> has no read cursor at all, so an extraction row would have to
-// change the model, not extend it -- and the std::ios_base formatting
-// manipulators.  std::istringstream is a separate owner (rules/basic_istringstream,
+// the std::ios_base formatting manipulators.
+//
+// ⭐ EXTRACTION IS NOW COVERED, but NOT BY A KEY IN THIS MODULE.  `ss >> tok`
+// resolves to the FREE `operator>>(std::istream &, std::string &)`, whose
+// receiver reaches `std::istream` through a DerivedToBase conversion -- so the
+// key belongs to the std::istream owner and is `rules/iostream` f8.  THAT KEY
+// ONLY TYPE-CHECKS BECAUSE OF THIS FLIP: the argument-position DerivedToBase is
+// emitted with NO cast (plain `&mut ss`), so the stringstream's own Rust type
+// must BE the `std::istream` type.  While t1 was Vec<u8> and iostream t4 was
+// std::fs::File, that call was an E0308 no matter what the rule body said.
+//
+// STILL NOT COVERED: the MEMBER `operator>>` overloads and the basic_ios
+// predicates (`eof`/`good`/`operator bool`/`operator!`), because a MEMBER call's
+// receiver IS emitted with a cast -- `(ss as Cpp2RustUnmapped_std_ios).eof()`,
+// dip/dip.cpp.rs:5478 -- which no rule body can remove; and `std::getline`,
+// which the converter does not rule-search at all: it emits an undefined ported
+// call `getline_99(&mut s_stream, &mut substr, ...)` (dip/dip.cpp.rs:6414, with
+// no `fn getline_99` anywhere in the file).  A getline key would be DEAD.  std::istringstream is a separate owner (rules/basic_istringstream,
 // rows g144/g1301-g1303).
 
 #include <sstream>

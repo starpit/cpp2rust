@@ -36,18 +36,21 @@
 // different owner, so the keys are shipped as the model-correct bodies and this
 // is left FAILING LOUDLY rather than guessed at.
 
-fn t1() -> Vec<u8> {
-    Vec::new()
+fn t1() -> libcc2rs::IStream {
+    libcc2rs::IStream::new()
 }
 
-fn f1() -> Vec<u8> {
-    Vec::new()
+fn f1() -> libcc2rs::IStream {
+    libcc2rs::IStream::new()
 }
 
 // .str() -- a COPY out of the buffer, plus exactly ONE trailing NUL, because
 // rules/string's size() is len()-1.
-fn f2(a0: Vec<u8>) -> Vec<u8> {
-    let mut __s: Vec<u8> = a0.clone();
+// ⚠️ CHANGED BY THE t1 FLIP: `a0` is an IStream now.  `buf()`, not
+// `remaining()` -- see tgt_unsafe.rs's f2 for why that distinction is a
+// correctness one.
+fn f2(a0: libcc2rs::IStream) -> Vec<u8> {
+    let mut __s: Vec<u8> = a0.buf().to_vec();
     __s.push(0);
     __s
 }
@@ -57,9 +60,10 @@ fn f2(a0: Vec<u8>) -> Vec<u8> {
 // Vec<u8> here and Vec<libc::c_char> in the unsafe model, so inheriting the
 // unsafe body would give E0308 "expected Vec<u8>, found Vec<i8>" -- the same
 // shape already measured for f2.  No refcount-specific body logic is involved.
-fn f3(a0: Vec<u8>, a1: libc::c_uint) -> Vec<u8> {
+// ⚠️ CHANGED BY THE t1 FLIP: the RETURN type is now IStream.
+fn f3(a0: Vec<u8>, a1: libc::c_uint) -> libcc2rs::IStream {
     let _ = a1;
     let __s = a0;
     let __n = __s.len().saturating_sub(1);
-    __s[..__n].to_vec()
+    libcc2rs::IStream::from_bytes(__s[..__n].to_vec())
 }

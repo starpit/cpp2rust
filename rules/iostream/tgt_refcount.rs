@@ -81,11 +81,46 @@ fn f7() -> u32 {
     0x04
 }
 
-// t4 -- std::istream. Plain owned value, model-independent, so this is t1's body shape
-// verbatim. Restated here because this module HAS a tgt_refcount.rs and must therefore
-// carry EVERY key (see the f5/f6 note above -- omitting one aborts at LOAD TIME).
-fn t4() -> std::fs::File {
-    std::fs::File::open("").unwrap()
+// t4 -- std::istream -> `libcc2rs::IStream`. See tgt_unsafe.rs for why the old
+// `std::fs::File` model was replaced: a File has no read cursor and no sticky failbit, so
+// the key could never carry an operation. The body is model-independent (a plain owned
+// value), restated here because this module HAS a tgt_refcount.rs and must therefore carry
+// EVERY key -- omitting one aborts at LOAD TIME.
+fn t4() -> libcc2rs::IStream {
+    libcc2rs::IStream::new()
+}
+
+// f8 -- the free `operator>>(std::istream &, std::string &)`. See tgt_unsafe.rs for the
+// searched spelling, for the argument-position-vs-receiver-position measurement that makes
+// this key writable, and for why the sticky case must round-trip the caller's string
+// instead of overwriting it.
+//
+// THIS OVERRIDE IS REQUIRED and not for pointer syntax: BOTH parameter types are
+// model-dependent. `std::string` is Vec<u8> here and Vec<libc::c_char> in the unsafe model,
+// and an lvalue reference is `Ptr<T>` here and `&mut T` there, so inheriting the unsafe body
+// would give E0308 twice over.
+//
+// `extract_token` is called directly rather than through `istream_shr_string`, because that
+// free function takes a `Ptr<Vec<u8>>` for its out-parameter and the value handed to the
+// extractor here is a LOCAL staging buffer (the NUL has to come off before the read and go
+// back on after it), which has no `Ptr`. The stream handle is still consumed exactly once
+// and handed back, so chaining is unaffected.
+// ⚠️ THE `__stored` GUARD IS NOT COSMETIC -- without it a sticky-failed read
+// would write the staging buffer back and ERASE the caller's std::string, the
+// exact opposite of the specified behaviour.  See tgt_unsafe.rs's f8.
+//
+// `Ptr` is a VALUE, so unlike the unsafe model a `let` binding is legal here and
+// each `aN` is still named exactly once.
+fn f8(a0: Ptr<libcc2rs::IStream>, a1: Ptr<Vec<u8>>) -> Ptr<libcc2rs::IStream> {
+    let __s = a0;
+    let __o = a1;
+    let mut __b: Vec<u8> = Vec::new();
+    let __stored = __s.with_mut_ref(|__st| __st.extract_token_reporting(&mut __b).1);
+    if __stored {
+        __b.push(0);
+        __o.with_mut_ref(|__v| *__v = __b);
+    }
+    __s
 }
 
 // t5 -- std::ios_base::seekdir == int-promoted unscoped enum -> i32. Byte-identical to

@@ -2,6 +2,7 @@
 // Distributed under the MIT license that can be found in the LICENSE file.
 
 #include <iostream>
+#include <string>
 
 using t1 = std::ostream;
 using t2 = std::ostream &;
@@ -93,6 +94,36 @@ unsigned int f7() { return std::ios_base::binary; }
 // (operator>>, getline, read) still has no rule and fails LOUDLY with a placeholder
 // token rather than being silently invented here.
 using t4 = std::istream;
+
+// ============================================================================
+// f8 -- THE FREE `operator>>` FOR std::string, i.e. the whole reason t4 was
+// re-modelled.  Recorded key (the converter searches for exactly this):
+//     std::istream & operator shr(std::istream &, std::string &)
+//
+// NOTE HOW THE KEY IS HARVESTED.  The declared parameters below are only how
+// OVERLOAD RESOLUTION is steered; the RECORDED signature is the resolved
+// library function's own, which for libcxx is
+//     template<class C, class T, class A>
+//     basic_istream<C,T>& operator>>(basic_istream<C,T>&, basic_string<C,T,A>&)
+// printed with the typedef-preferring printer as `std::istream &` /
+// `std::string &`.  rules/cstddef/src.cpp:10 is the precedent: it writes
+// `operator>>(a0, a1)` with `const std::byte &` parameters and the recorded key
+// comes out `std::byte operator shr(std::byte, unsigned int)`, i.e. the
+// LIBRARY's signature, not this file's.  `operator>>(...)` is called in its
+// FUNCTION form so the free overload -- not the basic_istream member -- is the
+// one resolved.
+//
+// THE MEMBER `operator>>` OVERLOADS (int&, double&, ... ) ARE DELIBERATELY NOT
+// HERE, and it is a refusal with a measured cause rather than an omission: a
+// member call's receiver arrives through a DerivedToBase cast that the converter
+// emits as `(<recv> as Cpp2RustUnmapped_std_ios)` (dip/dip.cpp.rs:5478), a
+// non-primitive cast that no rule body can remove.  The free string overload has
+// no receiver -- both operands are ARGUMENTS, and an argument-position
+// DerivedToBase is emitted with NO cast (dip/dip.cpp.rs:6414 passes a
+// std::stringstream to a `std::istream &` parameter as plain `&mut s_stream`).
+// That measured asymmetry is the whole reason this key lands and those do not.
+// ============================================================================
+std::istream &f8(std::istream &a0, std::string &a1) { return operator>>(a0, a1); }
 
 // t5 -- `std::ios_base::seekdir` (row g478, 2 TUs).  libcxx/ios:295 is
 // `enum seekdir { beg, cur, end };` -- an UNSCOPED enum with no fixed underlying

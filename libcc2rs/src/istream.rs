@@ -84,6 +84,15 @@ impl IStream {
         &self.buf[self.pos.min(self.buf.len())..]
     }
 
+    /// The WHOLE underlying buffer, independent of the read cursor -- this is
+    /// what `std::basic_stringstream::str()` returns.  `str()` is specified on
+    /// the `basic_stringbuf`, not on the get area, so a stream that has already
+    /// been read from still reports every byte it holds; a model that returned
+    /// `remaining()` here would silently shrink `ss.str()` after each `>>`.
+    pub fn buf(&self) -> &[u8] {
+        &self.buf
+    }
+
     // -- state, exactly the `basic_ios` predicates the corpus asks for --------
 
     pub fn fail(&self) -> bool {
@@ -296,8 +305,32 @@ impl IStream {
     /// tree's `std::string` model carries is NOT added here -- the caller's
     /// model decides, which is why the two string entry points below differ.
     pub fn extract_token(&mut self, out: &mut Vec<u8>) {
+        self.extract_token_reporting(out);
+    }
+
+    /// ⭐ `extract_token` FOR A CALLER THAT MUST CONVERT THE STRING, and both of
+    /// its return values exist for a rule-ABI reason, not for elegance.
+    ///
+    /// The tree's `std::string` is a NUL-TERMINATED `Vec<libc::c_char>` (unsafe
+    /// model) while this type reads raw bytes, so the rule body needs a STAGING
+    /// buffer and must convert back afterwards. Two problems follow, and this
+    /// signature answers both:
+    ///
+    /// 1. ⛔ THE STICKY CASE MUST NOT WRITE THE ARGUMENT. `operator>>` on a
+    ///    failed stream leaves its `std::string` strictly untouched
+    ///    ([istream.formatted.reqmts]; libcxx clears the string only AFTER the
+    ///    sentry succeeds). A rule body that copied its staging buffer back
+    ///    unconditionally would ERASE the caller's string on every sticky read --
+    ///    a silent wrong answer, and exactly the failbit-dropping mistake this
+    ///    family is warned about. `bool` here is "the argument was written",
+    ///    i.e. the sentry succeeded, so the body can guard the write.
+    /// 2. A rule body is INLINED and every `aN` RE-EXPANDS to the argument
+    ///    expression verbatim, so the body must name each operand EXACTLY ONCE.
+    ///    Returning `*mut Self` lets the body mention the receiver once and still
+    ///    hand the stream on, which is what makes `in >> a >> b` chain.
+    pub fn extract_token_reporting(&mut self, out: &mut Vec<u8>) -> (*mut Self, bool) {
         if !self.sentry() {
-            return;
+            return (self, false);
         }
         let start = self.pos;
         while self.pos < self.buf.len() && !self.buf[self.pos].is_ascii_whitespace() {
@@ -308,6 +341,7 @@ impl IStream {
         }
         out.clear();
         out.extend_from_slice(&self.buf[start..self.pos]);
+        (self, true)
     }
 
     /// `std::getline(in, s, delim)`: everything up to (and consuming) `delim`.
@@ -336,6 +370,58 @@ impl IStream {
         out.extend_from_slice(&self.buf[start..end]);
     }
 }
+
+// ---------------------------------------------------------------------------
+// THE PUT SIDE.  ⛔ THIS IS NOT OPTIONAL DECORATION -- IT IS THE ONE HARD
+// CONSTRAINT ON USING `IStream` AS THE MODEL FOR `std::stringstream`.
+//
+// A `stringstream` is read AND written, and insertion into it is NOT
+// rule-driven: `converter_lib.cpp:552` IsCallToOstream matches on the RESULT
+// type being `basic_ostream`, and `converter.cpp` ConvertCallToOstream then
+// emits, textually, `write!(<stream>, "<fmt>", args)` / `<stream>.write_all(..)`
+// against `ToString()` of the left-most operand.  In the refcount model those
+// land on `Ptr<T>`, whose `write_fmt`/`write_all` exist ONLY for
+// `T: std::io::Write + ByteRepr` (`rc.rs:723`).  So a `T` without BOTH traits
+// makes every put-side site an E0599 -- i.e. flipping `std::stringstream`'s
+// model to `IStream` without these two impls would trade a read-side gap for a
+// write-side regression.  Both are therefore supplied here.
+//
+// SEMANTICS OF THE WRITE: APPEND, and the divergence it carries is the one
+// `rules/basic_stringstream` already measured and documented, unchanged by this
+// type.  `std::stringstream ss(s)` opens `in|out` WITHOUT `ate`, so C++'s put
+// position is 0 and an insertion OVERWRITES from the front (`abcXY` + `12` ->
+// `12cXY`), while appending gives `abcXY12`.  `IStream` carries a GET cursor
+// only, so it appends -- exactly what `Vec<u8>` did before the flip.  This is
+// preserved deliberately rather than "fixed" here: a put cursor is a model
+// change for the whole family, the corpus has no construct-then-insert site
+// (the 36-site grep is in `rules/basic_stringstream/src.cpp`), and the members
+// that would observe the difference (`seekp`/`tellp`/the `str()` setter) stay
+// unmapped.  ⭐ The point: this impl is a strict no-regression move, not a new
+// claim.
+// ---------------------------------------------------------------------------
+
+impl std::io::Write for IStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.buf.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// `ByteRepr` with every method left at its PANICKING default -- the same
+/// claim-nothing shape `reinterpret.rs:160-172` already uses for `BTreeMap`,
+/// `HashMap` and `HashSet`.  ⭐ WHY THIS IS HONEST: the bound on
+/// `Ptr::with_mut` / `Ptr::write_fmt` is a whole-method requirement imposed by a
+/// SINGLE arm, `PtrKind::Reinterpreted`, which is the only place `byte_size` /
+/// `to_bytes` / `from_bytes` are called (see the `Ptr::with_ref` doc at
+/// `rc.rs:566`).  A stream is never reached through a reinterpreted pointer, so
+/// the impl claims no byte layout and any attempt to use one fails LOUDLY with
+/// the default's panic rather than fabricating bytes for a `Vec` + cursor +
+/// three flags.
+impl crate::ByteRepr for IStream {}
 
 // ---------------------------------------------------------------------------
 // The refcount-model entry points.
@@ -415,6 +501,43 @@ shr_unsafe_fn!(istream_shr_u64_unsafe, u64, extract_u64);
 shr_unsafe_fn!(istream_shr_u32_unsafe, u32, extract_u32);
 shr_unsafe_fn!(istream_shr_f64_unsafe, f64, extract_f64);
 shr_unsafe_fn!(istream_shr_u8_unsafe, u8, extract_u8);
+
+// ⭐ THE TWO MIRRORS THE FIRST CUT OF THIS FILE WAS MISSING, and the reason they
+// are needed is the rule ABI, not symmetry.  `std::string` and `getline` are the
+// two shapes the corpus actually writes (`ss >> tok` at util/dtgetenv.hpp:127
+// and the `std::getline(ss, tok, ',')` comma split), and an UNSAFE-model rule
+// body for either one must (a) hand the stream back so `in >> a >> b` chains and
+// (b) MENTION THE RECEIVER EXACTLY ONCE, because a rule body is inlined and each
+// `aN` re-expands to the argument expression verbatim -- a body written
+// `{ (*a0).extract_token(&mut *a1); a0 }` names `a0` twice and would evaluate the
+// receiver expression twice at every call site.  A free function that consumes
+// the pointer once and returns it is the only shape that cannot do that.
+//
+// NOTE the std::string element type: these take `*mut Vec<u8>`, the RAW BYTES,
+// not the unsafe model's NUL-terminated `Vec<libc::c_char>`.  The terminator is
+// representation, and converting it is the RULE's job (see
+// `rules/iostream/tgt_unsafe.rs`), not this crate's -- libcc2rs must not encode
+// one model's string layout.
+
+/// # Safety
+///
+/// Both pointers must be valid and non-aliasing for the call.
+pub unsafe fn istream_shr_string_unsafe(s: *mut IStream, out: *mut Vec<u8>) -> *mut IStream {
+    unsafe { (*s).extract_token(&mut *out) };
+    s
+}
+
+/// # Safety
+///
+/// Both pointers must be valid and non-aliasing for the call.
+pub unsafe fn istream_getline_unsafe(
+    s: *mut IStream,
+    out: *mut Vec<u8>,
+    delim: u8,
+) -> *mut IStream {
+    unsafe { (*s).getline(&mut *out, delim) };
+    s
+}
 
 #[cfg(test)]
 mod tests {
@@ -577,6 +700,68 @@ mod tests {
         assert!(st.fail());
         assert!(st.eof());
         assert_eq!(v, 0);
+    }
+
+    // ⭐ THE PUT-SIDE PROOF, and the reason it asserts on `buf()` and not on
+    // `remaining()`: a `stringstream` is read AND written, and `str()` must keep
+    // reporting bytes that have ALREADY been consumed by `>>`.  Also proves the
+    // written bytes become readable, which is what makes `ss << x; ss >> y;`
+    // work at all.
+    #[test]
+    fn writing_appends_and_does_not_disturb_the_read_cursor() {
+        use std::io::Write;
+        let mut st = s("7 ");
+        let mut a: i32 = 0;
+        st.extract_i32(&mut a);
+        assert_eq!(a, 7);
+        write!(st, "{}", 42).unwrap();
+        // str() sees EVERYTHING, including the already-consumed `7`.
+        assert_eq!(st.buf(), b"7 42");
+        // and the appended bytes are readable through the same cursor.
+        let mut b: i32 = 0;
+        st.extract_i32(&mut b);
+        assert_eq!(b, 42);
+        assert!(!st.fail());
+    }
+
+    // The `Ptr` put path the converter's built-in ostream lowering actually
+    // emits: `write!(ss.as_pointer(), ...)`, which resolves to
+    // `Ptr::write_fmt` and needs `IStream: std::io::Write + ByteRepr`
+    // (rc.rs:723).  This test IS the E0599-would-not-compile check.
+    #[test]
+    fn a_stream_behind_a_ptr_is_writable() {
+        let owner = std::rc::Rc::new(std::cell::RefCell::new(IStream::new()));
+        let p = crate::AsPointer::as_pointer(&owner);
+        p.write_all(b"abc").unwrap();
+        write!(p, "{}", 9).unwrap();
+        assert_eq!(owner.borrow().buf(), b"abc9");
+    }
+
+    #[test]
+    fn unsafe_string_and_getline_mirrors_chain_and_stay_sticky() {
+        let mut st = s("aa bb");
+        let mut x: Vec<u8> = Vec::new();
+        let mut y: Vec<u8> = Vec::new();
+        unsafe {
+            let p = istream_shr_string_unsafe(&mut st, &mut x);
+            istream_shr_string_unsafe(p, &mut y);
+        }
+        assert_eq!(x, b"aa");
+        assert_eq!(y, b"bb");
+        assert!(!st.fail());
+
+        let mut st2 = s("p,q");
+        let mut f: Vec<u8> = Vec::new();
+        unsafe {
+            let p = istream_getline_unsafe(&mut st2, &mut f, b',');
+            assert_eq!(f, b"p");
+            istream_getline_unsafe(p, &mut f, b',');
+        }
+        assert_eq!(f, b"q");
+        // third call: nothing left, failbit, and the argument is left ALONE.
+        unsafe { istream_getline_unsafe(&mut st2, &mut f, b',') };
+        assert!(st2.fail());
+        assert_eq!(f, b"q", "a failed getline must not clear its argument");
     }
 
     #[test]
