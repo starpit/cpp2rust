@@ -409,3 +409,21 @@ unsafe fn f66(a0: Vec<libc::c_char>, a1: usize, a2: usize) -> Vec<libc::c_char> 
     __sv2.push(0);
     __sv2
 }
+unsafe fn f81(a0: Vec<libc::c_char>, a1: Vec<libc::c_char>, a2: usize) -> usize {
+    // Each `aN` occurs EXACTLY ONCE (rule bodies are inlined, so every occurrence
+    // re-evaluates the argument), and neither buffer is MOVED -- a0 is the receiver
+    // place (`jsonString`) and is live after the call.
+    (|__hv: &Vec<libc::c_char>, __nv: &Vec<libc::c_char>, __pos: usize| -> usize {
+        let __h = &__hv[..__hv.len().saturating_sub(1)];
+        let __n = &__nv[..__nv.len().saturating_sub(1)];
+        if __n.len() > __h.len() {
+            usize::MAX
+        } else {
+            let __last = ::std::cmp::min(__pos, __h.len() - __n.len());
+            (0..=__last)
+                .rev()
+                .find(|&__i| &__h[__i..__i + __n.len()] == __n)
+                .unwrap_or(usize::MAX)
+        }
+    })(&a0, &a1, a2)
+}

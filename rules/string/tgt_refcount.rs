@@ -380,3 +380,18 @@ fn f66(a0: Vec<u8>, a1: usize, a2: usize) -> Vec<u8> {
     __sv2.push(0);
     __sv2
 }
+fn f81(a0: Vec<u8>, a1: Vec<u8>, a2: usize) -> usize {
+    (|__hv: &Vec<u8>, __nv: &Vec<u8>, __pos: usize| -> usize {
+        let __h = &__hv[..__hv.len().saturating_sub(1)];
+        let __n = &__nv[..__nv.len().saturating_sub(1)];
+        if __n.len() > __h.len() {
+            usize::MAX
+        } else {
+            let __last = ::std::cmp::min(__pos, __h.len() - __n.len());
+            (0..=__last)
+                .rev()
+                .find(|&__i| &__h[__i..__i + __n.len()] == __n)
+                .unwrap_or(usize::MAX)
+        }
+    })(&a0, &a1, a2)
+}

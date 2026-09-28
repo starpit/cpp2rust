@@ -115,3 +115,16 @@ fn f16<T1: PartialOrd + Clone + ByteRepr>(a0: Ptr<T1>, a1: Ptr<T1>) -> Ptr<T1> {
 fn f17<T1: PartialOrd + Clone + ByteRepr>(a0: Ptr<T1>, a1: Ptr<T1>) -> Ptr<T1> {
     if a0.read() >= a1.read() { a0 } else { a1 }
 }
+
+fn f18(a0: Ptr<u8>, a1: Ptr<u8>, a2: Ptr<u8>, a3: Ptr<u8>) {
+    let __old = a2.read();
+    let __new = a3.read();
+    let mut __it = a0;
+    let __end = a1;
+    while __it != __end {
+        if __it.read() == __old {
+            __it.write(__new.clone());
+        }
+        __it += 1;
+    }
+}

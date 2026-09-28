@@ -131,3 +131,29 @@ template <typename T1> const T1 &f16(const T1 &a, const T1 &b) {
 template <typename T1> const T1 &f17(const T1 &a, const T1 &b) {
   return std::max(a, b);
 }
+
+// f18 -- `<algorithm>`'s FREE FUNCTION `std::replace(first, last, old, new)`.
+// REATTRIBUTION: SENU-WORKLIST row 8 filed this under rules/string as
+// `std::string::replace`.  That is WRONG.  The failing site (senulatorProg.cpp
+// rustc.err:2945, .rs:4939) is
+//     replace_65(___first, ___last, &mut ___old_value, &mut ___new_value)
+// with `___first/___last: *mut libc::c_char` and `___old_value/___new_value:
+// libc::c_char` -- an iterator pair plus two values, i.e. the <algorithm> free
+// function, not a std::string member.  rules/string's only `replace` is f14
+// `s.replace(pos, count, p, n)`, a different call entirely.
+// `std::replace` takes NO callable (that is `replace_if`), so the CallableN
+// convention f6/f14 need does not arise here.
+// Iterator model: spelled `T1 *` as f8/f14 do (the site's iterators really are
+// `char *`), and the value parameters as `const T1 &` -- which lowers to
+// `*const T1` in the unsafe model and `Ptr<T1>` in refcount, matching f16/f17.
+// The emitted call passes `&mut <lvalue>`, which coerces to `*const T1`.
+// MEASURED READBACK CORRECTION: the `T1 *` spelling recorded as
+//   void std::replace(T1 *, T1 *, const T1 &, const T1 &)
+// and was DEAD -- `replace_65` survived unchanged.  The site's iterators are
+// `std::string::iterator` (the converter lowers them to `*mut libc::c_char`,
+// which is why the `T1 *` form looked right), so the key must be spelled on
+// `std::string::iterator`, exactly as f13 does for `std::copy`.
+void f18(std::string::iterator a0, std::string::iterator a1, const char &a2,
+         const char &a3) {
+  return std::replace(a0, a1, a2, a3);
+}

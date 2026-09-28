@@ -129,3 +129,21 @@ unsafe fn f17<T1: PartialOrd>(a0: *const T1, a1: *const T1) -> *const T1 {
         (a1) as *const _
     }
 }
+
+unsafe fn f18(
+    a0: *mut libc::c_char,
+    a1: *mut libc::c_char,
+    a2: *const libc::c_char,
+    a3: *const libc::c_char,
+) {
+    let __old = a2;
+    let __new = a3;
+    let mut __it = a0;
+    let __end = a1;
+    while __it != __end {
+        if *__it == *__old {
+            *__it = (*__new).clone();
+        }
+        __it = __it.add(1);
+    }
+}

@@ -297,3 +297,28 @@ bool f64(std::string_view a0) { return a0.empty(); }
 std::string_view f66(std::string_view a0, std::size_t a1, std::size_t a2) {
   return a0.substr(a1, a2);
 }
+
+// ---------------------------------------------------------------------------
+// f81 -- `std::string::rfind(const std::string &, size_type = npos) const`.
+// MEASURED, senulatorProg.cpp rustc.err:993 / .rs:3764.  The fallback the
+// converter emitted was
+//     jsonString.rfind_pconstVeclibcc_char_usize_const(&progEndMarker, None)
+// so the mangling decodes the callee as the 2-parameter (str, pos) overload and
+// -- critically -- **the DEFAULTED `pos` argument is emitted as a literal
+// `None`**, exactly as rules/map f35 documents for its collapsed defaulted
+// comparator.  The C++ here therefore spells `std::size_t a2` (that spelling is
+// what gets RECORDED as the key, and it is what the `usize` in the fallback
+// mangling comes from) while the Rust TARGET takes `Option<usize>` and does
+// `a2.unwrap_or(usize::MAX)`.  Keying the target as a bare `usize` would be a
+// guaranteed E0308 that then LOOKS like a missing key.
+// npos is `usize::MAX`; the site's own guard is `if ((progEndPos) != (usize::MAX))`.
+// The `const std::string &` parameters lower to `Vec<..>` BY VALUE, as f33/f44
+// already record for the same shape -- not to `*const Vec<..>`.
+// ⚠️ SUBSTR-COLLAPSE CHECK (f66's measured trap): the 1-arg `rfind(str)` form and
+// the 2-arg form collapse into THIS ONE key because the recorder writes defaulted
+// arguments out explicitly, so there is deliberately NO second entry for the
+// 1-arg form -- a second entry would be silently redundant and would make the
+// search pick between two colliding buckets.
+std::size_t f81(const std::string &a0, const std::string &a1, std::size_t a2) {
+  return a0.rfind(a1, a2);
+}
