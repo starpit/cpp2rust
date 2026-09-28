@@ -2844,7 +2844,7 @@ fn f480(
 ) -> bool {
     match a0.read_attribute() {
         Ok(__v) => {
-            *a1 = __v;
+            drop(core::mem::replace(a1, __v));
             true
         }
         Err(_) => false,
@@ -2865,7 +2865,7 @@ fn f481(
 ) -> bool {
     match a0.read_optional_attribute() {
         Ok(Some(__v)) => {
-            *a1 = __v;
+            drop(core::mem::replace(a1, __v));
             true
         }
         Ok(None) => true,
@@ -3003,6 +3003,36 @@ fn f500(a0: &mut dataflowir_gen::fmt::Block, a1: u32) -> dataflowir_gen::ir::Val
 }
 
 // ===========================================================================
+// ⛔⛔ WHY `drop(core::mem::replace(a1, __v))` AND NOT `*a1 = __v`, 2026-09-28.
+// `*a1 = __v;` WAS HERE AND IT EMITTED RUST THAT DOES NOT COMPILE.  A `&mut T`
+// placeholder records as `{arg 1, access: "borrow_mut"}` and the emitter renders
+// that placeholder as `&mut <argexpr>` -- the rule's leading `*` is SWALLOWED, it
+// is not emitted separately.  So the body emitted, at all 67 sites on
+// `ddc/ddl/Dialect/DdlOps.cpp`:
+//     &mut (*prop).memory = __v;        // and `&mut attr = __v;`
+// which is `error[E0070]: invalid left-hand side of assignment` -- measured with
+// `rustc --edition 2021` on a reduced scratch, 2 errors, rc=1.
+// ⭐ AND THIS IS THE CLASS rc=0 CANNOT SEE.  E0070 is a HIR/type-check error, NOT
+// a parse error: `rustfmt` PARSES `&mut x = v` happily (measured: rustfmt rc=0, it
+// reformats the line and leaves it verbatim).  rustfmt is the only Rust parser in
+// this pipeline, so the TU stayed `A complete rc=0` with a healthy 64705 lines and
+// no `Cpp2RustUnmapped_*` token.  No placeholder census can find this.
+// ⭐ THE FIX RELIES ON THE SAME RENDERING, DELIBERATELY: bare `a1` records the
+// IDENTICAL `{arg 1, access: "borrow_mut"}` placeholder, so `replace(a1, __v)`
+// emits `replace(&mut (*prop).memory, __v)` -- and `&mut place` is exactly what
+// `core::mem::replace` wants.  `drop(...)` of the returned old value is the C++
+// copy-assignment's destruction of the overwritten attribute, so this is a
+// fidelity IMPROVEMENT over the assignment, not a workaround.
+// ⚠️ TWO SPELLINGS THAT DO NOT WORK, both measured: `replace(&mut *a1, __v)` and
+// `replace(*a1, __v)` both make rule-preprocessor ABORT with
+// `semantic.rs:260: unresolved access="unknown"` -- a deref or a re-borrow of a
+// placeholder inside a CALL ARGUMENT has no access classification.  Only the bare
+// placeholder is classifiable there.  Do not "restore" the `*`.
+// ⚠️ IDENTICAL IN BOTH MODELS: `a1` is `&mut dataflowir_gen::ir::Attr` in unsafe
+// AND in refcount (t7/t10/t11/t12/t20/t44/t29 all map to the same `ir::Attr`, an
+// enum -> `Sized` + movable), so `replace` is well-typed in both and there is no
+// `Ptr`/`Value` wrapper to defeat it.  Verified by the f520-f531/f560/f480/f481
+// bodies in the two overlays being character-identical apart from `unsafe`.
 // f520-f531 -- THE TEMPLATE OVERLOADS of readAttribute/readOptionalAttribute,
 // i.e. what the ODS-generated `readProperties` ACTUALLY calls.  f480/f481 key
 // the virtual `Attribute &` forms and were measured DEAD (37 -> 37, 32 -> 32
@@ -3030,7 +3060,7 @@ fn f520(
 ) -> bool {
     match a0.read_attribute() {
         Ok(__v) => {
-            *a1 = __v;
+            drop(core::mem::replace(a1, __v));
             true
         }
         Err(_) => false,
@@ -3044,7 +3074,7 @@ fn f521(
 ) -> bool {
     match a0.read_attribute() {
         Ok(__v) => {
-            *a1 = __v;
+            drop(core::mem::replace(a1, __v));
             true
         }
         Err(_) => false,
@@ -3058,7 +3088,7 @@ fn f522(
 ) -> bool {
     match a0.read_attribute() {
         Ok(__v) => {
-            *a1 = __v;
+            drop(core::mem::replace(a1, __v));
             true
         }
         Err(_) => false,
@@ -3072,7 +3102,7 @@ fn f523(
 ) -> bool {
     match a0.read_attribute() {
         Ok(__v) => {
-            *a1 = __v;
+            drop(core::mem::replace(a1, __v));
             true
         }
         Err(_) => false,
@@ -3086,7 +3116,7 @@ fn f524(
 ) -> bool {
     match a0.read_attribute() {
         Ok(__v) => {
-            *a1 = __v;
+            drop(core::mem::replace(a1, __v));
             true
         }
         Err(_) => false,
@@ -3100,7 +3130,7 @@ fn f525(
 ) -> bool {
     match a0.read_attribute() {
         Ok(__v) => {
-            *a1 = __v;
+            drop(core::mem::replace(a1, __v));
             true
         }
         Err(_) => false,
@@ -3114,7 +3144,7 @@ fn f526(
 ) -> bool {
     match a0.read_attribute() {
         Ok(__v) => {
-            *a1 = __v;
+            drop(core::mem::replace(a1, __v));
             true
         }
         Err(_) => false,
@@ -3128,7 +3158,7 @@ fn f527(
 ) -> bool {
     match a0.read_attribute() {
         Ok(__v) => {
-            *a1 = __v;
+            drop(core::mem::replace(a1, __v));
             true
         }
         Err(_) => false,
@@ -3142,7 +3172,7 @@ fn f528(
 ) -> bool {
     match a0.read_optional_attribute() {
         Ok(Some(__v)) => {
-            *a1 = __v;
+            drop(core::mem::replace(a1, __v));
             true
         }
         Ok(None) => true,
@@ -3157,7 +3187,7 @@ fn f529(
 ) -> bool {
     match a0.read_optional_attribute() {
         Ok(Some(__v)) => {
-            *a1 = __v;
+            drop(core::mem::replace(a1, __v));
             true
         }
         Ok(None) => true,
@@ -3172,7 +3202,7 @@ fn f530(
 ) -> bool {
     match a0.read_optional_attribute() {
         Ok(Some(__v)) => {
-            *a1 = __v;
+            drop(core::mem::replace(a1, __v));
             true
         }
         Ok(None) => true,
@@ -3187,7 +3217,7 @@ fn f531(
 ) -> bool {
     match a0.read_optional_attribute() {
         Ok(Some(__v)) => {
-            *a1 = __v;
+            drop(core::mem::replace(a1, __v));
             true
         }
         Ok(None) => true,
@@ -3287,7 +3317,7 @@ fn f560<T1>(
 ) -> bool {
     match a0.read_attribute() {
         Ok(__v) => {
-            *a1 = __v;
+            drop(core::mem::replace(a1, __v));
             true
         }
         Err(_) => false,
