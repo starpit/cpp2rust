@@ -2928,3 +2928,49 @@ fn f486(a0: &dataflowir_gen::DialectBytecodeWriter) -> i64 {
 fn f487(a0: &mut dataflowir_gen::DialectBytecodeWriter, a1: Vec<i32>) {
     a0.write_sparse_array(&a1)
 }
+
+// ---------------------------------------------------------------------------
+// t520 / f420 / f421 -- `mlir::MutableOperandRange` AS A WRITE-THROUGH VIEW.
+// See tgt_unsafe.rs at t520 for the aliasing argument and the measured
+// demonstration, and src.cpp at t520 for the member census and the two
+// forward-looking hazards (the dropped segment list, and the flat ODS index).
+//
+// ⭐ THE ONLY DIFFERENCE FROM THE UNSAFE MODEL IS THE OWNER'S SPELLING: t36 models
+// `mlir::Operation *` as `libcc2rs::Ptr<fmt::OpInst>` here, so the owner slot is a
+// `Ptr` and the deref in f421 goes through `Ptr::with_ref` rather than `*`.
+// ⭐ `with_ref`, NOT `with`: `fmt::OpInst` is not `ByteRepr` and lives in another
+// crate, so the orphan rule makes the byte-decoding accessors unusable on it.
+// `with_ref`/`with_mut_ref` (libcc2rs rc.rs:593,625) are the bound-free path, and
+// they mutate the OWNER'S STORAGE, which is exactly the aliasing this row needs.
+// ⚠️ SAFETY IN THIS MODEL IS LIVENESS, NOT LIFETIMES: a view that outlives its op
+// panics with `ub: dangling pointer` on the next access rather than reading freed
+// memory.  That is the loud outcome, not a silent one.
+fn t520() -> (libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>, u32, u32) {
+    (libcc2rs::Ptr::<dataflowir_gen::fmt::OpInst>::null(), 0, 0)
+}
+
+fn f420(
+    a0: libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>,
+    a1: u32,
+    a2: u32,
+    a3: Vec<(u32, (::std::string::String, dataflowir_gen::ir::Attr))>,
+) -> (libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>, u32, u32) {
+    // ⛔ THE ANNOTATION IS LOAD-BEARING, AND THIS WAS MEASURED, NOT GUESSED.  The 4th
+    // argument is DEFAULTED (`= {}`) and the recorder writes the default out at the call
+    // site, so `a3` re-expands to a bare `Vec::new()` at 29 of the 30 DdlOps sites.
+    // `let __segments = a3; drop(__segments);` therefore emitted `let __segments =
+    // Vec::new(); drop(__segments);` -- E0282 `type annotations needed`, at rc=0 and with no
+    // placeholder token, i.e. invisible to every census.  Naming the element type here
+    // pins the inference at every site.
+    let __segments: Vec<(u32, (::std::string::String, dataflowir_gen::ir::Attr))> = a3;
+    drop(__segments);
+    (a0, a1, a2)
+}
+
+fn f421(
+    a0: libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>,
+) -> (libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>, u32, u32) {
+    let __owner = a0;
+    let __n: usize = __owner.with_ref(|op| op.operands.values().map(|g| g.len()).sum());
+    (__owner, 0u32, __n as u32)
+}
