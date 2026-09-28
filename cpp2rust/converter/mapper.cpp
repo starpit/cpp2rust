@@ -101,12 +101,167 @@ clang::PrintingPolicy getPrintPolicy() {
   return policy;
 }
 
+// THE CALL'S OWN PARAMETER LIST: the LAST balanced `(...)` group that sits at
+// ANGLE DEPTH 0. Returns nullopt when there is no such group (a bare constant
+// like `EAGAIN`) or when the brackets do not balance.
+//
+// WHY THIS EXISTS -- THE EXPR-SIDE TWIN OF THE `GetTypeMapKey` ARITY BUG.
+// `GetExprMapKey` used to walk back from the FIRST `(` anywhere in the spelling.
+// For a callable receiver
+//     T1 std::function<T1 (T2, T3, T4, T5, T6)>::operator()(T2, T3, T4, T5, T6)
+// that paren is the one INSIDE THE TEMPLATE ARGUMENT LIST, and the backward walk
+// immediately hit the depth-0 space in front of it and returned the EMPTY
+// STRING. So every `std::function::operator()` of every arity, and every
+// `std::function` constructor, shared bucket `""`, and `search`'s longer-src
+// tie-break handed a SEVEN-argument call to the arity-5 rule: measured on
+// arity-probe/p7.cpp, which emitted a five-argument call. Unlike the type-side
+// twin this RESOLVES AND COMPILES -- the receiver type maps, the call resolves,
+// and the emitted Rust is a legal call into a body written for a different
+// signature.
+//
+// WHICH PARENS AND WHY. An expr key is not a type key: the arity that
+// disambiguates here is the CALL'S OWN parameter list, not the arrow arity of a
+// function type sitting in a template argument list (that is `GetArrowArity`'s
+// job, and it is the receiver TYPE's business). So we take the LAST depth-0
+// group, which is the trailing parameter list -- trailing `const` / `&` /
+// `noexcept` carry no parens, and `operator()`'s own empty name parens are the
+// SECOND-to-last group, so this also stops the name token from being mistaken
+// for the parameter list.
+//
+// FALLBACK, AND WHY IT CANNOT ORPHAN. An `operator<` / `operator->` /
+// `operator>=` name token desyncs the angle counter (the same defect
+// MaskOperatorNameBrackets fixes for matchTemplate), so those spellings end up
+// unbalanced here and get nullopt; callers then fall back to EXACTLY today's
+// `find_first_of('(')`. Both the load side and the ask side run this same
+// function on structurally identical spellings, so the fallback is taken on both
+// sides or neither. Measured over pin/ir.v34's 1,373 expr keys: 10 keys land on
+// the fallback (7 `operator<`-family + 3 `operator->`) and keep their present
+// bucket byte-for-byte.
+std::optional<std::pair<size_t, size_t>>
+GetExprParamList(const std::string &str) {
+  int ang = 0;
+  int par = 0;
+  size_t open = std::string::npos;
+  std::optional<std::pair<size_t, size_t>> last;
+  for (size_t i = 0; i < str.size(); ++i) {
+    switch (str[i]) {
+    case '<':
+      ++ang;
+      break;
+    case '>':
+      --ang;
+      break;
+    case '(':
+      if (ang == 0) {
+        if (par == 0) {
+          open = i;
+        }
+        ++par;
+      }
+      break;
+    case ')':
+      if (ang == 0) {
+        if (--par < 0) {
+          return std::nullopt; // unbalanced
+        }
+        if (par == 0 && open != std::string::npos) {
+          last = std::pair<size_t, size_t>{open, i};
+        }
+      }
+      break;
+    default:
+      break;
+    }
+  }
+  if (ang != 0 || par != 0) {
+    return std::nullopt; // unbalanced: fall back to today's bucket, symmetrically
+  }
+  return last;
+}
+
+// THE CALL'S ARITY, or nullopt when it has none that can be compared.
+// ⚠️ nullopt is NOT an error path here, it is the VARIADIC path, and it is why
+// the arity cannot simply be glued onto the bucket the way `GetTypeMapKey` does
+// it. Measured over pin/ir.v34: 26 expr keys have a parameter list with no fixed
+// arity -- 21 pack keys (`std::vector<T1>::emplace_back(&&...)`,
+// `std::make_unique(&&...)`, `std::tie(&&...)`, `std::tuple<...>::tuple(&&...)`,
+// `std::unordered_map<T1, T2>::emplace(&&...)`, `std::deque` twins) and 5
+// C-variadics (`open`, `fcntl`, `ioctl`, `snprintf`, `__builtin_mul_overflow`).
+// Their ASK spelling always carries a CONCRETE arity, so an unconditional
+// `#arity` suffix would put load and ask in different buckets and ORPHAN all 26
+// -- and an orphaned expr key does not abort: the converter emits the member
+// TEXTUALLY at rc=0 with no placeholder token. Hence a variadic pattern loads
+// under the BARE bucket and every ask consults BOTH buckets (`searchExpr`).
+std::optional<size_t> GetExprCallArity(const std::string &str) {
+  auto group = GetExprParamList(str);
+  if (!group) {
+    return std::nullopt;
+  }
+  size_t a = group->first + 1;
+  size_t b = group->second;
+  while (a < b && std::isspace((unsigned char)str[a])) {
+    ++a;
+  }
+  while (b > a && std::isspace((unsigned char)str[b - 1])) {
+    --b;
+  }
+  if (a == b) {
+    return 0; // `()` -- a nullary call
+  }
+  size_t arity = 1;
+  int ang = 0;
+  int par = 0;
+  int sq = 0;
+  for (size_t i = a; i < b; ++i) {
+    switch (str[i]) {
+    case '<':
+      ++ang;
+      break;
+    case '>':
+      --ang;
+      break;
+    case '(':
+      ++par;
+      break;
+    case ')':
+      --par;
+      break;
+    case '[':
+      ++sq;
+      break;
+    case ']':
+      --sq;
+      break;
+    case '.':
+      // A top-level `...` -- either a C-variadic or this project's `&&...` pack
+      // marker. No fixed arity; see the comment above.
+      if (ang == 0 && par == 0 && sq == 0 && str.compare(i, 3, "...") == 0) {
+        return std::nullopt;
+      }
+      break;
+    case ',':
+      if (ang == 0 && par == 0 && sq == 0) {
+        ++arity;
+      }
+      break;
+    default:
+      break;
+    }
+  }
+  return arity;
+}
+
 std::string GetExprMapKey(const std::string &str) {
   // Extract the function name from something like
   // const T1 & std::foo<T1, T2>::fn_name(args)
-  auto n = str.find_first_of('(');
-  if (n == std::string::npos) {
-    n = str.size();
+  size_t n;
+  if (auto group = GetExprParamList(str)) {
+    n = group->first;
+  } else {
+    n = str.find_first_of('(');
+    if (n == std::string::npos) {
+      n = str.size();
+    }
   }
 
   // Walk backwards from '(' tracking <> depth:
@@ -127,6 +282,18 @@ std::string GetExprMapKey(const std::string &str) {
   }
   std::reverse(result.begin(), result.end());
   return result;
+}
+
+// THE LOAD-SIDE BUCKET: name plus the call's arity when it has one. Fixed-arity
+// rules go to `name#N`; variadic rules and paren-less constants go to the bare
+// `name`, which is the bucket `searchExpr` always also consults.
+std::string GetExprMapBucket(const std::string &str) {
+  std::string key = GetExprMapKey(str);
+  if (auto arity = GetExprCallArity(str)) {
+    key += '#';
+    key += std::to_string(*arity);
+  }
+  return key;
 }
 
 constexpr const char kPackMarker[] = "&&...";
@@ -709,13 +876,51 @@ search(std::unordered_multimap<std::string, T> &map, const std::string &txt,
   return {rule, std::move(subs)};
 }
 
+// THE ONLY WAY AN EXPR BUCKET MAY BE ASKED. Consults the arity bucket AND the
+// bare bucket, and applies the SAME longer-src tie-break across the union, so
+// the selection among the candidates that survive is bit-for-bit today's --
+// only the wrong-arity candidates are gone.
+//
+// SYMMETRY, which is the whole safety argument: every expr rule is loaded under
+// `GetExprMapBucket`, which is either `GetExprMapKey(src)` (variadic or
+// paren-less) or `GetExprMapKey(src) + "#" + arity`. Both of those are consulted
+// here. No load bucket exists that this function does not read, so no key can be
+// orphaned by the bucket change alone.
+std::pair<TranslationRule::ExprRule *,
+          std::vector<std::optional<std::string>>>
+searchExpr(const std::string &txt) {
+  const std::string base = GetExprMapKey(txt);
+  auto best = search(exprs_, txt, base);
+  if (auto arity = GetExprCallArity(txt)) {
+    auto exact = search(exprs_, txt, base + '#' + std::to_string(*arity));
+    if (exact.first != nullptr &&
+        (best.first == nullptr ||
+         exact.first->src.size() > best.first->src.size())) {
+      best = std::move(exact);
+    }
+  }
+  return best;
+}
+
+// The `contains` twin of searchExpr: same two buckets, same reason.
+bool exprsContain(const std::string &txt) {
+  const std::string base = GetExprMapKey(txt);
+  if (exprs_.contains(base)) {
+    return true;
+  }
+  if (auto arity = GetExprCallArity(txt)) {
+    return exprs_.contains(base + '#' + std::to_string(*arity));
+  }
+  return false;
+}
+
 TranslationRule::ExprRule *search(const clang::Expr *expr) {
   if (RefersToUserDefinedDecl(expr)) {
     return nullptr;
   }
   auto qualified_name = ToString(expr);
   auto [rule, subs] =
-      search(exprs_, qualified_name, GetExprMapKey(qualified_name));
+      searchExpr(qualified_name);
   log() << "search expr " << qualified_name << ", result:\n";
   if (rule) {
     rule->dump();
@@ -939,7 +1144,7 @@ void addRulesFromDirectory(const std::filesystem::path &dir, Model model) {
     }
     for (auto &[_, rule] : expr_rules) {
       parenthesizeBodyIfNeeded(rule);
-      exprs_.emplace(GetExprMapKey(rule.src), std::move(rule));
+      exprs_.emplace(GetExprMapBucket(rule.src), std::move(rule));
     }
     for (auto &[_, rule] : type_rules) {
       auto key = GetTypeMapKey(rule.src);
@@ -2225,7 +2430,7 @@ bool IsLibcPassthrough(const clang::Expr *expr) {
 std::string MapFunctionName(const clang::FunctionDecl *decl) {
   assert(decl);
   if (!IsUserDefinedDecl(decl) &&
-      exprs_.contains(GetExprMapKey(ToString(decl)))) {
+      exprsContain(ToString(decl))) {
     return std::format("libcc2rs::{}_{}", decl->getNameAsString(),
                        model_ == Model::kRefCount ? "refcount" : "unsafe");
   }
@@ -2265,7 +2470,7 @@ std::string MapFunctionName(const clang::FunctionDecl *decl) {
 std::string InstantiateTemplate(const clang::Expr *expr, unsigned n) {
   auto expr_str = ToString(expr);
   PushMapContext ctx("expression " + expr_str);
-  auto [rule, subs] = search(exprs_, expr_str, GetExprMapKey(expr_str));
+  auto [rule, subs] = searchExpr(expr_str);
   auto text = std::format("T{}", n);
   if (!rule) {
     return text;
@@ -2340,7 +2545,7 @@ const TranslationRule::TypeInfo &GetParamInfo(const clang::Expr *expr,
 std::string GetParamType(const clang::Expr *expr, unsigned index) {
   auto expr_str = ToString(expr);
   PushMapContext ctx("parameter " + std::to_string(index) + " of " + expr_str);
-  auto [rule, subs] = search(exprs_, expr_str, GetExprMapKey(expr_str));
+  auto [rule, subs] = searchExpr(expr_str);
   for (auto &ty : subs) {
     if (ty) {
       ty = mapTypeStringRecursive(*ty);
