@@ -1519,3 +1519,27 @@ fn f129() -> dataflowir_gen::fmt::OpInst {
         <dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as dataflowir_gen::MlirOp>::DEF,
     )
 }
+
+// t160 -- `mlir::UnrealizedConversionCastOp` -> `fmt::OpInst`.  An ODS-generated op in
+// the Builtin dialect, of the SAME shape as t27's `scf::ForOp` and t158's
+// `affine::AffineForOp`: one `Operation *` through its `OpState` base.  This row adds
+// NO new claim about the model at all -- `ops::mlir_UnrealizedConversionCastOp` is the
+// very `DEF` that t25, t27, t152, t157, t158 and t159 already name below, so the type
+// being keyed here is the one whose model was already load-bearing.
+//
+// ⛔ t25's PROHIBITION APPLIES UNCHANGED: no `operator==`, no `operator!=`, no identity
+// test is mapped, and none may be added without a handle-identity model.  NO MEMBER is
+// mapped either -- the corpus's `UnrealizedConversionCastOp::create` (7 sites),
+// `addLegalOp<...>`, `getDefiningOp<...>` and `::Adaptor` all still abort loudly in the
+// mapper rather than returning a plausible lie.  The middle two are the
+// collapsed-template-argument trap; see src.cpp at t160 for the enumerated sites and
+// for the zero-hit declaration grep that is why there is NO `f` key.
+//
+// The `init` is t25's/t27's/t152's/t157's/t158's/t159's, and for their reason: a
+// default-constructed ODS op handle is the NULL handle, `fmt::OpInst` has no null, and
+// this expression exists only to type-check the type key.
+fn t160() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}

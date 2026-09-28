@@ -873,6 +873,20 @@ public:
 // `runOnOperation`.  An OP HANDLE (a pointer-sized wrapper over Operation*).
 class ModuleOp {};
 
+// `mlir::UnrealizedConversionCastOp` -- BuiltinOps.h.inc, the SAME generated
+// header as `ModuleOp` above, and the same shape: an ODS-generated op class, i.e.
+// one `Operation *` through its `OpState` base.  Declared here ONLY so t160's key
+// can be spelled, exactly as `affine::AffineForOp` and `scf::IfOp` are; the model
+// is argued at `using t160 =`, including why it makes NO new claim (its `DEF` is
+// already the one every op-handle target in this module names).
+//
+// SAME MIS-SERVICE CHECK AS CallOp/FuncOp/AffineForOp, re-run rather than
+// assumed: `grep -n 'OpState::' src.cpp` is still ZERO HITS, so no existing key
+// can serve an inherited member call on an UnrealizedConversionCastOp receiver.
+// No member and no constructor are keyed, so every corpus read stays LOUD -- see
+// t160 for the enumerated sites and the refusals.
+class UnrealizedConversionCastOp {};
+
 // `mlir::OperationState` -- OperationSupport.h:948, a `struct`.  MLIR's mutable
 // construction bag handed to `Operation::create`.
 struct OperationState {};
@@ -2957,6 +2971,60 @@ using t159 = mlir::scf::IfOp;
 // so the target is f121/f125's unreachable placeholder and says so there -- the value
 // cannot be read, because no IfOp member is mapped.
 mlir::scf::IfOp f129() { return mlir::scf::IfOp(); }
+
+// ---------------------------------------------------------------------------
+// t160 -- `mlir::UnrealizedConversionCastOp`.  Arity 0, so no `\b\d+\b`
+// normalization and no last-placeholder-swallow hazard.
+//
+// EXACTLY t158's SHAPE: a TYPE-ONLY key with NO `fN`, because the corpus never
+// default-constructs one.  The declaration grep
+//   grep -rnE "(mlir::)?UnrealizedConversionCastOp[[:space:]]+[A-Za-z_]\w*[[:space:]]*(;|=|\()"
+// is ZERO hits over `repos/dt_src`, and -- because that shape is known to be
+// incomplete, having missed `mlir::scf::IfOp if_op, samv_if_op;` for t159 -- the
+// multi-declarator grep
+//   grep -rnE "UnrealizedConversionCastOp[[:space:]]+[A-Za-z_]\w*[[:space:]]*,"
+// was ALSO run: one hit, `PrecisionConversionLowering.cpp:267`, and it is a
+// FUNCTION PARAMETER (`matchAndRewrite(mlir::UnrealizedConversionCastOp castOp,`),
+// not a declaration.  A loose sweep of every textual occurrence enumerates all
+// five name-shaped sites and each is a parameter or an element position:
+//   PrecisionConversionLowering.cpp:267  matchAndRewrite parameter
+//   PrecisionConversionLowering.cpp:409  `[](mlir::UnrealizedConversionCastOp op)` lambda parameter
+//   DataconvElision.cpp:53               `module.walk([&](... castOp)` walk lambda parameter
+//   LogicalMemoryViewBuilder.cpp:297     `llvm::SmallVector<...> casts;` -- element position
+//   LogicalMemoryViewBuilder.cpp:298     `walk([&](... ucc)` walk lambda parameter
+// None needs a default constructor, so unlike t159/f129 there is NO `f` key here,
+// and unlike t159 this row deliberately omits the dead ctor exactly as t158 did.
+//
+// THE MODEL IS ALREADY COMMITTED AND THIS ROW MAKES NO NEW CLAIM.
+// `dataflowir_gen::ops::mlir_UnrealizedConversionCastOp` is the very `DEF` that
+// EVERY op-handle target in this module already names -- t25, t27, t152, t157,
+// t158 and t159 all spell
+// `fmt::OpInst::new(<dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as
+// dataflowir_gen::MlirOp>::DEF)`.  So the type this key maps is the one op whose
+// `DEF` was already load-bearing; it is an ODS-generated op in the Builtin
+// dialect with the same single-`Operation *`-through-`OpState` representation as
+// t27's `scf::ForOp`.  No destructor exists (neither `Op` nor `OpState` declares
+// one, and there is no `~UnrealizedConversionCastOp`), so the handle model is
+// permitted -- the OwningOpRef test.
+//
+// ⛔ MUST STAY REFUSED, and these are the corpus's ONLY other uses of the name:
+//   * `addLegalOp<UnrealizedConversionCastOp>()` -- VectorChainLowering.cpp:1952,
+//     AgenLowering.cpp:705, ArithmeticLegalization.cpp:105;
+//   * `getDefiningOp<mlir::UnrealizedConversionCastOp>()` -- DataconvElision.cpp:57, :71;
+//   * `mlir::UnrealizedConversionCastOp::Adaptor` -- PrecisionConversionLowering.cpp:268.
+// The first two are the COLLAPSED-TEMPLATE-ARGUMENT trap, now on its EIGHTH
+// instance: a member whose only distinguishing argument is an explicit template
+// argument records as ONE key, so any body written here would mis-serve every
+// other instantiation (`addLegalOp<arith::AddIOp>`, `getDefiningOp<scf::ForOp>`,
+// ...) silently.  `::Adaptor` is a nested class the model does not have.  The
+// seven `UnrealizedConversionCastOp::create` sites stay unkeyed too, so every
+// corpus read of one remains LOUD in the mapper.
+//
+// ⛔ t25's PROHIBITION CARRIES UNCHANGED: no `operator==`, no `operator!=`, no
+// identity test and NO MEMBER is mapped -- a C++ op handle compares
+// `Operation *`, whereas an `OpInst` is an op's printed CONTENT, so an equality
+// would be a plausible lie rather than a translation.
+using t160 = mlir::UnrealizedConversionCastOp;
 
 // ---------------------------------------------------------------------------
 // PASS 2026-09-28: the `mlir::Location` row, keyed against the model that landed
