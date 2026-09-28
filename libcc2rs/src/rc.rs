@@ -76,6 +76,29 @@ impl<T: ByteRepr> StrongPtr<T> {
     }
 }
 
+impl<T> StrongPtr<T> {
+    /// ⭐ `deref` without the `T: ByteRepr` bound -- the `StrongPtr` half of [`Ptr::with_ref`].
+    ///
+    /// `StrongPtr::deref` above is `where T: ByteRepr` for one reason only: its `Reinterpreted`
+    /// arm decodes the pointee out of another allocation's bytes into its own `cell`. The
+    /// `StackSingle` / `Vec` / `StackArray` arms just `RefCell::borrow()` (plus `Ref::map` and an
+    /// index) and need no byte-level guarantee, so they are reachable for ANY `T` -- including a
+    /// non-POD struct from a crate that cannot implement `ByteRepr` because of the orphan rule.
+    ///
+    /// ⚠️ PANICS on `Reinterpreted`: there is no `T` in memory to borrow, only bytes to decode.
+    pub fn deref_ref(&self) -> Ref<'_, T> {
+        match self {
+            StrongPtr::StackSingle(rc) => rc.borrow(),
+            StrongPtr::Vec { rc, offset } => Ref::map(rc.borrow(), |v| &v[*offset]),
+            StrongPtr::StackArray { rc, offset } => Ref::map(rc.borrow(), |a| &a[*offset]),
+            StrongPtr::Reinterpreted { .. } => panic!(
+                "ub: deref_ref on a reinterpreted pointer: {} has no byte representation",
+                std::any::type_name::<T>()
+            ),
+        }
+    }
+}
+
 impl<T> fmt::Debug for PtrKind<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -538,6 +561,90 @@ impl<T> Ptr<T> {
                 data.alloc.read_bytes(self.offset, buf);
                 f(&T::from_bytes(buf))
             }),
+        }
+    }
+
+    /// ⭐ IN-PLACE deref that does NOT require `T: ByteRepr` -- read a pointee that has no byte
+    /// representation.
+    ///
+    /// WHY THIS EXISTS. `with` / `with_mut` / `read` / `write` and `StrongPtr::deref` are all
+    /// `where T: ByteRepr`, but a reading of their bodies shows **exactly one arm actually uses
+    /// the trait**: `PtrKind::Reinterpreted`, which calls `T::byte_size()` / `T::from_bytes` /
+    /// `T::to_bytes` to materialise a `T` out of the bytes of a DIFFERENT allocation. Every other
+    /// arm is ordinary safe Rust -- `weak.upgrade()`, `RefCell::borrow{,_mut}()`, and an index --
+    /// and never mentions a byte. So the bound is a *whole-method* requirement imposed by a
+    /// *single* arm, and it is spurious for `StackSingle`/`StackVec`/`StackArray` **and equally
+    /// for `HeapSingle`/`HeapVec`/`HeapArray`**: the `Heap*` kinds differ from `Stack*` only in
+    /// whether `delete()` may free the owner, not in how a deref reaches the pointee.
+    ///
+    /// This matters because `ByteRepr` lives in `libcc2rs` while the non-POD pointee types
+    /// (e.g. `dataflowir_gen::fmt::Block`) live in another crate, so **the orphan rule forbids
+    /// any third crate from bridging them**: a `Ptr<NonPodStruct>` was previously impossible to
+    /// dereference at all. `with_ref` gives the bound-free path.
+    ///
+    /// ⚠️ PANICS on `Reinterpreted` (and on `Null`, like every other accessor). A reinterpreted
+    /// pointer's pointee does not exist as a `T` anywhere in memory -- it is a byte range that
+    /// must be *decoded*, which is precisely the operation `ByteRepr` provides, so there is no
+    /// reference to hand out. That case is a real requirement, not a spurious bound, and it fails
+    /// loudly in the house style rather than returning something wrong.
+    ///
+    /// ⚠️ Holds the owner's `RefCell` borrow for the duration of `f` (as `with` does), so `f` must
+    /// not re-enter a mutating accessor on the same owner.
+    pub fn with_ref<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        match &self.kind {
+            PtrKind::Null => panic!("ub: null pointer"),
+            PtrKind::StackSingle(weak) | PtrKind::HeapSingle(weak) => {
+                assert_eq!(self.offset, 0, "ub: invalid offset");
+                let rc = weak.upgrade().expect("ub: dangling pointer");
+                let borrow = rc.borrow();
+                f(&*borrow)
+            }
+            PtrKind::StackVec(weak) | PtrKind::HeapVec(weak) => {
+                let rc = weak.upgrade().expect("ub: dangling pointer");
+                let borrow = rc.borrow();
+                f(&borrow[self.offset])
+            }
+            PtrKind::StackArray(weak) | PtrKind::HeapArray(weak) => {
+                let rc = weak.upgrade().expect("ub: dangling pointer");
+                let borrow = rc.borrow();
+                f(&borrow[self.offset])
+            }
+            PtrKind::Reinterpreted(_) => panic!(
+                "ub: with_ref on a reinterpreted pointer: {} has no byte representation",
+                std::any::type_name::<T>()
+            ),
+        }
+    }
+
+    /// ⭐ Mutating counterpart of [`Ptr::with_ref`]: in-place `&mut` deref with NO `T: ByteRepr`
+    /// bound. Mutations are performed on the owner's storage itself, so they are visible through
+    /// the owner and through every other `Ptr` aliasing it.
+    ///
+    /// See [`Ptr::with_ref`] for why the bound is spurious on all six `Stack*`/`Heap*` kinds, and
+    /// why `Reinterpreted` legitimately panics.
+    pub fn with_mut_ref<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        match &self.kind {
+            PtrKind::Null => panic!("ub: null pointer"),
+            PtrKind::StackSingle(weak) | PtrKind::HeapSingle(weak) => {
+                assert_eq!(self.offset, 0, "ub: invalid offset");
+                let rc = weak.upgrade().expect("ub: dangling pointer");
+                let mut borrow = rc.borrow_mut();
+                f(&mut *borrow)
+            }
+            PtrKind::StackVec(weak) | PtrKind::HeapVec(weak) => {
+                let rc = weak.upgrade().expect("ub: dangling pointer");
+                let mut borrow = rc.borrow_mut();
+                f(&mut borrow[self.offset])
+            }
+            PtrKind::StackArray(weak) | PtrKind::HeapArray(weak) => {
+                let rc = weak.upgrade().expect("ub: dangling pointer");
+                let mut borrow = rc.borrow_mut();
+                f(&mut borrow[self.offset])
+            }
+            PtrKind::Reinterpreted(_) => panic!(
+                "ub: with_mut_ref on a reinterpreted pointer: {} has no byte representation",
+                std::any::type_name::<T>()
+            ),
         }
     }
 }
@@ -1087,6 +1194,136 @@ impl<T: 'static> Ptr<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A NON-POD pointee that DELIBERATELY does not implement `ByteRepr`, standing in for a
+    // foreign-crate struct (e.g. `dataflowir_gen::fmt::Block`) that the orphan rule forbids any
+    // third crate from bridging to this crate's `ByteRepr`. It owns a `String` and a `Vec`, so it
+    // has no meaningful byte representation and could not honestly implement the trait anyway.
+    //
+    // ⚠️ Do NOT add `impl ByteRepr for NonPod`: the whole point of the tests below is that they
+    // reach the pointee through a path that never needs it. `p.read()` / `p.with(..)` /
+    // `p.write(..)` / `upgrade().deref()` DO NOT COMPILE for this type -- only the `*_ref`
+    // methods do.
+    #[derive(Clone, Debug, PartialEq)]
+    struct NonPod {
+        name: String,
+        args: Vec<String>,
+    }
+
+    impl NonPod {
+        fn new(name: &str, args: &[&str]) -> Self {
+            Self {
+                name: name.to_string(),
+                args: args.iter().map(|s| s.to_string()).collect(),
+            }
+        }
+        // The shape the 8 consumer sites need after `begin()`: deref, then call a method.
+        fn get_argument(&self, i: usize) -> &str {
+            &self.args[i]
+        }
+    }
+
+    // ⭐ THE PROOF of the new capability: a `Ptr<T>` for a `T` that does NOT implement `ByteRepr`
+    // is dereferenced, read through, and mutated through -- with the mutation visible in the
+    // owner. This is exactly the `begin()` + deref + `getArgument(0)` sequence.
+    #[test]
+    fn with_ref_derefs_a_non_byterepr_pointee_and_mutates_the_owner() {
+        let owner: Value<Vec<NonPod>> = Rc::new(RefCell::new(vec![
+            NonPod::new("entry", &["a0", "a1"]),
+            NonPod::new("exit", &["b0"]),
+        ]));
+        let begin: Ptr<NonPod> = Ptr::borrow_vec(&owner);
+
+        // Read a field, and call a method, through the Ptr -- no `ByteRepr` anywhere.
+        assert_eq!(begin.with_ref(|b| b.name.clone()), "entry");
+        assert_eq!(begin.with_ref(|b| b.get_argument(0).to_string()), "a0");
+        assert_eq!(begin.with_ref(|b| b.args.len()), 2);
+
+        // Offsetting the Ptr walks the owner's Vec, as for any other provenance.
+        assert_eq!(begin.offset(1).with_ref(|b| b.name.clone()), "exit");
+        assert_eq!(begin.offset(1).with_ref(|b| b.get_argument(0).to_string()), "b0");
+
+        // ⭐ MUTATE THROUGH THE Ptr, OBSERVE IT IN THE OWNER: in-place, not a copy.
+        begin.with_mut_ref(|b| b.name.push_str("_block"));
+        begin.with_mut_ref(|b| b.args.push("a2".to_string()));
+        begin.offset(1).with_mut_ref(|b| b.args[0] = "b0'".to_string());
+
+        assert_eq!(owner.borrow()[0].name, "entry_block");
+        assert_eq!(owner.borrow()[0].args, vec!["a0", "a1", "a2"]);
+        assert_eq!(owner.borrow()[1].args, vec!["b0'"]);
+
+        // And the reverse direction: mutate the owner, read it back through the Ptr.
+        owner.borrow_mut()[0].name = "changed".to_string();
+        assert_eq!(begin.with_ref(|b| b.name.clone()), "changed");
+
+        // The aliasing is genuine: a clone of the Ptr sees the same storage, and no allocation
+        // was made (the owner's strong count is still 1).
+        assert_eq!(begin.clone().with_ref(|b| b.name.clone()), "changed");
+        assert_eq!(Rc::strong_count(&owner), 1);
+
+        // `StrongPtr::deref_ref` is the same capability through the upgrade path.
+        assert_eq!(begin.upgrade().deref_ref().name, "changed");
+        assert_eq!(begin.offset(1).upgrade().deref_ref().get_argument(0), "b0'");
+    }
+
+    // The bound is spurious for `Heap*` exactly as it is for `Stack*`: the `Heap*` arms of
+    // `with`/`with_mut` never touch a byte either. So a heap-allocated non-POD pointee is
+    // readable and mutable through the new path too, and `delete()` still frees it.
+    #[test]
+    fn with_ref_works_for_heap_provenance_too() {
+        let single: Ptr<NonPod> = Ptr::alloc(NonPod::new("heap", &["h0"]));
+        assert!(matches!(single.kind, PtrKind::HeapSingle(_)));
+        assert_eq!(single.with_ref(|b| b.get_argument(0).to_string()), "h0");
+        single.with_mut_ref(|b| b.name.push('!'));
+        assert_eq!(single.with_ref(|b| b.name.clone()), "heap!");
+        assert_eq!(single.upgrade().deref_ref().name, "heap!");
+        single.delete();
+
+        let array: Ptr<Box<[NonPod]>> = Ptr::alloc(
+            vec![NonPod::new("a", &["0"]), NonPod::new("b", &["1"])].into_boxed_slice(),
+        );
+        let elems: Ptr<NonPod> = array.decay_array();
+        assert!(matches!(elems.kind, PtrKind::HeapArray(_)));
+        assert_eq!(elems.offset(1).with_ref(|b| b.name.clone()), "b");
+        elems.offset(1).with_mut_ref(|b| b.args.clear());
+        assert_eq!(elems.offset(1).with_ref(|b| b.args.len()), 0);
+        elems.delete();
+    }
+
+    // ⚠️ `Reinterpreted` is the ONE arm where the `ByteRepr` bound is real, so the bound-free
+    // path cannot serve it: there is no `T` in memory to borrow, only bytes to decode. It must
+    // fail loudly, in the house style of `delete()`'s `"ub: ..."`.
+    #[test]
+    #[should_panic(expected = "ub: with_ref on a reinterpreted pointer")]
+    fn with_ref_on_a_reinterpreted_ptr_panics() {
+        let p: Ptr<u64> = Ptr::alloc(0x0807060504030201u64);
+        let bytes: Ptr<u8> = p.reinterpret_cast::<u8>();
+        assert!(matches!(bytes.kind, PtrKind::Reinterpreted(_)));
+        bytes.with_ref(|b| *b);
+    }
+
+    #[test]
+    #[should_panic(expected = "ub: with_mut_ref on a reinterpreted pointer")]
+    fn with_mut_ref_on_a_reinterpreted_ptr_panics() {
+        let p: Ptr<u64> = Ptr::alloc(0x0807060504030201u64);
+        let bytes: Ptr<u8> = p.reinterpret_cast::<u8>();
+        bytes.with_mut_ref(|b| *b = 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "ub: deref_ref on a reinterpreted pointer")]
+    fn deref_ref_on_a_reinterpreted_ptr_panics() {
+        let p: Ptr<u64> = Ptr::alloc(0x0807060504030201u64);
+        let bytes: Ptr<u8> = p.reinterpret_cast::<u8>();
+        let _ = *bytes.upgrade().deref_ref();
+    }
+
+    // Null still fails the same way it does for every other accessor.
+    #[test]
+    #[should_panic(expected = "ub: null pointer")]
+    fn with_ref_on_null_panics() {
+        Ptr::<NonPod>::null().with_ref(|b| b.args.len());
+    }
 
     // THE ALIASING PROOF for `Ptr::borrow_vec` -- the capability an aliasing `begin()` needs.
     // Every assertion below is one the two allocating constructors FAIL:
