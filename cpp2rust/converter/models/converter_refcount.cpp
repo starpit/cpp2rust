@@ -223,6 +223,36 @@ std::string ConverterRefCount::ConvertFunctionPointerType(
   return Converter::ConvertFunctionPointerType(proto, kind);
 }
 
+namespace {
+
+// A POINTER TO AN ABSTRACT RECORD MUST NAME THE TRAIT, AND THAT ANSWER MUST NOT
+// DEPEND ON EMISSION ORDER. `abstract_structs_` is populated ONLY by
+// `ConvertAbstractClass` (converter.cpp:6460), reached from `ConvertClass`
+// (:1317) AFTER the `record_decls_.MarkDefined(...)` early return (:1309), so a
+// pointer type converted BEFORE its pointee's class is converted sees an EMPTY
+// set and falls through to the bare record name. Measured and fixed on the
+// unsafe side in 22b974ee (LoopUnroll.cpp: seven of eight
+// `InheritWithClone<Base, Derived>::clone` definitions spelled
+// `dyn ...__Virtual`, and the one instantiated FIRST in source order spelled the
+// bare record -- same template, same return type, two spellings in one file).
+// This is the refcount mirror of that predicate.
+//
+// Ask the definition directly, under exactly the condition `ConvertClass`
+// emits the trait under: user-defined, convertible, abstract ON THE DEFINITION.
+// NOT a third mechanism -- `isAbstract()` is already the authority in
+// `Converter::VisitPointerType` and in the mapper's order-free path
+// (mapper.cpp:1461-1470). The `IsUserDefinedDecl` + `IsConvertibleCXXRecordDecl`
+// guards are LOAD-BEARING: without them a pointer to an abstract RULE-MAPPED or
+// non-convertible record would name a trait that was never emitted (E0405).
+bool IsAbstractByDefinition(const clang::CXXRecordDecl *record) {
+  const clang::CXXRecordDecl *def =
+      record != nullptr ? record->getDefinition() : nullptr;
+  return def != nullptr && IsUserDefinedDecl(def) &&
+         IsConvertibleCXXRecordDecl(def) && def->isAbstract();
+}
+
+} // namespace
+
 bool ConverterRefCount::VisitPointerType(clang::PointerType *type) {
   if (auto proto = type->getPointeeType()->getAs<clang::FunctionProtoType>()) {
     StrCat(std::format("FnPtr<{}>", ConvertFunctionPointerType(proto)));
@@ -244,8 +274,12 @@ bool ConverterRefCount::VisitPointerType(clang::PointerType *type) {
                            !pointee_type->isArrayType());
   PushConversionKind push2(*this, ConversionKind::FullRefCount,
                            pointee_type->isArrayType());
+  // The set is kept as a FLOOR so nothing that names a trait today stops naming
+  // one; the direct ask removes the emission-order dependence.
   if (pointee_type->isRecordType() &&
-      abstract_structs_.contains(GetID(pointee_type->getAsRecordDecl()))) {
+      (abstract_structs_.contains(GetID(pointee_type->getAsRecordDecl())) ||
+       IsAbstractByDefinition(llvm::dyn_cast_or_null<clang::CXXRecordDecl>(
+           pointee_type->getAsRecordDecl())))) {
     // The trait is `<Record>__Virtual` (`<Record>` is the struct), and that
     // name cannot come from the recursive type visit below -- it would emit the
     // bare record name. So emit the trait name here and stop.
@@ -1384,7 +1418,16 @@ bool ConverterRefCount::VisitImplicitCastExpr(clang::ImplicitCastExpr *expr) {
       auto ptype = clang::dyn_cast<clang::PointerType>(expr->getType());
       auto pointee_type = ptype->getPointeeType()->getAsCXXRecordDecl();
 
-      if (pointee_type && abstract_structs_.contains(GetID(pointee_type))) {
+      // Same floor + direct ask as `VisitPointerType` above, and for a reason
+      // that is NOT cosmetic: this predicate decides whether the cast is wrapped
+      // in `.to_dyn`, while the TARGET TYPE SPELLING comes from
+      // `ConvertPointeeType` -> `Unwrap(ToString(ptr_type), "PtrDyn<", ">")`,
+      // i.e. it inherits `VisitPointerType`'s answer. If the two predicates
+      // disagreed, a target spelled `dyn <Name>__Virtual` would be produced by
+      // an unwrapped cast. Inheriting the spelling is correct; no suffix is
+      // appended here, so there is no double-suffix risk.
+      if (pointee_type && (abstract_structs_.contains(GetID(pointee_type)) ||
+                           IsAbstractByDefinition(pointee_type))) {
         PushConversionKind push(*this, ConversionKind::Unboxed);
         StrCat(std::format("{}.to_dyn::<{}>(|w| w)",
                            ToString(sub_expr->IgnoreCasts()),
