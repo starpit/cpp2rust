@@ -756,9 +756,13 @@ protected:
   virtual void ConvertCast(clang::QualType qual_type,
                            int line = __builtin_LINE());
 
+  // `hoisted_range_name`, when non-empty, names a local the caller has already
+  // bound the range init to; the range init is then NOT re-emitted here. See
+  // the hoist comment on VisitCXXForRangeStmtIndexBased.
   virtual void ConvertLoopVariable(clang::VarDecl *decl,
                                    clang::Expr *range_init,
-                                   const std::string &index_name = {});
+                                   const std::string &index_name = {},
+                                   const std::string &hoisted_range_name = {});
 
   bool EmitVectorDecompositionBindings(const clang::DecompositionDecl *decl,
                                        const std::string &holder_name);

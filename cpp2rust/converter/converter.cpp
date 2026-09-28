@@ -1982,16 +1982,27 @@ bool Converter::VisitForStmt(clang::ForStmt *stmt) {
 
 void Converter::ConvertLoopVariable(clang::VarDecl *decl,
                                     clang::Expr *range_init,
-                                    const std::string &index_name) {
+                                    const std::string &index_name,
+                                    const std::string &hoisted_range_name) {
   auto loop_var_type = decl->getType();
   // A DecompositionDecl has no name of its own, so the index variable cannot be
   // derived from it -- the caller passes it in.
   auto loop_var_name =
       index_name.empty() ? GetNamedDeclAsString(decl) : index_name;
+  // The range init is emitted once per iteration here, so a hoisted local MUST
+  // be used in its place when the caller made one -- otherwise a by-value range
+  // init is re-evaluated (and its temporary dropped) every iteration.
+  auto emit_range = [&] {
+    if (!hoisted_range_name.empty()) {
+      StrCat(hoisted_range_name);
+    } else {
+      Convert(range_init);
+    }
+  };
 
   if (loop_var_type->isReferenceType()) {
     auto pointee_type = loop_var_type->getPointeeType();
-    Convert(range_init);
+    emit_range();
     if (pointee_type.isConstQualified()) {
       StrCat(std::format(".as_ptr().add({})", loop_var_name));
     } else {
@@ -2000,11 +2011,25 @@ void Converter::ConvertLoopVariable(clang::VarDecl *decl,
   } else {
     {
       PushExplicitAutoref autoref(*this, /*is_mut=*/false);
-      Convert(range_init);
+      emit_range();
     }
     StrCat(std::format("[{}]", loop_var_name));
     StrCat(".clone()");
   }
+}
+
+// A range init that is a by-value temporary reaches here wrapped in a
+// MaterializeTemporaryExpr (the `auto&&` range variable binds a reference, so the
+// prvalue is materialized and the node is an XVALUE, not a prvalue) -- testing
+// `isPRValue()` on the unstripped node silently classifies every by-value call as
+// an lvalue and the hoist never fires. Strip it and ask about the underlying
+// expression, which is the prvalue we actually care about.
+static bool IsByValueRangeInit(const clang::Expr *init) {
+  const clang::Expr *e = init->IgnoreParenImpCasts();
+  if (const auto *mte = llvm::dyn_cast<clang::MaterializeTemporaryExpr>(e)) {
+    e = mte->getSubExpr()->IgnoreParenImpCasts();
+  }
+  return e->isPRValue();
 }
 
 // A structured binding over a `std::vector<std::pair<A, B>>` element. The
@@ -2052,25 +2077,28 @@ void Converter::ConvertForRangeBody(clang::CXXForRangeStmt *stmt,
   curr_for_inc_.pop_back();
 }
 
-// THE RE-EVALUATION HAZARD, and why this gate is narrow on purpose.
-// VisitCXXForRangeStmtIndexBased emits `Convert(getRangeInit())` TWICE -- once
-// for the `.len()` bound and again inside the body for the element pointer.
+// THE RE-EVALUATION HAZARD, and how the hoist discharges it.
+// VisitCXXForRangeStmtIndexBased used to emit `Convert(getRangeInit())` TWICE --
+// once for the `.len()` bound and again inside the body for the element pointer.
 // That is harmless for a bare reference to an existing local, and UNSOUND for a
 // range init that is a CALL RETURNING BY VALUE (the C++ temporary is
-// lifetime-extended for the whole loop; the Rust would rebuild a fresh vector
-// per iteration and `as_mut_ptr()` would dangle into one dropped at end of
-// statement -- a silent use-after-free, strictly worse than a loud abort). So a
-// decomposing range-for is only lowered when the range init is a bare
-// DeclRefExpr. Hoisting the range init to one named local is the follow-on that
-// unblocks the by-value rows (util/foldManager/foldInfrastructure.h:1264,:1311
-// and the DenseMapPair / 3-ary tuple rows); it is NOT done here because it
-// would change the emitted text of EVERY vector for-range in the corpus.
+// lifetime-extended for the whole loop; the Rust rebuilt a fresh vector per
+// iteration and `as_mut_ptr()` dangled into one dropped at end of statement -- a
+// silent use-after-free, and any side effect in the init ran N times instead of
+// once). VisitCXXForRangeStmtIndexBased now HOISTS a PRVALUE range init to one
+// named local and uses that local for both the bound and the element pointer, so
+// the hazard is gone and a by-value range init is acceptable here. A bare
+// DeclRefExpr is deliberately NOT hoisted -- it is already evaluation-free -- and
+// an lvalue that is NOT a DeclRefExpr is still emitted twice and still refused:
+// hoisting an lvalue by value would be a MOVE in Rust, not a borrow.
 bool Converter::IsHoistFreeDecompositionRange(clang::CXXForRangeStmt *stmt) {
   const auto *init = stmt->getRangeInit();
   if (init == nullptr) {
     return false;
   }
-  if (!llvm::isa<clang::DeclRefExpr>(init->IgnoreParenImpCasts())) {
+  // The two re-evaluation-free shapes, and only those.
+  if (!llvm::isa<clang::DeclRefExpr>(init->IgnoreParenImpCasts()) &&
+      !IsByValueRangeInit(init)) {
     return false;
   }
   // Maps go down VisitCXXForRangeStmtMap; strings are `len()-1`-indexed chars
@@ -2211,11 +2239,52 @@ bool Converter::VisitCXXForRangeStmtIndexBased(clang::CXXForRangeStmt *stmt,
       decomp ? GetDecompositionIterName(decomp) : GetNamedDeclAsString(loop_var);
   auto index_name = decomp ? loop_var_name + "_i" : loop_var_name;
 
+  // THE HOIST. The range init is needed twice (the `.len()` bound, and the
+  // element pointer per iteration), so anything that is not a bare DeclRefExpr
+  // is bound to ONE local first: a by-value init must be evaluated exactly once
+  // and must OUTLIVE the loop, or `as_mut_ptr()` points into a temporary dropped
+  // at end of statement. A bare DeclRefExpr is left inline -- it is already
+  // evaluation-free, and hoisting it would rewrite most of the corpus for
+  // nothing. The name is source-location-derived so it cannot collide with a
+  // user local or with a second loop in the same scope.
+  // MEASURED, and the reason the test is `isPRValue()` and not "not a
+  // DeclRefExpr": hoisting an LVALUE range init changes a borrow into a MOVE.
+  // `for (auto& x : self.intervals)` (LiveRange.cpp:97) emitted
+  // `let __range = self.intervals;`, which is E0507 move-out-of-borrowed-content
+  // in Rust -- a fresh error where the inline form borrowed. Only a PRVALUE (the
+  // by-value temporary that is the actual hazard) is hoisted; every lvalue range
+  // init is left exactly as it was emitted before, which is also what keeps the
+  // corpus byte-identical.
+  std::string hoisted_range;
+  auto *range_init = stmt->getRangeInit();
+  if (range_init != nullptr && IsByValueRangeInit(range_init)) {
+    auto loc = ctx_.getSourceManager().getPresumedLoc(stmt->getBeginLoc());
+    hoisted_range =
+        loc.isValid() ? std::format("__range_{}_{}", loc.getLine(),
+                                    loc.getColumn())
+                      : std::format("__range_{}", static_cast<const void *>(stmt));
+    StrCat(keyword::kLet);
+    // The element pointer is taken with `as_mut_ptr()` for a non-const
+    // reference loop variable, which needs the binding itself to be mutable.
+    auto loop_var_type = loop_var->getType();
+    if (loop_var_type->isReferenceType() &&
+        !loop_var_type->getPointeeType().isConstQualified()) {
+      StrCat(keyword_mut_);
+    }
+    StrCat(hoisted_range, token::kAssign);
+    Convert(range_init);
+    StrCat(token::kSemiColon);
+  }
+
   StrCat("'loop_:");
   StrCat(keyword::kFor, index_name, keyword::kIn, "0..");
   {
     PushParen range(*this);
-    Convert(stmt->getRangeInit());
+    if (hoisted_range.empty()) {
+      Convert(stmt->getRangeInit());
+    } else {
+      StrCat(hoisted_range);
+    }
     StrCat(token::kDot, len_suffix);
   }
   {
@@ -2231,7 +2300,7 @@ bool Converter::VisitCXXForRangeStmtIndexBased(clang::CXXForRangeStmt *stmt,
     StrCat(token::kAssign);
 
     ConvertLoopVariable(loop_var, stmt->getRangeInit(),
-                        decomp ? index_name : std::string{});
+                        decomp ? index_name : std::string{}, hoisted_range);
 
     StrCat(token::kSemiColon);
     std::optional<ScopedPtrBindings> ptr_bindings;
