@@ -1283,6 +1283,15 @@ bool Converter::VisitCXXRecordDecl(clang::CXXRecordDecl *decl) {
 
     if (decl->isAbstract()) {
       ConvertAbstractClass(decl);
+      // An abstract class becomes a trait, so `EmitRustStructOrUnion` is not
+      // reached -- but a nested enum lives at module scope in Rust either way
+      // and is referenced by name from every derived class. Emitting the trait
+      // must not lose it.
+      for (auto *d : decl->decls()) {
+        if (auto *enum_decl = llvm::dyn_cast<clang::EnumDecl>(d)) {
+          VisitEnumDecl(enum_decl);
+        }
+      }
       return false;
     }
 
