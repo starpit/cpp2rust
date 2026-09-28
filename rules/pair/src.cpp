@@ -134,3 +134,29 @@ template <typename T1, typename T2>
 bool f18(const std::pair<T1, T2> &a, const std::pair<T1, T2> &b) {
   return operator!=(a, b);
 }
+
+// f19 -- THE MIRROR OF f15/f16: a STRING LITERAL IN SECOND POSITION.  This is the
+// shape of `{ComputeOpType::A, "a"}` inside a std::map init-list, i.e. the top
+// fabricated std::pair receivers (std_pair_const_OpFuncs__std_string_ 528 sites,
+// std_pair_const_SenComponents__std_string_ 321, ...).  libc++ picks the
+// perfect-forwarding `template<class _U1,class _U2> pair(_U1&&,_U2&&)`; with
+// `_U2 = const char (&)[N]` reference-collapsing makes the DECLARED signature
+// print with a SECOND parameter ending in `]`, not `&&`, so it cannot unify with
+// f7 (`pair(T3 &&, T4 &&)`, whose nextLit ` &&)` does not occur at depth 0 in the
+// searched spelling) nor with f15/f16 (opposite parameter order).
+// PROVEN SPELLING, from a real -verbose log
+// (wip/incgroup/cde/ddl_conversion.cpp.unsafe.log:216530):
+//   search expr void std::pair<const BaseFuncType, std::string>::pair(
+//                    BaseFuncType &&, const char (&)[_]), result:
+//   Matching: void std::pair<T1, T2>::pair(T3 &&, const char (&)[_])
+// SWALLOW-SAFETY: the `[_]` placeholder is followed by `nextLit = ")"` at
+// end-of-signature and no same-depth comma follows it, so against a SHORTER
+// instantiation the scan runs to npos and the key fails to match AT ALL rather
+// than swallowing a comma-joined tail.  f15/f16 keep 100% of their traffic
+// (different parameter order, so no ambiguity).
+// The element type is pinned to `char` for the same reason as f15: the body has
+// to turn the array into this project's std::string representation.
+template <typename T1, typename T2, typename T3, std::size_t T4>
+std::pair<T1, T2> f19(T3 &&a0, char const (&a1)[T4]) {
+  return std::pair<T1, T2>(std::move(a0), a1);
+}

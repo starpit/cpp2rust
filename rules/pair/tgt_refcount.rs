@@ -133,3 +133,18 @@ fn f18<T1: PartialEq, T2: PartialEq>(
 ) -> bool {
     a0 != a1
 }
+
+fn f19<T1, T2: TryFrom<Vec<u8>>>(a0: T1, a1: Vec<u8>) -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(a0.try_into().ok().expect("failed conversion"))),
+        Rc::new(RefCell::new(
+            <T2>::try_from({
+                let mut __b = a1.to_vec();
+                __b.push(0);
+                __b
+            })
+            .ok()
+            .expect("failed conversion"),
+        )),
+    )
+}

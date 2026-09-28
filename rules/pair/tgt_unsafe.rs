@@ -75,3 +75,14 @@ unsafe fn f17<T1: PartialEq, T2: PartialEq>(a0: &(T1, T2), a1: &(T1, T2)) -> boo
 unsafe fn f18<T1: PartialEq, T2: PartialEq>(a0: &(T1, T2), a1: &(T1, T2)) -> bool {
     a0 != a1
 }
+
+unsafe fn f19<T1, T2: From<Vec<libc::c_char>>>(a0: T1, a1: Vec<libc::c_char>) -> (T1, T2) {
+    (
+        a0.into(),
+        <T2>::from({
+            let __p = a1.as_ptr();
+            std::slice::from_raw_parts(__p, (0..).take_while(|&i| *__p.add(i) != 0).count() + 1)
+                .to_vec()
+        }),
+    )
+}
