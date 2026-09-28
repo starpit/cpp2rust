@@ -12,6 +12,36 @@ template <typename T1> using t2 = typename std::vector<T1>::iterator;
 template <typename T1> using t3 = std::vector<std::vector<T1>>;
 template <typename T1> using t4 = typename std::vector<T1>::const_iterator;
 
+// t8 -- `std::vector<T1 *>::const_iterator`, which libc++ spells
+// `std::__wrap_iter<T1 *const *>` (a POINTER TO CONST POINTER: the iterator may not
+// write the stored pointer).  THIS KEY EXISTS TO DEFEAT A SWALLOW, NOT TO ADD A MODEL.
+//
+// MEASURED, first abort on 4 bucket-B TUs, identical on the pinned binary (33e811d1)
+// AND on the HEAD-level `cc2.tk.AFTER` (0547744e), so it is NOT the already-landed
+// kConstPrefix/`*const ` derive:
+//   LLVM ERROR: unsupported unmapped type `DtInfo *const` has no model in types_,
+//   while mapping `std::__wrap_iter<DtInfo *const *>`
+// `DtInfo *const` is not a spelling anything wrote -- it is what t2's key
+// (`std::__wrap_iter<T1 *>`) CAPTURED.  matchTemplate's placeholder capture runs to
+// the next SAME-DEPTH literal (mapper.cpp findNextLiteralSameDepth), and against
+// `std::__wrap_iter<DtInfo *const *>` that literal is t2's trailing ` *>`, whose first
+// same-depth occurrence is after `const`.  So T1 swallowed `DtInfo *const`, and the
+// mapper then tried to map THAT as a type and hit the trailing-const bail.  Same defect
+// family as `llvm::DenseMapInfo<T1>` swallowing `llvm::StringRef, void`.
+//
+// The cure is the same as there: a LONGER, MORE SPECIFIC src, which search()'s
+// longer-src tie-break prefers.  SWALLOW-SAFETY, both directions:
+//   * t8 cannot match a NON-const `__wrap_iter<X *>`: matchTemplate must see the
+//     literal ` *const *>` after the placeholder, and `std::__wrap_iter<int *>` has no
+//     `const` at all.  So the 3 open `operator>=`-on-`__wrap_iter<int *>` rows are
+//     untouched, and t2/t6 keep every non-const iterator they own today.
+//   * t8 cannot match `__wrap_iter<const X *>` (t4/t7): that spelling is LEADING-const,
+//     `const X *`, and contains no ` *const *` either.
+//   * Conversely t4/t7 cannot match `__wrap_iter<X *const *>`, because their key's
+//     literal prefix is `std::__wrap_iter<const `.  So t8 is the only key that can win
+//     this spelling on specificity, and it wins it against t2/t6 only.
+template <typename T1> using t8 = typename std::vector<T1 *>::const_iterator;
+
 template <typename T1, typename T2 = std::allocator<T1>>
 using t5 = std::vector<T1, T2>;
 

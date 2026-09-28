@@ -17,6 +17,14 @@ fn t4<T1>() -> Ptr<T1> {
     Ptr::null()
 }
 
+// t8 -- see tgt_unsafe.rs.  t4 at element type `Ptr<T1>`, i.e. the refcount model's own
+// spelling of `T1 *`.  A BY-VALUE `Ptr` receiver is correct here (a Ptr is itself the
+// handle), so this does not repeat the dangling-reference shape that got
+// `string_view::front()` refused.
+fn t8<T1>() -> Ptr<Ptr<T1>> {
+    Ptr::null()
+}
+
 #[cfg(target_os = "linux")]
 fn t6<T1>() -> Ptr<T1> {
     Ptr::null()

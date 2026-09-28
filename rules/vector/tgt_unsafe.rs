@@ -19,6 +19,15 @@ fn t4<T1>() -> *const T1 {
     Default::default()
 }
 
+// `std::vector<T1 *>::const_iterator` == `std::__wrap_iter<T1 *const *>`.  Element type
+// is `T1 *` (unsafe model: `*mut T1`), and a const_iterator is t4's `*const <elem>`, so
+// this is EXACTLY t4 instantiated at `*mut T1` -- no new representation, no new
+// semantics.  Deliberately NOT `*const *const T1`: the CONST in `T1 *const *` binds to
+// the POINTER the iterator yields, not to the pointee.
+fn t8<T1>() -> *const *mut T1 {
+    Default::default()
+}
+
 fn t5<T1>() -> Vec<T1> {
     Default::default()
 }
