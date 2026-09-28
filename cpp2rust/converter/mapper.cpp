@@ -155,9 +155,76 @@ void AddTypeRule(std::string src, TranslationRule::TypeRule &&rule) {
 //   template_str   = "std::vector<T1>::vector()"
 //   instantiated   = "std::vector<int>::vector()"
 //   result         = { "int" }
+// The depth trackers in matchTemplate count '<' and '>' as template-argument
+// brackets. An operator-name token ("operator<", "operator>=", "operator<<",
+// "operator<=>", ...) contains those same characters but is NOT a bracket, so
+// counting it desyncs the tracker; findNextLiteralSameDepth then trips its
+// absolute `ang < 0` guard and reports "not found", making matchTemplate fail
+// on a byte-identical key.
+//
+// ToString() already neutralises the four shift kinds by spelling them
+// "operator shl"/"shr"/"shleq"/"shreq", but OO_Less, OO_Greater, OO_LessEqual,
+// OO_GreaterEqual and OO_Spaceship are not in that range and reach here with
+// their real angle brackets.
+//
+// Returns a SAME-LENGTH copy of `str` with the angle-bracket characters that
+// belong to an operator-name token replaced by a neutral character. Indices are
+// preserved, so callers keep matching literals against the ORIGINAL string and
+// only the depth arithmetic sees the mask.
+std::string MaskOperatorNameBrackets(const std::string &str) {
+  constexpr char kNeutral = '\1';
+  constexpr std::string_view kOp = "operator";
+  static constexpr std::string_view kTokens[] = {"<=>", "<<=", ">>=", "<<",
+                                                ">>",  "<=",  ">=",  "<",
+                                                ">"};
+  std::string out = str;
+  size_t pos = 0;
+  while ((pos = str.find(kOp.data(), pos, kOp.size())) != std::string::npos) {
+    const bool boundary =
+        pos == 0 || (!std::isalnum((unsigned char)str[pos - 1]) &&
+                     str[pos - 1] != '_');
+    size_t i = pos + kOp.size();
+    pos = i;
+    if (!boundary) {
+      continue;
+    }
+    while (i < str.size() && std::isspace((unsigned char)str[i])) {
+      i++;
+    }
+    const size_t begin = i;
+    while (i < str.size() && i - begin < 3 &&
+           (str[i] == '<' || str[i] == '>' || str[i] == '=')) {
+      i++;
+    }
+    if (i == begin) {
+      continue;
+    }
+    const std::string_view run(&str[begin], i - begin);
+    size_t keep = 0;
+    // kTokens is ordered longest-first, so the first hit is the longest match.
+    for (std::string_view tok : kTokens) {
+      if (tok.size() <= run.size() && run.substr(0, tok.size()) == tok) {
+        keep = tok.size();
+        break;
+      }
+    }
+    for (size_t k = 0; k < keep; ++k) {
+      if (out[begin + k] == '<' || out[begin + k] == '>') {
+        out[begin + k] = kNeutral;
+      }
+    }
+    pos = begin + (keep ? keep : 1);
+  }
+  return out;
+}
+
 std::optional<std::vector<std::optional<std::string>>>
 matchTemplate(const std::string &template_str,
               const std::string &instantiated) {
+  // Depth-only view of `instantiated`: same length, operator-name angle
+  // brackets neutralised. See MaskOperatorNameBrackets.
+  const std::string instantiated_depth =
+      MaskOperatorNameBrackets(instantiated);
   auto matchLiteralAt = [&](const std::string &input_str, size_t pos,
                             std::string_view literal, size_t &end_pos) -> bool {
     size_t i = pos;
@@ -190,14 +257,18 @@ matchTemplate(const std::string &template_str,
     }
   };
 
-  auto findNextLiteralSameDepth = [&](const std::string &s, size_t start,
+  // `s` is matched literally; `depth_s` is the same-length depth-only view
+  // (operator-name angle brackets masked out). They must be the same length.
+  auto findNextLiteralSameDepth = [&](const std::string &s,
+                                      const std::string &depth_s, size_t start,
                                       std::string_view lit) -> size_t {
+    assert(s.size() == depth_s.size() && "depth view must be same length");
     int ang = 0;
     int par = 0;
     int sq = 0;
 
     for (size_t i = 0; i < s.size() && i < start; i++) {
-      switch (s[i]) {
+      switch (depth_s[i]) {
       case '<': {
         ang++;
         break;
@@ -244,7 +315,7 @@ matchTemplate(const std::string &template_str,
         break;
       }
 
-      char c = s[i];
+      char c = depth_s[i];
       switch (c) {
       case '<': {
         ang++;
@@ -321,7 +392,8 @@ matchTemplate(const std::string &template_str,
         si = end_pos;
       } else {
         if (!nextLit.empty()) {
-          size_t k = findNextLiteralSameDepth(instantiated, si, nextLit);
+          size_t k = findNextLiteralSameDepth(instantiated, instantiated_depth,
+                                              si, nextLit);
           if (k == std::string::npos) {
             return std::nullopt;
           }
