@@ -171,3 +171,27 @@ fn f18(a0: Ptr<std::fs::File>, a1: AnyPtr) -> Ptr<std::fs::File> {
     let _ = __o.write_all(__b.as_bytes());
     __o
 }
+
+// t560 / f560 / f561 -- `llvm::raw_string_ostream`.  See the t560 block in
+// `src.cpp`.  Not an overlay omission: these three DIFFER from the unsafe bodies
+// (`Ptr<Vec<u8>>` vs `*mut Vec<libc::c_char>`), so all three are spelled out.
+//
+// ⚠️ NOT `Ptr<std::fs::File>`: this is the one spelling in this module whose bytes
+// go into a `std::string` the caller reads back, so the target is rules/string's
+// t1 BY REFERENCE -- `Ptr<Vec<u8>>`, the same shape rules/string f4/f14/f26 give a
+// `std::string &`.
+fn t560() -> Ptr<Vec<u8>> {
+    Ptr::null()
+}
+
+// f560 -- the constructor.  `Ptr` is NOT `Copy`, so the body must not bind `a0` to a
+// `let` first (that is E0382 at rc=0 with no placeholder token); moving it straight
+// out is a single move and is fine.
+fn f560(a0: Ptr<Vec<u8>>) -> Ptr<Vec<u8>> {
+    a0
+}
+
+// f561 -- `str()`, the identity.  Same single-move rule as f560.
+fn f561(a0: Ptr<Vec<u8>>) -> Ptr<Vec<u8>> {
+    a0
+}

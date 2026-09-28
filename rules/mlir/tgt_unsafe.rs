@@ -3481,3 +3481,68 @@ fn t730() -> dataflowir_gen::ir::Ty {
 fn f630(a0: &dataflowir_gen::OpBuilder, a1: u32) -> dataflowir_gen::ir::Ty {
     a0.get_integer_type(a1)
 }
+
+// t590 / t591 -- `mlir::DialectAsmPrinter` and `mlir::DialectAsmPrinter &`.  The
+// measurement, the header check and the "restated unrelated" reason are all in
+// `src.cpp` at the t590 block.  Same model as t462/t463 BY CONSTRUCTION, because the
+// 5 reached sites forward the printer into a `::mlir::AsmPrinter &` parameter and the
+// two spellings have to agree; a reference is a raw pointer in this model.
+fn t590() -> dataflowir_gen::AsmPrinter {
+    dataflowir_gen::AsmPrinter::new()
+}
+
+fn t591() -> *mut dataflowir_gen::AsmPrinter {
+    ::std::ptr::null_mut()
+}
+
+// t750 `mlir::detail::ShapedTypeTrait<mlir::MemRefType>` -> `ir::Ty`, 4 sites.
+//   THE CRTP BASE of the same object t73 maps, so it maps to what t73 maps to --
+//   the t560/t561 "the base IS the same container" discipline.  No new model
+//   claim.  Init is t73's own `Ty::Opaque("")` null sentinel.
+fn t750() -> dataflowir_gen::ir::Ty {
+    dataflowir_gen::ir::Ty::Opaque(::std::string::String::new())
+}
+
+// t751 `mlir::detail::ShapedTypeTrait<mlir::VectorType>` -> `ir::Ty`, 3 sites.
+//   Same, over t75.
+fn t751() -> dataflowir_gen::ir::Ty {
+    dataflowir_gen::ir::Ty::Opaque(::std::string::String::new())
+}
+
+// f650 `ShapedTypeTrait<MemRefType>::getRank() const` -> THE SHAPE LENGTH.
+//   BuiltinTypeInterfaces.h.inc:604-608 is `assert(hasRank()); return
+//   getShape().size();` and `Ty::MemRef(Vec<i64>, Box<Ty>)` (ir.rs:44) IS that
+//   shape, so this is computed from the model, not invented.  ⛔ The fallback arm
+//   is the C++ `assert(hasRank())`, not a placeholder: t73's init is the
+//   `Ty::Opaque("")` NULL handle and querying the rank of one is UB in C++ too.
+//   Returning 0 would be silently wrong -- rank 0 is a LEGAL rank.
+//   `a0` is named ONCE (f403's inlining constraint).
+fn f650(a0: &dataflowir_gen::ir::Ty) -> i64 {
+    match a0 {
+        dataflowir_gen::ir::Ty::MemRef(shape, _) => shape.len() as i64,
+        _ => panic!("ub: cannot query rank of unranked shaped type"),
+    }
+}
+
+// f651 `ShapedTypeTrait<VectorType>::getNumElements() const` -> THE SHAPE PRODUCT.
+//   BuiltinTypeInterfaces.h.inc:609-612 is `assert(hasStaticShape());
+//   return ShapedType::getNumElements(getShape());`, i.e. the product of the
+//   dimensions.  `Ty::Vector(Vec<i64>, Box<Ty>)` (ir.rs:42) carries them, with a
+//   NEGATIVE dim meaning dynamic `?` (ir.rs:56-60) -- which is exactly the
+//   `hasStaticShape()` the C++ asserts, so a dynamic dim panics here as it aborts
+//   there rather than multiplying a sentinel into the answer.
+fn f651(a0: &dataflowir_gen::ir::Ty) -> i64 {
+    match a0 {
+        dataflowir_gen::ir::Ty::Vector(shape, _) => {
+            let mut n: i64 = 1;
+            for d in shape {
+                if *d < 0 {
+                    panic!("ub: cannot get element count of dynamic shaped type");
+                }
+                n *= *d;
+            }
+            n
+        }
+        _ => panic!("ub: cannot get element count of dynamic shaped type"),
+    }
+}

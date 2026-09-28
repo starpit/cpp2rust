@@ -3316,3 +3316,60 @@ fn t730() -> dataflowir_gen::ir::Ty {
 fn f630(a0: &dataflowir_gen::OpBuilder, a1: u32) -> dataflowir_gen::ir::Ty {
     a0.get_integer_type(a1)
 }
+
+// t590 / t591 -- `mlir::DialectAsmPrinter` and `mlir::DialectAsmPrinter &`.  See the
+// t590 block in `src.cpp`; same model as t462/t463, and the null handle is the
+// faithful "no printer" value here for the same reason it is there.
+fn t590() -> dataflowir_gen::AsmPrinter {
+    dataflowir_gen::AsmPrinter::new()
+}
+
+fn t591() -> libcc2rs::Ptr<dataflowir_gen::AsmPrinter> {
+    libcc2rs::Ptr::<dataflowir_gen::AsmPrinter>::null()
+}
+
+// t750 `mlir::detail::ShapedTypeTrait<mlir::MemRefType>` -> `ir::Ty`, 4 sites.
+//   THE CRTP BASE of the same object t73 maps, so it maps to what t73 maps to --
+//   the t560/t561 "the base IS the same container" discipline.  No new model
+//   claim.  Init is t73's own `Ty::Opaque("")` null sentinel.
+fn t750() -> dataflowir_gen::ir::Ty {
+    dataflowir_gen::ir::Ty::Opaque(String::new())
+}
+
+// t751 `mlir::detail::ShapedTypeTrait<mlir::VectorType>` -> `ir::Ty`, 3 sites.
+//   Same, over t75.
+fn t751() -> dataflowir_gen::ir::Ty {
+    dataflowir_gen::ir::Ty::Opaque(String::new())
+}
+
+// f650 `ShapedTypeTrait<MemRefType>::getRank() const` -> THE SHAPE LENGTH.
+//   BuiltinTypeInterfaces.h.inc:604-608 is `assert(hasRank()); return
+//   getShape().size();` and `Ty::MemRef(Vec<i64>, Box<Ty>)` (ir.rs:44) IS that
+//   shape.  ⛔ The fallback arm is the C++ `assert(hasRank())`, not a placeholder.
+//   ⚠️ `a0` is a BORROW, not a move: `ir::Ty` is a plain enum here but the
+//   receiver is read-only and naming it once keeps the f122 read shape.
+fn f650(a0: &dataflowir_gen::ir::Ty) -> i64 {
+    match a0 {
+        dataflowir_gen::ir::Ty::MemRef(shape, _) => shape.len() as i64,
+        _ => panic!("ub: cannot query rank of unranked shaped type"),
+    }
+}
+
+// f651 `ShapedTypeTrait<VectorType>::getNumElements() const` -> THE SHAPE PRODUCT.
+//   BuiltinTypeInterfaces.h.inc:609-612, the product of the dimensions, with a
+//   NEGATIVE dim = dynamic `?` (ir.rs:56-60) panicking as the C++ assert aborts.
+fn f651(a0: &dataflowir_gen::ir::Ty) -> i64 {
+    match a0 {
+        dataflowir_gen::ir::Ty::Vector(shape, _) => {
+            let mut n: i64 = 1;
+            for d in shape {
+                if *d < 0 {
+                    panic!("ub: cannot get element count of dynamic shaped type");
+                }
+                n *= *d;
+            }
+            n
+        }
+        _ => panic!("ub: cannot get element count of dynamic shaped type"),
+    }
+}

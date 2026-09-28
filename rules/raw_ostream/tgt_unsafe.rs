@@ -194,3 +194,58 @@ unsafe fn f18(a0: *mut std::fs::File, a1: *const ::libc::c_void) -> *mut std::fs
 fn t540() -> std::fs::File {
     std::fs::File::open("").unwrap()
 }
+
+// t560 / f560 / f561 -- `llvm::raw_string_ostream`.  The measurement, the header
+// check, the three asked key spellings and the loud-insertion note are all in
+// `src.cpp` at the t560 block.
+//
+// ⚠️ THE TARGET TYPE IS NOT `std::fs::File` -- this is the one spelling in this
+// module that is NOT a file descriptor, because a raw_string_ostream's whole
+// purpose is that its bytes land in a `std::string` the caller reads back.  It is
+// rules/string's t1 BY REFERENCE, i.e. a raw pointer to the NUL-terminated
+// `Vec<libc::c_char>`, which is also what a `std::string &` parameter is spelled as
+// everywhere else in this model.
+//
+// ⚠️ `null_mut()` is the t560 sentinel for the same reason rules/mlir t461 uses it:
+// a type rule's body is only ever the DEFAULT VALUE for a declaration the converter
+// cannot initialise, and "no string to write into" is the faithful such value.
+unsafe fn t560() -> *mut Vec<libc::c_char> {
+    ::std::ptr::null_mut()
+}
+
+// f560 -- the constructor.  The C++ stores `std::string &OS`, so the body hands back
+// the address of the string it is given and is otherwise the identity.
+//
+// ⛔⛔ `::core::ptr::from_mut` RATHER THAN A CAST, AND THE REASON IS MEASURED, NOT
+// STYLISTIC.  THREE bodies were tried and the emitted text read back out of the four
+// live sites each time; ONLY the third is correct, and the first two fail with NO
+// placeholder token to make them visible:
+//   (1) `a0 as *mut Vec<libc::c_char>`  records `access: "borrow"` and the converter
+//       emits a borrow placeholder as a BARE PLACE EXPRESSION, so the site read
+//       `resource_str as *mut Vec<libc::c_char>` on a `Vec<libc::c_char>` local:
+//       `error[E0605]: non-primitive cast`.
+//   (2) `&mut *a0 as *mut Vec<libc::c_char>`  records text `"&mut "` PLUS
+//       `access: "borrow_mut"` -- i.e. an explicit `&mut` in a rule body is recorded
+//       as text AND upgrades the placeholder, and the converter then adds its own, so
+//       the site read `&mut &mut resource_str as *mut Vec<libc::c_char>`: a
+//       `&mut &mut Vec`, E0605 again.
+//   (3) `::core::ptr::from_mut(a0)`  records text `"::core::ptr::from_mut("` +
+//       `access: "borrow_mut"` + `")"` with NO `&mut` of my own, and the site reads
+//       `::core::ptr::from_mut(&mut resource_str)`.  ⭐ So the way to get a MUTABLE
+//       borrow of an argument into a rule body is to put it in ARGUMENT POSITION of a
+//       function that takes `&mut T`, never to write the `&mut` yourself.
+//       (`from_mut` is stable since Rust 1.76 and is in `core`, so the inlined body
+//       depends on nothing being in scope in the translated crate -- the same reason
+//       f5 spells `::std::io::Write::write_all` out in full.)
+unsafe fn f560(a0: &mut Vec<libc::c_char>) -> *mut Vec<libc::c_char> {
+    ::core::ptr::from_mut(a0)
+}
+
+// f561 -- `str()`, `{ return OS; }` in the header, so the identity here.  The
+// receiver is taken BY VALUE (a raw pointer is Copy) rather than as a borrow,
+// because a borrow placeholder would make the converter emit `&ss`, i.e. a
+// `&*mut Vec<..>`, and the call sites immediately deref the result
+// (`(*(ss.str())).as_ptr()`).
+unsafe fn f561(a0: *mut Vec<libc::c_char>) -> *mut Vec<libc::c_char> {
+    a0
+}

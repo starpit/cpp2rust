@@ -7503,3 +7503,244 @@ using t730 = mlir::IntegerType;
 mlir::IntegerType f630(mlir::OpBuilder &a0, unsigned a1) {
   return a0.getIntegerType(a1);
 }
+
+// ============================================================================
+// t590 / t591 -- `mlir::DialectAsmPrinter`, THE PARAMETER TYPE OF EVERY
+// `Dialect::printType` / `Dialect::printAttribute` OVERRIDE.
+//
+// ⭐ MEASURED, NOT INFERRED.  fresh36 (58 emitted `.rs`) carries exactly 5 live
+// `Cpp2RustUnmapped_mlir_DialectAsmPrinter` sites, in 4 files, and EVERY ONE of
+// them is a function PARAMETER:
+//     DataflowTypes.cpp:878, KTDFTypes.cpp:627, KtdpDialect.cpp:3995 and :4048,
+//     DdlOps.cpp:64408 -- all `printer: *mut Cpp2RustUnmapped_...`.
+// `Cpp2RustUnmapped_mlir_DialectAsmPrinter::[A-Za-z0-9_]*` is ZERO across all 58,
+// so NO member of this class is reached and none is keyed here.
+//
+// ⭐ THE ZERO-HIT ACCESSOR GREP (`--verbose`, `grep -A1` on the search line) over
+// KTDFTypes.cpp says the converter asks for exactly TWO spellings and nothing else:
+//     search type mlir::DialectAsmPrinter &, result: None   (2 asks)
+//     search type mlir::DialectAsmPrinter,   result: None   (3 asks)
+// and the recorder's own `searched as:` line agrees:
+//     searched as: mlir::DialectAsmPrinter
+// (the adjacent `from decl (NOT a key ...)` line names
+// mlir/IR/DialectImplementation.h:44:7, which is where the class is DECLARED --
+// that line is not a key spelling.)  So this row is two TYPE keys, no members.
+//
+// ⭐ WHY `dataflowir_gen::AsmPrinter` AND NOT A NEW MODEL: the 5 sites do not
+// merely hold the printer, they FORWARD it -- `generatedTypePrinter(type, printer)`
+// and `generatedAttributePrinter(attr, printer)`, whose own parameter is
+// `::mlir::AsmPrinter &`, i.e. t463, ALREADY mapped to
+// `*mut dataflowir_gen::AsmPrinter`.  Mapping DialectAsmPrinter to anything else
+// would leave those calls a type mismatch; mapping it here makes caller and callee
+// agree, which is the whole fidelity content of this row.  Checked in the header
+// rather than assumed: DialectImplementation.h:44 reads
+//     class DialectAsmPrinter : public AsmPrinter
+// so it IS just another AsmPrinter spelling, the same relation raw_ostream t540
+// (raw_ldbg_ostream) and t4 (raw_fd_ostream) already have to their base.
+//
+// ⛔ RESTATED AS EMPTY AND *UNRELATED* TO `AsmPrinter`, DELIBERATELY, for the exact
+// reason written out at the OpAsmPrinter block above: if the base relation were
+// spelled here, the `AsmPrinter &` operator<< overloads declared a few lines up
+// would win overload resolution for a DialectAsmPrinter argument by
+// derived-to-base conversion and the recorded key would silently read
+// `mlir::AsmPrinter &...`.  `class StringRef {}` at :1242 is the in-tree precedent
+// for an inert declaration that maps nothing on its own.
+//
+// ⛔ NOT COVERED, AND LOUD: the two members the sweep shows reached on the SIBLING
+// `mlir::DialectAsmParser` (5 sites, its own row) and the `AsmPrinter` members
+// `printType` / `printAttribute` / `getStream()`, which the ask log shows resolving
+// to None TODAY, before and after this change alike -- those are t462/t463's rows,
+// not this one, and each is a separate fidelity argument.  Unmapped members emit
+// textually, so they stay E0599 at compile time rather than going silent.
+namespace mlir {
+// mlir/IR/DialectImplementation.h:44.  Only the NAME enters the type key.
+class DialectAsmPrinter {};
+} // namespace mlir
+
+// ⚠️ INDICES t590/t591, not the next free t582, DELIBERATELY: several slots are live
+// in the rule tree today and t582 is the index a concurrent slot would also pick.
+// Indices are per-module and need not be dense.
+using t590 = mlir::DialectAsmPrinter;
+using t591 = mlir::DialectAsmPrinter &;
+
+// ---------------------------------------------------------------------------
+// ⛔ `mlir::RewritePatternSet` -- EXAMINED 2026-09-28 AND DELIBERATELY NOT WRITTEN.
+// Recorded so the next slot does not re-derive it.  This comment changes NO key, so
+// ir_src/ir_unsafe/ir_refcount stay byte-identical.
+//
+// The key it WOULD need, taken from the log's own `searched as:` line and not from the
+// `from decl` text the recorder labels "NOT a key":
+//     searched as: mlir::RewritePatternSet            (PatternMatch.h:822:7)
+// and nothing else -- no `&`/`*` spelling is asked.
+//
+// ⭐ THE ROW IS ONE SITE, NOT THE 16 THE QUEUE REPORTS.  Measured over fresh36 (58
+// emitted `.rs`, 84 logs): 4 asks in 2 TUs, and `Cpp2RustUnmapped_mlir_RewritePatternSet`
+// appears ONCE in the whole emitted corpus (DataTransferLowering.cpp:30090).  The
+// other asking TU, KTDFOps.cpp, is B-bucket on an unrelated structured-binding abort
+// and emits nothing.
+//
+// ⛔ WHY IT IS LEFT OUT RATHER THAN GIVEN A TYPE KEY.  The one site is
+//     void populateDataTransferLoweringPatterns(mlir::RewritePatternSet &patterns, ..)
+//     { patterns.add<LowerDataTransferPattern>(patterns.getContext(), ..); }
+// i.e. the ONLY thing any RewritePatternSet in this corpus is for is `add<Pattern>`,
+// and `add` is a VARIADIC MEMBER TEMPLATE whose template argument is a LOCAL pattern
+// class in an anonymous namespace -- the emitted call already carries that whole
+// instantiation in its mangled name.  There is no model behind it either:
+// `grep -rn 'RewritePattern\|PatternSet' dataflowir-gen/src` is EMPTY, so unlike
+// AsmPrinter (t462, `dataflowir-gen/src/asm.rs`) there is no existing type to point a
+// key at, and inventing an empty container whose only mutator cannot be keyed buys a
+// type that nothing can ever be added to.  A type key alone would remove ONE
+// placeholder token while leaving `patterns.add_<mangled>(..)` and
+// `patterns.getContext()` as E0599 on that new type -- the same loud failure, one
+// placeholder less honest about it.  Row left OPEN, blocked on a dataflowir-gen
+// rewrite-pattern model, which is a far larger piece of work than one site justifies.
+
+// ===========================================================================
+// t750/t751 + f650/f651 -- `mlir::detail::ShapedTypeTrait<T>`, THE DECLARING
+// CLASS OF `getRank()` AND `getNumElements()`.  7 emitted sites (fresh37).
+//
+// THE ROW, from the fresh37 live-placeholder census (86 TUs, 58 emitting,
+// snapshot pin 602a787f, ir.v35 + this module regenerated at 5e923831):
+//     Cpp2RustUnmapped_mlir_detail_ShapedTypeTrait_mlir_MemRefType_        4 sites / 1 file
+//     Cpp2RustUnmapped_mlir_detail_ShapedTypeTrait_mlir_VectorType_        3 sites / 1 file
+//     Cpp2RustUnmapped_mlir_detail_ShapedTypeTrait_mlir_RankedTensorType_  3 sites / 2 files
+// and EVERY ONE of the seven kept here is the same two shapes, with the member
+// call on the NEXT LINE of the emitted text:
+//     (<memref-ty> as Cpp2RustUnmapped_..._mlir_MemRefType_).getRank()
+//     (vector_type as Cpp2RustUnmapped_..._mlir_VectorType_).getNumElements()
+// (`dataflow-scheduler/lib/Conversion/backend/ScheduleIRToDFIR/KTDFLowToDFIR/
+// DataTransferLowering.cpp`, emitted lines 30255/30260/30323/30376 and
+// 29724/29900/29943).
+//
+// ⭐⭐ THIS CORRECTS A RECORDED REFUSAL IN THIS VERY FILE, and the correction is
+// the point of the row.  The g088/g125 block at :4090 refuses the
+// `mlir::detail::*Trait` family on the ground that "Any default method these
+// supply is called in the corpus THROUGH THE OP (`op.getName()`), so it would
+// record against the Op or the OpInterface -- never against the trait class
+// type.  A `tN` for the trait would therefore be a DEAD key."  THAT IS FALSE FOR
+// THE ShapedType TRAIT AS MEASURED: the converter emits the trait class as the
+// DerivedToBase cast target and puts `.getRank()` / `.getNumElements()` on it,
+// i.e. it DID ask for this type and missed -- an emitted placeholder token is
+// proof of the ask, not of a decl-site mention.  The g088/g125 verdict was
+// reached from a LOCATION census over queue samples (decl sites only) with no
+// emitted-corpus leg; the emitted corpus disagrees.  (The `getName()` half of
+// that block, `SymbolOpInterfaceTrait<mlir::func::FuncOp>`, 6 sites / 2 files, is
+// ALSO emitted as a cast receiver -- see the report; it is left out here only
+// because its member needs a symbol-name accessor this slot did not establish.)
+//
+// ⛔⛔ WHY THIS IS NOT THE `OperationState -> ()` BARGAIN, which is what the
+// t560/t561 header forbids: the type key ALONE would trade 7 census-visible loud
+// placeholders for 7 census-INVISIBLE textual `.getRank()` calls on an `ir::Ty`.
+// So the member keys are NOT optional and this set is all-or-nothing.  `getRank`
+// and `getNumElements` are the ONLY two members read on these receivers in the
+// whole 58-file emitting corpus (censused: no other `Cpp2RustUnmapped_mlir_detail_
+// ShapedTypeTrait_*).<name>` shape occurs), so with f650/f651 the row leaves
+// nothing silently textual behind it.
+//
+// ⭐ THE BASE IS THE SAME OBJECT, the t560/t561 and t37-t39/t166 discipline.
+// `ShapedTypeTrait<ConcreteType>` is the CRTP base every shaped builtin type
+// derives its shape accessors from (BuiltinTypeInterfaces.h.inc:586,
+// `struct ShapedTypeTrait : public TypeInterface<ShapedType, ...>::Trait<ConcreteType>`),
+// and :415 `struct Trait : public detail::ShapedTypeTrait<ConcreteType> {}` is how
+// a concrete type picks it up.  A cast to it does not change the object, so it maps
+// to exactly what its derived class maps to: t73 `mlir::MemRefType -> ir::Ty` and
+// t75 `mlir::VectorType -> ir::Ty`.  No new model claim is made here.
+//
+// ⭐ THE TWO BODIES ARE READ OFF THE HEADER THE CONVERTER PARSES WITH, not
+// remembered.  BuiltinTypeInterfaces.h.inc:604-611:
+//     int64_t getRank() const {
+//       assert(...hasRank() && "cannot query rank of unranked shaped type");
+//       return (...).getShape().size();
+//     }
+//     int64_t getNumElements() const {
+//       assert(hasStaticShape() && "cannot get element count of dynamic shaped type");
+//       return ::mlir::ShapedType::getNumElements((...).getShape());
+//     }
+// i.e. getRank is the SHAPE LENGTH and getNumElements is the PRODUCT of the shape.
+// `ir::Ty::MemRef(Vec<i64>, Box<Ty>)` and `ir::Ty::Vector(Vec<i64>, Box<Ty>)`
+// (dataflowir-gen/src/ir.rs:42-44) CARRY THAT SHAPE EXACTLY, with negative dim =
+// dynamic `?` (ir.rs:56-60), so both bodies are computed from the model and
+// nothing is invented.  ⭐ This is why the row is writable WITHOUT touching
+// dataflowir-gen: the crate has no `rank()`/`num_elements()` method (grepped: 0),
+// but a rule body is arbitrary Rust over the model it already exposes.
+//
+// ⭐ EACH `a0` IS NAMED EXACTLY ONCE -- f403's constraint, because a rule body is
+// inlined as ONE expression and a second mention would duplicate the receiver
+// expression (here a `getType()` call chain).  `match a0 { Ty::MemRef(shape, _) =>
+// ... }` binds the shape from the pattern, so the receiver appears once.
+//
+// ⛔ THE PANIC ARMS ARE THE C++ ASSERTS, NOT PLACEHOLDER BODIES.  Both members
+// abort in C++ on the same conditions (`assert(hasRank())`,
+// `assert(hasStaticShape())`), and t73/t75's committed `init` is the
+// `Ty::Opaque("")` NULL sentinel, so a non-MemRef/non-Vector arm is exactly the
+// null-or-unranked handle C++ asserts on.  The precedent is f461's borrow-
+// provenance `delete()` panicking `"ub: invalid delete"` BY DESIGN.  Silently
+// returning 0 is the defect this refuses: a rank of 0 and an element count of 0
+// are both LEGAL values that would make a loop run zero times.
+//
+// ⛔ `mlir::detail::ShapedTypeTrait<mlir::RankedTensorType>` (3 sites, 2 files,
+// `dialects/ExPlan/ExPlanOps.cpp` + `dialects/Init/InitOps.cpp`) IS DELIBERATELY
+// LEFT OUT, and it is the same measured cause t164's own header records: `ir::Ty`
+// has NO TENSOR VARIANT, so a RankedTensorType lands in `Ty::Opaque(spelling)`
+// and its shape is recoverable only by REPARSING that string.  Its three sites all
+// read `getNumElements()`, which is precisely the structure query t164 says "still
+// aborts LOUDLY".  A key here would have to reparse `tensor<...>` text, which is a
+// model decision for t164, not a member rule.  LEFT LOUD.
+//
+// ⛔ ELEVEN OTHER MEMBERS OF THE TRAIT ARE NOT DECLARED, so a site that reads one
+// FAILS LOUDLY instead of resolving by accident: `clone`,
+// `getElementTypeBitWidth`, `isDynamicDim`, `isStaticDim`, `hasStaticShape`
+// (both overloads), `getNumDynamicDims`, `getDimSize`, `getDynamicDimIndex`.
+// None is read on these receivers in the emitting corpus.
+//
+// SWALLOW-SAFETY.  `GetTypeMapKey` truncates at the first `<`, so the bucket is
+// `mlir::detail::ShapedTypeTrait`; `grep -rn 'ShapedTypeTrait' rules/*/src.cpp`
+// finds it in NO other module, so the bucket holds exactly t750 and t751, both
+// mine.  Both keys are FULLY CONCRETE -- no `T<digits>` appears in either
+// spelling -- so `matchTemplate`'s placeholder capture
+// (`findNextLiteralSameDepth`) NEVER RUNS and the same-depth-comma swallow is
+// ruled out by construction (the t243-t246 / t480-t482 / t560-t561 argument).
+// `mlir::MemRefType` and `mlir::VectorType` are distinct literals, so the two
+// cannot alias each other.
+//
+// ⚠️ ONE TEMPLATE PARAMETER, NO DEFAULTS, and each `using` FULLY CONCRETE -- the
+// t66 / t480-t482 discipline, so the recorded key cannot drift to a canonical
+// spelling carrying a defaulted argument.  The real declaration has exactly one
+// parameter (`template <typename ConcreteType> struct ShapedTypeTrait`,
+// BuiltinTypeInterfaces.h.inc:585-586), so there is no default to suppress.
+// ⚠️ EXPLICIT SPECIALISATIONS, not members on the primary template, so each
+// member's RETURN TYPE is written out per instantiation and cannot be rendered
+// through a dependent name that would never match the recorded key -- f461's
+// `simple_ilist<mlir::Block>` shape.  `int64_t` is `long` on this target, which is
+// the spelling the recorded key carries.
+// ===========================================================================
+namespace mlir {
+namespace detail {
+template <typename ConcreteType> struct ShapedTypeTrait {};
+
+template <> struct ShapedTypeTrait<mlir::MemRefType> {
+  long getRank() const;
+};
+
+template <> struct ShapedTypeTrait<mlir::VectorType> {
+  long getNumElements() const;
+};
+} // namespace detail
+} // namespace mlir
+
+// t750 -- `mlir::detail::ShapedTypeTrait<mlir::MemRefType>`, 4 sites / 1 file.
+using t750 = mlir::detail::ShapedTypeTrait<mlir::MemRefType>;
+
+// t751 -- `mlir::detail::ShapedTypeTrait<mlir::VectorType>`, 3 sites / 1 file.
+using t751 = mlir::detail::ShapedTypeTrait<mlir::VectorType>;
+
+// f650 -- `long mlir::detail::ShapedTypeTrait<mlir::MemRefType>::getRank() const`.
+// `const &` receiver, the f122 / `FileLineColLoc::getLine` precedent for a read.
+long f650(const mlir::detail::ShapedTypeTrait<mlir::MemRefType> &a0) {
+  return a0.getRank();
+}
+
+// f651 -- `long mlir::detail::ShapedTypeTrait<mlir::VectorType>::getNumElements() const`.
+long f651(const mlir::detail::ShapedTypeTrait<mlir::VectorType> &a0) {
+  return a0.getNumElements();
+}

@@ -32,9 +32,14 @@
 //
 // Why File and not a byte buffer (rules/sstream's choice): raw_ostream's
 // reason to exist in the target codebase is llvm::errs(), i.e. side effects on
-// a real stream, not a buffer someone later reads back.  raw_string_ostream
-// and raw_svector_ostream -- the buffer-backed subclasses -- are NOT covered
-// here; they would need the sstream model and their own rules.
+// a real stream, not a buffer someone later reads back.
+// ⚠️ THIS PARAGRAPH USED TO SAY raw_string_ostream AND raw_svector_ostream ARE BOTH
+// UNCOVERED.  raw_string_ostream IS NOW COVERED -- t560/f560/f561 at the bottom of
+// this file, with its own (NOT-a-File) model and the measurement behind it.  Only
+// raw_svector_ostream is still out, and it needs the SMALLVECTOR model rather than
+// this one, because it holds a `SmallVectorImpl<char> &`.  Corrected 2026-09-28; a
+// stale "NOT covered" line here is exactly the kind of thing a later slot reads as a
+// measurement and acts on.
 //
 // operator<< is a MEMBER of raw_ostream, and Mapper keys a member operator on
 // its return type plus parameters, not on the receiver's class.  That is why
@@ -304,3 +309,93 @@ class raw_ldbg_ostream : public raw_ostream {};
 // rule tree today and t6 is the index a concurrent slot would also pick.  Indices
 // are per-module and need not be dense.
 using t540 = llvm::impl::raw_ldbg_ostream;
+
+// ---------------------------------------------------------------------------
+// t560 / f560 / f561 -- `llvm::raw_string_ostream`, WHICH THE MODULE DOC ABOVE
+// EXPLICITLY LEFT OUT ("raw_string_ostream and raw_svector_ostream -- the
+// buffer-backed subclasses -- are NOT covered here").  That line is now stale for
+// raw_string_ostream; raw_svector_ostream is still out.
+//
+// ⭐ MEASURED, NOT INFERRED.  fresh36 (58 emitted `.rs`, pin binary
+// afe3a6463ffe3e221aa47f583c7d8d52, rules pin/ir.v35) carries 4 live
+// `Cpp2RustUnmapped_llvm_raw_string_ostream` sites, in 2 files:
+//     MemoryTracker.cpp:3727 and :3753, UnitMaterializer.cpp:12225 and :12856,
+// every one of them a `let mut <v>: Cpp2RustUnmapped_... = llvm_raw_string_ostream
+// :: new ( { & mut <str> } )` -- the fabricated-ctor shape.
+//
+// ⭐ THE ZERO-HIT ACCESSOR GREP (`--verbose` + `grep -A1` on the search line) over
+// MemoryTracker.cpp says the converter asks for EXACTLY THREE spellings for this
+// type and nothing else -- no `&` and no `*` spelling is ever asked, unlike
+// t1/t2/t3:
+//     search type llvm::raw_string_ostream, result: None                        (6)
+//     search expr void llvm::raw_string_ostream::raw_string_ostream(std::string &),
+//                                             result: None                      (2)
+//     search expr std::string & llvm::raw_string_ostream::str(), result: None    (8)
+// So this row is one type key plus two member keys.  The recorder's own
+// `searched as:` line agrees with the type spelling; the adjacent
+// `from decl (NOT a key ...)` line names raw_ostream.h:662:16, which is the
+// DECLARATION SITE and not a key.
+//
+// ⭐ THE MODEL IS A *REFERENCE TO THE STRING*, NOT A COPY OF IT, and that is forced
+// by the header and by the corpus, not chosen.  raw_ostream.h:662 is
+//     class raw_string_ostream : public raw_ostream { std::string &OS; ... };
+// i.e. it holds the caller's string BY REFERENCE and its doc says "the std::string
+// is always up-to-date, may be used directly and there is no need to call flush()".
+// And BOTH read patterns occur in the corpus: MemoryTracker reads the buffer back
+// through `ss.str()`, while UnitMaterializer:12230 reads the ORIGINAL local
+// (`return printed.lower();`) after writing through `os`.  A by-value buffer -- the
+// rules/sstream choice for std::ostringstream, which OWNS its string -- would
+// silently lose UnitMaterializer's writes.  So the target type is the model's
+// spelling of `std::string &`: a raw pointer to rules/string's t1 in the unsafe
+// model, a `Ptr` to it in refcount.  `str()` is then the IDENTITY -- it returns the
+// very reference the object stores (raw_ostream.h:681 `std::string &str() { return
+// OS; }`) -- and the constructor is the identity too.
+//
+// ⛔ THE INSERTION SITES STAY LOUD, AND THAT IS THE SAME PRE-EXISTING CONVERTER
+// DEFECT rules/sstream DOCUMENTS AT LENGTH, NOT SOMETHING THIS ROW INTRODUCES.
+// `ss << x` on one of these DOES already match f5-f18 (verified in the verbose log:
+// `Matching: llvm::raw_ostream & operator shl(const char *)`), and the converter
+// inserts a DerivedToBase cast on the receiver to this module's raw_ostream target
+// type, emitting `(( & mut ss as std::fs::File ) as *mut std::fs::File)`.  That is
+// `error[E0605]: non-primitive cast` -- BEFORE this change (`Cpp2RustUnmapped_...`
+// as File) and after it (`*mut Vec<c_char>` as File) alike, so nothing goes from
+// loud to silent here; a cast the converter writes at the use site cannot be removed
+// from inside a target body, and cpp2rust/converter/* is a different owner.
+// rules/sstream reached the identical conclusion for the identical cast and shipped
+// the model-correct bodies anyway; this follows it.
+//
+// ⛔ NOT COVERED, each because it is not asked anywhere in the corpus:
+// `reserveExtraSpace`, and `raw_svector_ostream` (a DIFFERENT model -- it holds a
+// `SmallVectorImpl<char> &`, i.e. rules/smallvector's type, not rules/string's).
+// `flush()` needs no key of its own: it is f4 on the raw_ostream base, and on one of
+// these streams it is a NO-OP in C++ anyway (the class is SetUnbuffered).
+
+namespace llvm {
+// raw_ostream.h:662.  ⛔ RESTATED EMPTY AND *UNRELATED* to raw_ostream, exactly as
+// rules/mlir restates AsmPrinter/OpAsmPrinter unrelated and for the same reason: if
+// the base relation were spelled here, `o.operator<<(...)` on one of these would be
+// a derived-to-base conversion and f5-f18's keys -- 18 live keys -- would be at risk
+// of being re-recorded against the derived spelling.  The real TU's AST carries the
+// true inheritance regardless, which is why the `<<` sites match f5-f18 today.
+class raw_string_ostream {
+public:
+  explicit raw_string_ostream(std::string &O);
+  std::string &str();
+};
+} // namespace llvm
+
+// ⚠️ INDICES t560/f560/f561, not the next free t6/f19, DELIBERATELY: several slots
+// are live in the rule tree today and t6/f19 is what a concurrent slot would also
+// pick.  Indices are per-module and need not be dense.
+using t560 = llvm::raw_string_ostream;
+
+// f560 -- the constructor.  The parameter is the string the stream writes THROUGH;
+// the body is the identity, because the model type IS that reference.
+llvm::raw_string_ostream f560(std::string &s) {
+  return llvm::raw_string_ostream(s);
+}
+
+// f561 -- `str()`.  raw_ostream.h:681 is `{ return OS; }`, i.e. hand back the very
+// reference the object holds, so the body is the identity here too.  NOT `const` in
+// the header, and the key spelling above confirms it.
+std::string &f561(llvm::raw_string_ostream &o) { return o.str(); }
