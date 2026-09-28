@@ -159,3 +159,25 @@ unsafe fn f31<T1>(a0: &Option<T1>) -> &T1 {
 unsafe fn f32() -> () {
     ()
 }
+
+// f33 -- value_or(T1 &&): the prvalue form, `o.value_or(0)`.  The default is consumed,
+// not cloned, so the parameter is BY VALUE.  The present value is CLONED out of the
+// receiver -- `value_or` returns by value in C++ and must not move out of a shared
+// optional.
+unsafe fn f33<T1: Clone>(a0: &Option<T1>, a1: T1) -> T1 {
+    match a0.as_ref() {
+        Some(v) => Clone::clone(v),
+        None => a1,
+    }
+}
+
+// f34 -- value_or(const T1 &).  `Clone::clone(a1)` is deliberately in PATH form: the
+// converter substitutes its own expression for a `const &` argument (`&(*s)`) and
+// appends a method TEXTUALLY, so `a1.clone()` would emit `&(*s).clone()`, which parses
+// as `&((*s).clone())` -- a reference to a temporary.
+unsafe fn f34<T1: Clone>(a0: &Option<T1>, a1: &T1) -> T1 {
+    match a0.as_ref() {
+        Some(v) => Clone::clone(v),
+        None => Clone::clone(a1),
+    }
+}

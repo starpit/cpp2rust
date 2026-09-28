@@ -164,3 +164,21 @@ fn f31<T1>(a0: &Option<Value<T1>>) -> Ptr<T1> {
 fn f32() -> () {
     ()
 }
+
+// f33 -- value_or(T1 &&).  Prvalue default: taken by value, returned by value.  The
+// present value is read out of the shared cell by CLONE, never moved.
+fn f33<T1: Clone + ByteRepr>(a0: &Option<Value<T1>>, a1: T1) -> T1 {
+    match a0.as_ref() {
+        Some(v) => T1::clone(&*v.borrow()),
+        None => a1,
+    }
+}
+
+// f34 -- value_or(const T1 &).  Same shape as f15, whose `T1 &` parameter the refcount
+// model also expands to `Ptr<T1>`.
+fn f34<T1: Clone + ByteRepr>(a0: &Option<Value<T1>>, a1: Ptr<T1>) -> T1 {
+    match a0.as_ref() {
+        Some(v) => T1::clone(&*v.borrow()),
+        None => a1.read(),
+    }
+}

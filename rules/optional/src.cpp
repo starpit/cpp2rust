@@ -238,3 +238,32 @@ template <typename T1> const T1 *f31(const std::optional<T1> &o) {
 // need the nullopt_t -> optional CONVERSION keyed at that site, not this declref.
 // That is a separate row and is deliberately left out rather than papered over here.
 const std::nullopt_t &f32() { return std::nullopt; }
+
+// f33 / f34 -- the two MISSING SIBLINGS of f15's `value_or`.
+//
+// `value_or` is declared `template <class U = T> T value_or(U &&v) const &`, so the
+// DEDUCED `U` is part of the recorded key and there are THREE distinct spellings, not
+// one.  Measured with `-verbose` (log at /home/agent/work/slot_optrw/vo.log):
+//     search expr int std::optional<int>::value_or(int &&) const &        -> None
+//     search expr int std::optional<int>::value_or(int &) const &         -> Matching
+//     search expr int std::optional<int>::value_or(const int &) const &   -> None
+// i.e. f15 answers ONLY the `U = T&` deduction (`o.value_or(lv)` on a non-const lvalue),
+// and the DOMINANT corpus shape `o.value_or(0)` -- a prvalue, `U = T` -- had no key at
+// all.  f33 covers that; f34 covers a const lvalue argument.
+//
+// Why these record faithfully where the CONSTRUCTOR family collapses: libc++'s
+// `template <class U = T> optional(U &&)` competes with the non-template copy
+// constructor and the synthetic resolver prefers the non-template, so the ctor keys
+// collapse.  `value_or` has NO competing non-template overload, so the recorder reflects
+// the declared parameter type directly -- which f15's own existing key demonstrates.
+//
+// `std::move` is required in f33: a parameter DECLARED `T1 &&` is an LVALUE inside the
+// body, so a bare `o.value_or(d)` there would deduce `U = T1 &` and record a DEAD
+// DUPLICATE of f15.
+template <typename T1> T1 f33(const std::optional<T1> &o, T1 &&d) {
+  return o.value_or(std::move(d));
+}
+
+template <typename T1> T1 f34(const std::optional<T1> &o, const T1 &d) {
+  return o.value_or(d);
+}
