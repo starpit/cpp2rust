@@ -140,6 +140,7 @@ public:
   bool ConvertCXXMethodDecl(clang::CXXMethodDecl *decl);
 
   std::string GetMethodName(const clang::CXXMethodDecl *decl);
+  std::string EmittedMethodKey(const clang::CXXMethodDecl *decl);
 
   virtual std::string GetSelfMaybeWithMut(const clang::CXXMethodDecl *decl);
 
@@ -1095,6 +1096,16 @@ protected:
     ScopedPtrBindings &operator=(const ScopedPtrBindings &) = delete;
   };
   static std::unordered_set<std::string> decl_ids_;
+  // Keyed on the EMITTED pair `<RecordName>::<GetMethodName>`, which is exactly
+  // the identity Rust uses for E0201 ("duplicate definitions with name ..."),
+  // unlike `decl_ids_`/`GetMethodID` whose key embeds `GetLocationID` and so
+  // treats a header in-class definition and its out-of-line `.cpp` twin as two
+  // distinct entities. Overload-safe: `GetMethodName` routes overloads through
+  // `GetOverloadedFunctionName`, which mangles the parameter types
+  // (`setOperand_i64_Optioni32`), so two genuinely different overloads get two
+  // different keys and BOTH survive. The only pairs this can collapse are ones
+  // that would emit the same Rust name in the same impl, i.e. E0201 already.
+  static std::unordered_set<std::string> emitted_impl_methods_;
   static std::unordered_set<std::string> abstract_structs_;
 
   class RecordIndex {

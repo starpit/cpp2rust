@@ -29,6 +29,7 @@
 namespace cpp2rust {
 std::unordered_map<std::string, std::string> Converter::inner_structs_;
 std::unordered_set<std::string> Converter::decl_ids_;
+std::unordered_set<std::string> Converter::emitted_impl_methods_;
 std::unordered_set<std::string> Converter::globals_;
 std::vector<std::string> Converter::global_inits_;
 std::unordered_set<std::string> Converter::abstract_structs_;
@@ -1401,6 +1402,16 @@ bool Converter::VisitCXXMethodDecl(clang::CXXMethodDecl *decl) {
   if (!decl_ids_.insert(GetMethodID(decl)).second) {
     return false;
   }
+  // An out-of-line definition whose (record, emitted name) pair was ALREADY
+  // emitted -- typically by the in-class definition in the header, seen in a
+  // sibling TU of the same `--dir` crate -- would land as a second
+  // `impl <Record> { fn <name> }`, which is E0201. `decl_ids_` cannot see this
+  // because `GetMethodID` embeds the source location. Skip the redefinition,
+  // never the first definition.
+  if (decl->isOutOfLine() &&
+      emitted_impl_methods_.contains(EmittedMethodKey(decl))) {
+    return false;
+  }
   PushCurrFunction push_fn(*this, decl);
 
   if (decl->isOutOfLine() && !decl->overridden_methods().empty()) {
@@ -1420,6 +1431,10 @@ bool Converter::ConvertOutOfLineMethod(clang::CXXMethodDecl *decl) {
   StrCat(keyword::kImpl, GetRecordName(decl->getParent()));
   PushBrace impl_brace(*this);
   return ConvertCXXMethodDecl(decl);
+}
+
+std::string Converter::EmittedMethodKey(const clang::CXXMethodDecl *decl) {
+  return GetRecordName(decl->getParent()) + "::" + GetMethodName(decl);
 }
 
 std::string Converter::GetMethodName(const clang::CXXMethodDecl *decl) {
@@ -1449,6 +1464,12 @@ bool Converter::ConvertCXXMethodDecl(clang::CXXMethodDecl *decl) {
       (decl->isStatic() ||
        (!decl->isVirtual() && !decl->getParent()->isAbstract()))) {
     ConvertFunctionQualifiers(decl);
+  }
+  // Record the emitted identity for every method that gets a BODY in an impl
+  // block (trait declarations and pure virtuals are signatures, not
+  // definitions, so they must not claim the pair).
+  if (!decl->isPureVirtual() && method_target_ != MethodTarget::TraitDecl) {
+    emitted_impl_methods_.insert(EmittedMethodKey(decl));
   }
   StrCat(keyword_unsafe_, keyword::kFn, GetMethodName(decl));
 
