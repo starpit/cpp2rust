@@ -865,6 +865,150 @@ bool Converter::ConvertVarDeclSkipInit(clang::VarDecl *decl) {
 // what `emplace` reported.  The iterator half stays an IDENTITY because f57
 // builds it with `find_key` on the LIVE map, and moving that iterator value out
 // of a dead temporary pair does not copy the node it points at.
+// ⭐ MEMBER-WISE STRUCTURED BINDING ([dcl.struct.bind]/4), the second of the two
+// forms the standard defines and the one this converter had never recognised.
+// Returns the FieldDecl each binding names, in declaration order, or an EMPTY
+// vector when the decomposition is not member-wise (or is one this function
+// refuses).
+//
+// HOW IT IS TOLD APART FROM THE TUPLE-LIKE FORM (/3).  For a tuple-like holder
+// clang synthesises one HOLDING VarDecl per binding, initialised to
+// `std::get<I>(__d)`; for the member-wise form there are NO holding vars at all
+// and each binding IS a member of the decomposed object.  `getHoldingVar() ==
+// nullptr` for every binding is therefore an exact discriminator, and it is
+// checked FIRST so a tuple-like holder can never be spelled by field name.
+//
+// WHY THIS MATTERS: the positional spelling `.0` / `.1` is WRONG for a plain
+// struct.  `struct RowGroupNodeInfo { ScheduleNode* node; int row;
+// CoordinateBaseType beta; }` (ddc/ddc.h:566) is emitted as a Rust struct with
+// NAMED fields, so `(*h).0` is `E0609: no field 0`.  The bindings correspond
+// 1:1, in order, to the non-static data members, so the field NAME is the only
+// sound spelling -- and it needs no rule and no tuple model at all.
+//
+// ⛔ WHAT IS REFUSED, and why each exclusion is load-bearing:
+//  - A REFERENCE field.  This is the single guard that keeps the `llvm::
+//    enumerate` family (`llvm::detail::enumerator_result<size_t, X &>`, four
+//    measured TUs) out: its aliasing lives in a reference MEMBER while clang
+//    hands the BindingDecls plain non-reference types, so the aliasing is
+//    invisible in the binding types.  `PcfgInfo` (dsc/dsc2Pcfg.h:102, `SenPcfg&
+//    pcfg;`) is excluded by the very same test.  A reference member is also
+//    modelled pointer-shaped, so `&raw const (*h).f` would be one level off.
+//    (enumerator_result is excluded a SECOND time independently: it is tuple-
+//    like, so it never reaches this function at all.)
+//  - A BASE CLASS, an anonymous struct/union member, a bitfield, a union, or a
+//    field count that does not equal the binding count.  Member-wise binding
+//    over any of those either is not what this simple 1:1 pairing models or has
+//    no addressable field to point at.
+//  - A record that HAS A RULE (`Mapper::Contains`).  Then the Rust type is
+//    whatever the rule says and its field names are not the C++ ones.
+static std::vector<const clang::FieldDecl *>
+GetMemberwiseBindingFields(const clang::DecompositionDecl *decl) {
+  const std::vector<const clang::FieldDecl *> kNotMemberwise;
+  auto bindings = decl->bindings();
+  if (bindings.empty()) {
+    return kNotMemberwise;
+  }
+  for (const auto *binding : bindings) {
+    if (binding->getHoldingVar() != nullptr) {
+      return kNotMemberwise;
+    }
+  }
+  auto value_type = decl->getType().getNonReferenceType();
+  const clang::CXXRecordDecl *record = value_type->getAsCXXRecordDecl();
+  if (record == nullptr) {
+    return kNotMemberwise;
+  }
+  // ⛔ THE RECORD MUST BE ONE THIS TU EMITS AS ITS OWN RUST STRUCT, because that
+  // is the only case in which the Rust type carries the C++ FIELD NAMES.
+  //
+  // ⚠️ MEASURED, and it is exactly the mis-recording trap this construct is
+  // known for: the obvious test `!Mapper::Contains(value_type)` is USELESS here.
+  // `Contains` is TRUE for a struct defined in the TU itself -- `search()` falls
+  // through to `LooksLikeUserDefinedTypeName` (mapper.cpp:2366) and synthesises
+  // an IDENTITY rule from `user_tags_` -- so gating on `!Contains` rejected
+  // every member-wise site and the whole arm measured as "no effect" on all four
+  // target TUs while the code was in fact reached. Instrumented to reject-3 to
+  // find that, then replaced with the predicate that actually answers the
+  // question: is this an identity-mapped USER tag (emitted as a Rust struct with
+  // these field names) rather than a rule-modelled library type (whose Rust
+  // shape and field names are whatever the rule says)?
+  if (!Mapper::LooksLikeUserDefinedTypeName(
+          Mapper::ToString(value_type.getUnqualifiedType()), nullptr)) {
+    return kNotMemberwise;
+  }
+  record = record->getDefinition();
+  if (record == nullptr || record->isUnion() ||
+      record->getNumBases() != 0 || record->getNumVBases() != 0) {
+    return kNotMemberwise;
+  }
+  std::vector<const clang::FieldDecl *> fields;
+  for (const auto *field : record->fields()) {
+    if (field->isAnonymousStructOrUnion() || field->isBitField() ||
+        field->getType()->isReferenceType()) {
+      return kNotMemberwise;
+    }
+    fields.push_back(field);
+  }
+  if (fields.size() != bindings.size()) {
+    return kNotMemberwise;
+  }
+  return fields;
+}
+
+// The number of TOP-LEVEL elements of a parenthesised Rust tuple model, or 0
+// when `model` is not one. Used as the arity gate that replaces the old "with
+// exactly two bindings a parenthesised model can only be a 2-tuple" argument,
+// which stops holding once more than two bindings are allowed.
+//
+// ⚠️ A comma nested inside `(`/`<`/`[` is NOT a separator: `(A, HashMap<K, V>)`
+// has TWO elements and counting bare commas would say three. `>` is treated as
+// a closer ONLY while an angle bracket is open, so the `>` of a `->` in a
+// fn-pointer model cannot desync the depth -- the measured failure mode that
+// killed a whole family of rule keys elsewhere in this project.
+static unsigned RustTupleModelArity(const std::string &model) {
+  if (model.size() < 2 || model.front() != '(' || model.back() != ')') {
+    return 0;
+  }
+  int round = 0;
+  int square = 0;
+  int angle = 0;
+  unsigned elements = 1;
+  for (std::size_t i = 1; i + 1 < model.size(); ++i) {
+    const char c = model[i];
+    switch (c) {
+      case '(': ++round; break;
+      case ')': --round; break;
+      case '[': ++square; break;
+      case ']': --square; break;
+      case '<': ++angle; break;
+      case '>':
+        // Not a closer when it is the tail of `->`, and not a closer when no
+        // angle bracket is open.
+        if (angle > 0 && !(i > 0 && model[i - 1] == '-')) {
+          --angle;
+        }
+        break;
+      case ',':
+        if (round == 0 && square == 0 && angle == 0) {
+          ++elements;
+        }
+        break;
+      default: break;
+    }
+    if (round < 0 || square < 0) {
+      return 0;
+    }
+  }
+  if (round != 0 || square != 0 || angle != 0) {
+    return 0;
+  }
+  // `()` is the unit type, not a 1-tuple.
+  if (model == "()") {
+    return 0;
+  }
+  return elements;
+}
+
 static const clang::Expr *GetTemporaryHolderInit(const clang::Expr *init) {
   if (init == nullptr) {
     return nullptr;
@@ -891,7 +1035,13 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
     return false;
   }
   auto bindings = decl->bindings();
-  if (bindings.size() != 2) {
+  // ⭐ ARITY IS NO LONGER FIXED AT TWO. Every downstream emitter carries its own
+  // arity gate -- `EmitMapDecompositionBindings` still refuses anything but two
+  // (its accessor table has two entries), `EmitVectorDecompositionBindings`
+  // gates on the member-wise field count or on the tuple model's counted arity,
+  // and the by-value/const-ref path at the bottom of this function does the
+  // same. So widening here cannot let an unspelled shape through.
+  if (bindings.empty()) {
     return false;
   }
   // ---- MAP-ELEMENT branch, routed to the MAP-ACCESSOR lowering ----
@@ -1149,15 +1299,42 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
       }
     }
   }
-  if (!Mapper::Contains(type.getUnqualifiedType())) {
-    return false;
-  }
-  // The model must be a Rust tuple for `.0` / `.1` to mean the C++ elements.
-  // With exactly two bindings a parenthesised model can only be a 2-tuple --
-  // any other arity would not have type-checked in C++.
-  const std::string model = Mapper::Map(type.getUnqualifiedType());
-  if (model.size() < 2 || model.front() != '(' || model.back() != ')') {
-    return false;
+  // ⭐ MEMBER-WISE ARM ([dcl.struct.bind]/4). A plain struct has NO tuple model
+  // at all, so the `Mapper::Contains` + parenthesised-model gate below refuses
+  // it -- and refusing it was correct only as long as the emission could spell
+  // the elements ONLY positionally. It can now spell them by FIELD NAME, which
+  // is what the bindings of a member-wise decomposition actually name.
+  //
+  // MEASURED SITE (dsc-based-utils/DSC2ToDataflowIR/V3/SNControlFlowLowering.cpp:911):
+  //     const auto &[dim, kind] = node->dims_[dim_idx];
+  //   DecompositionDecl 'const PrimaryDimAndKind &'   (dsc/dims.h:76)
+  //   BindingDecl dim   'const PrimaryDimTypes'   <- enum, NOT a reference
+  //   BindingDecl kind  'const MetaDimKind'       <- enum, NOT a reference
+  // The holder is a CONST reference, so this arm inherits the const-ref
+  // reasoning verbatim: the holder becomes a `*const PrimaryDimAndKind` and each
+  // binding is a READ THROUGH THAT POINTER (`(*h).dim_`), not a copy of the
+  // struct -- so there is nothing to clone, nothing to move, and no write can
+  // travel back because every binding is const.
+  //
+  // ⛔ HOW THIS ARM EXCLUDES THE `llvm::enumerate` FAMILY, which must stay
+  // refused: `llvm::detail::enumerator_result` is TUPLE-LIKE (it has `get<I>`),
+  // so `GetMemberwiseBindingFields` returns empty for it on the holding-var test
+  // alone and it never reaches here; and independently, its aliasing lives in a
+  // reference MEMBER, which that helper refuses outright.
+  const std::vector<const clang::FieldDecl *> memberwise_fields =
+      GetMemberwiseBindingFields(decl);
+  if (memberwise_fields.empty()) {
+    if (!Mapper::Contains(type.getUnqualifiedType())) {
+      return false;
+    }
+    // The model must be a Rust tuple of EXACTLY this arity for `.N` to mean the
+    // C++ elements. (The old argument -- "with exactly two bindings a
+    // parenthesised model can only be a 2-tuple" -- does not survive allowing a
+    // third binding, so the arity is now counted, not inferred.)
+    if (RustTupleModelArity(Mapper::Map(type.getUnqualifiedType())) !=
+        bindings.size()) {
+      return false;
+    }
   }
 
   // REFCOUNT IS REFUSED, measured: that model wraps every local in
@@ -1189,7 +1366,11 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
   // scalars-only filter used to refuse, so accepting one whose model does not
   // exist would trade a loud abort for a `let` of a nonexistent type. Refuse
   // instead and let the original abort stand.
-  if (temp_holder) {
+  // The member-wise arm is gated the same way, and for the same reason: the
+  // struct has no rule by construction (GetMemberwiseBindingFields refuses one
+  // that does), so the ONLY evidence its Rust model exists is that its own
+  // annotation comes out placeholder-free.
+  if (temp_holder || !memberwise_fields.empty()) {
     std::string annotation;
     {
       Buffer buf(*this);
@@ -1255,8 +1436,16 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
     // is reached through a deref. Reading through the pointer (rather than
     // copying the holder first) is also what keeps the binding observing the
     // aliased pair -- the bindings are all const, so no write travels back.
-    StrCat(ref_holder ? std::format("(*{}).{}", holder, index)
-                      : std::format("{}.{}", holder, index));
+    // MEMBER-WISE decompositions are spelled by FIELD NAME; tuple-like ones by
+    // INDEX. See the member-wise arm above: the bindings of a member-wise
+    // decomposition name the non-static data members in declaration order, and
+    // the Rust struct carries those same names, so `.0` would be E0609.
+    const std::string element =
+        memberwise_fields.empty()
+            ? std::to_string(index)
+            : GetNamedDeclAsString(memberwise_fields[index]);
+    StrCat(ref_holder ? std::format("(*{}).{}", holder, element)
+                      : std::format("{}.{}", holder, element));
     StrCat(token::kSemiColon);
     ++index;
   }
@@ -2886,7 +3075,7 @@ static bool IsReEvaluationFreeLValue(const clang::Expr *init) {
 bool Converter::EmitVectorDecompositionBindings(
     const clang::DecompositionDecl *decl, const std::string &holder_name) {
   auto bindings = decl->bindings();
-  if (bindings.empty() || bindings.size() > 2) {
+  if (bindings.empty()) {
     return false;
   }
   // Only a `pair &` holder is lowered: the pointer-to-field form below is only
@@ -2894,14 +3083,57 @@ bool Converter::EmitVectorDecompositionBindings(
   if (!decl->getType()->isReferenceType()) {
     return false;
   }
+  // ⭐ MORE THAN TWO BINDINGS. The two-binding case is left EXACTLY as it was --
+  // no new gate, so the existing corpus is byte-identical -- because its callers
+  // already guarantee a `std::pair`-shaped element. Beyond two bindings the
+  // element spelling has to be established here, and there are exactly two
+  // sound spellings:
+  //   MEMBER-WISE (a plain struct): the field NAME. Measured at ddc/ddc.h:603,
+  //     `for (auto& [node, row, beta] : nodeInfo)` over
+  //     `std::vector<RowGroupNodeInfo>` -- three named fields, no tuple model,
+  //     so `.0` would be E0609. See GetMemberwiseBindingFields for the
+  //     discriminator and for why a reference member is refused.
+  //   TUPLE-LIKE: the INDEX, but only once the model is confirmed to be a Rust
+  //     tuple of exactly this arity. Measured at
+  //     dsc/sdsc-perfmodel/perfmodel.cpp:2740,
+  //     `for (const auto& [sdscName, opCategory, idealCycles] : perfData)` over
+  //     `std::vector<std::tuple<std::string, std::string, int64_t>>`.
+  // ⭐ NOTHING IS COPIED on either spelling: every binding becomes a raw pointer
+  // INTO the container element, so there is no holder copy to lose a write
+  // through, no object identity to change, and no clone for a class-typed field
+  // (a `std::string` field is pointed at, never moved -- so no E0507).
+  std::vector<const clang::FieldDecl *> fields;
+  if (bindings.size() != 2) {
+    fields = GetMemberwiseBindingFields(decl);
+    if (fields.empty()) {
+      auto value_type =
+          decl->getType().getNonReferenceType().getUnqualifiedType();
+      if (!Mapper::Contains(value_type)) {
+        return false;
+      }
+      if (RustTupleModelArity(Mapper::Map(value_type)) != bindings.size()) {
+        return false;
+      }
+      for (const auto *binding : bindings) {
+        // A reference binding aliases observably and is refused here for the
+        // same reason as everywhere else on this construct.
+        if (binding->getType()->isReferenceType()) {
+          return false;
+        }
+      }
+    }
+  }
   const bool is_const = decl->getType()->getPointeeType().isConstQualified();
   unsigned index = 0;
   for (const auto *binding : bindings) {
+    const std::string element =
+        fields.empty() ? std::to_string(index)
+                       : GetNamedDeclAsString(fields[index]);
     StrCat(keyword::kLet);
     StrCat(GetNamedDeclAsString(binding));
     StrCat(token::kAssign);
     StrCat(std::format("&raw {} (*{}).{}", is_const ? "const" : "mut",
-                       holder_name, index));
+                       holder_name, element));
     StrCat(token::kSemiColon);
     ++index;
   }
