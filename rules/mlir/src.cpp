@@ -4603,3 +4603,162 @@ using t233 = mlir::OpTrait::SingleBlock<mlir::agen::CompositeLoadOp>;
 using t234 = mlir::OpTrait::detail::MultiOperandTraitBase<mlir::sentient::YieldOp, mlir::OpTrait::VariadicOperands>;
 // t235 -- Cpp2RustUnmapped_mlir_OpTrait_detail_MultiOperandTraitBase_mlir_UnrealizedConversionCastOp__mlir_OpTrait_VariadicOperands_, 2 occurrences.  DEF `ops::mlir_UnrealizedConversionCastOp` present.
 using t235 = mlir::OpTrait::detail::MultiOperandTraitBase<mlir::UnrealizedConversionCastOp, mlir::OpTrait::VariadicOperands>;
+
+// ---------------------------------------------------------------------------
+// t236-t242 -- `llvm::SmallSet` and `llvm::detail::DenseSetImpl`, the two
+// set-shaped system types the recorder attributes to this module.  SEVEN keys,
+// a DELIBERATE SUBSET of the eighteen the queue lists; the nine unlanded
+// spellings and the exact reason are enumerated at the bottom of this block.
+//
+// ⛔ MONOMORPHIC, NEVER GENERIC, for the reason already recorded at :3650 and
+// :4258 and MEASURED as `rules/setvector`'s `t1`: in a key like
+// `DenseSetImpl<T1, T2, T3>` the next same-depth literal after `T1` is `, `,
+// and a COMMA IS NOT A DELIMITER, so `T1` captures the whole argument list and
+// `T2`/`T3` bind nothing.  Written fully concrete, placeholder arity is 0, so
+// `matchTemplate`'s capture (`findNextLiteralSameDepth`, mapper.cpp:173) never
+// runs and the swallow is ruled out BY CONSTRUCTION.  Same discipline as
+// t37-t39 / t166 / t167-t216.
+//
+// ⚠️ THE `_` IN THE RECORDED KEY IS THE CONVERTER'S, NOT MINE.
+// `normalizeTranslationRule` (cpp2rust/converter/mapper.cpp:1830-1838) rewrites
+// `\b\d+\b` -> `_` on BOTH the key and the search side, so the literal `4`
+// written below is recorded as `_` and one key covers every inline capacity.
+// For these two templates that erasure is HARMLESS: `N` is `SmallSet`'s inline
+// capacity (SmallSet.h:133) and `InlineBuckets` is `SmallDenseMap`'s -- neither
+// is semantic.  ⛔ BUT A CONVERTER SLOT IS REMOVING THAT ERASURE RIGHT NOW for
+// `chrono::duration`.  IF THAT LANDS, THESE KEYS STILL WORK (they spell a real
+// digit, not a literal `_`) BUT THEY STOP COLLAPSING: `SmallSet<long, 4>` and
+// `SmallSet<long, 8>` would then need one key each.  Do not "fix" these by
+// writing `_` in the C++ -- a literal `_` key goes dead the moment the erasure
+// is removed.
+//
+// MODEL: `std::collections::HashSet<T>`, exactly `rules/densemap`'s t2.  Order
+// is genuinely unspecified for BOTH of these (contrast `SetVector`, whose whole
+// point is insertion order), so a HashSet claims nothing the C++ does not.
+//
+// ⭐ NO MEMBER RULES AT ALL, and that is not an omission.  Not one of the
+// twelve `DenseSetImpl` queue rows is a member-call row -- all twelve are
+// "system type has no rule".  The type surfaces because the recorder emits the
+// DECLARING class: the corpus declares `DenseSet`/`SmallDenseSet` and
+// `insert`/`contains` are INHERITED from this CRTP base.  Same shape as t166.
+//
+// ⛔ `rules/densemap` OWNS `llvm::DenseSet` -- a DIFFERENT bucket (`GetTypeMapKey`
+// truncates at the first `<`, so `llvm::DenseSet` and `llvm::detail::DenseSetImpl`
+// never share a bucket).  Nothing here touches it.
+//
+// THE LOCAL DECLARATIONS BELOW, and why their DEFAULTS ARE WRITTEN THE WAY THEY
+// ARE -- this is the part a blind copy of the readback gets wrong.  Only
+// TRAILING defaulted arguments are suppressed when a key is printed, so:
+//   * `DenseSetImpl`'s third parameter is declared WITHOUT a default.  The real
+//     LLVM header defaults it to `DenseMapInfo<ValueT>`, which is exactly what
+//     every one of these keys spells -- so with the default declared it would
+//     be suppressed and the key would be recorded at ARITY 2, not matching the
+//     arity-3 `searched as:` text.  Same reasoning for `DenseMap` /
+//     `SmallDenseMap`, whose final `Bucket` argument is non-default here
+//     (`DenseSetPair<K>`, not `DenseMapPair<K,V>`) and so forces every earlier
+//     argument to print anyway.
+//   * `DenseMapInfo`'s SFINAE parameter IS defaulted to `void`, because the
+//     three element types landed here (`long`, `unsigned int`, `unsigned long`)
+//     are recorded as `llvm::DenseMapInfo<long>` -- WITHOUT the `, void`.  The
+//     two `llvm::StringRef` rows are recorded WITH it and are among the nine
+//     left out below.
+namespace llvm {
+template <typename T, unsigned N> class SmallSet {};
+template <typename T, typename Enable = void> struct DenseMapInfo {};
+template <typename KeyT, typename ValueT, typename KeyInfoT, typename BucketT>
+class DenseMap {};
+template <typename KeyT, typename ValueT, unsigned InlineBuckets,
+          typename KeyInfoT, typename BucketT>
+class SmallDenseMap {};
+namespace detail {
+struct DenseSetEmpty {};
+template <typename KeyT> struct DenseSetPair {};
+template <typename ValueT, typename MapTy, typename ValueInfoT>
+class DenseSetImpl {};
+}  // namespace detail
+}  // namespace llvm
+
+// t236 -- `llvm::SmallSet<long, _>`, FOUR queue rows: g120, g121, g122, g1171.
+// The search arity is 2 and the `_` is the erased `N`, so this one key covers
+// every inline capacity the corpus instantiates.
+using t236 = llvm::SmallSet<long, 4>;
+
+// t237 -- `llvm::SmallSet<unsigned long, _>`, queue row g1174.
+using t237 = llvm::SmallSet<unsigned long, 4>;
+
+// t238 -- queue row g323 (3 TUs), `llvm::DenseSet<long>`'s CRTP base.
+using t238 = llvm::detail::DenseSetImpl<
+    long,
+    llvm::DenseMap<long, llvm::detail::DenseSetEmpty, llvm::DenseMapInfo<long>,
+                   llvm::detail::DenseSetPair<long>>,
+    llvm::DenseMapInfo<long>>;
+
+// t239 -- queue row g1355 (1 TU), `llvm::SmallDenseSet<long, N>`'s CRTP base.
+// Distinguished from t238 by the `SmallDenseMap` MapTy and its extra
+// `InlineBuckets` argument, so a literal match selects exactly one.
+using t239 = llvm::detail::DenseSetImpl<
+    long,
+    llvm::SmallDenseMap<long, llvm::detail::DenseSetEmpty, 4,
+                        llvm::DenseMapInfo<long>,
+                        llvm::detail::DenseSetPair<long>>,
+    llvm::DenseMapInfo<long>>;
+
+// t240 -- queue row g1356 (1 TU).
+using t240 = llvm::detail::DenseSetImpl<
+    unsigned int,
+    llvm::DenseMap<unsigned int, llvm::detail::DenseSetEmpty,
+                   llvm::DenseMapInfo<unsigned int>,
+                   llvm::detail::DenseSetPair<unsigned int>>,
+    llvm::DenseMapInfo<unsigned int>>;
+
+// t241 -- queue row g1357 (1 TU).
+using t241 = llvm::detail::DenseSetImpl<
+    unsigned int,
+    llvm::SmallDenseMap<unsigned int, llvm::detail::DenseSetEmpty, 4,
+                        llvm::DenseMapInfo<unsigned int>,
+                        llvm::detail::DenseSetPair<unsigned int>>,
+    llvm::DenseMapInfo<unsigned int>>;
+
+// t242 -- queue row g1358 (1 TU).
+using t242 = llvm::detail::DenseSetImpl<
+    unsigned long,
+    llvm::DenseMap<unsigned long, llvm::detail::DenseSetEmpty,
+                   llvm::DenseMapInfo<unsigned long>,
+                   llvm::detail::DenseSetPair<unsigned long>>,
+    llvm::DenseMapInfo<unsigned long>>;
+
+// ⛔⛔ THE NINE SPELLINGS DELIBERATELY NOT KEYED, AND THE ONE REASON.
+// A MONOMORPHIC set key has to name a CONCRETE Rust ELEMENT type, and for these
+// nine the element's Rust model is NOT owned by this module and NOT derivable
+// from anything in it.  A key naming the wrong element type records cleanly,
+// passes the load smoke test, and is then a SILENT LIE about set membership --
+// strictly worse than the loud abort that is there now.  Enumerated:
+//   llvm::SmallSet<SentientRegType, _>                  g1166 g1167 g1168
+//   llvm::SmallSet<const EvaluatedValue *, _>           g1169 g1170
+//     -- CORPUS types, not system types.  `SentientRegType` is named only in
+//        rules/equivalenceclasses' and rules/densemap' PROSE; neither maps it,
+//        and nothing in the tree says what `EvaluatedValue` becomes.
+//   llvm::SmallSet<mlir::Operation *, _>                g1172 g1173
+//     -- `mlir::Operation *`.  t1 maps the CLASS to `fmt::OpInst`, a VALUE
+//        type; what a POINTER to it is under the refcount model (and whether
+//        that spelling is `Hash + Eq`, which `HashSet` REQUIRES) is not settled
+//        anywhere in this module.  Also the only row that additionally hits the
+//        `SmallSet<PointeeType *, N> : SmallPtrSet` partial specialisation
+//        (SmallSet.h:273) -- the search key is unchanged by that, so it is the
+//        element model alone that blocks it.
+//   llvm::SmallSet<std::pair<mlir::Operation *, std::optional<int>>, _>
+//                                                       g128 g129
+//     -- same `mlir::Operation *` blocker, inside a pair.
+//   DenseSetImpl over `llvm::StringRef`                 g415 g1354
+//     -- element owned by rules/stringref, and these two are ALSO the rows
+//        whose `DenseMapInfo` is recorded WITH the `, void`, so they need the
+//        non-defaulted declaration the seven above must not have.
+//   DenseSetImpl over `mlir::Attribute`                 g416 g417
+//   DenseSetImpl over `mlir::StringAttr`                g156
+//   DenseSetImpl over `mlir::Value`                     g168
+//   DenseSetImpl over `mlir::Operation *`               g202
+//     -- t4/t6 and t1 give these types a REPRESENTATION, but none of
+//        `ir::Attr` / `ir::Value` / `fmt::OpInst` is known here to implement
+//        `Hash + Eq`, and `std::collections::HashSet` does not compile without
+//        both.  That check is a `dataflowir-gen` read, not a rules read, and it
+//        is the next step for these five.

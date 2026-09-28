@@ -19,7 +19,36 @@
 
 use libcc2rs::*;
 
-fn t1<T1, T2, T3>() -> Vec<T1> {
+// ARITY REPAIR 2026-09-28: the generic 4-ary `t1` key is GONE (it was dead in
+// both directions -- see src.cpp).  These are the four distinct `searched as:`
+// spellings, arity-0 so no capture and therefore no swallow is possible.  The
+// MODEL IS UNCHANGED: `Vec<element>`, insertion order observable.
+
+// `llvm::SetVector<mlir::Attribute>` (1-ary).  Element model = rules/mlir t6.
+fn t1() -> Vec<dataflowir_gen::ir::Attr> {
+    Default::default()
+}
+
+// `llvm::SetVector<mlir::Operation *>` (1-ary).  Element model = a pointer to
+// rules/mlir t1's `mlir::Operation` model.
+fn t3() -> Vec<*mut dataflowir_gen::fmt::OpInst> {
+    Default::default()
+}
+
+// `llvm::SetVector<mlir::Attribute, llvm::SmallVector<mlir::Attribute, _>,
+//  llvm::DenseSet<mlir::Attribute>, _>` -- the 4-ary spelling of t1's type.
+fn t4() -> Vec<dataflowir_gen::ir::Attr> {
+    Default::default()
+}
+
+// The two 4-ary op-element forms.  An MLIR op handle held by value models as
+// `OpInst`, the same model rules/mlir gives `mlir::Operation` (t1) and the
+// op-trait `Impl<...>` keys (t167-t216).
+fn t5() -> Vec<dataflowir_gen::fmt::OpInst> {
+    Default::default()
+}
+
+fn t6() -> Vec<dataflowir_gen::fmt::OpInst> {
     Default::default()
 }
 

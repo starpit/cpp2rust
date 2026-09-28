@@ -2363,3 +2363,39 @@ fn t235() -> dataflowir_gen::fmt::OpInst {
     )
 }
 
+
+// t236-t242 -- `llvm::SmallSet` / `llvm::detail::DenseSetImpl` -> HashSet.
+// See src.cpp for the seven keys, the monomorphic-not-generic prohibition, the
+// `_`-erasure warning, and the nine spellings deliberately left unkeyed.
+// IDENTICAL in both models on purpose: the three element types landed here are
+// PRIMITIVES, so neither model's pointer representation appears.  Plain `fn`,
+// not `unsafe fn`, per the t37-t39 / t166 convention for a TYPE rule.  The
+// `init` is the empty set, which is what a default-constructed `SmallSet` /
+// `DenseSet` IS -- not a sentinel, an exact match.
+fn t236() -> std::collections::HashSet<i64> {
+    std::collections::HashSet::new()
+}
+
+fn t237() -> std::collections::HashSet<u64> {
+    std::collections::HashSet::new()
+}
+
+fn t238() -> std::collections::HashSet<i64> {
+    std::collections::HashSet::new()
+}
+
+fn t239() -> std::collections::HashSet<i64> {
+    std::collections::HashSet::new()
+}
+
+fn t240() -> std::collections::HashSet<u32> {
+    std::collections::HashSet::new()
+}
+
+fn t241() -> std::collections::HashSet<u32> {
+    std::collections::HashSet::new()
+}
+
+fn t242() -> std::collections::HashSet<u64> {
+    std::collections::HashSet::new()
+}
