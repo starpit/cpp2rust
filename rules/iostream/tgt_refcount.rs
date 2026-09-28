@@ -123,6 +123,35 @@ fn f8(a0: Ptr<libcc2rs::IStream>, a1: Ptr<Vec<u8>>) -> Ptr<libcc2rs::IStream> {
     __s
 }
 
+// f9 / f10 -- `std::getline`. See tgt_unsafe.rs and src.cpp for the searched
+// spellings, for the corrected diagnosis, and for why the sticky guard here is the
+// sentry result rather than "were any bytes read" (getline succeeds on an empty
+// field, `>>` cannot produce one).
+//
+// THIS OVERRIDE IS REQUIRED and not merely for pointer syntax: THREE parameter
+// types are model-dependent. `std::string` is Vec<u8> here and Vec<libc::c_char>
+// in the unsafe model, an lvalue reference is `Ptr<T>` here and `&mut T` there,
+// and `char` is `u8` here against `libc::c_char` there (rules/string/tgt_refcount.rs
+// f9/f21 are the precedent). Inheriting the unsafe body would give E0308 three
+// times over.
+//
+// NO STAGING BUFFER IS NEEDED HERE and that is a real difference, not a
+// simplification: the refcount `std::string` is already a raw `Vec<u8>` with no
+// NUL terminator, which is precisely what `IStream::getline` writes, so
+// `istream_getline` can be called directly on the caller's own buffer. The
+// STICKY GUARD IS STILL CORRECT WITHOUT IT -- `IStream::getline` returns before
+// touching `out` on both failure paths, so the caller's string is left untouched
+// by construction rather than by a guarded copy-back.
+//
+// `Ptr` is a VALUE, so each `aN` is named exactly once and still handed on.
+fn f9(a0: Ptr<libcc2rs::IStream>, a1: Ptr<Vec<u8>>, a2: u8) -> Ptr<libcc2rs::IStream> {
+    libcc2rs::istream_getline(a0, a1, a2)
+}
+
+fn f10(a0: Ptr<libcc2rs::IStream>, a1: Ptr<Vec<u8>>) -> Ptr<libcc2rs::IStream> {
+    libcc2rs::istream_getline(a0, a1, b'\n')
+}
+
 // t5 -- std::ios_base::seekdir == int-promoted unscoped enum -> i32. Byte-identical to
 // tgt_unsafe.rs; restated for the same load-time reason.
 fn t5() -> i32 {

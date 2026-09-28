@@ -369,6 +369,47 @@ impl IStream {
         out.clear();
         out.extend_from_slice(&self.buf[start..end]);
     }
+
+    /// ⭐ `getline` FOR A RULE BODY THAT MUST CONVERT THE STRING -- the exact
+    /// counterpart of `extract_token_reporting`, and it exists for the same two
+    /// rule-ABI reasons, not for symmetry.
+    ///
+    /// 1. ⛔ THE STICKY CASE MUST NOT WRITE THE ARGUMENT. `std::getline` on an
+    ///    already-failed stream, and on a stream with nothing left to read,
+    ///    leaves its `std::string` strictly untouched (it sets failbit and
+    ///    returns; libcxx erases the string only AFTER the sentry succeeds).
+    ///    The tree's `std::string` is a NUL-terminated `Vec<libc::c_char>` in
+    ///    the unsafe model, so a rule body must stage into a `Vec<u8>` and copy
+    ///    back -- and an UNCONDITIONAL copy-back would ERASE the caller's
+    ///    string on every sticky read, which compiles, runs, and is silently
+    ///    wrong. The `bool` is "the argument was written", so the body can
+    ///    guard the write-back.
+    /// 2. A rule body is INLINED and every `aN` RE-EXPANDS to the argument
+    ///    expression verbatim, so the body must name each operand EXACTLY ONCE.
+    ///    Returning `*mut Self` lets the body mention the receiver once and
+    ///    still hand the stream back, which is what makes `std::getline(...)`
+    ///    usable as the condition of `while (std::getline(f, line))`.
+    ///
+    /// ⚠️ NOTE THE DIVERGENCE FROM `extract_token_reporting`: an EMPTY FIELD is
+    /// a SUCCESS here (`"a,,b"` split on `','` yields an empty second token and
+    /// the string MUST be cleared), whereas `>>` cannot produce one. So the
+    /// flag is false only on the genuine no-character-read failure, never
+    /// merely because the result is empty.
+    pub fn getline_reporting(
+        &mut self,
+        out: &mut Vec<u8>,
+        delim: u8,
+    ) -> (*mut Self, bool) {
+        if self.fail() || self.pos >= self.buf.len() {
+            // Delegate so the bit-setting stays in ONE place: `getline` sets
+            // eofbit+failbit on the exhausted-stream case and returns without
+            // touching `out`.
+            self.getline(out, delim);
+            return (self, false);
+        }
+        self.getline(out, delim);
+        (self, true)
+    }
 }
 
 // ---------------------------------------------------------------------------

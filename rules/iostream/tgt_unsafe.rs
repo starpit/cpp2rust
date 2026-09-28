@@ -159,6 +159,62 @@ unsafe fn f8(a0: &mut libcc2rs::IStream, a1: &mut Vec<libc::c_char>) -> *mut lib
     __r
 }
 
+// ============================================================================
+// f9 / f10 -- `std::getline`. See src.cpp for the two searched spellings read
+// back from a -verbose leg that exited 0, and for the correction of the recorded
+// "getline is never searched" diagnosis (it IS searched, 18 times in dip/dip.cpp,
+// `result: None` both spellings -- an ordinary missing free-function key).
+//
+// ⛔ THE BODY USES NOTHING BUT METHOD CALLS ON `a0`/`a1`, for exactly the reason
+// f8 above records: a `&mut` parameter's `aN` re-expands to the BARE LVALUE, not
+// to `&mut lvalue`, so `let __s: *mut IStream = a0;` emits `let __s = ss;` and
+// gives E0308 with rc=0 and no placeholder. Method calls compile under both
+// shapes because Rust auto-refs the receiver.
+//
+// EACH `aN` IS NAMED EXACTLY ONCE. `a2` appears once, inside the delimiter
+// conversion; the emitted argument at the measured site is `(',' as libc::c_char)`
+// so `a2 as u8` expands to `(',' as libc::c_char) as u8`, a legal primitive cast
+// chain.
+//
+// ⛔ THE `if __stored` GUARD IS THE STICKY CASE, and here it is NOT the same
+// predicate as f8's. `getline` succeeds on an EMPTY FIELD (`"a,,b"` split on
+// `','` must clear the caller's string for the middle token), so the guard cannot
+// be "did any bytes arrive"; it is the stream's sentry result, which is what
+// `getline_reporting` reports. Dropping the guard would erase the caller's string
+// on every read past end-of-stream -- the loop-exit iteration of
+// `while (std::getline(f, line))` writes nothing and must leave `line` alone.
+unsafe fn f9(
+    a0: &mut libcc2rs::IStream,
+    a1: &mut Vec<libc::c_char>,
+    a2: libc::c_char,
+) -> *mut libcc2rs::IStream {
+    let mut __b: Vec<u8> = Vec::new();
+    let (__r, __stored) = a0.getline_reporting(&mut __b, a2 as u8);
+    if __stored {
+        __b.push(0);
+        a1.splice(.., __b.iter().map(|&__c| __c as libc::c_char))
+            .for_each(drop);
+    }
+    __r
+}
+
+// f10 -- the two-argument form. The delimiter is `'\n'` per [string.io]; it is
+// spelled out rather than defaulted because a defaulted argument is a recorded
+// rule-authoring trap and because the recorded key's arity is what it is.
+unsafe fn f10(
+    a0: &mut libcc2rs::IStream,
+    a1: &mut Vec<libc::c_char>,
+) -> *mut libcc2rs::IStream {
+    let mut __b: Vec<u8> = Vec::new();
+    let (__r, __stored) = a0.getline_reporting(&mut __b, b'\n');
+    if __stored {
+        __b.push(0);
+        a1.splice(.., __b.iter().map(|&__c| __c as libc::c_char))
+            .for_each(drop);
+    }
+    __r
+}
+
 // t5 -- std::ios_base::seekdir, `enum seekdir { beg, cur, end }` (libcxx/ios:295).
 // Unscoped enum, no fixed underlying type, promotes to int -> i32. Nothing
 // model-dependent, so tgt_refcount.rs restates it byte-identically.

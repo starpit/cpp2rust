@@ -125,6 +125,73 @@ using t4 = std::istream;
 // ============================================================================
 std::istream &f8(std::istream &a0, std::string &a1) { return operator>>(a0, a1); }
 
+// ============================================================================
+// f9 / f10 -- `std::getline`, THE FREE FUNCTION TEMPLATE.  Recorded keys, read
+// back CHARACTER FOR CHARACTER from a -verbose leg that EXITED 0 (562,123 lines,
+// witness dip/dip.cpp, pin 6b2fbbb5dc85683916ba664db864847c, my own tree cloned
+// from ir.v31 with iostream+string regenerated to HEAD):
+//     search expr std::istream & std::getline(std::istream &, std::string &, char), result:
+//     None                                                                (13 asks)
+//     search expr std::istream & std::getline(std::istream &, std::string &), result:
+//     None                                                                 (5 asks)
+//
+// ⭐⭐ THIS CORRECTS A RECORDED DIAGNOSIS THAT WAS WRONG, and the correction is
+// the whole point of the row.  The brief for this slot stated that `std::getline`
+// "IS NOT RULE-SEARCHED AT ALL, which is a different and worse class than an
+// unmapped member", and that a key written for it "would be DEAD -- the converter
+// never asks for it".  THAT IS FALSE AS MEASURED.  The converter asks 18 times in
+// dip/dip.cpp alone and gets `None` both times, i.e. this is an ORDINARY MISSING
+// FREE-FUNCTION KEY, the same class as f8 above, and NOT the fabricated-name
+// class of `<Recv>::new_<N>`.
+//
+// WHERE THE `_99` TELL CAME FROM, since it is what motivated the wrong diagnosis:
+// the emitted call really is `getline_99(&mut s_stream, &mut substr, ',')` with
+// ZERO `fn getline_99` in the file -- but that is simply what an UNRESOLVED free
+// function looks like on the way out.  The verbose log shows the sequence
+// explicitly, in this order:
+//     search expr std::istream & std::getline(std::istream &, std::string &, char), result:
+//     None
+//     [VisitDeclRefExpr:4806] getline_99
+//     [VisitCallExpr:3381] ( unsafe { getline_99 ( & mut s_stream , ... ) } )
+// i.e. the ASK COMES FIRST and the per-decl-counter name is the FALLBACK the
+// DeclRefExpr visitor emits AFTER the search misses.  ⭐ So a fabricated
+// `name_<N>` with no definition does NOT by itself mean "never searched" --
+// the DeclRefExpr fallback is shared between "never asked" and "asked and
+// missed", and only `grep -A1` on the search line distinguishes them.  That is
+// the reusable discriminator from this row.
+//
+// WHY THE KEY IS WRITABLE, the same measured asymmetry that lands f8: `getline`
+// is a FREE function, so the `std::stringstream`/`std::ifstream` -> `std::istream &`
+// conversion happens in ARGUMENT position, where the converter emits a
+// DerivedToBase with NO cast at all.  The verbose log confirms it at the site:
+// `ImplicitCastExpr ... <DerivedToBase (basic_iostream -> basic_istream)>` in the
+// AST, and plain `&mut s_stream` in the emitted text.  A member-call receiver
+// would instead get `(recv as Cpp2RustUnmapped_std_ios)`, which is why `eof()`
+// and friends stay refused.
+//
+// TWO KEYS, NOT ONE, because the converter issues TWO DISTINCT SEARCHES: the
+// three-argument form with an explicit delimiter and the two-argument form,
+// whose delimiter is `'\n'` per [string.io].  A single rule cannot answer both
+// -- the recorded signatures differ in arity -- so f10 supplies the newline
+// default explicitly rather than defaulting a parameter (a defaulted template
+// argument is a recorded rule-authoring trap).
+//
+// ⛔ WHAT WOULD BE SILENTLY WRONG HERE: `std::getline` differs from `operator>>`
+// in TWO ways that a copy of f8 would get wrong.  It does NOT skip leading
+// whitespace, and AN EMPTY FIELD IS A SUCCESS -- `"a,,b"` split on `','` must
+// yield an empty middle token, i.e. the caller's string must be CLEARED, whereas
+// `>>` can never produce an empty token at all.  So the write-back guard cannot
+// be "did we read any bytes"; it must be the stream's own sentry result. That is
+// what `IStream::getline_reporting` returns, and it is why this row added that
+// entry point instead of reusing `extract_token_reporting`.
+// ============================================================================
+std::istream &f9(std::istream &a0, std::string &a1, char a2) {
+  return std::getline(a0, a1, a2);
+}
+std::istream &f10(std::istream &a0, std::string &a1) {
+  return std::getline(a0, a1);
+}
+
 // t5 -- `std::ios_base::seekdir` (row g478, 2 TUs).  libcxx/ios:295 is
 // `enum seekdir { beg, cur, end };` -- an UNSCOPED enum with no fixed underlying
 // type, so it promotes to `int` -> i32.  Note that g478 and g2894 report the SAME
