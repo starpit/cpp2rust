@@ -784,6 +784,68 @@ bool Converter::ConvertVarDeclSkipInit(clang::VarDecl *decl) {
 // all ALIAS in C++, and indexing a by-value temporary would silently duplicate
 // what the source shares -- a write through one binding would not be seen
 // through the other. Those stay on the loud refusal path.
+// The prvalue a reference holder's initializer binds to a TEMPORARY, or nullptr
+// when the holder aliases an object that outlives the declaration.
+//
+// ⭐ WHY THIS DISTINCTION IS THE WHOLE RELAXATION.  The scalars-only filter on
+// the reference-holder path below exists to stop a by-value lowering from
+// SILENTLY DROPPING A WRITE through an alias (see the REFERENCE paragraph
+// above).  When the holder is `const auto &` bound to a PRVALUE there is no
+// alias to drop: the pair is a temporary that nothing else can name, its
+// lifetime is extended only to cover the bindings, and clang gives the
+// BindingDecls plain non-reference `tuple_element_t` types -- i.e. C++ ITSELF
+// COPIES each element out of the temporary.  A Rust MOVE out of a by-value
+// tuple is therefore equal-or-better fidelity than the C++ copy it replaces,
+// and it is sound for a CLASS-typed element, which is exactly the case the
+// scalars-only filter was refusing.
+//
+// MEASURED SITE (util/variabledefinition/VariableDefinition.cpp:310, the last
+// remaining abort on that TU):
+//     const auto& [_, inserted] = defs.emplace(sym, std::move(newExpression));
+//   DecompositionDecl 'const std::pair<std::__hash_map_iterator<..>, bool> &'
+//   BindingDecl _        'const std::__hash_map_iterator<..>'  <- CLASS type
+//   BindingDecl inserted 'const bool'
+// `rules/unordered_map` f57 supplies the `emplace` -> `pair<iterator, bool>`
+// call and `rules/pair` t1 models the pair as a BARE RUST 2-TUPLE, so `.0`/`.1`
+// are the only sound emission and both elements are reachable by FIELD ACCESS.
+//
+// ⛔ WHY NOT THE POINTER-HOLDER FORM (`EmitVectorDecompositionBindings`, i.e.
+// `&raw const (*holder).N`) THAT THE TWO BRANCHES ABOVE USE.  Both of those
+// holders are pointers into storage that ALREADY EXISTS and outlives the
+// statement -- a container node, or a `*def` the caller owns.  Here the holder
+// IS the temporary, so a `*const` holder would have to be `&<call>()` and would
+// depend on Rust temporary-lifetime extension to not dangle; and every binding
+// would become a raw pointer needing a per-use deref, which for `inserted`
+// means the LOAD-BEARING bool is read through a pointer at every `if` that
+// tests it.  A by-value holder needs neither, and reuses the by-value emission
+// already at the bottom of this function unchanged -- so this relaxation adds
+// NO new emission machinery at all and still emits only `.0` / `.1`, never a
+// method call, and so cannot fabricate an unmapped member.
+//
+// ⛔ AND THE BOOL IS NOT DISCARDED OR INVERTED: `inserted` is bound to `.1` of
+// the very tuple f57 returns, in source order, with no negation anywhere on
+// this path -- `DT_CHECK(inserted)` at the measured site keeps testing exactly
+// what `emplace` reported.  The iterator half stays an IDENTITY because f57
+// builds it with `find_key` on the LIVE map, and moving that iterator value out
+// of a dead temporary pair does not copy the node it points at.
+static const clang::Expr *GetTemporaryHolderInit(const clang::Expr *init) {
+  if (init == nullptr) {
+    return nullptr;
+  }
+  // Deliberately NOT IgnoreParenImpCasts: an implicit cast between the
+  // temporary and the reference would be the very node that tells us a
+  // conversion happened, and only these two wrappers are known-transparent.
+  const clang::Expr *expr = init->IgnoreParens();
+  if (const auto *cleanups = clang::dyn_cast<clang::ExprWithCleanups>(expr)) {
+    expr = cleanups->getSubExpr()->IgnoreParens();
+  }
+  if (const auto *temp =
+          clang::dyn_cast<clang::MaterializeTemporaryExpr>(expr)) {
+    return temp->getSubExpr();
+  }
+  return nullptr;
+}
+
 bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
   // Only a local `let` is lowered: a file-scope or static-local decomposition
   // would need one `static mut` per binding plus the init hoisting that goes
@@ -997,8 +1059,26 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
   // any binding that is itself a reference or a class type, still ALIASES
   // observably and stays on the loud refusal path -- see the REFERENCE
   // paragraph above.
-  const bool ref_holder = type->isReferenceType();
-  if (ref_holder) {
+  bool ref_holder = type->isReferenceType();
+  // ⭐ TEMPORARY-HOLDER ARM. See GetTemporaryHolderInit above for why a
+  // reference holder bound to a prvalue is lowered BY VALUE and why that makes
+  // a CLASS-typed binding sound here when the scalars-only filter below
+  // (correctly) refuses one for a holder that aliases live storage.
+  const bool temp_holder =
+      ref_holder && type->isLValueReferenceType() &&
+      type.getNonReferenceType().isConstQualified() &&
+      GetTemporaryHolderInit(decl->getInit()) != nullptr;
+  if (temp_holder) {
+    for (const auto *binding : bindings) {
+      // A reference binding still aliases observably; those stay on the loud
+      // refusal path exactly as before.
+      if (binding->getType()->isReferenceType()) {
+        return false;
+      }
+    }
+    type = type.getNonReferenceType();
+    ref_holder = false;
+  } else if (ref_holder) {
     if (!type->isLValueReferenceType()) {
       return false;
     }
@@ -1055,6 +1135,35 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
     return false;
   }
 
+  // ⭐ THE ELEMENT-MODEL GATE for the temporary-holder arm, vetted BEFORE any
+  // emission. `Mapper::Map` is NOT usable for this: measured by `rules/
+  // unordered_map` f57, `Mapper::Map(std::pair<__hash_map_iterator<..>, bool>)`
+  // answers the UNSUBSTITUTED template text `(T1, T2)`, so it says nothing
+  // about whether the elements themselves have models -- the substitution
+  // happens inside `Convert(QualType)`. And `Mapper::Contains` on the ELEMENT is
+  // the wrong test in the other direction: it is false for a class that has no
+  // rule but IS emitted as a struct in this same TU, which is a perfectly good
+  // model. So convert the holder annotation into a throwaway Buffer and require
+  // it to be placeholder-free. That is exactly "every element's own model is a
+  // mapped value type", tested on the text that will actually be emitted.
+  //
+  // ⛔ WHY IT IS A GATE AND NOT A WARNING: `Cpp2RustUnmapped_` in a type
+  // annotation is loud, but a CLASS-typed element is precisely the case the
+  // scalars-only filter used to refuse, so accepting one whose model does not
+  // exist would trade a loud abort for a `let` of a nonexistent type. Refuse
+  // instead and let the original abort stand.
+  if (temp_holder) {
+    std::string annotation;
+    {
+      Buffer buf(*this);
+      Convert(type);
+      annotation = std::move(buf).str();
+    }
+    if (annotation.find("Cpp2RustUnmapped") != std::string::npos) {
+      return false;
+    }
+  }
+
   HoistMaterializedTempBindings hoist_temps(*this);
   // A DecompositionDecl has no name of its own.
   const std::string holder = GetDecompositionIterName(decl);
@@ -1089,8 +1198,22 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
 
   unsigned index = 0;
   for (const auto *binding : bindings) {
-    StrCat(keyword::kLet, keyword::kMut, GetNamedDeclAsString(binding),
-           token::kAssign);
+    const std::string binding_name = GetNamedDeclAsString(binding);
+    // ⛔ `let mut _ = ..;` IS NOT LEGAL RUST -- rustc rejects it with "`mut`
+    // must be followed by a named binding", because `_` is a wildcard PATTERN
+    // and not an identifier. `_` is a real identifier in C++ and is the
+    // conventional spelling for the element of a structured binding the caller
+    // does not use, so it reaches here verbatim: measured at
+    // VariableDefinition.cpp:310, `const auto& [_, inserted] = ..`. Emit the
+    // wildcard without `mut`; it discards the element, which is what the source
+    // asked for. If the C++ did name `_` and then USE it, VisitDeclRefExpr
+    // spells it `_`, which is a hard rustc error in expression position -- i.e.
+    // that case FAILS LOUDLY rather than being silently miscompiled.
+    if (binding_name == "_") {
+      StrCat(keyword::kLet, "_", token::kAssign);
+    } else {
+      StrCat(keyword::kLet, keyword::kMut, binding_name, token::kAssign);
+    }
     // The holder is a raw pointer when it came from a reference, so the element
     // is reached through a deref. Reading through the pointer (rather than
     // copying the holder first) is also what keeps the binding observing the
