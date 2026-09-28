@@ -2594,3 +2594,26 @@ fn t340() -> *mut ::libc::c_void {
 fn f240(a0: *mut ::libc::c_void) -> *mut ::libc::c_void {
     a0
 }
+
+// t420-t422: a NULL-HANDLE model for the three `mlir::memref` ODS op wrappers.  See src.cpp for
+// what the 8 sites do after the default-construct, why `Option<fmt::OpInst>` is rejected (the two
+// `mc` sites MUTATE THROUGH THE HANDLE: `mc.erase()`, `sel.getResult().setType(...)`), and why
+// this needs NO `fN` -- `*mut T` implements `Default` as `null_mut()` in std, VERIFIED by
+// compiling `let p: *mut Foo = <*mut Foo>::default();` (rc=0, `is_null()` true).  That is the whole
+// difference from f42/f137/f138, whose `ir::Ty`/`ir::Attr` enum targets have no `Default`.
+// The representation is BIT-FOR-BIT t36's (`mlir::Operation *`, :503), because an ODS op wrapper IS
+// an `Operation *` plus a static type assertion -- `OpState` holds exactly one `Operation *`.  The
+// init is the NULL POINTER: a default-constructed MLIR op wrapper is `state == nullptr`, so this is
+// the faithful default and a `dyn_cast` against it is the one that must FAIL.
+// ⚠️ NO MEMBER IS KEYED, the t166 / t243-t246 discipline.
+fn t420() -> *mut dataflowir_gen::fmt::OpInst {
+    ::std::ptr::null_mut()
+}
+
+fn t421() -> *mut dataflowir_gen::fmt::OpInst {
+    ::std::ptr::null_mut()
+}
+
+fn t422() -> *mut dataflowir_gen::fmt::OpInst {
+    ::std::ptr::null_mut()
+}

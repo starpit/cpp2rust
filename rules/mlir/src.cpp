@@ -4845,11 +4845,108 @@ using t400 = mlir::detail::SymbolOpInterfaceTrait<mlir::ktdf_arch::DeviceOp>;
 // would have to return `OpInst::new(<DEF>)` -- a REAL op instance standing for a
 // DEFAULT-CONSTRUCTED MLIR op wrapper, which in MLIR is a NULL handle (`state == nullptr`).  Every
 // null test on such a local would then read as a live op.  These three need a null-handle model for
-// the ODS op wrappers first; until that exists they must stay LOUD, which is what leaving the key
-// out achieves.  ⛔ And the `llvm::function_ref<std::unique_ptr<ktdf_arch::DeviceView>(const
+// the ODS op wrappers first; ⭐ THAT MODEL IS NOW WRITTEN -- see t420-t422 immediately below, which
+// LAND these three.  The paragraph above is kept because its reasoning is still the reason the
+// OBVIOUS fix (an `fN` returning `OpInst::new(DEF)`) is refused; what changed is that a null handle
+// turns out to need NO `fN` AT ALL.  ⛔ And the `llvm::function_ref<std::unique_ptr<ktdf_arch::DeviceView>(const
 // ktdf_arch::Device &)>` row is out on the ORIGINAL ground, undisturbed by ee457cc: `DeviceView`
 // and `Device` are not ODS ops, so `grep -cE '^ *pub struct mlir_ktdf_arch_Device(View)?;'` is 0
 // and that IS still an absent DEF.
+
+// ---------------------------------------------------------------------------
+// t420 / t421 / t422 -- A NULL-HANDLE MODEL FOR THE ODS OP WRAPPERS, applied to the three
+// `mlir::memref` cast ops the paragraph above left out.  8 sites, ALL in one file
+// (dataflow-scheduler/lib/Conversion/backend/ScheduleIRToDFIR/KTDFLowToDFIR/
+// LogicalMemoryViewBuilder.cpp): MemorySpaceCastOp 3, CastOp 3, ReinterpretCastOp 2.  Counted
+// `grep -o` on the EMITTED `.rs`, not on a queue `searched as:` line; the three names have no
+// longer spelling in the corpus, and `CastOp` is NOT a substring problem here because
+// `MemorySpaceCastOp` / `ReinterpretCastOp` are matched by their own full `grep -o` and the
+// `Cpp2RustUnmapped_mlir_memref_CastOp` anchor carries the `memref_` prefix.
+//
+// ⭐ WHAT THE SITES ACTUALLY DO, read off the emitted unsafe `.rs` (lines 15229-15291), because
+// this is what picks the representation and it is NOT what "cast target" would suggest:
+//     let mut msc: <T> = <T>::default();                      // DEFAULT-CONSTRUCT  (the null)
+//     msc = (unsafe { dyn_cast_344(user) });                  // overwrite
+//     if (unsafe { (msc as fmt::OpInst).to_bool() }) break;   // operator bool
+//     if !(unsafe { (msc as fmt::OpInst).to_bool() }) { ...emitError... }   // operator!
+//     (unsafe { msc.getDest() }) as ir::Value                 // MEMBER, then
+//     mc.getDest().replaceAllUsesWith(...); mc.erase();       // MUTATION THROUGH THE HANDLE
+//
+// ⭐ THE SHAPE, DECIDED ON THAT EVIDENCE: `libcc2rs::Ptr<fmt::OpInst>` / `*mut fmt::OpInst`, i.e.
+// BIT-FOR-BIT t36's representation of `mlir::Operation *` (tgt_refcount.rs:493).  That is the
+// right answer for a reason stronger than analogy: an ODS op wrapper IS an `Operation *` plus a
+// static type assertion -- `OpState` holds exactly one `Operation *` member and every wrapper
+// derives from it -- so the wrapper's representation is `Operation *`'s representation, and
+// t243-t246 already model an UNPOSITIONED iterator the same way (`Ptr::null()` / `null_mut()`).
+//
+// ⛔ `Option<fmt::OpInst>` WAS CONSIDERED AND IS REJECTED, and the two `mc` sites are what reject
+// it: `mc.erase()` and `sel.getResult().setType(...)` MUTATE THROUGH THE HANDLE, and they must be
+// visible to the block that owns the op.  An `Option<OpInst>` is a BY-VALUE copy (fmt.rs:390
+// derives `Clone`), so `erase()` would erase a copy and the block would keep the op -- the same
+// class of semantic lie as `OpInst::new(DEF)`, just quieter.  A non-owning handle INTO the Vec the
+// block already is does not have that failure mode.  ⭐ And `Ptr::borrow_vec` / `Ptr::with_ref` /
+// `with_mut_ref` (libcc2rs 34e592b3 / b8a5953b) make this shape usable for a NON-POD payload:
+// there is no `T: ByteRepr` bound on the deref path, which matters because `fmt::OpInst` does not
+// implement it.  Liveness, not lifetimes: an access outliving the owner PANICS
+// (`weak.upgrade().expect("ub: dangling pointer")`) rather than reading freed memory.
+//
+// ⭐⭐ AND THE REASON THIS NEEDS **NO `fN`** -- the single fact that makes the row landable, and the
+// one the f42 note could not have known.  The emitted default-construct is
+// `<T>::default()`, NOT `<T>::new()` (readback above, and `grep -c '_memref_[A-Za-z]*Op>::new('`
+// on the emitted file is 0), and BOTH targets implement `Default` WITH THE NULL AS THE DEFAULT:
+//   * `impl<T> Default for Ptr<T>` (libcc2rs rc.rs:148) builds `offset: 0, kind: Default::default()`,
+//     and `PtrKind::Null` carries `#[default]` (rc.rs:26-28) -- so `Ptr::default() == Ptr::null()`
+//     EXACTLY, and the impl has NO `T` bound at all.
+//   * `*mut T` implements `Default` as `null_mut()` in std -- VERIFIED by compiling
+//     `let p: *mut Foo = <*mut Foo>::default(); p.is_null()`, rc=0, prints `true`.
+// ⛔ THAT IS THE WHOLE DIFFERENCE FROM f42 / f137 / f138.  Those three needed an `fN` because their
+// targets are `ir::Ty` / `ir::Attr`, ENUMS WITH NO `Default`, so `::default()` did not resolve and a
+// body had to be supplied.  A nullable handle gets its honest default FOR FREE, which is why the
+// null-handle model dissolves the rc=0-then-E0433 trap instead of merely relocating it.
+//
+// ⚠️ WHAT THIS DOES **NOT** BUY, stated plainly because the row was set to test rustc and not the
+// census: THE WITNESS FILE STILL DOES NOT COMPILE, and it never could have from these three keys.
+// Measured on the BEFORE emission, all three defects PRE-EXIST and none is introduced or removed
+// by t420-t422:
+//   1. `mlir::dyn_cast` IS ITSELF UNMAPPED.  The file contains **101 calls** to fabricated
+//      `dyn_cast_<N>` names and **ZERO** `fn dyn_cast` definitions -- every one an E0425.  That is
+//      the SETTLED absence already recorded at src.cpp:948-949 ("NO rules module anywhere keys a
+//      `dyn_cast` free template function"), so it is not this row's to close.
+//   2. `(msc as fmt::OpInst)` is a NON-PRIMITIVE CAST (E0605).  It is how the converter spells the
+//      upcast to the `OpState` base, and it is emitted for MAPPED ODS ops in the same file too
+//      (`(cmv as fmt::OpInst).emitError(...)`, where `cmv` is the generated
+//      `mlir_ktdp_ConstructMemoryViewOp`), so it is converter-side and TYPE-INDEPENDENT.
+//   3. `msc.getDest()` / `rc.getResult()` are UNMAPPED MEMBERS, emitted TEXTUALLY at rc=0 with no
+//      placeholder token (the class recorded at rules/mlir t63).  Deliberately NOT guessed here --
+//      the t166 / t243-t246 discipline: type keys only, members stay loud.
+// ⭐ SO `dyn_cast` CORRECTLY FAILING ON THE NULL IS TRUE BY REPRESENTATION BUT NOT YET OBSERVABLE:
+// `Ptr::null()`/`null_mut()` is the value any honest `dyn_cast` miss would return and `is_null()`
+// answers it, but no `dyn_cast` rule exists to exercise it.  What the keys DO buy is that the
+// default-construct is now an HONEST NULL rather than an undeclared placeholder -- and, decisively,
+// that the three sites can never be "fixed" later by a live-op sentinel, which is the outcome the
+// paragraph above was written to prevent.
+//
+// SWALLOW-SAFETY: all three keys are FULLY CONCRETE, placeholder arity 0, so `matchTemplate`'s
+// same-depth capture (mapper.cpp:173) never runs.  `GetTypeMapKey` truncates at the first `<` and
+// none of the three has one, so each occupies its own bucket; no defaulted template argument is
+// spelled, so `SuppressDefaultTemplateArgs` cannot produce a dead duplicate.
+namespace mlir {
+namespace memref {
+// The three ODS-generated `mlir::memref` cast ops, declared ONLY so t420-t422 can be SPELLED --
+// the t161 / t400 reason and nothing more.  No member of any of them is mapped.  ⚠️ `namespace
+// memref` is opened here for the first time in this file; none of these three is declared
+// elsewhere in it.
+class CastOp {};
+class MemorySpaceCastOp {};
+class ReinterpretCastOp {};
+} // namespace memref
+} // namespace mlir
+// t420 -- Cpp2RustUnmapped_mlir_memref_MemorySpaceCastOp, 3 sites / 1 file.
+using t420 = mlir::memref::MemorySpaceCastOp;
+// t421 -- Cpp2RustUnmapped_mlir_memref_CastOp, 3 sites / 1 file.
+using t421 = mlir::memref::CastOp;
+// t422 -- Cpp2RustUnmapped_mlir_memref_ReinterpretCastOp, 2 sites / 1 file.
+using t422 = mlir::memref::ReinterpretCastOp;
 
 // ---------------------------------------------------------------------------
 // t236-t242 -- `llvm::SmallSet` and `llvm::detail::DenseSetImpl`, the two
