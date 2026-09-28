@@ -105,3 +105,10 @@ unsafe fn f19<T1>(a0: (), a1: &Option<Box<T1>>) -> bool {
     let _: () = a0;
     a1.is_some()
 }
+
+// f20 -- unique_ptr<T1>(nullptr).  The nullptr_t operand is `()` and unused;
+// a null unique_ptr owns nothing, so this is the same empty value as f10.
+unsafe fn f20<T1>(a0: ()) -> Option<Box<T1>> {
+    let _: () = a0;
+    None
+}

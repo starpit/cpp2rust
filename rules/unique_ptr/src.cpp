@@ -104,3 +104,34 @@ template <typename T1>
 bool f19(std::nullptr_t n, const std::unique_ptr<T1> &o) {
   return operator!=(n, o);
 }
+
+// ---------------------------------------------------------------------------
+// f20 -- `std::unique_ptr<T1>(std::nullptr_t)`.
+//
+// The ctor OVERLOAD the `::new_N` fabrication class was missing for this module
+// (FABRICATED-NEWN.md: 234 sites / 117 files at receiver
+// `std_unique_ptr_std_string__std_default_delete_std_string__`).  The 117 files
+// are ONE C++ row: the inline `InstrInfo::operator=(const InstrInfo &)` in
+// sys-arch-spec/progir/progir.h:292-294, re-emitted per including TU, whose
+// ternary
+//     comment_ = other.comment_ ? std::make_unique<std::string>(*other.comment_)
+//                               : nullptr;
+// converts the `nullptr` arm to `unique_ptr<std::string>`, i.e. exactly this
+// ctor.  `f10` (the default ctor) already exists and RESOLVES; this overload did
+// not, so the converter emitted
+//     std_unique_ptr_std_string__std_default_delete_std_string__::new_1({
+//         Default::default() })
+// -- a function defined nowhere -- at rc=0 with no placeholder token.
+//
+// Same shape, same fix as rules/shared_ptr f20.  `std::nullptr_t` carries no
+// information (the converter emits the `nullptr` literal as
+// `Default::default()`), so the target binds that operand to `()` and leaves it
+// deliberately unused.
+//
+// OWNERSHIP (the refusal criterion for this module): a null unique_ptr owns
+// NOTHING.  No pointer is transferred in, none is duplicated, and the result is
+// the same empty `Option` that `f10` yields, so there is no observer of a
+// double-free, a leak, or two live owners.  Safe to express.
+template <typename T1> std::unique_ptr<T1> f20(std::nullptr_t n) {
+  return std::unique_ptr<T1>(n);
+}
