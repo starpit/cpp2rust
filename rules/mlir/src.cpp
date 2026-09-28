@@ -4225,3 +4225,246 @@ mlir::ValueRange f145(std::vector<mlir::Value> &a0) {
 // THE RECEIVER IS `const` AND ARRIVES BY VALUE, exactly as for f11
 // (`bool mlir::Attribute::operator!() const`) whose target likewise takes a0.
 llvm::APInt f146(const mlir::IntegerAttr &a) { return a.getValue(); }
+
+// ============================================================================================
+// t167-t216 -- `mlir::OpTrait::OneTypedResult<ResultType>::Impl<ConcreteOp>`, FIFTY concrete
+// instantiations.  ROWS g081 / g096 / g112, REOPENED: the refusal block at :3546 concluded
+// "dead key" from the member-read check alone and that conclusion is OVERTURNED by the emitted
+// corpus -- read the CORRECTION at :3613 before touching any of this.  These rows were not
+// aborting, they were FABRICATING, and the fabricated identifiers were in rc=0 output.
+//
+// MEASUREMENT, re-run 2026-09-28 over `/home/agent/work/verify0928/out`, anchored to the
+// STANDALONE prefix `(^|[^A-Za-z0-9_])Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_` (NOT the
+// same text as the substring inside the much longer `Cpp2RustUnmapped_mlir_Op_<Op>__<traits>_`
+// names of the separately-unkeyed `mlir::Op<...>` -- counting them together measures two
+// defects at once):
+//     465 occurrences, 21 files, 75 DISTINCT SPELLINGS.
+// ⚠️ THE EARLIER FIGURE OF "407 / 8 files / 53 spellings" AT :3624 IS NOW STALE and undercounts
+// by 1.4x on spellings: the emitted corpus has grown since it was taken.  A fourth outer
+// `ResultType` also appeared that the 53-count never saw (`mlir::MemRefType`), so the outer arg
+// set is `mlir::Type` / `mlir::VectorType` / `mlir::IndexType` / `mlir::MemRefType`, not three.
+//
+// EVERY occurrence is in CAST-TARGET (type) POSITION -- the implicit derived-to-base upcast of
+// an op to its trait base.  NO MEMBER IS EVER READ, which is exactly what makes these keys
+// cheap: each site needs a NAME for the cast target and NO MEMBER RULES AT ALL.
+//
+// ⛔ MONOMORPHIC, NEVER GENERIC, and the reason is a measured failure not a preference.
+// `GetTypeMapKey` (mapper.cpp:115) truncates a type key at the first `<`, so every one of these
+// lands in the bucket `mlir::OpTrait::OneTypedResult`, which was EMPTY before this block.  A
+// generic `OneTypedResult<T1>::Impl<T2>` would therefore be the SOLE candidate in that bucket,
+// where `search()`'s longer-src tie-break (mapper.cpp:430-437) CANNOT protect it -- that is the
+// `DenseMapInfo` densemap failure verbatim (a short key ate `llvm::StringRef, void`).  Written
+// fully concrete, placeholder arity is 0, so `matchTemplate`'s capture
+// (`findNextLiteralSameDepth`, :173) never runs and the swallow cannot occur at all.  t166 (a
+// nested comma-bearing `PointerUnion<...>`) and t37-t39 are the proven-safe precedent.
+//
+// TARGET MODEL: the CONCRETE OP'S OWN DEF, `fmt::OpInst::new(<ops::mlir_<d>_<Op> as
+// MlirOp>::DEF)` -- exactly the t161/t162 precedent (t162 maps `arith::ConstantIndexOp` onto
+// `mlir_arith_ConstantOp`'s DEF).  Nothing new is claimed: the trait base of an op IS that op.
+//
+// ⛔⛔ 25 OF THE 75 SPELLINGS ARE DELIBERATELY NOT KEYED, AND THIS IS THE FINDING THAT WOULD
+// HAVE BROKEN A BLIND SWEEP.  A key naming an absent DEF records fine, passes the load smoke
+// test, and THEN FAILS AT rustc.  Checked per op with `grep -cE "struct <op>\b"` against
+//   repos/dt_src/cpp2rust-port/dataflowir-gen/target/debug/build/
+//     dataflowir-gen-654e676bccb4a05f/out/dataflow_ods.rs
+// -- THREE WHOLE DIALECTS have no generated DEF for any of their ops:
+//     mlir::LLVM    15 spellings, 35 occurrences  (UndefOp ConstantOp ZExtOp TruncOp ShlOp
+//                   LShrOp OrOp AndOp AddOp ICmpOp FCmpOp BitcastOp PtrToIntOp IntToPtrOp
+//                   InsertValueOp)                        -> 0 hits each
+//     mlir::math     6 spellings,  6 occurrences  (AbsIOp AbsFOp ExpOp TanhOp LogOp SqrtOp)
+//     mlir::memref   4 spellings,  4 occurrences  (LoadOp AllocOp GetGlobalOp
+//                   ExtractAlignedPointerAsIndexOp)
+// ⚠️ An earlier note flagged only TWO absent DEFs (`mlir_LLVM_UndefOp`, `mlir_math_AbsIOp`)
+// because it SPOT-CHECKED eleven ops; the real shape is whole-dialect, 25 of 75.  That is a
+// dataflowir-gen `.td` COVERAGE GAP, not a rules gap, and those 45 occurrences must stay LOUD
+// so the coverage question keeps its evidence.  ⭐ VERIFY THE DEF EXISTS BEFORE ADDING ANY KEY
+// HERE; the grep is cheap and it is the difference between a landing and a regression.
+//
+// ⛔ t25's PROHIBITION CARRIES TO ALL FIFTY: no `operator==`, no `operator!=`, no identity test,
+// and NO MEMBER.  A C++ op handle compares `Operation *`; an `OpInst` is an op's printed
+// CONTENT.  No `fN` either -- nothing constructs a trait base, these are upcast targets only.
+// ============================================================================================
+namespace mlir {
+// mlir/IR/OpDefinition.h:698-706 -- `template <typename ResultType> class OneTypedResult {
+// public: template <typename ConcreteType> class Impl : public TraitBase<...> { ... }; };`.
+// Declared here ONLY so the fifty keys below can be SPELLED; it is a pure tag base in the model
+// (no state, one `Operation *` through the op it is mixed into) and no member of it is mapped.
+namespace OpTrait {
+template <typename ResultType> class OneTypedResult {
+public:
+  template <typename ConcreteType> class Impl {};
+};
+} // namespace OpTrait
+
+// The ODS-generated op classes the fifty keys name, each one `Operation *` through its OpState
+// base, declared for the t161 reason and nothing more.  `arith::ConstantOp` is NOT redeclared
+// here -- it already exists at :2902 and a second declaration would be a duplicate.
+namespace arith {
+class AddFOp {};
+class AddIOp {};
+class AndIOp {};
+class BitcastOp {};
+class CmpFOp {};
+class CmpIOp {};
+class DivFOp {};
+class DivSIOp {};
+class ExtFOp {};
+class ExtSIOp {};
+class IndexCastOp {};
+class MaxSIOp {};
+class MaximumFOp {};
+class MinSIOp {};
+class MinimumFOp {};
+class MulFOp {};
+class MulIOp {};
+class NegFOp {};
+class OrIOp {};
+class RemSIOp {};
+class RemUIOp {};
+class SelectOp {};
+class ShRSIOp {};
+class SubFOp {};
+class SubIOp {};
+class TruncFOp {};
+class TruncIOp {};
+class XOrIOp {};
+} // namespace arith
+
+namespace vector {
+class BitCastOp {};
+class ExtractOp {};
+class ExtractStridedSliceOp {};
+class FromElementsOp {};
+class InsertOp {};
+class InsertStridedSliceOp {};
+class LoadOp {};
+class ShapeCastOp {};
+class ShuffleOp {};
+} // namespace vector
+
+namespace sentient {
+class ConstantOp {};
+} // namespace sentient
+
+namespace dataflow {
+class GetLocalUnitOp {};
+class GetLogicalMemoryViewOp {};
+class ReceiveOp {};
+} // namespace dataflow
+
+namespace vectorchain {
+class CreateAffineMaskOp {};
+class MultiplyAndAccumulateOp {};
+class MultiplyOp {};
+class PackOp {};
+class RotateOp {};
+class SelectOp {};
+class ShuffleOp {};
+} // namespace vectorchain
+
+namespace uniform {
+class DefImmutableMappingOp {};
+} // namespace uniform
+
+} // namespace mlir
+
+// t167 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_ConstantOp_, 122 occurrences.  DEF `ops::mlir_arith_ConstantOp` present.
+using t167 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::ConstantOp>;
+// t168 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_SelectOp_, 23 occurrences.  DEF `ops::mlir_arith_SelectOp` present.
+using t168 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::SelectOp>;
+// t169 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_vector_ExtractOp_, 23 occurrences.  DEF `ops::mlir_vector_ExtractOp` present.
+using t169 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::vector::ExtractOp>;
+// t170 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_sentient_ConstantOp_, 19 occurrences.  DEF `ops::mlir_sentient_ConstantOp` present.
+using t170 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::sentient::ConstantOp>;
+// t171 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_CmpIOp_, 17 occurrences.  DEF `ops::mlir_arith_CmpIOp` present.
+using t171 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::CmpIOp>;
+// t172 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_MulIOp_, 16 occurrences.  DEF `ops::mlir_arith_MulIOp` present.
+using t172 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::MulIOp>;
+// t173 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_VectorType__Impl_mlir_vector_InsertOp_, 14 occurrences.  DEF `ops::mlir_vector_InsertOp` present.
+using t173 = mlir::OpTrait::OneTypedResult<mlir::VectorType>::Impl<mlir::vector::InsertOp>;
+// t174 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_AddIOp_, 13 occurrences.  DEF `ops::mlir_arith_AddIOp` present.
+using t174 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::AddIOp>;
+// t175 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_dataflow_GetLogicalMemoryViewOp_, 11 occurrences.  DEF `ops::mlir_dataflow_GetLogicalMemoryViewOp` present.
+using t175 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::dataflow::GetLogicalMemoryViewOp>;
+// t176 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_vectorchain_ShuffleOp_, 11 occurrences.  DEF `ops::mlir_vectorchain_ShuffleOp` present.
+using t176 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::vectorchain::ShuffleOp>;
+// t177 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_VectorType__Impl_mlir_vector_ShapeCastOp_, 10 occurrences.  DEF `ops::mlir_vector_ShapeCastOp` present.
+using t177 = mlir::OpTrait::OneTypedResult<mlir::VectorType>::Impl<mlir::vector::ShapeCastOp>;
+// t178 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_AddFOp_, 9 occurrences.  DEF `ops::mlir_arith_AddFOp` present.
+using t178 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::AddFOp>;
+// t179 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_MulFOp_, 9 occurrences.  DEF `ops::mlir_arith_MulFOp` present.
+using t179 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::MulFOp>;
+// t180 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_SubIOp_, 7 occurrences.  DEF `ops::mlir_arith_SubIOp` present.
+using t180 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::SubIOp>;
+// t181 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_vectorchain_RotateOp_, 7 occurrences.  DEF `ops::mlir_vectorchain_RotateOp` present.
+using t181 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::vectorchain::RotateOp>;
+// t182 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_TruncIOp_, 7 occurrences.  DEF `ops::mlir_arith_TruncIOp` present.
+using t182 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::TruncIOp>;
+// t183 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_VectorType__Impl_mlir_vector_BitCastOp_, 6 occurrences.  DEF `ops::mlir_vector_BitCastOp` present.
+using t183 = mlir::OpTrait::OneTypedResult<mlir::VectorType>::Impl<mlir::vector::BitCastOp>;
+// t184 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_XOrIOp_, 6 occurrences.  DEF `ops::mlir_arith_XOrIOp` present.
+using t184 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::XOrIOp>;
+// t185 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_IndexCastOp_, 6 occurrences.  DEF `ops::mlir_arith_IndexCastOp` present.
+using t185 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::IndexCastOp>;
+// t186 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_ExtSIOp_, 5 occurrences.  DEF `ops::mlir_arith_ExtSIOp` present.
+using t186 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::ExtSIOp>;
+// t187 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_BitcastOp_, 5 occurrences.  DEF `ops::mlir_arith_BitcastOp` present.
+using t187 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::BitcastOp>;
+// t188 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_DivFOp_, 5 occurrences.  DEF `ops::mlir_arith_DivFOp` present.
+using t188 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::DivFOp>;
+// t189 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_dataflow_ReceiveOp_, 4 occurrences.  DEF `ops::mlir_dataflow_ReceiveOp` present.
+using t189 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::dataflow::ReceiveOp>;
+// t190 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_CmpFOp_, 4 occurrences.  DEF `ops::mlir_arith_CmpFOp` present.
+using t190 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::CmpFOp>;
+// t191 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_AndIOp_, 4 occurrences.  DEF `ops::mlir_arith_AndIOp` present.
+using t191 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::AndIOp>;
+// t192 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_DivSIOp_, 4 occurrences.  DEF `ops::mlir_arith_DivSIOp` present.
+using t192 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::DivSIOp>;
+// t193 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_NegFOp_, 3 occurrences.  DEF `ops::mlir_arith_NegFOp` present.
+using t193 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::NegFOp>;
+// t194 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_MinimumFOp_, 3 occurrences.  DEF `ops::mlir_arith_MinimumFOp` present.
+using t194 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::MinimumFOp>;
+// t195 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_MinSIOp_, 3 occurrences.  DEF `ops::mlir_arith_MinSIOp` present.
+using t195 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::MinSIOp>;
+// t196 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_MaximumFOp_, 3 occurrences.  DEF `ops::mlir_arith_MaximumFOp` present.
+using t196 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::MaximumFOp>;
+// t197 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_MaxSIOp_, 3 occurrences.  DEF `ops::mlir_arith_MaxSIOp` present.
+using t197 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::MaxSIOp>;
+// t198 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_OrIOp_, 3 occurrences.  DEF `ops::mlir_arith_OrIOp` present.
+using t198 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::OrIOp>;
+// t199 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_RemUIOp_, 3 occurrences.  DEF `ops::mlir_arith_RemUIOp` present.
+using t199 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::RemUIOp>;
+// t200 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_VectorType__Impl_mlir_vector_ExtractStridedSliceOp_, 3 occurrences.  DEF `ops::mlir_vector_ExtractStridedSliceOp` present.
+using t200 = mlir::OpTrait::OneTypedResult<mlir::VectorType>::Impl<mlir::vector::ExtractStridedSliceOp>;
+// t201 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_VectorType__Impl_mlir_vector_InsertStridedSliceOp_, 3 occurrences.  DEF `ops::mlir_vector_InsertStridedSliceOp` present.
+using t201 = mlir::OpTrait::OneTypedResult<mlir::VectorType>::Impl<mlir::vector::InsertStridedSliceOp>;
+// t202 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_ExtFOp_, 2 occurrences.  DEF `ops::mlir_arith_ExtFOp` present.
+using t202 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::ExtFOp>;
+// t203 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_TruncFOp_, 2 occurrences.  DEF `ops::mlir_arith_TruncFOp` present.
+using t203 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::TruncFOp>;
+// t204 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_SubFOp_, 2 occurrences.  DEF `ops::mlir_arith_SubFOp` present.
+using t204 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::SubFOp>;
+// t205 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_ShRSIOp_, 2 occurrences.  DEF `ops::mlir_arith_ShRSIOp` present.
+using t205 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::ShRSIOp>;
+// t206 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_vectorchain_MultiplyOp_, 2 occurrences.  DEF `ops::mlir_vectorchain_MultiplyOp` present.
+using t206 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::vectorchain::MultiplyOp>;
+// t207 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_vectorchain_MultiplyAndAccumulateOp_, 2 occurrences.  DEF `ops::mlir_vectorchain_MultiplyAndAccumulateOp` present.
+using t207 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::vectorchain::MultiplyAndAccumulateOp>;
+// t208 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_VectorType__Impl_mlir_vectorchain_CreateAffineMaskOp_, 2 occurrences.  DEF `ops::mlir_vectorchain_CreateAffineMaskOp` present.
+using t208 = mlir::OpTrait::OneTypedResult<mlir::VectorType>::Impl<mlir::vectorchain::CreateAffineMaskOp>;
+// t209 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_vectorchain_SelectOp_, 2 occurrences.  DEF `ops::mlir_vectorchain_SelectOp` present.
+using t209 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::vectorchain::SelectOp>;
+// t210 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_vectorchain_PackOp_, 2 occurrences.  DEF `ops::mlir_vectorchain_PackOp` present.
+using t210 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::vectorchain::PackOp>;
+// t211 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_IndexType__Impl_mlir_uniform_DefImmutableMappingOp_, 2 occurrences.  DEF `ops::mlir_uniform_DefImmutableMappingOp` present.
+using t211 = mlir::OpTrait::OneTypedResult<mlir::IndexType>::Impl<mlir::uniform::DefImmutableMappingOp>;
+// t212 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_IndexType__Impl_mlir_dataflow_GetLocalUnitOp_, 2 occurrences.  DEF `ops::mlir_dataflow_GetLocalUnitOp` present.
+using t212 = mlir::OpTrait::OneTypedResult<mlir::IndexType>::Impl<mlir::dataflow::GetLocalUnitOp>;
+// t213 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_Type__Impl_mlir_arith_RemSIOp_, 1 occurrence.  DEF `ops::mlir_arith_RemSIOp` present.
+using t213 = mlir::OpTrait::OneTypedResult<mlir::Type>::Impl<mlir::arith::RemSIOp>;
+// t214 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_VectorType__Impl_mlir_vector_LoadOp_, 1 occurrence.  DEF `ops::mlir_vector_LoadOp` present.
+using t214 = mlir::OpTrait::OneTypedResult<mlir::VectorType>::Impl<mlir::vector::LoadOp>;
+// t215 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_VectorType__Impl_mlir_vector_FromElementsOp_, 1 occurrence.  DEF `ops::mlir_vector_FromElementsOp` present.
+using t215 = mlir::OpTrait::OneTypedResult<mlir::VectorType>::Impl<mlir::vector::FromElementsOp>;
+// t216 -- Cpp2RustUnmapped_mlir_OpTrait_OneTypedResult_mlir_VectorType__Impl_mlir_vector_ShuffleOp_, 1 occurrence.  DEF `ops::mlir_vector_ShuffleOp` present.
+using t216 = mlir::OpTrait::OneTypedResult<mlir::VectorType>::Impl<mlir::vector::ShuffleOp>;

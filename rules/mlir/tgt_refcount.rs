@@ -1800,3 +1800,317 @@ fn f146(a0: dataflowir_gen::ir::Attr) -> libcc2rs::APInt {
         ),
     }
 }
+
+// ============================================================================================
+// t167-t216 -- the fifty `mlir::OpTrait::OneTypedResult<RT>::Impl<ConcreteOp>` trait bases ->
+// `fmt::OpInst`.  Each body is the t161/t162 body with the CONCRETE OP'S OWN `DEF`, because the
+// trait base of an op IS that op -- no new representation is introduced and nothing is claimed
+// beyond what t161 already claims.  Every corpus occurrence is a CAST TARGET and no member is
+// ever read, so these expressions exist only to type-check their type keys; t25's prohibition
+// (no equality, no identity, no member) carries to all fifty.
+// ⛔ Each op's `DEF` was verified to EXIST in dataflow_ods.rs before its key was written -- a
+// key naming an absent DEF records fine, passes the load smoke test, and fails at rustc.  The
+// 25 spellings whose dialects (`mlir::LLVM`, `mlir::math`, `mlir::memref`) have NO generated DEF
+// are deliberately unkeyed and stay loud; see src.cpp at t167 for the per-dialect measurement.
+// ⚠️ Plain `fn`, not `unsafe fn`: the t37-t39 / t166 convention for a TYPE rule.
+// ============================================================================================
+fn t167() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_ConstantOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t168() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_SelectOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t169() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_vector_ExtractOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t170() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_sentient_ConstantOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t171() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_CmpIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t172() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_MulIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t173() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_vector_InsertOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t174() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_AddIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t175() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_dataflow_GetLogicalMemoryViewOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t176() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_vectorchain_ShuffleOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t177() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_vector_ShapeCastOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t178() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_AddFOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t179() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_MulFOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t180() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_SubIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t181() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_vectorchain_RotateOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t182() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_TruncIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t183() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_vector_BitCastOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t184() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_XOrIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t185() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_IndexCastOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t186() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_ExtSIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t187() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_BitcastOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t188() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_DivFOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t189() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_dataflow_ReceiveOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t190() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_CmpFOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t191() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_AndIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t192() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_DivSIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t193() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_NegFOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t194() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_MinimumFOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t195() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_MinSIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t196() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_MaximumFOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t197() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_MaxSIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t198() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_OrIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t199() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_RemUIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t200() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_vector_ExtractStridedSliceOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t201() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_vector_InsertStridedSliceOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t202() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_ExtFOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t203() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_TruncFOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t204() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_SubFOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t205() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_ShRSIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t206() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_vectorchain_MultiplyOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t207() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_vectorchain_MultiplyAndAccumulateOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t208() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_vectorchain_CreateAffineMaskOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t209() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_vectorchain_SelectOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t210() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_vectorchain_PackOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t211() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_uniform_DefImmutableMappingOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t212() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_dataflow_GetLocalUnitOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t213() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_RemSIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t214() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_vector_LoadOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t215() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_vector_FromElementsOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+fn t216() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_vector_ShuffleOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
