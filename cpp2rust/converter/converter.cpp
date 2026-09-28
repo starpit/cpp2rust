@@ -153,6 +153,70 @@ bool Converter::Convert(clang::QualType qual_type) {
   bool res = TraverseType(qual_type);
   if (rs_code_->size() == before) {
     const std::string cpp = Mapper::ToString(qual_type);
+    // BEFORE the placeholder: a PROJECT tag decl that this very TU also PORTS
+    // and EMITS. This is a CONVERSION-ORDER miss, not a missing model: the
+    // biggest placeholder names measured over the corpus
+    // (`Isa::InstOperand` 40 A-TUs, `SenTargets` 35, `DataConvertOpFuncs` 35,
+    // `DataFormats` 31, `OperandAttr::Type` 26 -- all first-party enums) reach
+    // here only because `VisitEnumDecl` (which emits `pub type <name> = <int>;`
+    // plus a `pub const <name>_<enumerator>` each) has not run yet, so
+    // `Mapper::Map` misses; and there is NO `VisitEnumType` in this converter,
+    // so `TraverseType` emits zero tokens. Measured: 165 of the 167 (TU, name)
+    // pairs carrying one of those placeholders ALSO carry the matching
+    // `pub type` IN THE SAME FILE (Rust items are order-independent, so the
+    // name resolves) -- e.g. `util__sendefs__numeric_convert.cpp.rs` has
+    // `Cpp2RustUnmapped_DataFormats` at line 737 and `pub type DataFormats =
+    // i32;` 198 lines below it.
+    //
+    // This is byte-for-byte the branch at mapper.cpp:1604-1631, which is why
+    // the `Sentient*` I32EnumAttrs in the same logs already get a PORTED name
+    // and no placeholder. Two things it deliberately does NOT do:
+    //   * It does NOT register anything in `types_`. `VisitEnumDecl` bails on
+    //     `Mapper::Contains(getCanonicalTagType(decl))` (converter.cpp:5222,
+    //     same trap at mapper.cpp:1597); a key would SUPPRESS the `pub type`
+    //     and every `pub const <name>_*`, leaving each enumerator reference
+    //     undefined -- fewer placeholder tokens, strictly WORSE Rust.
+    //   * It does NOT guess a width. The measured emissions are
+    //     `Isa_InstOperand = u8` (`enum class InstOperand : uint8_t`,
+    //     sys-arch-spec/isa/isa.hpp:48) while the other four are `i32`, so any
+    //     uniform width would silently corrupt the #1 name. Emitting only the
+    //     NAME sidesteps the question.
+    // The name comes from the DECL, never from `cpp`: see mapper.cpp:1606-1616
+    // for why (a template specialisation's leaf spelling mangles differently
+    // from what VisitRecordDecl actually defines).
+    //
+    // A SYSTEM type still falls through to the placeholder below, and
+    // ReportUnmappedSystemType's loud abort is untouched.
+    // NARROWED TO ENUMS, and that is load-bearing. Measured: the unrestricted
+    // form also rewrote `Cpp2RustUnmapped_mlir_AsmParser` to `mlir_AsmParser`
+    // in KtdpAttrs.cpp -- an MLIR CLASS reached through a plain `-I` (so
+    // `IsUserDefinedDecl` is true) that this TU does NOT define, so the rename
+    // only threw away the `Cpp2RustUnmapped_` prefix's one guarantee: that the
+    // spelling is emitted by nothing else and can therefore ONLY ever fail,
+    // never silently resolve to an unrelated `pub struct` of the same name
+    // (converter.cpp:145). An enum is the case where the definition provably
+    // IS emitted alongside, by `VisitEnumDecl`, so restricting to `isEnum()`
+    // keeps every one of the 167 measured enum sites and gives up nothing.
+    if (const clang::TagDecl *tag = nullptr;
+        Mapper::LooksLikeUserDefinedTypeName(cpp, &tag) && tag->isEnum()) {
+      const std::string ported =
+          Mapper::ToRustName(Mapper::ToString(Mapper::GetTypeForDecl(tag)));
+      if (!ported.empty()) {
+        StrCat(ported);
+        static std::set<std::string> ported_leaves;
+        if (ported_leaves.insert(cpp).second) {
+          llvm::errs() << "note: no Rust type text for `" << cpp << "` ("
+                       << qual_type->getTypeClassName()
+                       << "), but it is a project leaf type this TU ports; "
+                          "emitting its PORTED name `"
+                       << ported << "` (declared at "
+                       << tag->getLocation().printToString(
+                              ctx_.getSourceManager())
+                       << ")\n";
+        }
+        return res;
+      }
+    }
     // A dependent/deduced type can print as nothing at all; fall back to the
     // AST type class so the placeholder still says WHAT was dropped.
     std::string tail = Mapper::ToRustName(cpp);
