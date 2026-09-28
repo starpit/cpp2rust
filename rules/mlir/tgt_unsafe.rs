@@ -3142,3 +3142,196 @@ unsafe fn f421(
 unsafe fn f500(a0: &mut dataflowir_gen::fmt::Block, a1: u32) -> dataflowir_gen::ir::Value {
     a0.get_argument(a1).clone()
 }
+
+// ===========================================================================
+// f520-f531 -- THE TEMPLATE OVERLOADS of readAttribute/readOptionalAttribute,
+// i.e. what the ODS-generated `readProperties` ACTUALLY calls.  f480/f481 key
+// the virtual `Attribute &` forms and were measured DEAD (37 -> 37, 32 -> 32
+// textual on `ddc/ddl/Dialect/DdlOps.cpp`); a `-verbose` leg that EXITED 0 on
+// `dialects/ExPlan/ExPlanOps.cpp` names the real key as
+// `readAttribute(mlir::IntegerAttr &)` -- a per-attribute-type instantiation.
+// ⭐ EVERY ONE OF THESE PARAMETER TYPES MAPS TO THE SAME `ir::Attr`
+// (t7/t10/t11/t12/t20/t44/t29), which is why one Rust body shape serves all of
+// them AND why the C++ template's `dyn_cast<T>` is not reproducible here: the
+// subtype it tests is erased by the TYPE mapping, upstream of any expression
+// rule.  Nothing is fabricated; `Err` is still failure.
+// ⭐ THE OPTIONAL BODIES' `Ok(None) => true` LEAVES THE CALLER'S SLOT UNTOUCHED
+// AND THAT IS EXACT HERE, not a compromise: the C++ template at
+// BytecodeImplementation.h:121 does `if (!baseResult) return success();` and
+// likewise never assigns `result` on absence.
+// ⛔ `DictionaryAttr` (5 sites, t9 -> `ir::AttrDict`) and the project's own
+// attribute classes (`mlir::sentient::*`, `mlir::explan::PhaseAttr`, ...) are
+// DELIBERATELY LEFT LOUD -- see the argument in src.cpp.
+// ===========================================================================
+
+// f520 -- IntegerAttr, 27 sites.
+unsafe fn f520(
+    a0: &mut dataflowir_gen::DialectBytecodeReader,
+    a1: &mut dataflowir_gen::ir::Attr,
+) -> bool {
+    match a0.read_attribute() {
+        Ok(__v) => {
+            *a1 = __v;
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+// f521 -- StringAttr, 27 sites.
+unsafe fn f521(
+    a0: &mut dataflowir_gen::DialectBytecodeReader,
+    a1: &mut dataflowir_gen::ir::Attr,
+) -> bool {
+    match a0.read_attribute() {
+        Ok(__v) => {
+            *a1 = __v;
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+// f522 -- ArrayAttr, 31 sites.
+unsafe fn f522(
+    a0: &mut dataflowir_gen::DialectBytecodeReader,
+    a1: &mut dataflowir_gen::ir::Attr,
+) -> bool {
+    match a0.read_attribute() {
+        Ok(__v) => {
+            *a1 = __v;
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+// f523 -- BoolAttr, 4 sites.
+unsafe fn f523(
+    a0: &mut dataflowir_gen::DialectBytecodeReader,
+    a1: &mut dataflowir_gen::ir::Attr,
+) -> bool {
+    match a0.read_attribute() {
+        Ok(__v) => {
+            *a1 = __v;
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+// f524 -- AffineMapAttr, 3 sites.
+unsafe fn f524(
+    a0: &mut dataflowir_gen::DialectBytecodeReader,
+    a1: &mut dataflowir_gen::ir::Attr,
+) -> bool {
+    match a0.read_attribute() {
+        Ok(__v) => {
+            *a1 = __v;
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+// f525 -- IntegerSetAttr, 3 sites.
+unsafe fn f525(
+    a0: &mut dataflowir_gen::DialectBytecodeReader,
+    a1: &mut dataflowir_gen::ir::Attr,
+) -> bool {
+    match a0.read_attribute() {
+        Ok(__v) => {
+            *a1 = __v;
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+// f526 -- detail::DenseArrayAttrImpl<int> (= DenseI32ArrayAttr), 24 sites.
+unsafe fn f526(
+    a0: &mut dataflowir_gen::DialectBytecodeReader,
+    a1: &mut dataflowir_gen::ir::Attr,
+) -> bool {
+    match a0.read_attribute() {
+        Ok(__v) => {
+            *a1 = __v;
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+// f527 -- detail::DenseArrayAttrImpl<long> (= DenseI64ArrayAttr), 2 sites.
+unsafe fn f527(
+    a0: &mut dataflowir_gen::DialectBytecodeReader,
+    a1: &mut dataflowir_gen::ir::Attr,
+) -> bool {
+    match a0.read_attribute() {
+        Ok(__v) => {
+            *a1 = __v;
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+// f528 -- OPTIONAL, IntegerAttr, 56 sites.
+unsafe fn f528(
+    a0: &mut dataflowir_gen::DialectBytecodeReader,
+    a1: &mut dataflowir_gen::ir::Attr,
+) -> bool {
+    match a0.read_optional_attribute() {
+        Ok(Some(__v)) => {
+            *a1 = __v;
+            true
+        }
+        Ok(None) => true,
+        Err(_) => false,
+    }
+}
+
+// f529 -- OPTIONAL, StringAttr, 28 sites.
+unsafe fn f529(
+    a0: &mut dataflowir_gen::DialectBytecodeReader,
+    a1: &mut dataflowir_gen::ir::Attr,
+) -> bool {
+    match a0.read_optional_attribute() {
+        Ok(Some(__v)) => {
+            *a1 = __v;
+            true
+        }
+        Ok(None) => true,
+        Err(_) => false,
+    }
+}
+
+// f530 -- OPTIONAL, BoolAttr, 26 sites.
+unsafe fn f530(
+    a0: &mut dataflowir_gen::DialectBytecodeReader,
+    a1: &mut dataflowir_gen::ir::Attr,
+) -> bool {
+    match a0.read_optional_attribute() {
+        Ok(Some(__v)) => {
+            *a1 = __v;
+            true
+        }
+        Ok(None) => true,
+        Err(_) => false,
+    }
+}
+
+// f531 -- OPTIONAL, ArrayAttr, 8 sites.
+unsafe fn f531(
+    a0: &mut dataflowir_gen::DialectBytecodeReader,
+    a1: &mut dataflowir_gen::ir::Attr,
+) -> bool {
+    match a0.read_optional_attribute() {
+        Ok(Some(__v)) => {
+            *a1 = __v;
+            true
+        }
+        Ok(None) => true,
+        Err(_) => false,
+    }
+}
