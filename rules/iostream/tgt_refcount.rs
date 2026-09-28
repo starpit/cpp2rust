@@ -80,3 +80,16 @@ fn f6() -> u32 {
 fn f7() -> u32 {
     0x04
 }
+
+// t4 -- std::istream. Plain owned value, model-independent, so this is t1's body shape
+// verbatim. Restated here because this module HAS a tgt_refcount.rs and must therefore
+// carry EVERY key (see the f5/f6 note above -- omitting one aborts at LOAD TIME).
+fn t4() -> std::fs::File {
+    std::fs::File::open("").unwrap()
+}
+
+// t5 -- std::ios_base::seekdir == int-promoted unscoped enum -> i32. Byte-identical to
+// tgt_unsafe.rs; restated for the same load-time reason.
+fn t5() -> i32 {
+    0
+}

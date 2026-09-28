@@ -63,3 +63,17 @@ fn f6() -> u32 {
 fn f7() -> u32 {
     0x04
 }
+
+// t4 -- std::istream. Same counterpart as t1 (std::ostream -> std::fs::File): a byte
+// stream handle. TYPE key only; no istream operation is keyed, so `>>`/getline still
+// fail loudly.
+fn t4() -> std::fs::File {
+    std::fs::File::open("").unwrap()
+}
+
+// t5 -- std::ios_base::seekdir, `enum seekdir { beg, cur, end }` (libcxx/ios:295).
+// Unscoped enum, no fixed underlying type, promotes to int -> i32. Nothing
+// model-dependent, so tgt_refcount.rs restates it byte-identically.
+fn t5() -> i32 {
+    0
+}

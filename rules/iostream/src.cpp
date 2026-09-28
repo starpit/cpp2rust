@@ -80,3 +80,26 @@ unsigned int f6() { return std::ios_base::out; }
 // trunc=0x20, which is self-consistent with f5=0x08 and f6=0x10 already committed
 // here.  openmode is `unsigned int` -> u32, same as f5/f6.
 unsigned int f7() { return std::ios_base::binary; }
+
+// t4 -- `std::istream`, i.e. `std::basic_istream<char, std::char_traits<char>>`.
+// Rows g2818/g2826/g2827 (DataStructDims::read, SuperDsc::importJson,
+// SuperDsc::importPcfgJson) each abort with `system type has no rule:
+// std::basic_istream<char, std::char_traits<char>>` while the SEARCHED spelling is the
+// typedef `std::istream` -- exactly the shape t1 already proves for the output side
+// (ir_src.json t1 reads back "std::ostream", not "std::basic_ostream<char, ...>"),
+// so the typedef-preferring type printer resolves this one DOWN to `std::istream`
+// as required.  Modelled as std::fs::File, the same counterpart t1 uses for
+// std::ostream: this is a TYPE key only, so every actual operation on the stream
+// (operator>>, getline, read) still has no rule and fails LOUDLY with a placeholder
+// token rather than being silently invented here.
+using t4 = std::istream;
+
+// t5 -- `std::ios_base::seekdir` (row g478, 2 TUs).  libcxx/ios:295 is
+// `enum seekdir { beg, cur, end };` -- an UNSCOPED enum with no fixed underlying
+// type, so it promotes to `int` -> i32.  Note that g478 and g2894 report the SAME
+// declaration (`std::ios_base`) but DIFFERENT searched spellings: g478 searches
+// `std::ios_base::seekdir`, g2894 searches `std::ios_base` itself.  This key answers
+// g478 only; g2894 is deliberately NOT keyed (see the report) because ios_base itself
+// is an abstract, never-instantiated base and no honest Rust representation for it
+// was established within this slot's budget.
+using t5 = std::ios_base::seekdir;

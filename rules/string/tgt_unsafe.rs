@@ -373,3 +373,38 @@ unsafe fn f57(a0: f64) -> Vec<libc::c_char> {
         .map(|&b| b as libc::c_char)
         .collect::<Vec<libc::c_char>>()
 }
+
+// t3, f58..f66 -- std::string_view.  Same representation as t1: `Vec<libc::c_char>`,
+// NUL-TERMINATED (so size() is len()-1 and empty() is len() <= 1).  See src.cpp for the
+// measured aliasing adjudication and for the per-member refusals (data(), iterators,
+// ordering, operator[]/at/back/front, find*, the (const char*, size_t) ctor).
+fn t3() -> Vec<libc::c_char> {
+    Vec::new()
+}
+
+unsafe fn f58() -> Vec<libc::c_char> {
+    vec![0]
+}
+unsafe fn f59(a0: Vec<libc::c_char>) -> Vec<libc::c_char> {
+    a0.clone()
+}
+unsafe fn f60(a0: Vec<libc::c_char>, a1: Vec<libc::c_char>) -> bool {
+    a0 == a1
+}
+unsafe fn f61(a0: Vec<libc::c_char>, a1: Vec<libc::c_char>) -> bool {
+    a0 != a1
+}
+unsafe fn f62(a0: Vec<libc::c_char>) -> usize {
+    (a0.len() - 1)
+}
+unsafe fn f63(a0: Vec<libc::c_char>) -> usize {
+    (a0.len() - 1)
+}
+unsafe fn f64(a0: Vec<libc::c_char>) -> bool {
+    a0.len() <= 1
+}
+unsafe fn f66(a0: Vec<libc::c_char>, a1: usize, a2: usize) -> Vec<libc::c_char> {
+    let mut __sv2 = a0[(a1) as usize..::std::cmp::min((a1.saturating_add(a2)) as usize, a0.len() - 1)].to_vec();
+    __sv2.push(0);
+    __sv2
+}

@@ -340,3 +340,41 @@ fn f56(a0: f32) -> Vec<u8> {
 fn f57(a0: f64) -> Vec<u8> {
     format!("{:.6}\0", a0).into_bytes()
 }
+
+// t3, f58..f66 -- std::string_view.  `Vec<u8>`, NUL-TERMINATED, the same representation t1
+// carries in this model.  t3 MUST be present here as well as in tgt_unsafe.rs: a module that
+// has a tgt_refcount.rs must carry EVERY type key in it or the tree fails to LOAD
+// (translation_rule.cpp:233, and under NDEBUG that presents as rc=139 with no message --
+// the rules/iostream t1 precedent).  These bodies are value-like and carry no raw-pointer
+// text, so they are the same shape as the unsafe ones.
+fn t3() -> Vec<u8> {
+    Vec::new()
+}
+
+fn f58() -> Vec<u8> {
+    vec![0]
+}
+fn f59(a0: Vec<u8>) -> Vec<u8> {
+    a0.clone()
+}
+fn f60(a0: Vec<u8>, a1: Vec<u8>) -> bool {
+    a0 == a1
+}
+fn f61(a0: Vec<u8>, a1: Vec<u8>) -> bool {
+    a0 != a1
+}
+fn f62(a0: Vec<u8>) -> usize {
+    a0.len().saturating_sub(1)
+}
+fn f63(a0: Vec<u8>) -> usize {
+    a0.len().saturating_sub(1)
+}
+fn f64(a0: Vec<u8>) -> bool {
+    a0.len() <= 1
+}
+fn f66(a0: Vec<u8>, a1: usize, a2: usize) -> Vec<u8> {
+    let mut __sv2 =
+        a0[(a1) as usize..::std::cmp::min((a1.saturating_add(a2)) as usize, a0.len().saturating_sub(1))].to_vec();
+    __sv2.push(0);
+    __sv2
+}

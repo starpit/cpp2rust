@@ -3,6 +3,7 @@
 
 #include <iterator>
 #include <streambuf>
+#include <string_view>
 #include <string>
 
 using t1 = std::string;
@@ -205,3 +206,94 @@ std::string f55(unsigned long long a0) { return std::to_string(a0); }
 std::string f56(float a0) { return std::to_string(a0); }
 
 std::string f57(double a0) { return std::to_string(a0); }
+
+// ---------------------------------------------------------------------------
+// t3, f58..f68 -- `std::string_view`, landed on the measured adjudication in
+// /home/agent/work/BORROW-ADJUDICATION.md (queue rows g471 g941 g847 g2833 g2835 g2836).
+//
+// REPRESENTATION: the same as t1 and as rules/stringref -- `Vec<libc::c_char>` /
+// `Vec<u8>`, NUL-TERMINATED, so `size()` is `len() - 1` and `empty()` is `len() <= 1`.
+//
+// AN OWNING STAND-IN FOR A NON-OWNING VIEW IS ACCEPTED HERE, AND ONLY HERE, BECAUSE THE
+// CORPUS CANNOT OBSERVE THE DIFFERENCE.  Measured over the 7 real first-party
+// `std::string_view` sites (14 hits in 5 files; 4 are #include/comment, 3 are vendored):
+//   * mutation through the owner while a view is alive: 0 of 7.  And the reverse
+//     direction is IMPOSSIBLE for this type -- `std::string_view` has NO mutating
+//     member and `data()` returns `const char *`.
+//   * dangling: 1 of 7 stores a long-lived view (VariableDefinition.cpp:177), and it is
+//     SAFE -- a process-lifetime static whose referents are another static's strings,
+//     which the source comment at :183 states outright.
+//   * buffer identity: 1 of 7 (VariableDefinition.cpp:166, `ptr == sv.data() + sv.size()`),
+//     and corpus-wide ZERO sites compare two DIFFERENT views' `.data()`, so the failure
+//     mode an owning copy would hide does not occur.
+//   * cost only: 5 of 7, including `hash`/`equal_to`, which are CONTENT-based in C++ too,
+//     so a content model is faithful rather than approximate.
+// Cat-1 aliasing is therefore UNMODELLED and said so: mutating the owner and reading the
+// new bytes through the view prints `ZAAQ` in C++ and `AAAA` here.  That is the documented
+// boundary, kept as commented case (1) of probe/svalias/p.cpp.  Do NOT try to model it with
+// a borrowing representation -- that needs a lifetime a rule target cannot carry.
+//
+// DELIBERATELY NOT KEYED, each with its own reason (every one stays a LOUD abort; none
+// emits todo!()/unimplemented!()/UNSUPPORTED):
+//   * `data()` -- exposes the buffer ADDRESS.  Under refcount the receiver is a by-value
+//     Vec dropped at end of body, so any pointer made from it DANGLES SILENTLY.  Identical
+//     ground to rules/stringref src.cpp:146-158, which already refuses it in writing.  A
+//     rule correct in unsafe and dangling in refcount is worse than an abort.
+//   * `begin/end/cbegin/cend/rbegin/rend` -- same address exposure via iterators, and this
+//     representation's trailing NUL would be traversed: an off-by-one in every loop.  Zero
+//     first-party sites.
+//   * the ordering operators `< <= > >=` -- lexicographic order would have to agree with
+//     C++ across the trailing NUL this representation carries, and C++'s does not.  Zero
+//     sites, so no body could even be checked.  Same reason rules/stringref refuses them.
+//   * `operator[]`, `at()`, `back()` -- no first-party sites, and indexing to len()-1 would
+//     read the terminator.
+//   * `front()` -- REFUSED although the adjudication listed it safe, and the adjudication's own
+//     argument is why.  `front()` returns `const char &`, and the receiver of a `string_view`
+//     member is a BY-VALUE Vec (the type is a value type, unlike `std::string &` on f26 `at()`),
+//     so the reference the target must return points into a Vec dropped at end of body --
+//     SILENTLY DANGLING under refcount, exactly the `data()` failure with a different name.
+//     The one site is VariableDefinition.cpp:230; it stays a loud abort.
+//   * `remove_prefix`, `remove_suffix`, `copy`, `compare`, `find*` -- zero first-party
+//     sites.  "The model provides it" plus "the type is reached" is NOT "a key would be
+//     reached"; do not key what nothing calls.
+//   * `string_view(const char *, size_t)` -- would silently TRUNCATE at an interior NUL,
+//     exactly as rules/stringref records for its own two-argument constructor.  Zero
+//     first-party sites construct one.
+//   * `std::from_chars` -- not a member of this type and keyed by NO module.  Row g2832
+//     (`ParseInt64`) stays BLOCKED on it and on `.data()`; row g2834 (`toStringView`) stays
+//     BLOCKED on `llvm::StringRef::data()`.  Six of the eight rows are served, not eight.
+//   * `std::hash<std::string_view>` / `std::equal_to<std::string_view>` -- content-based and
+//     therefore SAFE to model, but the RECEIVER type belongs to rules/hash / rules/functional,
+//     not to this module.  Left for its owner rather than keyed across module boundaries.
+using t3 = std::string_view;
+
+std::string_view f58() { return std::string_view(); }
+
+// READBACK CORRECTION: `std::string_view(a0)` from a `std::string` recorded NOTHING AT ALL
+// (f59 was absent from ir_src.json).  It is not a string_view constructor -- libc++ reaches it
+// through `std::basic_string`'s implicit CONVERSION OPERATOR, so the key must be spelled on
+// basic_string, not on the view.
+std::string_view f59(const std::string &a0) { return a0.operator std::string_view(); }
+
+bool f60(std::string_view a0, std::string_view a1) { return a0 == a1; }
+
+bool f61(std::string_view a0, std::string_view a1) { return a0 != a1; }
+
+std::size_t f62(std::string_view a0) { return a0.size(); }
+
+std::size_t f63(std::string_view a0) { return a0.length(); }
+
+bool f64(std::string_view a0) { return a0.empty(); }
+
+// READBACK CORRECTION -- the brief said the 1-arg and 2-arg `substr` forms are DIFFERENT KEYS.
+// MEASURED: THEY ARE THE SAME KEY.  Both recorded as
+//     std::string_view std::basic_string_view<char>::substr(unsigned long, unsigned long) const
+// i.e. the recorder writes the DEFAULTED argument out explicitly, so two src entries collided in
+// one bucket and the search would have picked between them.  Keeping both is silent wrongness, so
+// there is ONE key, spelled with both arguments, and its body is `saturating_add` rather than
+// `a1 + a2` precisely because the 1-arg form arrives with a2 == npos == usize::MAX: saturating
+// there yields min(MAX, len-1) == len-1, which is exactly `substr(pos)`.  A plain `a1 + a2` would
+// overflow on every 1-arg call.
+std::string_view f66(std::string_view a0, std::size_t a1, std::size_t a2) {
+  return a0.substr(a1, a2);
+}
