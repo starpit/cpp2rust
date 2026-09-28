@@ -23,3 +23,28 @@
 fn t1<T1: Ord + Clone>() -> libcc2rs::EquivalenceClasses<T1> {
     libcc2rs::EquivalenceClasses::new()
 }
+
+// `llvm::EquivalenceClasses<T>::member_iterator` -> libcc2rs::MemberIter<T>
+// (iterators.rs:1348). No bound: `impl<T> Default for MemberIter<T>`
+// (iterators.rs:1354) is unconditional, and C++'s
+// `explicit member_iterator() = default` default-constructs to the end sentinel,
+// which is exactly what that impl gives (it leaves `Node` uninitialised in C++;
+// the only value a default can usefully denote is `member_end()`).
+fn t2<T1>() -> libcc2rs::MemberIter<T1> {
+    libcc2rs::MemberIter::default()
+}
+
+// `llvm::EquivalenceClasses<T>::ECValue` -> libcc2rs::ECValue<T>
+// (iterators.rs:1316). There is NO default initialiser to give: LLVM's ECValue
+// declares only `ECValue(const ElemTy &Data)` and `ECValue(const ECValue &)`
+// (EquivalenceClasses.h:76-80), so a default-init of an ECValue is ill-formed
+// C++ and cannot occur in any faithfully translated TU. Every use in this corpus
+// obtains one from `*I` / `insert()`. A `panic!` is therefore the only honest
+// body -- loud if anything ever reaches it -- and it is `!`, so it needs no
+// bound and constructs nothing. (libcc2rs::ECValue has private fields and no
+// public ctor; giving it a Default would need a libcc2rs change plus a
+// target_preprocessor re-pin, and an unreachable initialiser does not justify
+// one.)
+fn t3<T1>() -> libcc2rs::ECValue<T1> {
+    panic!("ub: llvm::EquivalenceClasses<T>::ECValue has no default constructor")
+}

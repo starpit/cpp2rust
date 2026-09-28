@@ -65,6 +65,25 @@ namespace llvm {
 template <class ElemTy> class EquivalenceClasses {
 public:
   EquivalenceClasses();
+
+  // Restated from EquivalenceClasses.h:66 -- `class ECValue`, a NESTED class (not
+  // a typedef). It is keyed because the converter does NOT abort on an unmapped
+  // nested type: it emits `Cpp2RustUnmapped_llvm_EquivalenceClasses_int__ECValue`
+  // (converter.cpp:162) and translates to rc=0, so GraphColoring.cpp reached
+  // bucket A carrying 8 undefined type names. The searched spelling is read off
+  // the converter's own note, verbatim:
+  //   note: no Rust type text for `llvm::EquivalenceClasses<int>::ECValue`
+  //   (Record); emitting the undefined placeholder
+  //   `Cpp2RustUnmapped_llvm_EquivalenceClasses_int__ECValue`
+  class ECValue {};
+
+  // Restated from EquivalenceClasses.h:171 -- `class member_iterator`, also a
+  // nested CLASS. Searched spelling, verbatim from the same note stream:
+  //   note: no Rust type text for
+  //   `llvm::EquivalenceClasses<int>::member_iterator` (Record)
+  // GraphColoring.hpp:71-73 names it in three PARAMETERS of doesEdgeExist, which
+  // is why it cannot be an anonymous `impl Iterator` on the Rust side.
+  class member_iterator {};
 };
 
 } // namespace llvm
@@ -73,3 +92,11 @@ public:
 // `fn tN() -> T { <initializer> }` on the target side; a bare `type tN = T;`
 // target does not register.
 template <typename T1> using t1 = llvm::EquivalenceClasses<T1>;
+
+// NESTED-TYPE keys. GetTypeMapKey (mapper.cpp:114) strips at the first `<`, so all
+// three keys land in the SAME bucket `llvm::EquivalenceClasses` and matchTemplate
+// picks between them on the literal tail after `<T1>`.
+template <typename T1>
+using t2 = typename llvm::EquivalenceClasses<T1>::member_iterator;
+template <typename T1>
+using t3 = typename llvm::EquivalenceClasses<T1>::ECValue;
