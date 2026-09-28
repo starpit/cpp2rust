@@ -2720,6 +2720,47 @@ class CallOp {};
 class FuncOp {};
 } // namespace func
 
+namespace arith {
+// mlir/Dialect/Arith/IR/ArithOps.h.inc -- `class ConstantOp : public ::mlir::Op<
+// ConstantOp, ...>`, an ORDINARY ODS-GENERATED OP CLASS exactly like func::CallOp,
+// func::FuncOp and affine::AffineForOp above, i.e. one `Operation *` through its
+// OpState base.  Declared here ONLY so t161's key can be spelled; the model is argued
+// at `using t161 =`.
+//
+// SAME MIS-SERVICE CHECK as the ops above, re-expressed because the `grep -n
+// 'OpState::' src.cpp` form the earlier rows cite is now SELF-REFERENTIAL (it returns
+// 6 hits, all comment lines quoting the grep).  Re-run as a search for a KEY, not for
+// the string: `grep -nE '^(using t[0-9]+ = .*OpState|.*OpState[a-zA-Z_]* [a-z_]+\()'
+// src.cpp` is ZERO HITS, and no `tN` in this file names `mlir::OpState` or
+// `mlir::Op<...>`.  So no existing key can serve an inherited member call on an
+// arith::ConstantOp receiver, and every corpus read stays LOUD --
+// `arith::ConstantOp::create` (a STATIC member on ConstantOp itself, 147 sites),
+// `constOp.getValue()`, `dyn_cast<arith::ConstantOp>`.
+// No destructor exists (`grep -n '~ConstantOp' ArithOps.h.inc` = 0 hits, and neither
+// `Op` nor `OpState` declares one), so the handle model is permitted -- the
+// OwningOpRef test.
+class ConstantOp {};
+
+// mlir/Dialect/Arith/IR/Arith.h:113 -- `class ConstantIndexOp : public
+// arith::ConstantOp`.  A HAND-WRITTEN C++ CONVENIENCE SUBCLASS of the ODS op above,
+// adding no state (`using arith::ConstantOp::ConstantOp;` plus static `create` and
+// `classof`), so it is the SAME `Operation *` handle and, at runtime, the same
+// `arith.constant` op.  Declared here ONLY so t162's key can be spelled.
+//
+// ⚠️ IT SHARES ConstantOp's `DEF` DELIBERATELY, and that is not an approximation: a
+// `ConstantIndexOp` IS an `arith.constant` whose result type is `index` -- there is no
+// separate ODS `def` for it, and `dataflowir_gen::ops` (read off the pinned rmeta)
+// carries `mlir_arith_ConstantOp` and NO `mlir_arith_ConstantIndexOp`, which is the
+// model agreeing with the header.
+//
+// ⛔ BECAUSE IT DERIVES, THIS FILE CANNOT RELOCATE ANY INHERITED MEMBER'S KEY (the
+// measured `llvm::FailureOr` lesson): a member declared by `ConstantOp` keys as
+// `mlir::arith::ConstantOp::...` whatever is written here.  Nothing is claimed for one.
+// No destructor exists (`grep -n '~ConstantIndexOp' Arith.h` = 0 hits), so the handle
+// model is permitted.
+class ConstantIndexOp : public ConstantOp {};
+} // namespace arith
+
 namespace affine {
 // mlir/Dialect/Affine/IR/AffineOps.h.inc -- `class AffineForOp : public ::mlir::Op<
 // AffineForOp, ...>`, an ORDINARY ODS-GENERATED OP CLASS exactly like func::CallOp and
@@ -3319,3 +3360,54 @@ llvm::raw_ostream &f128(llvm::raw_ostream &a0, const mlir::Location &a1) {
 // reasons already recorded for the `llvm::raw_ostream` family above; nothing
 // about an OpAsmPrinter receiver changes them.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// t161 -- `mlir::arith::ConstantOp`.  Arity 0, so no `\b\d+\b` normalization and no
+// collapsed-argument exposure.  Queue row g110 (`system type has no rule:
+// `mlir::arith::ConstantOp``, searched as `mlir::arith::ConstantOp`, which is what is
+// spelled below).  Independently confirmed REACHED, not inferred: the emitted Rust of
+// the n=150 census already carries the placeholder
+// `Cpp2RustUnmapped_mlir_arith_ConstantOp`
+// (e.g. /home/agent/work/cens0928c/out/dialect_utils__Agen__Utils.cpp.rs).
+//
+// NO `fN` DEFAULT CONSTRUCTOR, and this is measured rather than assumed.  The
+// type-key-needs-a-constructor trap only bites where the corpus DEFAULT-constructs:
+//   grep -rnE "(mlir::)?arith::ConstantOp[[:space:]]+[A-Za-z_]\w*[[:space:]]*(;|=|\()"
+//     --include=*.cpp --include=*.h repos/dt_src   ->  2 hits, and NEITHER is a default
+//     construction: both are LexicalOrdering.cpp:116,117
+//     `mlir::arith::ConstantOp const_a = dyn_cast<mlir::arith::ConstantOp>(a);`
+//     i.e. copy-initialization from a call.
+//   the multi-declarator form that the simple grep missed for `scf::IfOp` --
+//   grep -rnE "arith::Constant(Index)?Op[[:space:]]+[A-Za-z_]\w*[[:space:]]*,"
+//     -> 1 hit, BufferizationAnalysis.cpp:103 `analyseConstantOp(arith::ConstantOp
+//     constantOp,` which is a FUNCTION PARAMETER, not a declarator list.
+// So there is no `arith::ConstantOp x;` anywhere and a ctor key would be DEAD.
+//
+// ⛔ AND NO MEMBER IS MAPPED.  All 147 `arith::ConstantOp` sites are one of two shapes
+// that are both standing refusals:
+//   * `arith::ConstantOp::create(builder, loc, type, attr)` -- a SINK that CREATES an
+//     op, the `mlir::OpBuilder` / `RewriterBase` refusal.  There is no sink type in the
+//     model; a stub would create nothing while the code proceeded as though it had.
+//   * `dyn_cast<mlir::arith::ConstantOp>` / `dyn_cast_or_null<...>` -- the
+//     collapsed-template-argument trap, now on its tenth instance: the explicit
+//     template argument is the ONLY distinguishing argument, so every instantiation
+//     would record as ONE key and any body would be a plausible lie.
+// Both therefore stay LOUD, which is the intended outcome.
+//
+// ⛔ t25's PROHIBITION APPLIES UNCHANGED: no `operator==`, no `operator!=`, no identity
+// test.  A C++ op handle compares `Operation *`; an `OpInst` is an op's printed
+// CONTENT.
+using t161 = mlir::arith::ConstantOp;
+
+// t162 -- `mlir::arith::ConstantIndexOp`.  Arity 0.  Queue row g089 (`system type has
+// no rule: `mlir::arith::ConstantIndexOp``, searched as
+// `mlir::arith::ConstantIndexOp`).
+//
+// NO `fN`, measured the same way and more strongly:
+//   grep -rnE "(mlir::)?arith::ConstantIndexOp[[:space:]]+[A-Za-z_]\w*[[:space:]]*(;|=|\()"
+//     --include=*.cpp --include=*.h repos/dt_src  ->  ZERO hits.
+//   multi-declarator form  ->  ZERO hits.
+// All 344 `ConstantIndexOp` mentions in the corpus are
+// `mlir::arith::ConstantIndexOp::create(builder, loc, n)` -- the op-creating SINK
+// refusal above -- so no member and no constructor is keyed here either.
+using t162 = mlir::arith::ConstantIndexOp;

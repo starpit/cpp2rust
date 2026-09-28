@@ -1648,3 +1648,48 @@ fn t160() -> dataflowir_gen::fmt::OpInst {
         <dataflowir_gen::ops::mlir_UnrealizedConversionCastOp as dataflowir_gen::MlirOp>::DEF,
     )
 }
+
+// t161 -- `mlir::arith::ConstantOp` -> `fmt::OpInst`.  An ODS-generated op in the Arith
+// dialect, of the SAME shape as t27's `scf::ForOp`, t157's `func::FuncOp`, t158's
+// `affine::AffineForOp` and t160's `UnrealizedConversionCastOp`: one `Operation *`
+// through its `OpState` base.  Unlike those rows this one names a NEW `DEF`, so it was
+// verified to exist rather than assumed -- `mlir_arith_ConstantOp` is present in the
+// pinned `libdataflowir_gen` rmeta (alongside `mlir_arith_AddIOp`, `mlir_arith_CmpIOp`,
+// ... 20+ Arith ops), and `lib.rs:103` lists `arith` among the dialects whose op rows
+// this crate holds.  So no new claim about the model is made; the Arith `.td` front end
+// already parses it.
+//
+// ⛔ t25's PROHIBITION APPLIES UNCHANGED: no `operator==`, no `operator!=`, no identity
+// test is mapped, and NO MEMBER is mapped -- the corpus's `arith::ConstantOp::create`
+// (an op-creating SINK) and `dyn_cast<arith::ConstantOp>` (the
+// collapsed-template-argument trap) both still abort loudly in the mapper rather than
+// returning a plausible lie.  See src.cpp at t161 for the enumerated sites and for the
+// declaration grep that is why there is NO `f` key.
+//
+// The `init` is t25's/t27's/t152's/t157's/t158's/t159's/t160's, and for their reason: a
+// default-constructed ODS op handle is the NULL handle, `fmt::OpInst` has no null, and
+// this expression exists only to type-check the type key.
+fn t161() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_ConstantOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+// t162 -- `mlir::arith::ConstantIndexOp` -> `fmt::OpInst`.  `Arith.h:113` declares it as
+// `class ConstantIndexOp : public arith::ConstantOp` -- a hand-written convenience
+// subclass adding no state, so it is the same `Operation *` handle and, at runtime, the
+// same `arith.constant` op with an `index` result type.
+//
+// ⚠️ IT SHARES t161's `DEF` DELIBERATELY, and the model agrees with the header: the
+// pinned `libdataflowir_gen` rmeta carries `mlir_arith_ConstantOp` and NO
+// `mlir_arith_ConstantIndexOp`, because there is no separate ODS `def` for it.  Using
+// t161's DEF is therefore the faithful mapping, not an approximation.
+//
+// Same prohibitions as t161, and NO `f` key: the declaration grep for
+// `arith::ConstantIndexOp x;` is ZERO hits and all 344 corpus mentions are
+// `ConstantIndexOp::create(...)`, the op-creating SINK refusal.
+fn t162() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_ConstantOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
