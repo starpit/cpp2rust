@@ -1981,9 +1981,13 @@ bool Converter::VisitForStmt(clang::ForStmt *stmt) {
 }
 
 void Converter::ConvertLoopVariable(clang::VarDecl *decl,
-                                    clang::Expr *range_init) {
+                                    clang::Expr *range_init,
+                                    const std::string &index_name) {
   auto loop_var_type = decl->getType();
-  auto loop_var_name = GetNamedDeclAsString(decl);
+  // A DecompositionDecl has no name of its own, so the index variable cannot be
+  // derived from it -- the caller passes it in.
+  auto loop_var_name =
+      index_name.empty() ? GetNamedDeclAsString(decl) : index_name;
 
   if (loop_var_type->isReferenceType()) {
     auto pointee_type = loop_var_type->getPointeeType();
@@ -2003,6 +2007,40 @@ void Converter::ConvertLoopVariable(clang::VarDecl *decl,
   }
 }
 
+// A structured binding over a `std::vector<std::pair<A, B>>` element. The
+// holder is already a RAW POINTER to the element (ConvertLoopVariable emits
+// `.as_mut_ptr().add(i)` for the `pair &` the DecompositionDecl is), and
+// `std::pair` is modelled as a Rust tuple (rules/pair/tgt_unsafe.rs), so each
+// binding is a raw pointer to a tuple field. It MUST be a pointer, not a copy:
+// for a mutable `pair &` holder clang gives the BindingDecls plain
+// non-reference `tuple_element_t` types, so the aliasing is invisible in the
+// binding types and any by-value lowering would SILENTLY DROP WRITES.
+// ScopedPtrBindings + the per-use deref in VisitDeclRefExpr restore it.
+bool Converter::EmitVectorDecompositionBindings(
+    const clang::DecompositionDecl *decl, const std::string &holder_name) {
+  auto bindings = decl->bindings();
+  if (bindings.empty() || bindings.size() > 2) {
+    return false;
+  }
+  // Only a `pair &` holder is lowered: the pointer-to-field form below is only
+  // sound when the holder aliases the container's storage.
+  if (!decl->getType()->isReferenceType()) {
+    return false;
+  }
+  const bool is_const = decl->getType()->getPointeeType().isConstQualified();
+  unsigned index = 0;
+  for (const auto *binding : bindings) {
+    StrCat(keyword::kLet);
+    StrCat(GetNamedDeclAsString(binding));
+    StrCat(token::kAssign);
+    StrCat(std::format("&raw {} (*{}).{}", is_const ? "const" : "mut",
+                       holder_name, index));
+    StrCat(token::kSemiColon);
+    ++index;
+  }
+  return true;
+}
+
 void Converter::ConvertForRangeBody(clang::CXXForRangeStmt *stmt,
                                     const clang::VarDecl *map_iter_decl) {
   PushBreakTarget push(break_target_, BreakTarget::Loop);
@@ -2014,13 +2052,51 @@ void Converter::ConvertForRangeBody(clang::CXXForRangeStmt *stmt,
   curr_for_inc_.pop_back();
 }
 
+// THE RE-EVALUATION HAZARD, and why this gate is narrow on purpose.
+// VisitCXXForRangeStmtIndexBased emits `Convert(getRangeInit())` TWICE -- once
+// for the `.len()` bound and again inside the body for the element pointer.
+// That is harmless for a bare reference to an existing local, and UNSOUND for a
+// range init that is a CALL RETURNING BY VALUE (the C++ temporary is
+// lifetime-extended for the whole loop; the Rust would rebuild a fresh vector
+// per iteration and `as_mut_ptr()` would dangle into one dropped at end of
+// statement -- a silent use-after-free, strictly worse than a loud abort). So a
+// decomposing range-for is only lowered when the range init is a bare
+// DeclRefExpr. Hoisting the range init to one named local is the follow-on that
+// unblocks the by-value rows (util/foldManager/foldInfrastructure.h:1264,:1311
+// and the DenseMapPair / 3-ary tuple rows); it is NOT done here because it
+// would change the emitted text of EVERY vector for-range in the corpus.
+bool Converter::IsHoistFreeDecompositionRange(clang::CXXForRangeStmt *stmt) {
+  const auto *init = stmt->getRangeInit();
+  if (init == nullptr) {
+    return false;
+  }
+  if (!llvm::isa<clang::DeclRefExpr>(init->IgnoreParenImpCasts())) {
+    return false;
+  }
+  // Maps go down VisitCXXForRangeStmtMap; strings are `len()-1`-indexed chars
+  // and have no fields to bind. Only the vector path is lowered.
+  auto class_name = GetClassName(init->getType());
+  if (class_name != "std::vector") {
+    return false;
+  }
+  // Refcount is refused wholesale: that model wraps every local in
+  // `Rc<RefCell<..>>`, so `&raw mut (*holder).0` is unreachable without
+  // duplicating its access-mode expansion. `keyword_unsafe_` is the only model
+  // discriminator the base class has.
+  if (keyword_unsafe_ == nullptr || *keyword_unsafe_ == '\0') {
+    return false;
+  }
+  return true;
+}
+
 bool Converter::VisitCXXForRangeStmt(clang::CXXForRangeStmt *stmt) {
   auto range_init_type = stmt->getRangeInit()->getType();
   // A decomposing loop variable is only lowered on the MAP path (see
   // VisitCXXForRangeStmtMap). Every other range shape still fails loudly.
   if (auto *decomp =
           llvm::dyn_cast<clang::DecompositionDecl>(stmt->getLoopVariable())) {
-    if (GetClassName(range_init_type) != "std::map") {
+    if (GetClassName(range_init_type) != "std::map" &&
+        !IsHoistFreeDecompositionRange(stmt)) {
       ReportUnsupportedStructuredBinding(decomp);
       return false;
     }
@@ -2128,10 +2204,15 @@ bool Converter::VisitCXXForRangeStmtVector(clang::CXXForRangeStmt *stmt) {
 bool Converter::VisitCXXForRangeStmtIndexBased(clang::CXXForRangeStmt *stmt,
                                                const char *len_suffix) {
   auto *loop_var = stmt->getLoopVariable();
-  auto loop_var_name = GetNamedDeclAsString(loop_var);
+  auto *decomp = llvm::dyn_cast<clang::DecompositionDecl>(loop_var);
+  // A DecompositionDecl has no name of its own, so both the element holder and
+  // the index need synthetic ones.
+  auto loop_var_name =
+      decomp ? GetDecompositionIterName(decomp) : GetNamedDeclAsString(loop_var);
+  auto index_name = decomp ? loop_var_name + "_i" : loop_var_name;
 
   StrCat("'loop_:");
-  StrCat(keyword::kFor, loop_var_name, keyword::kIn, "0..");
+  StrCat(keyword::kFor, index_name, keyword::kIn, "0..");
   {
     PushParen range(*this);
     Convert(stmt->getRangeInit());
@@ -2149,9 +2230,18 @@ bool Converter::VisitCXXForRangeStmtIndexBased(clang::CXXForRangeStmt *stmt,
     StrCat(loop_var_name);
     StrCat(token::kAssign);
 
-    ConvertLoopVariable(loop_var, stmt->getRangeInit());
+    ConvertLoopVariable(loop_var, stmt->getRangeInit(),
+                        decomp ? index_name : std::string{});
 
     StrCat(token::kSemiColon);
+    std::optional<ScopedPtrBindings> ptr_bindings;
+    if (decomp) {
+      if (!EmitVectorDecompositionBindings(decomp, loop_var_name)) {
+        ReportUnsupportedStructuredBinding(decomp);
+        return false;
+      }
+      ptr_bindings.emplace(*this, decomp);
+    }
     ConvertForRangeBody(stmt);
   }
 

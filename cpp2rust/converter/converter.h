@@ -757,7 +757,13 @@ protected:
                            int line = __builtin_LINE());
 
   virtual void ConvertLoopVariable(clang::VarDecl *decl,
-                                   clang::Expr *range_init);
+                                   clang::Expr *range_init,
+                                   const std::string &index_name = {});
+
+  bool EmitVectorDecompositionBindings(const clang::DecompositionDecl *decl,
+                                       const std::string &holder_name);
+
+  bool IsHoistFreeDecompositionRange(clang::CXXForRangeStmt *stmt);
 
   virtual void ConvertUniquePtrDeref(clang::CXXOperatorCallExpr *expr);
 
