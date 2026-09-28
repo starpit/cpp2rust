@@ -554,6 +554,9 @@ public:
   virtual bool VisitCXXDefaultArgExpr(clang::CXXDefaultArgExpr *expr);
   virtual bool VisitConstantExpr(clang::ConstantExpr *expr);
 
+  static void CollectLambdaCallOperatorInstantiations(
+      const clang::CXXRecordDecl *lambda_class,
+      llvm::SmallVectorImpl<clang::CXXMethodDecl *> &out);
   clang::CXXMethodDecl *SelectLambdaCallOperator(clang::LambdaExpr *expr);
   virtual bool VisitLambdaExpr(clang::LambdaExpr *expr);
 

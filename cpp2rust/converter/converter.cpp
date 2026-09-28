@@ -334,11 +334,46 @@ bool Converter::VisitRecordType(clang::RecordType *type) {
   if (auto lambda = clang::dyn_cast<clang::CXXRecordDecl>(decl)) {
     if (lambda->isLambda()) {
       if (in_function_formals_) {
-        StrCat(
-            ConvertFunctionPointerType(lambda->getLambdaCallOperator()
-                                           ->getType()
-                                           ->getAs<clang::FunctionProtoType>(),
-                                       FnProtoType::LambdaCallOperator));
+        // ⛔ NOT `getLambdaCallOperator()` DIRECTLY. For a GENERIC lambda
+        // (`[](auto&& data) {...}`) that is the UNINSTANTIATED TEMPLATE
+        // PATTERN, whose FunctionProtoType still holds clang's *unsubstituted*
+        // spellings: every dependent parameter prints as `type-parameter-0-0`
+        // and the deduced return type prints as the bare `auto` sugar. Neither
+        // is a type the mapper can key or `TraverseType` can emit tokens for,
+        // so BOTH fell through to `Convert(QualType)`'s placeholder branch
+        // (:227) and the formal came out as
+        //   func: *mut impl Fn(*mut Cpp2RustUnmapped_typenegparameterneg_neg_)
+        //           -> Cpp2RustUnmapped_auto
+        // -- MEASURED on the two generic lambdas at dsc/dataOpDsc.h:167 and
+        // :171 (`FoldManager<T>::apply`), which account for ALL 44 + 44
+        // surviving `Cpp2RustUnmapped_auto` /
+        // `Cpp2RustUnmapped_typenegparameterneg_neg_` sites in the fresh32
+        // 56-file bucket-A sweep, four lines per file across 11 files, both
+        // placeholders always on the SAME line.
+        //
+        // This is the same question `SelectLambdaCallOperator` (:6252) already
+        // answers for the lambda BODY, which is why the body converts with real
+        // types while its own signature did not: the closure emitted by
+        // `VisitLambdaExpr` names `Vec<i64>` in its parameter list, and the
+        // formal it is passed to named a placeholder. Asking the same question
+        // here makes the two agree.
+        //
+        // ⭐ AND WHEN CLANG HAS NO SUBSTITUTED TYPE TO GIVE, KEEP THE
+        // PLACEHOLDER. A generic lambda with zero instantiated specialisations
+        // in this TU, or with more than one, has no single monomorphisation to
+        // name; guessing one would emit a type that is plausible and WRONG,
+        // and a wrong type in a formal can silently compile, whereas the
+        // placeholder is a loud E0412. So those cases fall through to the
+        // pattern and keep emitting exactly what they emit today.
+        const clang::CXXMethodDecl *call_op = lambda->getLambdaCallOperator();
+        llvm::SmallVector<clang::CXXMethodDecl *, 4> instantiations;
+        CollectLambdaCallOperatorInstantiations(lambda, instantiations);
+        if (instantiations.size() == 1) {
+          call_op = instantiations.front();
+        }
+        StrCat(ConvertFunctionPointerType(
+            call_op->getType()->getAs<clang::FunctionProtoType>(),
+            FnProtoType::LambdaCallOperator));
       } else {
         StrCat('_');
       }
@@ -6225,6 +6260,30 @@ bool Converter::VisitConstantExpr(clang::ConstantExpr *expr) {
   return false;
 }
 
+// The lambda call operator's INSTANTIATED specialisations -- the ones that
+// carry real (substituted) parameter and return types. Leaves `out` EMPTY for a
+// non-generic lambda, whose `getLambdaCallOperator()` is already the real
+// thing, and also for a generic lambda that this TU never calls (nothing was
+// ever instantiated, so clang has no substituted type to give and the caller
+// must keep whatever it would have emitted for the pattern).
+void Converter::CollectLambdaCallOperatorInstantiations(
+    const clang::CXXRecordDecl *lambda_class,
+    llvm::SmallVectorImpl<clang::CXXMethodDecl *> &out) {
+  const clang::CXXMethodDecl *pattern = lambda_class->getLambdaCallOperator();
+  if (pattern == nullptr || !pattern->isTemplated()) {
+    return;
+  }
+  if (auto *tmpl = pattern->getDescribedFunctionTemplate()) {
+    for (auto *spec : tmpl->specializations()) {
+      if (auto *method = llvm::dyn_cast<clang::CXXMethodDecl>(spec)) {
+        if (method->hasBody()) {
+          out.push_back(method);
+        }
+      }
+    }
+  }
+}
+
 // For a GENERIC lambda (`[](auto x) {...}`), getLambdaCallOperator() returns the
 // UNINSTANTIATED template pattern: every parameter type is `<dependent type>`
 // and every call in the body is unresolved, so converting it can only produce
@@ -6238,15 +6297,8 @@ Converter::SelectLambdaCallOperator(clang::LambdaExpr *expr) {
   }
 
   llvm::SmallVector<clang::CXXMethodDecl *, 4> instantiations;
-  if (auto *tmpl = pattern->getDescribedFunctionTemplate()) {
-    for (auto *spec : tmpl->specializations()) {
-      if (auto *method = llvm::dyn_cast<clang::CXXMethodDecl>(spec)) {
-        if (method->hasBody()) {
-          instantiations.push_back(method);
-        }
-      }
-    }
-  }
+  CollectLambdaCallOperatorInstantiations(expr->getLambdaClass(),
+                                          instantiations);
 
   if (instantiations.size() == 1) {
     return instantiations.front();
