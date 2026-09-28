@@ -975,6 +975,12 @@ bool ConverterRefCount::VisitDeclRefExpr(clang::DeclRefExpr *expr) {
 static std::vector<const char *> printf2fmt(std::string &format,
                                             const std::string &loc) {
   std::vector<const char *> types;
+  // FIRST, before a single `{}` placeholder is inserted below: everything in
+  // `format` right now is LITERAL C text, and everything inserted after this
+  // point is a placeholder that must NOT be escaped. Doing it in this order is
+  // what keeps the two apart -- escaping afterwards would double the `{}` this
+  // function just wrote and print `{}` instead of the argument.
+  format = Converter::EscapeFmtBraces(format);
   size_t pos = 0;
   while ((pos = format.find('%', pos)) != std::string::npos) {
     if (pos + 1 >= format.size())

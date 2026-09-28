@@ -419,6 +419,20 @@ public:
 
   std::string GetEscapedStringLiteral(clang::Expr *expr,
                                       uint64_t pad_nulls = 0) const;
+
+  // Doubles `{` and `}` so that LITERAL C++ text can be spliced into a Rust
+  // format literal (`write!`/`format!`/`println!`). In a Rust format string
+  // both braces are metacharacters, so an unescaped one is either a hard error
+  // ("invalid format string: unmatched `}`") or -- when the surrounding text
+  // happens to parse as a placeholder, e.g. a literal `{0}` next to a real
+  // argument -- SILENTLY DIFFERENT OUTPUT.
+  //
+  // CALL THIS ONLY ON LITERAL TEXT, never on a placeholder this converter
+  // itself synthesised: doubling a real `{}` prints `{}` instead of the value,
+  // which is silent wrongness in the opposite direction. Where a caller both
+  // escapes literals and inserts placeholders (printf2fmt), escape FIRST and
+  // insert placeholders AFTER, so the inserted ones are never re-escaped.
+  static std::string EscapeFmtBraces(std::string_view text);
   virtual bool VisitStringLiteral(clang::StringLiteral *expr);
 
   virtual bool VisitCXXBoolLiteralExpr(clang::CXXBoolLiteralExpr *expr);

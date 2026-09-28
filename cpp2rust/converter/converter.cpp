@@ -2714,6 +2714,18 @@ static bool IsRawCharPointer(clang::Expr *arg) {
   return mapped.starts_with("*const ") || mapped.starts_with("*mut ");
 }
 
+std::string Converter::EscapeFmtBraces(std::string_view text) {
+  std::string out;
+  out.reserve(text.size());
+  for (char c : text) {
+    if (c == '{' || c == '}') {
+      out += c;
+    }
+    out += c;
+  }
+  return out;
+}
+
 bool Converter::GetFmtArg(clang::Expr *arg, std::string &fmt,
                           std::string &fmt_args, const char *&fmt_trait,
                           std::string &fmt_width) {
@@ -2728,9 +2740,12 @@ bool Converter::GetFmtArg(clang::Expr *arg, std::string &fmt,
     // Delete " from string
     trim.remove_prefix(1);
     trim.remove_suffix(1);
-    fmt += trim;
+    // LITERAL text, so braces must be doubled. `trim` is already backslash-
+    // escaped, which is orthogonal: a `{` in it is a real brace either way.
+    fmt += EscapeFmtBraces(trim);
   } else if (auto ch = GetEscapedUTF8CharLiteral(arg); !ch.empty()) {
-    fmt += std::move(ch);
+    // `os << '{'` is literal text too.
+    fmt += EscapeFmtBraces(ch);
   } else if (arg_str.contains("std::endl")) {
     fmt += "\\n";
   } else if (arg_str.contains("std::hex")) {
