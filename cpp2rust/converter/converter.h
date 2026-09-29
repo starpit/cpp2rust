@@ -986,6 +986,36 @@ protected:
   // answer this question in the unsafe model, which never pushes TraitDecl.
   bool in_trait_body_ = false;
 
+  // Rust name of the record whose item-level block (`impl <Name> { ... }` or
+  // `trait <Name>__Virtual { ... }`) is OPEN right now, as opened by
+  // ConvertCXXMethodDecls; empty when no such block is open.
+  //
+  // ⛔ WHY THIS EXISTS. `ConvertCXXMethodDecls` iterates `decl->methods()` AND
+  // THEN `ForEachTemplateInstantiatedMethod(decl, ...)`, both inside the one
+  // `impl <Name> {` it opened. A member function template with an OUT-OF-LINE
+  // explicit specialization (`template <> void LoopNode::walk<kPreOrder>(...)`,
+  // dcc/src/Analysis/LoopTree.cpp:19) reaches the second loop, and
+  // `isTemplateInstantiation()` is FALSE for TSK_ExplicitSpecialization, so
+  // VisitCXXMethodDecl (:2306) routed it to ConvertOutOfLineMethod, which opened
+  // a SECOND `impl <Name> {` nested inside the first. Braces stay balanced, so
+  // the emission looks fine and the converter exits rc=0 from its own point of
+  // view -- but the file does not PARSE, rustfmt exits nonzero, cpp2rust.cpp:255
+  // prints `ERROR: failed to run rustfmt` and rc becomes 1 with no usable `.rs`.
+  // Since rustfmt is the only Rust parser the pipeline runs, such a TU is
+  // invisible to every compile-level instrument: it reads as "no output", not as
+  // "does not compile".
+  std::string open_item_block_record_;
+
+  struct PushOpenItemBlockRecord {
+    Converter &c;
+    std::string prev;
+    PushOpenItemBlockRecord(Converter &c, std::string v)
+        : c(c), prev(c.open_item_block_record_) {
+      c.open_item_block_record_ = std::move(v);
+    }
+    ~PushOpenItemBlockRecord() { c.open_item_block_record_ = std::move(prev); }
+  };
+
   // True while emitting the IN-PLACE `impl Default` arm added for a class whose
   // only default constructor is IMPLICIT (AddDefaultTrait). There the receiver
   // local `this` is a `&mut Self` aimed at a `MaybeUninit` slot, NOT the
