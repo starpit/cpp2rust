@@ -89,8 +89,21 @@ namespace llvm {
 // byte-identical to the forward declaration it replaces, so SuppressDefaultTemplate-
 // Args behaves exactly as before and t1/t2/t3's keys are unchanged (verified
 // character by character against the frozen BEFORE tree).
+//
+// ROW g3057, 2026-09-29: three static members ADDED to the declaration --
+// getEmptyKey/getTombstoneKey/getHashValue -- purely so f32/f33/f34 below (which
+// key the MEASURED `KeyT = unsigned int` instantiation) can compile against a
+// qualified static call, exactly as rules/mlir's `WalkResult` declares
+// advance()/interrupt()/skip() for its own f1710-f1712.  Declaring them here does
+// NOT create a generic rule for them -- no generic target body is written, only
+// the three CONCRETE unsigned-int free functions below are -- so this cannot
+// regress the "type key with no method key" hazard the other direction: it adds
+// exactly the members that are keyed and no others.
 template <typename KeyT, typename ValueT = void> struct DenseMapInfo {
   DenseMapInfo();
+  static KeyT getEmptyKey();
+  static KeyT getTombstoneKey();
+  static unsigned getHashValue(const KeyT &Val);
 };
 
 namespace detail {
@@ -764,4 +777,67 @@ template <typename T1, typename T2> using t8 = llvm::DenseMapInfo<T1, T2>;
 // keeps f5 for the one-argument arity.
 template <typename T1, typename T2> llvm::DenseMapInfo<T1, T2> f31() {
   return llvm::DenseMapInfo<T1, T2>();
+}
+
+// ---------------------------------------------------------------------------
+// f32-f34 -- ROW g3057, 2026-09-29.  CLOSES the "type key with no method key"
+// hazard the t6/t8 comments left open, for the one MEASURED instantiation:
+// `llvm::DenseMapInfo<unsigned int>`.  g3052 found 12 asks / 12 `result: None`
+// for exactly these three signatures on `UniformGroupAnalysis.cpp`'s -verbose
+// leg; the t6/t8 comments above independently found the SAME 3-method, 0-hit
+// shape (36 asks over 3 *bucket-A rc=0* TUs: ExPlanOps.cpp, KTDFTypes.cpp,
+// KtdpAttrs.cpp) and recorded exactly the values to use without guessing them.
+//
+// WHO CALLS THESE -- MEASURED, not inferred.  `DenseMapInfo` is spelled 0 times
+// in dt_src's own .cpp/.h, but that is not evidence of 0 calls (see t6/t8's own
+// correction of that exact mistake).  The actual caller is MLIR TableGen's
+// generated per-enum `DenseMapInfo<EnumT>` specialisation, e.g.
+//   dataflow-scheduler/.../DataflowEnums.h.inc:93-109:
+//     template<> struct DenseMapInfo<::mlir::dataflow::DataflowRoutingDirection> {
+//       using StorageInfo = ::llvm::DenseMapInfo<uint32_t>;
+//       static ... getEmptyKey() { return cast<...>(StorageInfo::getEmptyKey()); }
+//       ... getTombstoneKey() { return cast<...>(StorageInfo::getTombstoneKey()); }
+//       static unsigned getHashValue(...) { return StorageInfo::getHashValue(cast<uint32_t>(val)); }
+//       static bool isEqual(...) { return lhs == rhs; }   // does NOT delegate -- why isEqual is 0 asks, not 12
+//     };
+// This specialisation is declared inside a textually-#included .inc, so
+// `IsUserDefinedDecl` (converter_lib.cpp:173) is true for it and the converter
+// PORTS it -- i.e. converts its method bodies -- which is why `StorageInfo::
+// getEmptyKey()` (== `llvm::DenseMapInfo<uint32_t>::getEmptyKey()` ==
+// `llvm::DenseMapInfo<unsigned int>::getEmptyKey()`, uint32_t and unsigned int
+// being the same canonical type) is searched at all. This pattern is generated
+// once per TableGen enum across the whole mlir/dataflow-scheduler corpus, so the
+// 3-TU reproduction above is a lower bound, not the full extent.
+//
+// VALUES -- read out of THIS toolchain's real header, not assumed:
+// llvm/ADT/DenseMapInfo.h:112-129, the constrained
+// `is_integral_v<T> && !is_same_v<T, char>` partial specialisation `unsigned int`
+// actually resolves to (there is no dedicated `DenseMapInfo<unsigned>`):
+//   getEmptyKey()      -> std::numeric_limits<T>::max()                = 0xFFFFFFFFu
+//   getTombstoneKey()  -> is_unsigned_v<T> so max() - 1                = 0xFFFFFFFEu
+//   getHashValue(Val)  -> sizeof(unsigned int) is NOT > sizeof(unsigned),
+//                         so the ELSE branch: static_cast<unsigned>(Val * 37U)
+//                         -- unsigned multiplication, DEFINED to wrap, hence
+//                         `wrapping_mul` on the Rust side, not `*` (which panics
+//                         on overflow in a debug build and would be a semantics
+//                         change, not a translation).
+// isEqual is DELIBERATELY NOT keyed here: measured 0 asks (12, not 16, across
+// every witness), because the generated wrapper's own isEqual compares the enum
+// with `==` directly and never delegates to StorageInfo -- keying it now would
+// be a guess with no observed call site, which the standing rule (leave unkeyed
+// members OUT, loud) forbids.
+//
+// Written CONCRETE (KeyT = unsigned int), not generic over T1 like f5/f31,
+// because the tombstone/hash branching above is type-dependent and has been
+// measured for `unsigned int` only; a generic rule would either have to
+// reproduce that branching (unmeasured for every other T) or be silently wrong
+// for it. Concrete is what stays honest: an as-yet-unseen `DenseMapInfo<long>::
+// getEmptyKey()` search still returns `None` and reaches rustc loudly, exactly
+// as intended.
+unsigned int f32() { return llvm::DenseMapInfo<unsigned int>::getEmptyKey(); }
+
+unsigned int f33() { return llvm::DenseMapInfo<unsigned int>::getTombstoneKey(); }
+
+unsigned int f34(const unsigned int &a0) {
+  return llvm::DenseMapInfo<unsigned int>::getHashValue(a0);
 }

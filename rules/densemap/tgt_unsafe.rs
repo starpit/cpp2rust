@@ -305,3 +305,22 @@ fn t8<T1, T2>() -> () {
 unsafe fn f31<T1, T2>() -> () {
     ()
 }
+
+// f32-f34 -- ROW g3057.  `llvm::DenseMapInfo<unsigned int>`'s three traits
+// members, for the ONE measured instantiation (KeyT = unsigned int); see the
+// f32-f34 comment block in src.cpp for who calls these and where the values
+// come from (llvm/ADT/DenseMapInfo.h:114-129 in this toolchain).
+unsafe fn f32() -> u32 {
+    u32::MAX
+}
+
+unsafe fn f33() -> u32 {
+    u32::MAX - 1
+}
+
+// C++ `static_cast<unsigned>(Val * 37U)` is unsigned multiplication, DEFINED to
+// wrap on overflow -- `wrapping_mul`, not `*`, which panics on overflow in a
+// debug build and would silently change the hash function's semantics.
+unsafe fn f34(a0: u32) -> u32 {
+    a0.wrapping_mul(37)
+}

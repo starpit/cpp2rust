@@ -304,3 +304,18 @@ fn t8<T1, T2>() -> () {
 fn f31<T1, T2>() -> () {
     ()
 }
+
+// f32-f34 -- ROW g3057.  Identical to tgt_unsafe.rs: three plain u32-in/u32-out
+// functions, no ownership involved, so refcount and unsafe agree byte-for-byte
+// modulo the `unsafe fn` keyword every function in tgt_unsafe.rs carries.
+fn f32() -> u32 {
+    u32::MAX
+}
+
+fn f33() -> u32 {
+    u32::MAX - 1
+}
+
+fn f34(a0: u32) -> u32 {
+    a0.wrapping_mul(37)
+}
