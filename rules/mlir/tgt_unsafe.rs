@@ -5238,3 +5238,47 @@ fn t2619() -> dataflowir_gen::fmt::OpInst {
         <dataflowir_gen::ops::mlir_arith_ConstantOp as dataflowir_gen::MlirOp>::DEF,
     )
 }
+
+// ===========================================================================
+// GAP FAMILY F4 -- g3077, 2026-09-29.  See src.cpp for the member censuses, the
+// fidelity restriction on t2630's unset state, and the three spellings left loud.
+
+// t2630 -- `mlir::OpBuilder::InsertPoint` -> `(usize, usize)`, the (block index,
+// op index) pair `dataflowir_gen::OpBuilder` already keeps its insertion point in
+// (`insertion_block` build.rs:614, `insertion_index` :619, `set_insertion_point`
+// :628).  MLIR's own InsertPoint is `{Block *, Block::iterator}` (Builders.h:327),
+// the same pair in MLIR's coordinates, so this is the model's representation of the
+// type and not a stand-in for it.
+// ⛔ THE INIT VALUE IS NOT A SENTINEL.  `(0, 0)` is the start of the first block --
+// exactly where `OpBuilder::new(new_block_list_with_entry())` (t440's own init) puts
+// the insertion point -- so a default-initialised InsertPoint and a
+// default-initialised builder agree, which is the only consistent pair available.
+fn t2630() -> (usize, usize) {
+    (0_usize, 0_usize)
+}
+
+// f2630 -- `saveInsertionPoint() const`, 25 sites.  The `let` binds the receiver ONCE:
+// the body is INLINED, and `(a0.insertion_block(), a0.insertion_index())` would name
+// the receiver expression twice -- the hazard f403's comment records.
+fn f2630(a0: &dataflowir_gen::OpBuilder) -> (usize, usize) {
+    let __b = a0;
+    (__b.insertion_block(), __b.insertion_index())
+}
+
+// f2631 -- `restoreInsertionPoint(InsertPoint)`, 22 sites.  `&mut` because the header's
+// receiver is non-const and `set_insertion_point` takes `&mut self`.  The `let` binds
+// the argument ONCE for the same inlining reason as f2630 -- `insPts.top()` is the one
+// non-variable argument in the corpus (ddl_conversion.cpp:2958) and naming it twice
+// would evaluate it twice.
+fn f2631(a0: &mut dataflowir_gen::OpBuilder, a1: (usize, usize)) {
+    let __ip = a1;
+    a0.set_insertion_point(__ip.0, __ip.1)
+}
+
+// t2631 -- `mlir::ConversionPatternRewriter` -> `dataflowir_gen::OpBuilder`.  t542's
+// body VERBATIM: DialectConversion.h:839 derives it from `PatternRewriter`, which
+// t542 already maps to this type, so the type carrier is identical.  No rewrite verb
+// is keyed, for t541-t543's recorded `Operation *`/`OpHandle` reason.
+fn t2631() -> dataflowir_gen::OpBuilder {
+    dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
+}

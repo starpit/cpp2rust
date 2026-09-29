@@ -1563,9 +1563,25 @@ class PassManager {};
 // regen failure rather than a converter gap.  t440's key is unaffected: it is
 // ARITY 0, FULLY CONCRETE, so the key is the bare name `mlir::OpBuilder` and a
 // base class does not enter it.
+// ⭐ `InsertPoint` AND THE TWO MEMBERS THAT MOVE IT, ADDED 2026-09-29 (g3077, F4).
+// `class InsertPoint` is Builders.h:327, nested inside `OpBuilder` exactly as
+// `Listener` is, so it is declared HERE for the same encloser reason -- the key is
+// `mlir::OpBuilder::InsertPoint` and a wrong encloser makes it dead.  Keyed t2630.
+// `saveInsertionPoint() const` (Builders.h:385) and `restoreInsertionPoint(InsertPoint)`
+// (Builders.h:390) are declared because they are keyed as f2630/f2631; the `const` on
+// the first is copied from the header, because it enters the recorded signature.
+// ⛔ NO OTHER `InsertPoint` MEMBER IS DECLARED.  `isSet()`, `getBlock()`, `getPoint()`
+// and both constructors are absent, measured: over repos/dt_src the receivers that
+// hold an InsertPoint (`insert_point`, `insert_pt`, `ckp_insert_pt`,
+// `saved_insertion_pt`, `insPts`) are dotted only with `.push`/`.pop`/`.top`, which
+// belong to the `std::stack` and not to this type -- ZERO member calls on an
+// InsertPoint anywhere in the corpus, and zero default-constructed ones.
 class OpBuilder : public Builder {
 public:
   struct Listener {};
+  class InsertPoint {};
+  InsertPoint saveInsertionPoint() const;
+  void restoreInsertionPoint(InsertPoint ip);
 };
 
 namespace detail {
@@ -6999,6 +7015,10 @@ class DenseArrayAttr {};
 class RewriterBase : public OpBuilder {};
 class PatternRewriter : public RewriterBase {};
 class IRRewriter : public RewriterBase {};
+// ⭐ ADDED 2026-09-29 (g3077, F4): DialectConversion.h:839 reads
+// `class ConversionPatternRewriter final : public PatternRewriter`, i.e. this is the
+// FOURTH member of the t541/t542/t543 family and not a new question.  Keyed t2631.
+class ConversionPatternRewriter : public PatternRewriter {};
 
 } // namespace mlir
 
@@ -11669,3 +11689,164 @@ using t2618 = mlir::affine::AffineApplyOp;
 // dsc-based-utils/DSC2ToDataflowIR/DSC2ToDataflowIR.cpp, AND a second, unlisted gate TU found by
 // this row: dcc/src/Transform/Dataflow/LoopUnrollForShuffleOp.cpp aborts on the same spelling.
 using t2619 = mlir::arith::ConstantIntOp;
+
+// ===========================================================================
+// GAP FAMILY F4 -- REWRITER / BUILDER INFRASTRUCTURE.  g3077, 2026-09-29.
+// Indices start at 2630 to leave 2617-2629 clear of the in-flight F1 continuation
+// (g3073), which extends the t2610-t2616 block; indices are per-module and need
+// not be dense.
+//
+// TWO OF THE FIVE SPELLINGS ARE KEYED HERE.  The other three are left OUT so they
+// keep aborting LOUDLY at translate time, each with its measurement and its named
+// unblocker, at the bottom of this block.
+// ---------------------------------------------------------------------------
+
+// t2630 + f2630/f2631 -- `mlir::OpBuilder::InsertPoint`, AND THE TWO MEMBERS THAT
+// PRODUCE AND CONSUME IT.  This is a COMPLETE row, not a bare type key.
+//
+// ⭐ WHY IT IS WRITABLE, AGAINST THE EXPECTATION THAT IT WAS NOT.  The standing F4
+// note said "a guard/insert-point shape requires the builder to be modelled first;
+// if `OpBuilder` is not modelled, the key is a lie."  ⛔ `OpBuilder` IS MODELLED --
+// t440 lands it on `dataflowir_gen::OpBuilder` (build.rs:572) -- and that model
+// carries the insertion point AS AN EXPLICIT PAIR OF INDICES:
+//     OpBuilder::insertion_block(&self)  -> usize        build.rs:614
+//     OpBuilder::insertion_index(&self)  -> usize        build.rs:619
+//     OpBuilder::set_insertion_point(&mut self, block: usize, index: usize)  :628
+// MLIR's own InsertPoint is `{Block *block, Block::iterator point}` (Builders.h:
+// 327-346) -- a block plus a position within it -- so `(usize, usize)` is that same
+// pair in the model's own coordinates, not a stand-in for it.  The premise the
+// refusal rested on is simply false as of t440.
+//
+// ⭐ THE MEMBER SURFACE IS EMPTY, SO THE "TYPE KEY WITH NO METHOD KEY" HAZARD DOES
+// NOT ARISE.  Measured over repos/dt_src: every InsertPoint-holding receiver
+// (`insert_point`, `insert_pt`, `ckp_insert_pt`, `saved_insertion_pt`, `insPts`) is
+// dotted ONLY with `.push` / `.pop` / `.top`, and all five of those belong to the
+// `std::stack<mlir::OpBuilder::InsertPoint>` at ddl_conversion.cpp:2946 rather than
+// to this type.  `isSet()`, `getBlock()`, `getPoint()`: ZERO call sites.  The type
+// is a pure opaque token in this corpus -- saved, stored, handed back.
+//
+// ⭐ AND THE TWO OpBuilder MEMBERS THAT MOVE IT ARE FAITHFUL, NOT TRANSLITERATED.
+// 25 `.saveInsertionPoint()` sites and 22 `.restoreInsertionPoint()` sites, and each
+// lowers to exactly the model call that means the same thing.  Keying them is what
+// makes this row complete rather than a silent E0599 farm: without f2630/f2631 a
+// t2630 alone would clear the type abort and leave 47 textually-emitted member calls
+// on a Rust tuple.
+//
+// ⛔ THE ONE FIDELITY RESTRICTION, STATED RATHER THAN HIDDEN.  MLIR's InsertPoint has
+// an UNSET state (`InsertPoint() = default`, `isSet()` false, and
+// `restoreInsertionPoint` then calls `clearInsertionPoint()` instead of setting one).
+// `(usize, usize)` cannot represent it, and `dataflowir_gen::OpBuilder` has no
+// `clear_insertion_point` to lower that branch onto, so an `Option<(usize, usize)>`
+// model would only move the unrepresentable branch rather than write it.  The branch
+// is UNREACHABLE IN THIS CORPUS: there is no default-constructed InsertPoint anywhere
+// in repos/dt_src (the only declaration is the `std::stack` above, and every element
+// pushed into it comes from a live `builder.saveInsertionPoint()`), and every one of
+// the 22 restores consumes a point produced by one of the 25 saves.  ⭐ The unblocker
+// if a future TU does default-construct one: `dataflowir_gen::OpBuilder::
+// clear_insertion_point(&mut self)` plus an unset representation -- a dataflowir-gen
+// request, named here so it does not have to be re-derived.
+using t2630 = mlir::OpBuilder::InsertPoint;
+
+// f2630 -- `mlir::OpBuilder::saveInsertionPoint() const`.  25 sites.  The `const` is
+// on the receiver because it is on the header's declaration and enters the key.
+mlir::OpBuilder::InsertPoint f2630(const mlir::OpBuilder &a0) {
+  return a0.saveInsertionPoint();
+}
+
+// f2631 -- `mlir::OpBuilder::restoreInsertionPoint(InsertPoint)`.  22 sites.  Non-const
+// receiver, because the header's is non-const and the model's setter takes `&mut self`.
+void f2631(mlir::OpBuilder &a0, mlir::OpBuilder::InsertPoint a1) {
+  return a0.restoreInsertionPoint(a1);
+}
+
+// t2631 -- `mlir::ConversionPatternRewriter`.  DialectConversion.h:839,
+// `class ConversionPatternRewriter final : public PatternRewriter`.
+//
+// ⭐ THIS IS THE FOURTH MEMBER OF AN ALREADY-LANDED FAMILY AND CARRIES NO NEW
+// DECISION.  t541 `mlir::RewriterBase`, t542 `mlir::PatternRewriter` and t543
+// `mlir::IRRewriter` all map to `dataflowir_gen::OpBuilder` on the ground that
+// PatternMatch.h:368/780/799 make them OpBuilders by inheritance.
+// `ConversionPatternRewriter` derives from t542's own type, so the identical argument
+// reaches it verbatim: the TYPE is exactly OpBuilder, and t2631's body is t542's body
+// character for character in both overlays.
+//
+// ⛔ NO REWRITE VERB IS KEYED, AND THAT IS THE SAME DELIBERATE ABSENCE t541-t543
+// ALREADY RECORD, NOT A NEW HOLE.  The repo-wide `rewriter.<member>` census in the
+// t541-t543 block above (`replaceOp` 49, `eraseOp` 30, `replaceOpWithNewOp` 15,
+// `notifyMatchFailure` 9, `modifyOpInPlace` 6, `inlineRegionBefore` 6, ...) was taken
+// over dt_src as a whole and therefore ALREADY INCLUDES the
+// `ConversionPatternRewriter &rewriter` parameters in Conversion/SCFToSentient and
+// Conversion/VectorChainLowering -- those receivers are spelled `rewriter` and are
+// counted in exactly those numbers.  So this key opens no member surface that the
+// family's own census had not already sized and left loud.
+// ⛔ The blocker on the verbs is unchanged and is NOT a judgement call: they take
+// `mlir::Operation *`, t36 maps that to `*mut fmt::OpInst` -- a DETACHED record -- and
+// only `OpHandle` reaches an op in its block, so a verb key would mutate a copy and
+// lose the rewrite silently at rc=0.  They stay loud at rustc (`no method named
+// replaceOp on dataflowir_gen::OpBuilder`).  ⭐ Unblocker, already named at t541:
+// `OpBuilder::handle_of(&OpInst) -> Option<OpHandle>` in dataflowir-gen.
+using t2631 = mlir::ConversionPatternRewriter;
+
+// ---------------------------------------------------------------------------
+// ⛔ THE THREE F4 SPELLINGS DELIBERATELY LEFT WITHOUT A KEY, SO THEY KEEP ABORTING
+// LOUDLY AT TRANSLATE TIME.  Each is recorded with its measurement and its unblocker
+// so the next slot does not re-derive it.  These paragraphs change no key, so
+// ir_src/ir_unsafe/ir_refcount are unaffected by them.
+//
+// (a) `mlir::OpBuilder::InsertionGuard` -- Builders.h:348.  34 corpus sites
+//     (`InsertionGuard guard(builder)` 18, `guard(rewriter)` 9, `guard(b)` 4,
+//     `g(b)` 3), and `grep -o '\bguard\.[A-Za-z_]+'` over repos/dt_src returns
+//     **ZERO** -- it is never dotted, it is pure RAII.
+//     ⛔ AND THAT IS PRECISELY WHY A TYPE KEY ALONE WOULD BE A LIE RATHER THAN MERELY
+//     INCOMPLETE.  The guard's ENTIRE observable behaviour is in its DESTRUCTOR
+//     (Builders.h:353-356, `~InsertionGuard() { if (builder) builder->
+//     restoreInsertionPoint(ip); }`).  A key that maps it to any type without a `Drop`
+//     that restores the builder's insertion point would compile, emit nothing at the
+//     scope end, and leave the builder pointing where the guarded block left it -- so
+//     every operation created after the guarded scope goes into the WRONG BLOCK, at
+//     rc=0, with no diagnostic.  That is the one failure mode this tree forbids, and
+//     unlike the rewrite verbs it is not even detectable at rustc.
+//     ⭐ IT IS NOW GENUINELY WRITABLE, WHICH IT WAS NOT BEFORE t440 AND t2630, and the
+//     shape is fully determined -- it is scoped out of this row on SIZE, not on
+//     doubt.  It needs a struct with a `Drop`, and per the standing rule a
+//     struct-shaped model lives in `libcc2rs/src/` and is `pub use`d from `lib.rs`
+//     (a file-level item in a `tgt_*.rs` is NOT copied into the emitted output).
+//     The two overlays need different holders, because the unsafe arm annotates its
+//     temporaries and cannot share one generic spelling with the refcount arm:
+//         unsafe:   { b: *mut dataflowir_gen::OpBuilder, ip: (usize, usize) }
+//         refcount: { b: libcc2rs::Ptr<dataflowir_gen::OpBuilder>, ip: (usize, usize) }
+//     with `Drop::drop` calling `set_insertion_point(self.ip.0, self.ip.1)` and a
+//     one-argument constructor key for `InsertionGuard(OpBuilder &)`.  ⭐ NAMED
+//     UNBLOCKER: a `libcc2rs` addition, i.e. exactly the `039489e7` move that fixed
+//     `llvm::cl::OptionEnumValue`, plus one f-key for the constructor.  ⚠️ The
+//     `cc2.rs` `ByteRepr` marker for `OpBuilder` that the refcount holder needs is
+//     ALREADY in place (t440's refcount note records it), so that is not a blocker.
+//
+// (b) `mlir::IRMapping` -- the refusal recorded at the bottom of this file by the
+//     2026-09-29 `irmap` slot is UPHELD, and re-reading it against a second,
+//     independent member census did not move it.  My own count over repos/dt_src,
+//     receiver-aware over the five declaration names the corpus uses (`bv_map`,
+//     `mapper`, `operandMap`, `arg_map`, `ir_map`): `.map` 33, `.lookupOrDefault` 8,
+//     `.lookupOrNull` 7, `.lookup` 3, `.contains` 3, and ZERO `.erase`/`.clear` --
+//     the same five members and the same write/read split that slot measured at 42
+//     writes / 50 reads over a wider receiver set.  The load-bearing claim is NOT the
+//     member list and NOT the map model (a Vec-of-pairs + linear scan needs only
+//     `PartialEq`, as rules/smallset already establishes): it is that the POPULATOR
+//     IS `clone`, that `clone` needs an `OpHandle` the rule tree cannot obtain from a
+//     `*mut fmt::OpInst`, and that with `clone` unmapped the table is EMPTY AT EVERY
+//     READ -- at which point `lookupOrDefault`'s 10 sites silently return the
+//     PRE-CLONE value with no diagnostic. That is a silent miscompile, so landing the
+//     type plus all five members does NOT discharge the "no bare type key" rule here.
+//     ⭐ NAMED UNBLOCKER, identical to the rewrite verbs': `OpBuilder::handle_of
+//     (&OpInst) -> Option<OpHandle>` (or `BlockList::find_op`) in dataflowir-gen,
+//     which converts BOTH this row and the t541-t543 verb family from refusals into
+//     ordinary rules work.  ⛔ Do not reopen IRMapping before that lands.
+//
+// (c) `mlir::RewritePatternSet` -- the 2026-09-28 refusal at the t590/t591 block is
+//     UPHELD.  Its measurement stands on re-check: the only thing the corpus does
+//     with one is `patterns.add<Pattern>(...)`, a VARIADIC MEMBER TEMPLATE whose
+//     template argument is a pattern class in an anonymous namespace, so the argument
+//     never enters a recorded signature and one key would have to answer for every
+//     instantiation.  `grep -rn 'RewritePattern\|PatternSet' dataflowir-gen/src` is
+//     still EMPTY, so there is no type to point a key at either.  ⭐ NAMED UNBLOCKER:
+//     a rewrite-pattern model in dataflowir-gen -- strictly larger than this row.

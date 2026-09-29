@@ -4676,3 +4676,44 @@ fn t2619() -> dataflowir_gen::fmt::OpInst {
         <dataflowir_gen::ops::mlir_arith_ConstantOp as dataflowir_gen::MlirOp>::DEF,
     )
 }
+
+// ===========================================================================
+// GAP FAMILY F4 -- g3077, 2026-09-29.  See src.cpp for the member censuses, the
+// fidelity restriction on t2630's unset state, and the three spellings left loud.
+
+// t2630 -- `mlir::OpBuilder::InsertPoint` -> `(usize, usize)`.  IDENTICAL to the
+// unsafe overlay, and legitimately so: the pair is two plain indices with no pointer
+// and no ownership in it, so there is nothing for a `Ptr`/`StrongPtr` to wrap -- the
+// same reason t540 and t541-t543 are byte-identical across the two overlays.
+fn t2630() -> (usize, usize) {
+    (0_usize, 0_usize)
+}
+
+// f2630 -- `saveInsertionPoint() const`, 25 sites.  Same body as the unsafe overlay:
+// the receiver arrives as `&dataflowir_gen::OpBuilder` in BOTH overlays (t440's note
+// records why -- the builder is modelled on an `Rc<RefCell<Vec<Block>>>` BlockList,
+// this overlay's own representation, so no wrapper is needed at the type level), and
+// the returned pair is plain indices.  The `let` binds the receiver ONCE because the
+// body is inlined.
+fn f2630(a0: &dataflowir_gen::OpBuilder) -> (usize, usize) {
+    let __b = a0;
+    (__b.insertion_block(), __b.insertion_index())
+}
+
+// f2631 -- `restoreInsertionPoint(InsertPoint)`, 22 sites.  Same body and same `&mut`
+// receiver as the unsafe overlay.  ⭐ NO `.borrow()`/`.borrow_mut()` appears here and
+// none is needed: the interior `RefCell` is INSIDE `OpBuilder`'s own BlockList and is
+// taken by `set_insertion_point` itself, so this body holds no guard across anything
+// and cannot produce the "RefCell already borrowed" panic that an inlined guard held
+// across a `match` arm produces.
+fn f2631(a0: &mut dataflowir_gen::OpBuilder, a1: (usize, usize)) {
+    let __ip = a1;
+    a0.set_insertion_point(__ip.0, __ip.1)
+}
+
+// t2631 -- `mlir::ConversionPatternRewriter` -> `dataflowir_gen::OpBuilder`.  t542's
+// body VERBATIM in this overlay too, for t542's own recorded reason: `cc2.rs` already
+// carries the `ByteRepr` marker for `OpBuilder`, so the type needs no wrapper here.
+fn t2631() -> dataflowir_gen::OpBuilder {
+    dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
+}
