@@ -650,7 +650,48 @@ public:
 // `Option<&'static TdOpDef>`, and `None` is the null handle a
 // default-constructed `OperationName` is.  No MEMBER is mapped, so
 // `getAttributeNames()` still aborts loudly rather than lying.
-class OperationName {};
+//
+// ⭐⭐ UPDATE 2026-09-29 (opname slot): TWO MEMBERS ARE NOW DECLARED HERE, IN
+// PLACE -- `getStringRef()` (f2100) and `isRegistered()` (f2101).  They are the
+// TOP TWO ENTRIES of the first ranking of the SILENT-MEMBER class: 200 and 199
+// of 312 TUs, 6,052 and 5,962 sites.  ⛔ THEY DO NOT ABORT.  `mlir::OperationName`
+// IS keyed (t18), so the converter emitted `name.getStringRef()` TEXTUALLY into the
+// `.rs`; the TU stayed bucket A at rc=0, rustfmt-clean, and the failure showed up
+// only under real rustc as E0599.  That is the `std::hash<int>` mistake measured at
+// 427 sites / 190 TUs: A TYPE KEY WITH NO METHOD KEY IS STRICTLY WORSE THAN NO KEY
+// AT ALL, because it bypasses the loud path.  These two close it for this class.
+//
+// ⭐ BOTH ARE HONESTLY ANSWERABLE ON THE MODEL, and that is the whole test:
+//  * `isRegistered()` is `typeID != TypeID::get<void>()` (OperationSupport.h:158),
+//    i.e. "is there a registry record behind this handle".  t18's model is
+//    `Option<TdOpDef>` and THE PARAGRAPH ABOVE ALREADY SAYS `None` IS THE NULL /
+//    UNREGISTERED HANDLE.  So `is_some()` is not an approximation of
+//    `isRegistered()` -- it is the same predicate on the same discriminant.
+//    ⛔ A HARDCODED `true` WOULD HAVE BEEN A SILENT LIE and the key would have had
+//    to be left out; it is not needed, because the Option discriminant answers.
+//  * `getStringRef()` is `return getIdentifier();` (OperationSupport.h:473), the
+//    FULLY-QUALIFIED op name INCLUDING THE DIALECT -- `dataflow.program_unit`, not
+//    `program_unit`.  ⛔ `def.mnemonic` ALONE IS THE WRONG ANSWER and isa.rs:78
+//    says why in the crate's own words: "NOT an identity on its own: `arith.constant`
+//    and `func.constant` share it".  The dialect half is `dataflowir_gen::row_dialect`
+//    (lib.rs:154, "the printed dialect prefix of a row ... from its ODS base class"),
+//    and isa.rs:86 already composes exactly this pair and documents it as "the
+//    printed op name, what C++ `getOperationName()` returns".
+// The NULL-handle path on `getStringRef()` is C++ UB (an `OperationName` is not
+// default-constructible; every value comes from `lookup()`/`getRegisteredInfo()`),
+// so it is a `panic!("ub: ...")` -- the f670 / equivalenceclasses idiom, loud, never
+// a fabricated empty string.
+//
+// ⚠️ BY-VALUE RECEIVER ON BOTH, the f1/f1713 precedent: `OperationName` is one
+// pointer and the corpus calls these on values (`name.getStringRef()`), so a
+// `const mlir::OperationName &a0` formal would record a key the corpus never asks
+// for.  `const` is recorded from the by-value formal by the preprocessor, which is
+// f1's documented behaviour; the spelling is read back out of ir_src.json.
+class OperationName {
+public:
+  llvm::StringRef getStringRef() const;
+  bool isRegistered() const;
+};
 
 // mlir/include/mlir/IR/OperationSupport.h:525 --
 // `class RegisteredOperationName : public OperationName`.  A REGISTERED op name
@@ -851,15 +892,25 @@ class OpResult {};
 // ODS-generated op class: one `Operation *`.  So it maps where `mlir::Operation`
 // maps, `fmt::OpInst`.
 //
-// ⛔ NO COMPARISON OR IDENTITY OPERATION IS MAPPED ON THIS TYPE, DELIBERATELY,
-// AND NOBODY SHOULD ADD ONE.  A C++ OpState is a HANDLE: two OpStates are the
-// same op exactly when their `Operation *` are equal.  `fmt::OpInst` is a VALUE
-// (an op's printed content), so a derived `PartialEq` on it would say two
-// distinct operations with identical content ARE the same operation -- silently
-// wrong, and invisible to any probe that does not build two identical ops.  The
-// TYPE is mapped so TUs can name it (33 rustc errors in the reference TU, and it
-// is a first-abort gate); equality is NOT, and stays absent so that a comparison
-// site aborts loudly instead.
+// ⛔ NO *STRUCTURAL* COMPARISON IS MAPPED ON THIS TYPE AND NOBODY SHOULD ADD ONE.
+// A C++ OpState is a HANDLE: two OpStates are the same op exactly when their
+// `Operation *` are equal.  `fmt::OpInst`'s CONTENT FIELDS are a VALUE (an op's
+// printed form), so a derived `PartialEq` on it would say two distinct operations
+// with identical content ARE the same operation -- silently wrong, and invisible to
+// any probe that does not build two identical ops.
+//
+// ⭐⭐ UPDATE 2026-09-29 (opname slot): `operator==` IS NOW KEYED, AS f2102 AT THE
+// TAIL, AND THIS PARAGRAPH'S OLD BLANKET REFUSAL WAS BASED ON AN INCOMPLETE
+// PREMISE.  `OpInst` is not only content: `OpInst.id: OpId` (fmt.rs:429, reachable
+// as `op_id()` at fmt.rs:892, stamped by `build.rs:708 OpId::fresh()`) is the
+// modelled `Operation *`, and fmt.rs:386 introduces it precisely as "THE IDENTITY
+// OF ONE OPERATION, which is not the same thing as its contents".  So IDENTITY IS
+// EXPRESSIBLE and f2102 compares `op_id()` only -- it reads no content field.  The
+// row it closes is the first abort on 10 TUs.
+// ⚠️ The one case the model cannot answer -- both sides `OpId::NONE`, i.e. two
+// never-inserted handles -- PANICS in f2102 rather than returning the false `true`
+// a bare `==` would give.  Read f2102's note in tgt_unsafe.rs before touching it.
+// Every OTHER member of OpState remains unmapped and still aborts loudly.
 class OpState {};
 
 // mlir/include/mlir/IR/Value.h:490 -- `mlir::BlockArgument`, a `Value` subclass
@@ -10101,3 +10152,74 @@ bool f1713(mlir::WalkResult a0) { return a0.wasInterrupted(); }
 template <typename T1> void f1800(mlir::Region &a0, T1 &&a1) {
   return a0.walk(std::move(a1));
 }
+
+// ===========================================================================
+// opname slot, 2026-09-29.  Indices t2100+/f2100+ ONLY -- the `oppass` slot is
+// appending at this same tail with t2000+/f2000+ for the
+// `mlir::OperationPass<mlir::ModuleOp>` row.  Two tail appends collided twice
+// today and once swallowed a closing `}`, nesting nine keys INSIDE another key's
+// body with zero conflict markers, after which HEAD could not regenerate
+// `rules/mlir` at all (`Aborted (core dumped)`, no `OK` line).  Hence the
+// disjoint index band and the staged-content brace count in the report.
+//
+// f2100/f2101 -- `mlir::OperationName::getStringRef()` / `::isRegistered()`.
+// f2102       -- `bool mlir::operator==(mlir::OpState, mlir::OpState)`.
+// The declarations f2100/f2101 need are IN PLACE in `class OperationName` above
+// (~:653): a C++ class cannot be reopened, and appending a second
+// `namespace mlir { class OperationName { ... } }` is a redefinition error that
+// cost a merge today.
+// ===========================================================================
+
+// ---- f2100: `mlir::OperationName::getStringRef()` --------------------------
+// 200 of 312 TUs, 6,052 sites -- the #1 entry in the silent-member ranking
+// (queue g2977).  See the argument in the `class OperationName` block above: this
+// is a SILENT E0599 today, not an abort, because t18 keys the type and the
+// converter therefore emitted `name.getStringRef()` textually at rc=0.
+// ⛔ The body must NOT be `mnemonic` alone -- `getIdentifier()` is the
+// dialect-qualified name and isa.rs:78 records that `arith.constant` and
+// `func.constant` share a mnemonic.
+llvm::StringRef f2100(mlir::OperationName a0) { return a0.getStringRef(); }
+
+// ---- f2101: `mlir::OperationName::isRegistered()` --------------------------
+// 199 of 312 TUs, 5,962 sites -- the #2 entry, SAME receiver variable and SAME
+// mapped type as f2100 (2,001 of 2,218 sampled `.getStringRef(` receivers were
+// `name: Option<dataflowir_gen::TdOpDef>`).  Honest because the model's Option
+// discriminant IS the registry-record predicate; see the block above.
+bool f2101(mlir::OperationName a0) { return a0.isRegistered(); }
+
+namespace mlir {
+// ---- f2102: `bool mlir::operator==(mlir::OpState, mlir::OpState)` ----------
+// FIRST ABORT ON 10 TUs, measured two ways.  A census of the
+// `CXXOperatorCallExpr` family had `==` gating ZERO TUs; it was hidden behind
+// `rules/functional` f17-f22 (`function_ref::operator()`), and when those landed
+// `==` became the first abort on 10 of the 11 TUs that moved.  An independent
+// 30-TU random sample already had it at 3 of 20 B-rows.
+//   LLVM ERROR: unsupported CXXOperatorCallExpr: == on (mlir::OpState, mlir::OpState)
+//     rule key: bool mlir::operator==(mlir::OpState, mlir::OpState)
+// ⚠️ The 11th TU went ELSEWHERE and is NOT this row: KTDFArch/Analysis/NodeLinks.cpp
+// aborts on `CXXOperatorCallExpr: & on (mlir::ktdf_arch::LinkDirection,
+// mlir::ktdf_arch::LinkDirection)` -- a PROJECT ENUM bitwise-and.
+//
+// ⭐ A FREE FUNCTION IN `namespace mlir`, NOT A MEMBER -- the ask spells
+// `mlir::operator==(mlir::OpState, mlir::OpState)`, by value, both operands.  The
+// namespace is REOPENED (legal; only a CLASS cannot be) and the call in the body is
+// written UNQUALIFIED so ADL resolves it -- the `rules/array` f8 recipe
+// (`return operator==(a, b);`), which records the namespace component it never
+// wrote.  ⛔ Hand-qualifying the call records the WRONG spelling and yields a dead
+// key; that was measured on a probe today.
+bool operator==(OpState, OpState);
+
+// ---- f2103: `bool mlir::operator!=(mlir::OpState, mlir::OpState)` ----------
+// ⭐⭐ A DISTINCT ROW, NOT A DUPLICATE OF f2102, AND IT WAS FOUND BY MEASUREMENT.
+// `dataflow-scheduler/lib/Dialect/KTDF/Transforms/StageCoarsening/ScopeCorrection.cpp`
+// aborts on
+//   LLVM ERROR: unsupported CXXOperatorCallExpr: != on (mlir::OpState, mlir::OpState)
+// -- `!=`, not `==`.  C++ does NOT synthesise `!=` from `==` before C++20 rewriting,
+// and the converter keys on the recorded spelling, so f2102 can never serve a `!=`
+// site: it would be a DEAD half of the pair.  Same ADL recipe, same by-value pair.
+bool operator!=(OpState, OpState);
+} // namespace mlir
+
+bool f2102(mlir::OpState a0, mlir::OpState a1) { return operator==(a0, a1); }
+
+bool f2103(mlir::OpState a0, mlir::OpState a1) { return operator!=(a0, a1); }

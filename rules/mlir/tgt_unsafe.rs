@@ -4663,3 +4663,140 @@ unsafe fn f1800<T1: FnMut(*mut dataflowir_gen::fmt::OpInst)>(
         a1(::core::ptr::from_mut(o))
     })
 }
+
+// ===========================================================================
+// opname slot, 2026-09-29 -- f2100/f2101/f2102.  Index band f2100+ is disjoint
+// from the `oppass` slot's f2000+ tail append (see src.cpp's tail banner).
+// ===========================================================================
+
+// f2100 -- `llvm::StringRef mlir::OperationName::getStringRef() const`.
+// 200 of 312 TUs, 6,052 sites: THE #1 SILENT-MEMBER ROW (queue g2977).
+// ⛔ THIS WAS NEVER AN ABORT, which is why no bucket census, placeholder census or
+// first-abort ranking could see it.  `mlir::OperationName` is keyed (t18), so the
+// converter emitted `name.getStringRef()` TEXTUALLY: the TU stayed bucket A, rc=0,
+// rustfmt-clean, and failed only under real rustc as E0599.  Exactly the
+// `std::hash<int>` shape measured at 427 sites across 190 TUs -- a type key with no
+// method key is strictly worse than no key, because it bypasses the loud path.
+//
+// ⭐ THE BODY IS THE DIALECT-QUALIFIED NAME, NOT THE MNEMONIC.  C++
+// `getStringRef()` is `return getIdentifier();` (OperationSupport.h:473) -- the
+// fully-qualified name, `dataflow.program_unit`.  The crate says the same thing in
+// its own words: isa.rs:78 on `op_mnemonic` reads "NOT an identity on its own:
+// `arith.constant` and `func.constant`" share it, and isa.rs:86 composes exactly
+// this pair, documented as "the printed op name, what C++ `getOperationName()`
+// returns".  `row_dialect` (lib.rs:154) is "the printed dialect prefix of a row ...
+// from its ODS base class"; it takes `&TdOpDef` and is re-exported at the crate
+// root, so the receiver needs no crate change.
+//
+// ⛔ THE `None` ARM IS A LOUD PANIC, NEVER AN EMPTY STRING.  `mlir::OperationName`
+// is not default-constructible and every value in the corpus comes from `lookup()`
+// / `getRegisteredInfo()` / `getRegisteredOperations()`, so reading the name out of
+// a null handle is C++ UB.  The `panic!("ub: ...")` idiom is f670's and
+// `rules/equivalenceclasses`'.  A fabricated `""` would satisfy rustc and lie.
+//
+// The `Vec<libc::c_char>` + trailing NUL is f670's verbatim: `rules/stringref` t1
+// maps `llvm::StringRef` to `Vec<libc::c_char>`.
+fn f2100(a0: Option<dataflowir_gen::TdOpDef>) -> Vec<libc::c_char> {
+    match a0 {
+        Some(ref __d) => {
+            let __s = format!("{}.{}", dataflowir_gen::row_dialect(__d), __d.mnemonic);
+            let mut __v: Vec<libc::c_char> = __s.bytes().map(|b| b as libc::c_char).collect();
+            __v.push(0);
+            __v
+        }
+        None => panic!(
+            "ub: mlir::OperationName::getStringRef() on a null op-name handle"
+        ),
+    }
+}
+
+// f2101 -- `bool mlir::OperationName::isRegistered() const`.
+// 199 of 312 TUs, 5,962 sites: the #2 silent-member row, SAME receiver variable and
+// SAME mapped type as f2100 (2,001 of 2,218 sampled `.getStringRef(` receivers were
+// `name: Option<dataflowir_gen::TdOpDef>`), so one declaring class closes both.
+//
+// ⭐⭐ WHY THIS IS HONEST AND NOT A GUESS, which is the whole bar for this key.
+// C++ `isRegistered()` is `typeID != TypeID::get<void>()` (OperationSupport.h:158)
+// -- "is there a registry record behind this handle".  t18's model is
+// `Option<TdOpDef>` and t18's OWN comment already states that `None` is the null
+// handle and the unregistered name, `Some` a `TD_OPS` registry row.  So
+// `is_some()` is not an approximation of the C++ predicate -- it is the same
+// predicate read off the same discriminant, and `TdOpDef` rows only ever come from
+// the generated table, so a `Some` cannot be an unregistered op.
+// ⛔ A HARDCODED `-> true` WAS THE NAMED FORBIDDEN OUTCOME for this key and would
+// have forced it to be left out.  It is not needed: the discriminant answers.
+fn f2101(a0: Option<dataflowir_gen::TdOpDef>) -> bool {
+    a0.is_some()
+}
+
+// f2102 -- `bool mlir::operator==(mlir::OpState, mlir::OpState)`, the first abort
+// on 10 TUs (hidden behind `rules/functional` f17-f22 until they landed).
+//
+// ⭐⭐ IDENTITY, NOT STRUCTURAL EQUALITY, AND THE MODEL CAN EXPRESS IT.  t25 maps
+// `mlir::OpState` to `fmt::OpInst`, and `OpInst` MODELS PRINTED CONTENT, so a
+// derived/structural `PartialEq` would report two DISTINCT operations with the same
+// operands and attributes as EQUAL -- in a pass that dedups or caches ops that is a
+// silent wrong answer, not a cosmetic one.  fmt.rs:386-401 says this in the crate's
+// own words ("THE IDENTITY OF ONE OPERATION, which is not the same thing as its
+// contents ... a worklist that dedups an `OpInst` by value silently drops a
+// legitimate repeat visit") AND supplies the fix: `OpInst.id: OpId`, reachable as
+// `OpInst::op_id()` (fmt.rs:892), stamped fresh per insertion by
+// `build.rs:708 inst.id = OpId::fresh();`.  `OpId` is `PartialEq`.  So this body
+// compares `op_id()`, i.e. the modelled `Operation *`, and touches NO content field.
+// ⛔ The in-tree note on `class OpState` in src.cpp previously refused every
+// comparison outright; its premise ("`OpInst` is a VALUE") is true of the CONTENT
+// fields and incomplete -- it predates/overlooks the `id` field.  The note is
+// updated in place rather than left contradicting this key.
+//
+// ⭐ THE ONE CASE THE MODEL CANNOT ANSWER IS LOUD, NOT GUESSED.  `OpId::NONE` is
+// documented as "the only id that is not unique, and never equal to a stamped one"
+// -- it is what `OpInst::new` gives an instance no builder inserted (the printer's
+// round-trip corpus).  So:
+//   * stamped vs stamped -> exact identity, both directions correct.
+//   * stamped vs NONE    -> correctly UNEQUAL; an inserted op and a never-inserted
+//                           one are genuinely two operations.
+//   * NONE vs NONE       -> THE MODEL HOLDS NO IDENTITY FOR EITHER SIDE.  A bare
+//                           `x == y` here returns `true` and is a FALSE EQUAL --
+//                           the exact silent-wrong-answer direction a structural
+//                           compare fails in.  It PANICS instead.
+// A conservative `!x.is_none() && x == y` was rejected: it never false-EQUALs, but
+// it silently false-UNEQUALs two handles on the SAME un-inserted op, so an
+// `if (op == target) erase` site would just never fire -- still a lie that compiles.
+// The panic is the only branch that neither fabricates an answer nor hides.
+fn f2102(
+    a0: dataflowir_gen::fmt::OpInst,
+    a1: dataflowir_gen::fmt::OpInst,
+) -> bool {
+    let __x = a0.op_id();
+    let __y = a1.op_id();
+    if __x.is_none() && __y.is_none() {
+        panic!(
+            "mlir::operator==(OpState, OpState): both handles carry OpId::NONE, so the model holds no identity for either side and equality cannot be decided without comparing printed content"
+        );
+    }
+    __x == __y
+}
+
+// f2103 -- `bool mlir::operator!=(mlir::OpState, mlir::OpState)`, the NEGATION of
+// f2102 and a SEPARATE KEY BECAUSE THE CORPUS ASKS FOR IT SEPARATELY:
+// `.../StageCoarsening/ScopeCorrection.cpp` aborts on `!= on (mlir::OpState,
+// mlir::OpState)` verbatim, and pre-C++20 there is no rewriting from `==`, so
+// without this key that TU stays gated no matter what f2102 does.
+// ⛔ THE BODY IS NOT `!f2102(...)` SPELT OUT -- it repeats the identity test and the
+// same loud NONE-vs-NONE refusal, because a rule body is INLINED into the translated
+// crate and may not depend on another key being in scope there (the f360-f366
+// reason).  Read f2102's note above for why this compares `op_id()` and never
+// content, and for why two `OpId::NONE` handles panic instead of answering.
+fn f2103(
+    a0: dataflowir_gen::fmt::OpInst,
+    a1: dataflowir_gen::fmt::OpInst,
+) -> bool {
+    let __x = a0.op_id();
+    let __y = a1.op_id();
+    if __x.is_none() && __y.is_none() {
+        panic!(
+            "mlir::operator!=(OpState, OpState): both handles carry OpId::NONE, so the model holds no identity for either side and inequality cannot be decided without comparing printed content"
+        );
+    }
+    __x != __y
+}
