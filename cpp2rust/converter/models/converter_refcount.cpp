@@ -2408,21 +2408,34 @@ bool ConverterRefCount::VisitCXXForRangeStmtVectorDecomposition(
       return false;
     }
   }
-  // (3) ⛔ THE BY-VALUE HOLDER IS REFUSED, and this gate is the whole reason the
-  // arm is not simply "lower every decomposing vector range-for". `for (auto
-  // [a, b] : v)` copies the element in C++, so a write through `a` must NOT reach
-  // the container -- but the ONLY spelling this model has for the element field is
-  // `.clone()` of a `Value<..>`, which is an `Rc` clone that SHARES the cell. The
-  // aliasing that makes the reference holder correct makes the by-value holder
-  // SILENTLY WRONG (a write travels back where C++ dropped it, at rc=0, with no
-  // placeholder token for any census to see). A deep copy would be the sound
-  // spelling and this model has no established one for an arbitrary element, so
-  // the sub-shape is refused LOUDLY -- which is also exactly the status quo, since
-  // the wholesale refusal refused it too.
-  if (!decomp->getType()->isReferenceType()) {
-    ReportUnsupportedStructuredBinding(decomp);
-    return false;
-  }
+  // (3) THE BY-VALUE HOLDER. `for (auto [a, b] : v)` COPIES the element in C++,
+  // so a write through `a` must NOT reach the container -- and `.clone()` of a
+  // `Value<..>` is an `Rc` clone that SHARES the cell, so cloning is exactly
+  // wrong here. The holder is therefore NOT refused; it gets a DIFFERENT
+  // spelling, `Rc::new(RefCell::new(elem.borrow().clone()))`, which mints a
+  // FRESH cell holding a clone of the value -- a genuine copy, so the write
+  // lands in the binding's own cell and the container is untouched.
+  //
+  // ⭐ MEASURED, and it corrects the reason the earlier refusal gave ("this model
+  // has no established deep-copy spelling for an arbitrary element"): it has
+  // two, and they agree. `rules/pair`'s refcount `f2` -- the pair COPY
+  // CONSTRUCTOR -- is literally `(Rc::new(RefCell::new(a0.0.borrow().clone())),
+  // Rc::new(RefCell::new(a0.1.borrow().clone())))`, i.e. the per-component deep
+  // copy emitted below, and `VisitCXXForRangeStmtVector`'s own by-value arm for
+  // a `Value<..>` element (the `IsBoxedType` branch) emits
+  // `Rc::new(RefCell::new(x.borrow().clone()))` for the same reason. So this is
+  // the model's ESTABLISHED by-value spelling, reused, not a new invention.
+  //
+  // ⛔ AND A NARROWING I WAS HANDED AND MEASURED TO BE VACUOUS, recorded so it is
+  // not proposed a third time: "allow the by-value holder iff no component is
+  // `Value<`-prefixed, because then `.clone()` is a genuine copy". For
+  // `std::pair` NO component is ever non-`Value<`: `rules/pair`'s refcount `t1`
+  // is `(Value<T1>, Value<T2>)` unconditionally, and the emitted element type
+  // for the measured witness `std::vector<std::pair<PrimaryDimTypes, int>>` is
+  // `Ptr<(Value<PDT>, Value<i32>)>` -- an ENUM component and an `int` component
+  // are BOTH boxed. Gate (2) ABOVE therefore never fires for a `std::pair`, so
+  // that narrowing would have been dead code that only looked like coverage.
+  const bool by_value = !decomp->getType()->isReferenceType();
   // (4) `std::move` OUT OF A BINDING. `std::move(data)` is a move of the
   // CONTAINER ELEMENT in C++: the callee gets the value and the element is left
   // in its moved-from state (empty, for every mapped container type here). The
@@ -2462,6 +2475,19 @@ bool ConverterRefCount::VisitCXXForRangeStmtVectorDecomposition(
   llvm::SmallPtrSet<const clang::BindingDecl *, 2> moved_bindings;
   CollectMovedBindings(stmt->getBody(), decomp, moved_bindings);
   if (!moved_bindings.empty()) {
+    // ⛔ `std::move` OUT OF A *BY-VALUE* BINDING MUST STAY REFUSED, and it is not
+    // the same question as the reference holder's. There the `take()` empties the
+    // CONTAINER element, which is what C++ does. Here C++ moves out of the loop's
+    // own COPY and the container is untouched, so `take()` would be the silent
+    // rc=0 wrong in the opposite direction -- it would empty an element C++ kept.
+    // The deep copy below already gives the callee a cell of its own, so a sound
+    // spelling plausibly exists; it is NOT established here and no witness has
+    // been measured for the combination, so it keeps the LOUD refusal rather than
+    // being guessed at.
+    if (by_value) {
+      ReportUnsupportedStructuredBinding(decomp);
+      return false;
+    }
     if (!IsTemporaryRangeInit(range_init)) {
       ReportUnsupportedStructuredBinding(decomp);
       return false;
@@ -2510,11 +2536,22 @@ bool ConverterRefCount::VisitCXXForRangeStmtVectorDecomposition(
     // already established that the container is an inline temporary and that this
     // binding is mentioned only as the move operand, which is what makes taking
     // HERE rather than at the move site equivalent.
+    //
+    // ⭐ AND A BY-VALUE HOLDER IS DEEP-COPIED, NOT CLONED. `.clone()` of the
+    // element's `Value<..>` is an `Rc` clone that SHARES the cell, which is the
+    // ALIASING the reference holder wants and the exact opposite of what `for
+    // (auto [a, b] : v)` means. `Rc::new(RefCell::new(elem.borrow().clone()))`
+    // mints a fresh cell holding a clone of the value, so a write through the
+    // binding stays in the binding -- see gate (3). Gate (4) has refused the
+    // by-value + `std::move` combination, so these three arms are disjoint.
     const std::string element =
         std::format("(*{}{}).{}", holder, deref, index);
     StrCat(binding_name, token::kAssign,
            moved_bindings.contains(binding)
                ? std::format("Rc::new(RefCell::new({}.take()))", element)
+           : by_value
+               ? std::format("Rc::new(RefCell::new({}.borrow().clone()))",
+                             element)
                : std::format("{}.clone()", element),
            token::kSemiColon);
     ++index;
