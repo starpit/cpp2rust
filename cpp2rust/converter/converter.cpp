@@ -4573,6 +4573,60 @@ std::string Converter::FlushStream(const std::string &stream) {
   return "let _ = ::std::io::Write::flush(&mut " + stream + ");";
 }
 
+// ConvertStream gives the unsafe model the PLACE `(*os)` behind the `*mut File`
+// that a `std::ostream&` parameter maps to, so the chain's value -- a reference
+// to the same stream -- is a raw pointer back to that place. `&raw mut` rather
+// than `&mut` because every other stream use in the unsafe model is a raw
+// pointer deref and a `&mut` here would collide with them under Stacked
+// Borrows.
+std::string Converter::StreamValue(const std::string &stream) {
+  return "&raw mut " + stream;
+}
+
+// ⭐ An ostream `<<` chain is lowered to STATEMENTS (`write!(<os>, ..);`,
+// `<os>.write_all(..);`) by ConvertCallToOstream, and a statement is only legal
+// where the chain's VALUE is discarded. C++ `os << x` evaluates to
+// `std::ostream&`, and real code reaches that value: in
+// `sys-arch-spec/dpc/dpc.cpp:1394`,
+//     outStream << INDENT << prefix << "_" << instr.instn_;
+// the trailing operand has a USER-DEFINED `operator<<(ostream&,
+// Isa::InstOpCode)`, so the built-in prefix of the chain lands in that call's
+// ARGUMENT slot. EmitHoistedArgs then wrapped a statement in an expression:
+//     let _os: Ptr<std::fs::File> = (write!(outStream, "..",);).clone();
+//                                                          ^ rustfmt:
+//     error: expected one of `)`, `,`, `.`, `?`, or an operator, found `;`
+// on a 4,530-line `.rs` the converter had otherwise finished -- a defect no
+// bucket census sees, because the converter's own exit code is 0.
+//
+// ⚠️ THIS IS NOT A REFCOUNT-ONLY DEFECT, and the unsafe model is the WORSE
+// half: there the same site emits
+//     let _os: *mut std::fs::File = &mut write!((*out), "a",);
+//     (*out).write_all(&([..].concat()));
+// which PARSES. The chain's remaining writes leak out as sibling statements
+// after the binding, so `_os` is bound to `&mut Result<(),Error>` and the
+// writes happen in the wrong place. Measured on /home/agent/work/semi/probe.cpp
+// with from-master 177f30db: `rc=0` in the unsafe model and a rustfmt reject in
+// refcount, from ONE converter defect.
+//
+// Transparent parents are skipped: a discarded chain is routinely wrapped in an
+// ExprWithCleanups, and that wrapper is an Expr. Under-detection here is the
+// status quo (a statement in statement position), over-detection would break a
+// working site, so the list is deliberately conservative.
+bool Converter::OstreamChainValueIsUsed(clang::Expr *expr) {
+  const clang::Expr *cur = expr;
+  while (const clang::Expr *parent = GetParentExpr(cur)) {
+    if (clang::isa<clang::ParenExpr>(parent) ||
+        clang::isa<clang::ExprWithCleanups>(parent) ||
+        clang::isa<clang::ConstantExpr>(parent) ||
+        clang::isa<clang::CXXBindTemporaryExpr>(parent)) {
+      cur = parent;
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
 void Converter::ConvertCallToOstream(clang::CallExpr *expr) {
   clang::Expr *stream = nullptr;
   auto collect_args = [expr, &stream]() -> std::vector<clang::Expr *> {
@@ -4610,6 +4664,14 @@ void Converter::ConvertCallToOstream(clang::CallExpr *expr) {
   std::string raw_args;
   std::string stream_str = ConvertStream(stream);
   size_t arg_count = args.size();
+
+  // See OstreamChainValueIsUsed. When the chain's value is consumed, the
+  // statements have to be wrapped in a block expression whose tail is the
+  // stream itself, so that the whole thing is an EXPRESSION of the stream's
+  // type. In statement position nothing changes -- PushDelim's `enabled` flag
+  // emits no braces -- so this cannot move text at the sites that already work.
+  const bool value_used = OstreamChainValueIsUsed(expr);
+  PushBrace chain_block(*this, value_used);
 
   auto write_raw_args = [&]() {
     if (!raw_args.empty()) {
@@ -4659,6 +4721,10 @@ void Converter::ConvertCallToOstream(clang::CallExpr *expr) {
     if (i == start) {
       break;
     }
+  }
+
+  if (value_used) {
+    StrCat(StreamValue(stream_str));
   }
 
   assert(*fmt_trait == '\0' && "Stream state was not restored after call");

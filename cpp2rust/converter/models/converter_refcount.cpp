@@ -2720,6 +2720,15 @@ std::string ConverterRefCount::FlushStream(const std::string &stream) {
          ").with_mut(|__s| ::std::io::Write::flush(__s));";
 }
 
+// C++ `os << x` evaluates to a REFERENCE to the same stream. The refcount
+// model's stream expression is a `libcc2rs::Ptr<File>`, an owning handle
+// (`impl<T> Clone for Ptr<T>`, libcc2rs/src/rc.rs:180), so the faithful value
+// is a clone -- a second handle onto the same stream. Yielding `stream` itself
+// would MOVE it out of the enclosing scope and break every later use.
+std::string ConverterRefCount::StreamValue(const std::string &stream) {
+  return "(" + stream + ").clone()";
+}
+
 bool ConverterRefCount::VisitCXXConstructExpr(clang::CXXConstructExpr *expr) {
   PushConversionKind push(*this, ConversionKind::Unboxed);
   PushSuppressIteratorClone push_suppress(*this, expr);
