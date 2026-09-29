@@ -292,6 +292,13 @@ private:
                                          const std::string &element,
                                          clang::QualType value_type) override;
 
+  // The model hook for the MAP-ITERATOR arm of
+  // `ConvertTupleDecompositionDecl` (row g3036). See the definition for the
+  // measured reason the receiver is `(*<it>.borrow())` here and a bare `<it>`
+  // in the base.
+  std::string
+  DecompositionMapIterReceiver(clang::DeclRefExpr *iter_ref) override;
+
   // Converts `expr` for use where a `qual_type` function pointer is
   // expected, inserting a `.cast()` if `expr`'s own fn pointer type differs
   // from `qual_type` -- e.g. because the two describe the same C function

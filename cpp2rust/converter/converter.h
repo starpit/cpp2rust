@@ -964,6 +964,21 @@ protected:
   bool EmitMapDecompositionBindings(const clang::DecompositionDecl *decl,
                                     const std::string &iter_name,
                                     bool ptr_accessors = false);
+  // ⭐ THE RECEIVER the two map-element accessors are called ON, for the
+  // STANDALONE `const auto &[k, v] = *it;` arm of
+  // `ConvertTupleDecompositionDecl` (:1196). Model-specific because the
+  // ITERATOR LOCAL has a different Rust shape per model: this base (unsafe)
+  // implementation returns the plain conversion of `iter_ref`, a bare
+  // `UnsafeMapIterator<K, V>` on which `first()` / `second()` are directly
+  // callable, so the unsafe emission is byte-for-byte what it was before this
+  // hook existed. The refcount model boxes the local into
+  // `Value<RefcountMapIter<K, V>>` and must borrow through it -- see the
+  // override's comment for the measured evidence.
+  //
+  // ⛔ Returns the EMPTY STRING to REFUSE, and must emit nothing when it does:
+  // the caller keeps the loud `ReportUnsupportedStructuredBinding` diagnostic
+  // rather than emitting bindings whose receiver has no accessors.
+  virtual std::string DecompositionMapIterReceiver(clang::DeclRefExpr *iter_ref);
 
   std::string GetMappedAsString(clang::Expr *expr, clang::Expr **args = nullptr,
                                 unsigned num_args = 0,
