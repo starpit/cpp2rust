@@ -231,6 +231,19 @@ private:
   clang::Sema *sema_ = nullptr;
   clang::SourceLocation loc_;
 
+  // ⛔ EVERY `assert(... && "Rule resolution failed")` IN THIS FILE IS A NO-OP:
+  // the pinned binary is built RelWithDebInfo, i.e. -DNDEBUG.  So each of them
+  // used to fall through to a null dereference and the tool died with SIGSEGV,
+  // printing NOTHING that names the rule.  pin/regen-rule.sh's only reliable
+  // success signal is its `OK <module> -> <dir>` line, and a caller that greps
+  // for anything else records that crash as a landed key -- a harness fault
+  // presenting as a result, which is this project's most expensive failure
+  // mode.  Route every such path through here instead.  Same pattern as
+  // converter.cpp:2793 and as the resolution-failure path in lookupCalledDecl.
+  [[noreturn]] static void fail(const llvm::Twine &msg) {
+    llvm::report_fatal_error(msg, /*gen_crash_diag=*/false);
+  }
+
   void addPackRule(const clang::FunctionDecl *func, clang::FunctionDecl *rule,
                    clang::FunctionDecl *callee) {
     auto key = Mapper::ToString(callee);
@@ -502,13 +515,80 @@ private:
     return mirror;
   }
 
+  // The stand-in ENUMERATION for a rule template parameter whose hint is an
+  // enumeration type.  Named after the parameter (`T1`), so the recorded key
+  // prints `std::__hash_impl<T1>` and stays GENERIC; it is a fresh, empty,
+  // enumerator-less enum, so it is a DISTINCT type from the hint and cannot
+  // make the key name the hint.
+  //
+  // ⭐ WHY THIS IS NEEDED AND WHAT IT GENERALISES.  createTemplateArguments
+  // builds the stand-in for an un-hinted parameter with createRecordDecl, i.e.
+  // always a CLASS type.  A library template whose members live on a PARTIAL
+  // SPECIALISATION selected by a type TRAIT on that parameter is then
+  // unreachable by construction: no trait holds for an empty struct, so
+  // resolution picks the PRIMARY template.  libc++'s hash is exactly this --
+  //     template <class _Tp, class = void> struct __hash_impl { ...= delete; };
+  //     template <class _Tp> struct __hash_impl<_Tp,
+  //         __enable_if_t<is_enum<_Tp>::value && __is_unqualified_v<_Tp>>>
+  //       : __unary_function<_Tp, size_t> { size_t operator()(_Tp) const; };
+  // (toolchain/libcxx/__functional/hash.h:351-365) -- the PRIMARY has no
+  // `operator()` at all, so `o.operator()(a1)` on a generic `__hash_impl<T1>`
+  // could not resolve however it was spelled, and the same held through the
+  // derived `std::hash<T1>` spelling.
+  //
+  // ⛔ NOT SPECIAL-CASED TO hash, OR TO ENUMS-IN-libc++.  The kind of stand-in
+  // is chosen from the KIND OF THE HINT the rule itself wrote, which is the
+  // channel that already existed for `typename T2 = std::allocator<T1>`
+  // (rules/vector).  Any trait-selected partial specialisation over an
+  // enumeration is reachable by the same one line of rule source, and a hint
+  // kind nobody has needed yet fails LOUDLY below instead of crashing.
+  clang::QualType createMirrorEnum(llvm::StringRef name,
+                                   const clang::EnumDecl *hdecl) {
+    clang::ASTContext &ctx = sema_->Context;
+    clang::EnumDecl *edecl = clang::EnumDecl::Create(
+        ctx, sema_->CurContext, loc_, loc_, &ctx.Idents.get(name),
+        /*PrevDecl=*/nullptr, hdecl->isScoped(), hdecl->isScopedUsingClassTag(),
+        hdecl->isFixed());
+    edecl->setAccess(clang::AS_public);
+    sema_->CurContext->addDecl(edecl);
+    edecl->startDefinition();
+    // Empty (no enumerators): the stand-in is only ever used as a TYPE, and an
+    // enumerator would leak a name into the synthetic namespace.  The integer
+    // and promotion types are copied from the hint so that
+    // `__underlying_type_t<T1>` -- which the enum specialisation's own body
+    // uses -- is the hint's, not a guess.
+    edecl->completeDefinition(hdecl->getIntegerType(), hdecl->getPromotionType(),
+                              /*NumPositiveBits=*/0, /*NumNegativeBits=*/0);
+    return ctx.getCanonicalTagType(edecl);
+  }
+
   clang::QualType createMirrorType(llvm::StringRef name, clang::QualType hint) {
     clang::ASTContext &ctx = sema_->Context;
     forceCompleteDefinition(hint);
 
+    if (const auto *etype = hint->getAs<clang::EnumType>()) {
+      const clang::EnumDecl *edecl = etype->getDecl()->getDefinition();
+      if (!edecl) {
+        fail(llvm::Twine("template parameter `") + name +
+             "` has an INCOMPLETE enumeration as its default-argument hint (`" +
+             Mapper::ToString(hint) +
+             "`); a stand-in enum needs the hint's underlying type, so define "
+             "the enum in the rule source");
+      }
+      return createMirrorEnum(name, edecl);
+    }
+
     const auto *hdecl = hint->getAsCXXRecordDecl();
-    assert(hdecl && "Failed resolving hint record declaration");
-    assert(hdecl->isCompleteDefinition() && "Incomplete hint");
+    if (!hdecl || !hdecl->isCompleteDefinition()) {
+      // ⛔ WAS `assert(hdecl && ...)`, i.e. a no-op under -DNDEBUG followed by a
+      // null dereference.  A rule that hinted a parameter with anything other
+      // than a class or an enum (a builtin, a pointer, a function type) died
+      // with a bare SIGSEGV and no mention of the rule or the parameter.
+      fail(llvm::Twine("template parameter `") + name +
+           "`'s default-argument hint `" + Mapper::ToString(hint) +
+           "` is neither a complete class type nor an enumeration, and only "
+           "those two kinds of stand-in can be built");
+    }
 
     const auto *hspec =
         llvm::dyn_cast<clang::ClassTemplateSpecializationDecl>(hdecl);
@@ -827,7 +907,28 @@ private:
     clang::NamespaceDecl *ns = createNamespaceDecl();
     clang::Sema::ContextRAII savedContext(*sema_, ns);
     clang::FunctionDecl *rule = instantiateRuleDecl(decl);
-    assert(rule && "Rule instantiation failed");
+    // ⛔ WAS `assert(rule && "Rule instantiation failed")` -- a no-op under
+    // -DNDEBUG, so `rule->parameters()` below dereferenced null and the tool
+    // died with a bare SIGSEGV, printing only the `Preprocessing <path>` line.
+    // Measured on the enum-partial-specialisation probe: a rule whose PARAMETER
+    // TYPE is guarded by `__enable_if_t<is_enum<T1>::value && ...>` cannot be
+    // instantiated at all while the stand-in for T1 is an empty STRUCT -- the
+    // enable_if is a substitution failure, so the whole declaration is
+    // discarded and this returns null BEFORE any lookup happens.  That is a
+    // different failure from the resolution failure below and needs its own
+    // message, because the remedy is different: hint the parameter.
+    if (!rule) {
+      fail(llvm::Twine("rule instantiation failed for `") +
+           decl->getQualifiedNameAsString() +
+           "`: no declaration survives substituting the stand-in types built "
+           "for its template parameters -- a SFINAE/enable_if substitution "
+           "failure in one of its PARAMETER types, before any name lookup "
+           "happens.  An un-hinted `typename Tn` is modelled as an empty STRUCT, "
+           "so a parameter constrained by a type trait (is_enum, is_integral, "
+           "...) can never be formed; give that parameter a DEFAULT ARGUMENT of "
+           "the right KIND of type (e.g. `template <typename T1 = SomeEnum>`) "
+           "so the stand-in is built to match");
+    }
     if (rule_out) {
       *rule_out = rule;
     }

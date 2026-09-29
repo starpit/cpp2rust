@@ -30,42 +30,84 @@
 
 template <typename T1> using t1 = std::__hash_impl<T1>;
 
-// `size_t std::__hash_impl<T>::operator()(T) const` IS LEFT OUT, and this is a
-// PREPROCESSOR LIMITATION, not a choice.  Written as
-//     template <typename T1>
-//     std::size_t f1(const std::__hash_impl<T1> &a0, T1 a1) {
-//       return a0.operator()(a1);
-//     }
-// the rule preprocessor RESOLVES the call against the PRIMARY template
-//     template <class _Tp, class = void> struct __hash_impl { ... = delete; };
-// (hash.h:351-356), which has no `operator()` at all -- only the enum / integral /
-// floating-point PARTIAL specialisations do -- and dies with
-//     No viable function
-//     cpp_rule_preprocessor.cpp:888 Assertion `0 && "Rule resolution failed"'
-// So a generic key for this operator cannot be written until the preprocessor can be
-// pointed at a partial specialisation.  Deliberately NOT replaced by a concrete key:
-// naming `SenComponents` is impossible from a rule source, and a `todo!()`/
-// `unimplemented!()` body would be silent wrongness.
+// `size_t std::__hash_impl<T1>::operator()(T1) const` -- f1 below.  ⭐ IT CLOSES THE
+// WHOLE `0(v)` CLASS: 427 call sites in 190 of 312 corpus TUs emitted
+// `return ((unsafe { 0((*x).storage_) }) ^ ...)`, i.e. `error[E0618] expected
+// function, found {integer}`, because t2 gave `std::hash<T1>` a scalar `usize` model
+// with NO `operator()` key, so the functor's own DEFAULT VALUE landed in callee
+// position.  ⛔ Standing lesson: A TYPE KEY WITH NO `operator()` KEY IS STRICTLY WORSE
+// THAN NO KEY AT ALL -- `std::less<int>` has no type key and aborts loudly with
+// `unsupported system type has no rule`, while `std::hash<int>` had one and silently
+// emitted `0(v)`.
 //
-// The VALUE it would have to produce is fully specified by libc++, transcribed here so
-// the next attempt does not have to rederive it:
+// ⛔⛔ WHY THE `typename T1 = HashableEnumHint` DEFAULT ARGUMENT IS LOAD-BEARING AND
+// MUST NOT BE DELETED.  libc++ is
+//     template <class _Tp, class = void> struct __hash_impl { ... = delete; };   :351
+//     template <class _Tp> struct __hash_impl<_Tp,
+//         __enable_if_t<is_enum<_Tp>::value && __is_unqualified_v<_Tp>>>          :358
+//       : __unary_function<_Tp, size_t> { size_t operator()(_Tp) const; };
+// -- the PRIMARY template has no `operator()` at all; only the enum / integral /
+// floating-point PARTIAL SPECIALISATIONS have one.  cpp_rule_preprocessor models an
+// un-hinted `typename T1` as an empty STRUCT, and no type trait holds for an empty
+// struct, so resolution picked the PRIMARY and the tool died.  MEASURED, three ways,
+// 2026-09-29:
+//   * `f1(const std::hash<T1>&, const T1&) -> o.operator()(a1)` (the DERIVED
+//     spelling, since `struct hash : public __hash_impl<_Tp>`, hash.h:434):
+//         LLVM ERROR: rule resolution failed for `f1`: could not resolve the call
+//         to `operator()` (no viable function)
+//     -- and before f90878cb that same path was a bare SIGSEGV.
+//   * naming the enum partial specialisation's own enable_if generically,
+//     `std::__hash_impl<T1, std::__enable_if_t<std::is_enum<T1>::value && ...>>`:
+//     rc=139 SEGFAULT with NO diagnostic -- the enable_if is a SUBSTITUTION FAILURE
+//     against the struct stand-in, so the rule DECLARATION itself does not survive
+//     instantiation and lookup is never reached.  That crash is now loud.
+//   * concrete `std::hash<long>` / `std::hash<int>` keys: rc=0, but the 427 sites need
+//     `std::__hash_impl<SenComponents>` -- a PROJECT enum, UNNAMEABLE from a rule
+//     source -- so those keys would be DEAD.  Deliberately not landed.
+// The default argument tells the preprocessor to build the stand-in for T1 as an
+// ENUMERATION rather than a struct, which is the one thing that makes the enum partial
+// specialisation selectable.  The stand-in is a FRESH empty enum NAMED `T1`, so the
+// recorded key stays GENERIC -- read it back out of <tree>/hash/ir_src.json:
+//     "f1": "unsigned long std::__hash_impl<T1>::operator()(T1) const"
+// `HashableEnumHint` itself is never keyed and never appears in the key.
 //
-//   hash.h:358-365, the ENUM specialisation
-//       struct __hash_impl<_Tp, __enable_if_t<is_enum<_Tp>::value && ...>>
-//         size_t operator()(_Tp __v) const {
-//           using type = __underlying_type_t<_Tp>;
-//           return hash<type>()(static_cast<type>(__v));
-//         }
-//   hash.h:367-372, the INTEGRAL specialisation for sizeof(T) <= sizeof(size_t)
-//       struct __hash_impl<_Tp, __enable_if_t<is_integral<_Tp>::value && ...
-//                                             && (sizeof(_Tp) <= sizeof(size_t))>>
-//         size_t operator()(_Tp __v) const { return static_cast<size_t>(__v); }
+// THE VALUE, from libc++, not guessed:
+//   hash.h:358-365 ENUM:      return hash<__underlying_type_t<_Tp>>()(static_cast<...>(v))
+//                             -> which lands on the integral specialisation below
+//   hash.h:367-372 INTEGRAL, sizeof(_Tp) <= sizeof(size_t):
+//                             return static_cast<size_t>(v)     -- the IDENTITY CAST
+// so an enum hashes as its underlying integer and a size_t-or-narrower integer hashes
+// as itself: `a1 as usize`.  Both instantiations this program reaches are covered --
+// `enum SenComponents : int` (sys-arch-spec/arch_enums.h:13, emitted as
+// `pub type SenComponents = i32;`) and `long`.  Rust `as usize` on a signed integer
+// sign-extends then reinterprets, which is exactly what `static_cast<size_t>` does, so
+// `SenComponents::NO_COMPONENT == -1` hashes to 0xFFFF_FFFF_FFFF_FFFF in both.
 //
-// i.e. an enum hashes as its underlying integer and an integer no wider than size_t
-// hashes as the IDENTITY CAST -- `v as usize`.  For the two instantiations this program
-// reaches (`enum SenComponents : int`, sys-arch-spec/arch_enums.h:13, and `long`) that
-// is exactly `a1 as usize`.  This is the one hash rule with no iteration-order risk: a
-// wrong hash would change unordered_map iteration order (observable), the mandated one
-// cannot.
+// ⚠️ WHAT THIS GENERIC KEY DOES **NOT** MODEL, STATED RATHER THAN LEFT IMPLICIT.  The
+// key matches `std::__hash_impl<T1>::operator()(T1)` for ANY T1, including the
+// FLOATING-POINT partial specialisation (hash.h:379-387) and `__hash_impl<long double>`
+// (:390), whose bodies are `__scalar_hash`, NOT the identity cast.  For those, `a1 as
+// usize` would be a WRONG HASH -- the silent kind, missed HashMap lookups.  It is
+// emitted anyway because dt_src instantiates NO floating-point hash: measured
+//     grep -rnE "unordered_(map|set|multimap|multiset)< *(float|double|long double)
+//               |hash< *(float|double|long double)" --include=*.cpp --include=*.h
+// over all of dt_src outside cpp2rust-port -> ZERO hits, and the same grep restricted
+// to unordered_map/set -> 0 files.  ⛔ IF A FLOATING-POINT `std::hash` SITE EVER
+// APPEARS, THIS KEY MUST BE SPLIT before it is allowed to serve it; the key language
+// has no way to constrain T1 to non-floating types.  Pointers are unaffected:
+// `std::hash<_Tp*>` (hash.h:339) is its own specialisation of `hash`, not of
+// `__hash_impl`, so it does not match this key and still aborts loudly.
+//
+// t1's `std::__hash_impl<T1>` type key is kept: it is what gives the receiver a Rust
+// type, and this key's own parameter names it.
+
+// The stand-in HINT.  Never keyed, never emitted, never named in any recorded key --
+// its only job is to carry the KIND (enumeration) that T1's stand-in must have.
+enum HashableEnumHint : int {};
+
+template <typename T1 = HashableEnumHint>
+std::size_t f1(const std::__hash_impl<T1> &o, T1 a1) {
+  return o.operator()(a1);
+}
 
 template <typename T1> using t2 = std::hash<T1>;
