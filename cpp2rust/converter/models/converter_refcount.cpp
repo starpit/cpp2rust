@@ -2974,11 +2974,15 @@ void ConverterRefCount::EmitDecompositionHolderAnnotation(
   // to it, because that function takes a `ReferenceType *` we do not have here
   // and synthesising one would be worse than repeating three tokens.
   //
-  // `is_mut` is deliberately UNUSED: this model has no `*mut`/`*const`
-  // distinction to make -- mutability lives in the `RefCell`, not in the
-  // pointer -- and in any case the mutable-reference-holder arm never reaches
-  // this model (it is gated out in ConvertTupleDecompositionDecl because its
-  // bindings are raw `&raw mut` pointers).
+  // `is_mut` is deliberately UNUSED, and as of the mutable-holder step it is
+  // reached with `is_mut == true`: this model has no `*mut`/`*const`
+  // distinction to make. `ConverterRefCount::VisitReferenceType` spells BOTH
+  // `T &` and `const T &` as `Ptr<T>` -- mutability lives in the `RefCell` a
+  // `Value<T>` wraps, not in the handle -- so a mutable reference holder is the
+  // same `Ptr<(Value<T1>, Value<T2>)>` and a write through a binding reaches the
+  // pair by sharing that element's `Rc`, not by writing through the holder. See
+  // the POINTER-FORM block in ConvertTupleDecompositionDecl for the write
+  // argument and for why `ptr_form` is cleared for this model.
   PushConversionKind push(*this, ConversionKind::Pointee);
   StrCat("Ptr<");
   Convert(value_type);
@@ -2995,6 +2999,14 @@ std::string ConverterRefCount::DecompositionHolderElement(
   // object the pair element names -- the same aliasing the C++ `const auto &`
   // asks for, and the same argument as the map-range decomposition's
   // `second()`.
+  //
+  // ⭐ AND THAT SHARING IS WHAT MAKES THE MUTABLE HOLDER (`auto &[a, b] = pr;`)
+  // SOUND ON THE SAME SPELLING, where the const arm's "every binding is const,
+  // so there is no write to lose" argument does not apply: a write goes through
+  // `a.borrow_mut()`, and `a` and `(*h..).0` are two `Rc`s to ONE `RefCell`, so
+  // the write lands in the pair's own element. The unsafe model needs
+  // `&raw mut` there only because ITS element read is a copy; here the read is a
+  // handle, so there is no write to drop.
   return std::format("(*{}{}).{}.clone()", holder,
                      GetPointerDerefSuffix(value_type), element);
 }
