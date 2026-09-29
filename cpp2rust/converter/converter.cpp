@@ -3784,6 +3784,93 @@ bool Converter::VisitCXXForRangeStmt(clang::CXXForRangeStmt *stmt) {
   if (GetClassName(range_init_type) == "std::map") {
     return VisitCXXForRangeStmtMap(stmt);
   }
+  // ⭐ ROW g3006. A NON-DECOMPOSING `for (auto &kv : unordered_map)` used to fall
+  // through to the POSITIONAL path at the bottom of this function, which emitted
+  // `m.as_ptr().add(i)` / a tuple index against the MAP itself. MEASURED
+  // 2026-09-29 with snap/coord44 + pin/ir.v42 on a probe doing `kv.first`,
+  // `kv.second` and a write through `kv.second`: translation was **rc=0** in both
+  // models and only `rustc` caught it -- refcount `error[E0609]: no field 0/1 on
+  // type HashMap<i32, Rc<RefCell<i32>>>`, unsafe `error[E0599]: no method named
+  // as_mut_ptr found for struct HashMap`. rc=0 + a rustc error is the one failure
+  // shape no bucket census can see, which is why this is routed rather than left.
+  //
+  // ⭐ WHY ROUTING IS THE SMALL FIX, and the earlier comment below ("routing it
+  // to `.iter()` would bind `kv` to a Rust `(&K, &V)` tuple") is answered rather
+  // than contradicted: the map path does NOT bind a tuple. It binds the MODELLED
+  // ITERATOR and registers the loop variable in `map_iter_decls_`, so every
+  // `kv.first` / `kv.second` in the body is rewritten to the iterator's
+  // `first()` / `second()` accessors. The IDENTICAL shape over `std::map` is
+  // measured CORRECT end to end today -- the same both-members-plus-write probe
+  // with `std::map` gives `unsafe: MATCH 11 11` and `refcount: MATCH 11 11`,
+  // i.e. the aliasing write reaches the map -- so what unordered_map needed was
+  // not a new lowering, only the dispatch and the iterator SPELLING (see
+  // ConverterRefCount::VisitCXXForRangeStmtMap, which used to hardcode
+  // `RefcountMapIter`).
+  //
+  // ⚠️ `llvm::DenseMap` is deliberately NOT routed here. Its non-decomposing
+  // range is broken the same way, but the refcount model cannot name a
+  // `MapIterator` for it (rules/densemap's refcount t4 has no `MapIterator`
+  // impl, see RefCountMapRangeIteratorName) and the unsafe arm's accessors are
+  // `key_ptr()`/`value_ptr()` rather than `first()`/`second()`
+  // (MapDecompositionUsesPtrAccessors), which the member-expr rewrite for a
+  // NAMED loop variable does not implement. Routing it would trade a known
+  // silent error for a different one; it stays a separate row.
+  // ⛔⛔ AND THE ROUTING IS **NOT** THE FIX -- MEASURED, and this is the part of
+  // the row that a design could not have told you. Routing it (built, md5
+  // d41df53d84cf63979a587ac9911efdae, pin/ir.v42) DOES bind the right iterator,
+  // and the body then reads:
+  //     'loop_: for kv in RefcountHashMapIter::begin(m.clone()) {
+  //         (*t.borrow_mut()) += (*kv.0.borrow());
+  // i.e. `kv.first` STILL lowers to a TUPLE INDEX, now against the iterator:
+  //   refcount `error[E0609]: no field 0 on type
+  //             HashMapIter<i32, libcc2rs::Ptr<HashMap<i32, Rc<RefCell<i32>>>>>`
+  //   unsafe   `error[E0609]: no field 0 on type
+  //             HashMapIter<i32, *const HashMap<i32, Box<i32>>>`
+  // -- rc=0 again, a DIFFERENT silent wrongness, which is exactly what this row
+  // exists to stop. The reason is that `kv.first` is resolved through the MAPPED
+  // TYPE of its base: for `std::map` the pair maps onto `RefcountMapIter` and
+  // hits rules/map f20/f21 (`it->first` / `it->second`, bodies `a0.first()`),
+  // while for `std::unordered_map` it maps onto the MONOMORPHISED PAIR (a Rust
+  // tuple, hence `.0`) and rules/unordered_map's f36-f39 on
+  // `RefcountHashMapIter` are never reached. rules/unordered_map/src.cpp:132
+  // already names that gap ("lowering needs a pair whose first element is a
+  // mapped iterator type"). Closing it is a MAPPER/rules row, not a dispatch row.
+  //
+  // ⭐ SO THE LOWERING IS REFUSED LOUDLY INSTEAD, gated HERE -- before any
+  // emission, so a refused shape leaves no partial text -- because a loud abort
+  // is strictly better than today's `rc=0` + `E0609`, which no bucket census can
+  // see. When the mapper row lands, delete this block and put back
+  // `return VisitCXXForRangeStmtMap(stmt);`: the refcount arm's iterator
+  // spelling is already class-keyed for it (see
+  // ConverterRefCount::VisitCXXForRangeStmtMap).
+  //
+  // ⚠️ `llvm::DenseMap`'s non-decomposing range is broken the SAME way and is
+  // deliberately left alone: it is a different rules module with different
+  // accessor names (`key_ptr()`/`value_ptr()`, see
+  // MapDecompositionUsesPtrAccessors), and refusing it here would change corpus
+  // TUs this row has not measured. Its own row, stated rather than widened.
+  if (GetClassName(range_init_type) == "std::unordered_map") {
+    const auto *loop_var = stmt->getLoopVariable();
+    const std::string loc =
+        loop_var->getLocation().printToString(ctx_.getSourceManager());
+    std::string detail =
+        "non-decomposing range-`for` over `std::unordered_map` (loop variable `" +
+        GetNamedDeclAsString(loop_var) + "` of type `" +
+        Mapper::ToString(loop_var->getType()) +
+        "`) is not implemented: the positional lowering emits a field access the "
+        "mapped `HashMap` does not have, and the map lowering cannot resolve "
+        "`.first`/`.second` on an unordered_map iterator yet";
+    if (curr_function_ != nullptr) {
+      detail += ", reached while converting `" +
+                curr_function_->getQualifiedNameAsString() + "`";
+    }
+    if (survey::Enabled()) {
+      survey::Record(survey::GapKind::kUnsupportedConstruct, detail, loc);
+      return false;
+    }
+    llvm::report_fatal_error(llvm::Twine("unsupported ") + detail + " at " + loc,
+                             /*gen_crash_diag=*/false);
+  }
   if (GetClassName(range_init_type) == "std::basic_string") {
     return VisitCXXForRangeStmtString(stmt);
   }

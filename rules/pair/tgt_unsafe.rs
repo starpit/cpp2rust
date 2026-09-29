@@ -146,8 +146,20 @@ unsafe fn f22<T1, T2>(a0: T1, a1: T2) -> (T1, T2) {
 // f23 -- `pair<T1,T2>::pair(const pair<T3,T4> &)`.  Body is f2's VERBATIM: both
 // pairs share the `(T1, T2)` model, so the converting copy is a plain clone.  See
 // rules/pair/src.cpp's f23 note for the blast-radius argument.
+// ⛔ NOT `.into()`: the 14 real sites need `f64 -> i32`, for which std has NEITHER
+// `From` NOR `TryFrom` (it is lossy, by design), so `.into()` was a loud E0277.
+// `libcc2rs::CxxConvert` is that conversion as a TRAIT, which is the only shape a
+// rule body can name -- `a0.0 as T1` is E0605 in the preprocessor's generic
+// type-check.  It lowers to `self as $to`, i.e. C++'s truncating semantics rather
+// than a panic.  ⚠️ `as` SATURATES on an out-of-range float -> int where C++ is UB;
+// see libcc2rs/src/cxx_convert.rs for that divergence in full.  The identity case
+// (T3=T1, T4=T2 -- the displaced f2's shape) goes through the reflexive
+// `impl<T> CxxConvert<T> for T` and is a move, so the displacement stays safe.
 unsafe fn f23<T1: Clone, T2: Clone>(a0: (T1, T2)) -> (T1, T2) {
-    (a0.0.clone().into(), a0.1.clone().into())
+    (
+        libcc2rs::CxxConvert::<T1>::cxx_convert(a0.0.clone()),
+        libcc2rs::CxxConvert::<T2>::cxx_convert(a0.1.clone()),
+    )
 }
 
 // f24 -- `pair<T1,T2>::pair()`, the default constructor.  Body is t1's VERBATIM:

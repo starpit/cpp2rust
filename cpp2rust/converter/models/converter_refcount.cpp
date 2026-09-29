@@ -2100,67 +2100,85 @@ bool ConverterRefCount::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
     return false;
   }
 
-  // ⛔ THE HARDCODED `RefcountMapIter` BELOW IS CORRECT, and the obvious
-  // objection to it is REFUTED. `std::unordered_map`'s refcount iterator is
-  // `RefcountHashMapIter` (iterators.rs:413), not `RefcountMapIter` (:151), so
-  // this literal looks like it must be wrong for an unordered_map range -- it is
-  // NOT, because a non-decomposing unordered_map range NEVER ARRIVES HERE.
-  // `Converter::VisitCXXForRangeStmt` (converter.cpp) dispatches only
-  // `std::map` and `std::basic_string` by name; `std::unordered_map` reaches
-  // this function ONLY through the DECOMPOSING reroute, which is guarded by
-  // `llvm::dyn_cast<DecompositionDecl>` and so cannot fall through to this arm.
-  // Everything else, unordered_map included, goes down the SET or the
-  // INDEX-BASED path.
+  // ⭐⭐ ROW g3006 CORRECTS THE COMMENT THAT USED TO STAND HERE. It said the
+  // hardcoded `RefcountMapIter` was correct because "a non-decomposing
+  // unordered_map range NEVER ARRIVES HERE", and that routing it was "a
+  // separate, larger row, because the loop variable's Rust type has to become
+  // the `std::pair<const K, V> &` the C++ program sees". That second claim is
+  // REFUTED by measurement: the map path does NOT need a pair-shaped value,
+  // because it registers the loop variable in `map_iter_decls_` and every
+  // `kv.first` / `kv.second` in the body is rewritten to the modelled iterator's
+  // `first()` / `second()` accessors. MEASURED 2026-09-29 (snap/coord44,
+  // pin/ir.v42) on a probe using BOTH members plus a write through `kv.second`,
+  // over a `std::map<int,int> &`: `unsafe: MATCH 11 11` and
+  // `refcount: MATCH 11 11` -- the arm below is correct end to end, aliasing
+  // included. So `std::unordered_map` is now routed here too
+  // (`Converter::VisitCXXForRangeStmt`), and the ONLY thing that had to change
+  // is the iterator SPELLING: unordered_map's refcount iterator is
+  // `RefcountHashMapIter` (iterators.rs:413), not `RefcountMapIter` (:151).
+  // ⭐ THE NON-DECOMPOSING ARM. The iterator type used to be the hardcoded
+  // string "RefcountMapIter", which was correct only because `std::map` was the
+  // only class the dispatch let in. ROW g3006 routes a non-decomposing
+  // `std::unordered_map` range here too (converter.cpp:VisitCXXForRangeStmt), and
+  // that model's iterator is `RefcountHashMapIter` -- naming `RefcountMapIter`
+  // for a `HashMap` would be `E0308`/`E0599` at rustc, i.e. the same silent class
+  // this row exists to close. Ask the SAME helper the decomposing arm asks.
+  const char *const nd_iter_type =
+      RefCountMapRangeIteratorName(GetClassName(stmt->getRangeInit()->getType()));
+  // ⛔ LOUD REFUSAL, GATED BEFORE ANY EMISSION so a refused shape leaves no
+  // partial text (the pattern c151701d established).
   //
-  // MEASURED 2026-09-29, snap/coord44/cpp2rust (md5 a1bc9015..) and this tree's
-  // own BEFORE binary (829cd0f6..), pin/ir.v41, -model=refcount, on
-  // `for (auto &kv : m)` over a `std::unordered_map<int,int> &`: the emitted
-  // Rust contains NO `RefcountMapIter::begin(` at all. It is
-  //     'loop_: for mut kv in m as Ptr<HashMap<i32, Value<i32>>> {
-  //         (*t.borrow_mut()) += (*(*kv.upgrade().deref()).1.borrow());
-  // which rustc rejects with `error[E0609]: no field `1` on type
-  // `HashMap<i32, Rc<RefCell<i32>>>``. That failure is the POSITIONAL-lowering
-  // class already documented at the fall-through in
-  // `Converter::VisitCXXForRangeStmt` ("for (auto &kv : unordered_map) still
-  // goes down the positional path from here"), NOT an iterator-spelling defect
-  // in this function, and fixing it means routing the non-decomposing map range
-  // here -- a separate, larger row, because the loop variable's Rust type has to
-  // become the `std::pair<const K, V> &` the C++ program sees.
-  //
-  // So DO NOT add a class-keyed iterator selector to this arm: on today's
-  // dispatch it would be dead code that only looks like coverage. The selector
-  // belongs on whichever arm can actually see more than one range class.
+  // Two shapes are refused:
+  //  * a map-like class this model cannot name a `MapIterator` for (today only
+  //    `llvm::DenseMap`, which the dispatch does not route here -- the gate is
+  //    the guarantee, not dead code, because the dispatch and this spelling are
+  //    two files apart);
+  //  * a BY-VALUE loop variable over a class OTHER than `std::map`.
+  //    ⚠️ MEASURED, and the reason for that exclusion: `EmitByValueShadow`
+  //    fires only for a non-reference loop variable and emits
+  //    `let kv: Value<pair<..>> = Rc::new(RefCell::new(kv));` where `kv` is the
+  //    ITERATOR, not a pair -- an `E0308` that is PRE-EXISTING for `std::map`
+  //    (`for (auto kv : some_map)`) and is NOT this row's to change: refusing it
+  //    here would move existing `std::map` sites from rc=0 to abort, which is a
+  //    widening, not a fix. It is recorded as its own row instead. For the class
+  //    this row NEWLY routes, the same shape is refused rather than emitted
+  //    wrong.
+  if (nd_iter_type == nullptr ||
+      (!loop_var->getType()->isReferenceType() &&
+       GetClassName(stmt->getRangeInit()->getType()) != "std::map")) {
+    const std::string loc =
+        loop_var->getLocation().printToString(ctx_.getSourceManager());
+    std::string detail =
+        "non-decomposing range-`for` loop variable `" + loop_var_name +
+        "` of type `" + Mapper::ToString(loop_var->getType()) +
+        "` over map-like range `" +
+        GetClassName(stmt->getRangeInit()->getType()) +
+        "` is not implemented in the refcount model";
+    if (curr_function_ != nullptr) {
+      detail += ", reached while converting `" +
+                curr_function_->getQualifiedNameAsString() + "`";
+    }
+    if (survey::Enabled()) {
+      survey::Record(survey::GapKind::kUnsupportedConstruct, detail, loc);
+      return false;
+    }
+    llvm::report_fatal_error(llvm::Twine("unsupported ") + detail + " at " + loc,
+                             /*gen_crash_diag=*/false);
+  }
+
   StrCat("'loop_:");
-  // ⭐ ConvertFreshObject, NOT ConvertObject. `RefcountMapIter<K, V>` is
-  // `MapIter<K, Ptr<BTreeMap<K, Value<V>>>>` and `MapIter::begin` takes its
-  // `MapRef` BY VALUE (libcc2rs/src/iterators.rs:75); `Ptr<T>` is `Clone` but
-  // deliberately NOT `Copy` (rc.rs:180 -- there is no `impl Copy for Ptr`), so
-  // handing it a PLACE moves it.
-  //
-  // MEASURED 2026-09-29 on snap/coord44/cpp2rust (md5 a1bc9015..) with
-  // pin/ir.v41, -model=refcount: two range-`for`s over one `std::map &`
-  // parameter both emitted `RefcountMapIter::begin(m)` at rc=0, and rustc gave
-  //   error[E0382]: use of moved value: `m`
-  //   move occurs because `m` has type `libcc2rs::Ptr<BTreeMap<i32,
-  //   Rc<RefCell<i32>>>>`, which does not implement the `Copy` trait
-  // -- a SILENT translation failure, visible only at rustc.
-  //
-  // ConvertFreshObject is the existing helper for exactly this (:351): it is
-  // `ConvertObject(expr, ObjectShape::Whole)` plus `.clone()` when the result is
-  // NOT already fresh, so a LOCAL map -- which converts to the fresh temporary
-  // `one.as_pointer()` -- is emitted unchanged and only a place gains the clone.
-  // Reusing it rather than writing a second freshness test is what keeps this
-  // arm from drifting from the rest of the model.
-  //
-  // ⚠️ ALIASING IS UNCHANGED, which is why this is the call-site fix and not a
-  // `begin(&MapRef)` signature change. `Ptr::clone` copies `offset` and clones
-  // `kind` (a `Weak`, rc.rs:180) -- it clones the HANDLE, never the map -- so
-  // both loops observe the same storage and a write through `second()` still
-  // reaches it. NO C++ program changes meaning. Making `begin` BORROW instead
-  // would (a) break every unsafe-model call site, which passes a `*const Map`
-  // rvalue, and (b) turn an in-loop mutation of the map into a borrow-checker
-  // error rather than leaving it expressible through `Ptr::with_mut`.
-  StrCat(keyword::kFor, loop_var_name, keyword::kIn, "RefcountMapIter::begin(",
+  // ⭐ ConvertFreshObject, NOT ConvertObject (slot-mapiter, on this arm).
+  // `RefcountMapIter<K, V>` is `MapIter<K, Ptr<BTreeMap<K, Value<V>>>>` and
+  // `MapIter::begin` takes its `MapRef` BY VALUE (libcc2rs/src/iterators.rs:75);
+  // `Ptr<T>` is `Clone` but deliberately NOT `Copy` (rc.rs:180), so handing it a
+  // PLACE moves it and two loops over one `std::map &` gave
+  // `error[E0382]: use of moved value` at rc=0. ConvertFreshObject is
+  // `ConvertObject(expr, ObjectShape::Whole)` plus `.clone()` only when the
+  // result is not already fresh, and `Ptr::clone` clones the HANDLE, never the
+  // map, so aliasing is unchanged. The same reasoning applies verbatim to
+  // `RefcountHashMapIter`, which is the same `MapIter` shape over a `HashMap`.
+  StrCat(keyword::kFor, loop_var_name, keyword::kIn,
+         std::string(nd_iter_type) + "::begin(",
          ConvertFreshObject(stmt->getRangeInit()), ')');
   PushBrace brace(*this);
 
