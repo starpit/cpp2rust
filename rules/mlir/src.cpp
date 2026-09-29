@@ -10485,3 +10485,73 @@ f2300(mlir::detail::PassOptions &a0, llvm::StringRef a1, llvm::cl::desc &&a2,
   return mlir::detail::PassOptions::Option<std::string>(a0, a1, std::move(a2),
                                                         std::move(a3));
 }
+
+// ---------------------------------------------------------------------------
+// t2400 / t2401 -- TWO MLIR-INTERNAL STORAGE/IMPL BASES, each an OPAQUE `()`, the
+// representation t23 (`mlir::MLIRContext`), t40 (`mlir::Pass`), t43 (`OpOperand`),
+// t58 (`detail::InterfaceMap`) and t59 (`mlir::Builder`) already use.
+//
+// Provenance: a first-abort census on the matched pair (pin/cpp2rust
+// 5bf5cd9f10fb93926d84d92ce875aa9d + pin/ir.v43, `-model=refcount`,
+// verif/recut46) found these two types as the FIRST ABORT of 15 TUs --
+// `mlir::AttributeStorage` 12, `mlir::detail::ValueImpl` 3.  They are two of the
+// three types the never-merged `--opaque-namespace=mlir` flag used to absorb.
+//
+// ⭐ THE GATE THAT LICENSES `()` -- "the corpus never reads the type's members" --
+// WAS RE-MEASURED SOURCE-SIDE, NOT TAKEN FROM A SURVEY:
+//   grep -rnoF 'AttributeStorage' repos/dt_src --include=*.cpp --include=*.h  = 0
+//   mlir::detail::ValueImpl in repos/dt_src                                  = 0
+//     (a bare `ValueImpl` grep returns 11 and ALL ELEVEN ARE SUBSTRING NOISE:
+//      rapidjson's `IsGenericValueImpl`, `evaluateValueImpl`, `getValueImpl`.)
+// So there is no member surface to key, and by the standing rule a type key with
+// no method key would be strictly worse than no key -- here there is no method to
+// write, which is exactly the MLIRContext justification.
+//
+// ⭐ AND THE REACHING SITE, READ DIRECTLY (the abort's `file:line:col` is the
+// TYPE'S OWN DECLARATION in an LLVM header -- AttributeSupport.h:169:18 is
+// `class alignas(8) AttributeStorage`, Value.h:40:18 is `class alignas(8)
+// ValueImpl` -- so it can NEVER name a dt_src site; the `reached while converting`
+// half is the only usable pointer):
+//   AttributeStorage, all 12 TUs: `mlir::uniform::UniformizeRegionsOp::
+//     getRegIndicesIfExist`, whose body is Uniform.td:102
+//        ArrayAttr getRegIndicesIfExist() {
+//          if (getRegIndices().has_value()) return getRegIndices().value();
+//          return nullptr;
+//        }
+//     -- the `return nullptr` needs `Attribute(const AttributeStorage *)`, i.e.
+//     the type appears in a CONVERSION-CTOR SIGNATURE and nothing is read off it.
+//   ValueImpl, all 3 TUs: `dcc::CondNode::CondNode`
+//     (dcc/src/Analysis/ConditionalTree.hpp:32) -- reached through `mlir::Value`'s
+//     private `detail::ValueImpl *impl` member (t4 already models Value), again a
+//     type in a signature with no member read.
+//
+// ⛔ NO MEMBER IS MAPPED FOR EITHER, DELIBERATELY.  `AttributeStorage::getType()`
+// / `getAbstractAttribute()` / the StorageUniquer hooks, and `ValueImpl::getKind()`
+// / `getType()` / `setType()` / the use-list traversal, are ALL absent, so any TU
+// that genuinely dereferences one still ABORTS LOUDLY in the mapper.  These two
+// rules buy the SIGNATURE and nothing else.
+//
+// ⛔⛔ THE THIRD TYPE OF THAT CENSUS TRIPLE, `mlir::ValueTypeRange<llvm::
+// MutableArrayRef<mlir::BlockArgument>>` (7 TUs), IS DELIBERATELY *NOT* KEYED HERE.
+// It FAILS the gate: the aborting instantiation has a real member surface, measured
+// at four sites, all `operator[]`:
+//   Agen.td:394, :466, :654, :750
+//     Type getLoadInductionVarType() {
+//       return getRegion().getBlocks().begin()->getArgumentTypes()[0]; }
+// `Block::getArgumentTypes()` IS this instantiation, and `[0]` reads it.  A bare
+// type key with no `operator[]` key would let that subscript be emitted textually
+// (unmapped MEMBERS do not abort) and silently hand back garbage -- the
+// `std::hash<int>` failure mode.  It stays LOUD until someone lands the type AND
+// an `operator[] -> mlir::Type` model together.
+// ⚠️ Note the survey-v10 rows for `ValueTypeRange` are a DIFFERENT instantiation
+// (`<ResultRange>` / `<OperandRange>`, 12 of 13 expr rows being `OpAsmPrinter <<`,
+// a standing refusal) and say nothing about this one.
+namespace mlir {
+class AttributeStorage {};
+namespace detail {
+class ValueImpl {};
+} // namespace detail
+} // namespace mlir
+
+using t2400 = mlir::AttributeStorage;
+using t2401 = mlir::detail::ValueImpl;
