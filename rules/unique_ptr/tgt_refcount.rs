@@ -118,3 +118,14 @@ fn f20<T1>(a0: ()) -> Option<Value<T1>> {
     let _: () = a0;
     None
 }
+
+// f21/f22 -- `explicit operator bool`.  An empty Option is exactly a null
+// unique_ptr, in both models; see the src.cpp comment for the five boolean-context
+// shapes this single key covers.
+fn f21<T1>(a0: &Option<Value<T1>>) -> bool {
+    a0.is_some()
+}
+
+fn f22<T1>(a0: &Option<Value<Box<[T1]>>>) -> bool {
+    a0.is_some()
+}

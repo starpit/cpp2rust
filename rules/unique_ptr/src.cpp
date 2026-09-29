@@ -135,3 +135,52 @@ bool f19(std::nullptr_t n, const std::unique_ptr<T1> &o) {
 template <typename T1> std::unique_ptr<T1> f20(std::nullptr_t n) {
   return std::unique_ptr<T1>(n);
 }
+
+// ---------------------------------------------------------------------------
+// f21/f22 -- `explicit operator bool() const noexcept`.
+//
+// THE CONVERTER ALREADY CALLS THIS AND THE CALLEE DID NOT EXIST.  An unmapped
+// MEMBER does not abort (the converter emits the call TEXTUALLY, with
+// `operator bool` spelled `to_bool`), so every boolean use of a unique_ptr came
+// out as `unsafe { p.to_bool() }` -- and the only `fn to_bool` in this tree is
+// `libcc2rs::IStream::to_bool`, so each site was a SILENT `error[E0599]` that
+// rc=0 and rustfmt cannot see.  Measured at HEAD 907226d5 against pin/ir.v36:
+// 16 such sites in dxp/src/Driver/dxp-driver.cpp and 14 in dxp/tools/DxpOptMain.cpp
+// (the two TUs the rules/tooloutputfile row just took B -> A), of which the
+// unique_ptr ones are these keys' work.
+//
+// ONE KEY COVERS EVERY BOOLEAN CONTEXT.  A contextual conversion to bool is a
+// CXXMemberCallExpr to `operator bool` in clang's AST regardless of the spelling
+// at the use site, so all five shapes the target codebase writes resolve through
+// the SAME key.  All five, measured in the emitted Rust of the two driver TUs:
+//   * `if (!output)`                          dxp-driver.cpp:70          -> `if !(p.to_bool())`
+//   * `if (tag_)`                             progir.h:317, :338, :342   -> `if (p.to_bool())`
+//   * `(bool)tag_ && !getTagStr().empty()`     progir.h:333, :335         -> `(p.to_bool()) && ...`
+//   * `tag_ ? *tag_ : empty`                   progir.h:345, :348         -> `if (p.to_bool()) {..} else {..}`
+//   * `other.comment_ ? make_unique(..) : nullptr`  progir.h:292, :294    -> same, on a `(*other).` receiver
+// So there is no shape left silently unresolved by covering only `!p`.
+//
+// `const` RECEIVER, deliberately -- unlike rules/shared_ptr f7, which takes a
+// mutable `&`.  Four of the sites above are inside `const` member functions
+// (`hasTag`/`hasComment`/`getTagStr`/`getCommentStr`), so a rule whose parameter
+// is a mutable reference would need a mutable borrow of `self` there.  The
+// recorded key is unaffected: it is the CALLEE's signature, and libc++ declares
+// the operator `const`, so `const &` is strictly the more permissive spelling.
+//
+// NOT the same shape as f16-f19.  Those key the free `operator==`/`operator!=`
+// against `std::nullptr_t`, which the target codebase also writes; this is the
+// conversion operator, a MEMBER, and a site using one never routes through the
+// other.
+//
+// OWNERSHIP (this module's refusal criterion): a boolean test neither transfers
+// nor duplicates a pointer, and it cannot observe a double-free or two live
+// owners.  `is_some()` is exact in both models -- the unsafe model is
+// `Option<Box<T1>>` and the refcount model `Option<Value<T1>>`, and in both an
+// empty `Option` is exactly a null `unique_ptr`.
+template <typename T1> bool f21(const std::unique_ptr<T1> &o) {
+  return o.operator bool();
+}
+
+template <typename T1> bool f22(const std::unique_ptr<T1[]> &o) {
+  return o.operator bool();
+}
