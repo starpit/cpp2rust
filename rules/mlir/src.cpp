@@ -127,6 +127,16 @@ namespace llvm {
 // live here because `llvm::ilist_iterator` is not declared until t243.
 template <typename T> class simple_ilist;
 template <typename T> class iplist;
+
+// g3087: FORWARD DECLARATION ONLY, so that `mlir::Region::getOps()`'s RETURN TYPE
+// can be SPELLED inside `class Region` sixty lines below -- the `simple_ilist` /
+// `iplist` licence one line up, verbatim.  The DEFINITION is t2750's, at the tail
+// of this file (`llvm/ADT/iterator_range.h:32`); a member DECLARATION may return
+// an incomplete type, and f2900 -- which actually returns one by value -- sits
+// long past that definition.  ⛔ It must stay a DECLARATION here: appending a
+// second definition is a redefinition error, the collision `class Operation` and
+// `class Region` already cost a merge.
+template <typename IteratorT> class iterator_range;
 } // namespace llvm
 
 namespace mlir {
@@ -235,6 +245,28 @@ public:
   // which a key can carry, so the recorded key is the bare
   // `void mlir::Region::walk(T1 &&)`.
   template <typename T1> void walk(T1 &&);
+
+  // ⚠️ g3087: DECLARED HERE AND NOT LATER, the f460 / `walk` discipline one line
+  // up -- a C++ class cannot be reopened, so `getOps()` and the nested iterator
+  // it names must go INSIDE this block.
+  //
+  // `OpIterator` is a FORWARD DECLARATION of the real nested class
+  // (mlir/IR/Region.h:132, `class OpIterator final : public
+  // llvm::iterator_facade_base<OpIterator, std::forward_iterator_tag,
+  // Operation>`).  Declaring it NESTED is what makes the recorded spelling the
+  // qualified `mlir::Region::OpIterator` that the gate asks for; a namespace-scope
+  // `class OpIterator` would record as `mlir::OpIterator` and be a DEAD KEY.
+  // ⛔ NO MEMBER OF IT IS DECLARED -- not `operator*`, not `operator++`, not
+  // `operator==`.  That is deliberate and it is the t243/t244 mistake NOT being
+  // repeated in the other direction: the only corpus use is the range-`for`,
+  // which the converter lowers positionally over the `Vec` (see t2900), so it
+  // never asks for an iterator member; and had one been declared, the `>` in
+  // `operator>=`-style angle-depth desync makes such keys dead 10/10 anyway.
+  //
+  // mlir/IR/Region.h:172 -- `iterator_range<OpIterator> getOps()`, NON-const,
+  // returning BY VALUE.  f2900's key.
+  class OpIterator;
+  llvm::iterator_range<OpIterator> getOps();
 };
 
 // `Value`, `Type` and `Attribute` are HANDLES in real MLIR -- each wraps one
@@ -12039,6 +12071,165 @@ llvm::iterator_range<std::reverse_iterator<mlir::Operation **>>
 f2750(std::reverse_iterator<mlir::Operation **> x,
       std::reverse_iterator<mlir::Operation **> y) {
   return llvm::make_range(x, y);
+}
+
+// ===========================================================================
+// t2900 / f2900 -- GAP FAMILY B3 continued, ROW g3087:
+// `llvm::iterator_range<mlir::Region::OpIterator>` (rank295 22, n=5-over-295 row
+// reads n=2: dcc/src/Transform/Sentient/Analyses/TimeStamps.cpp
+// `TimeStamp::computeTimeStamps` and dcc/src/Transform/Sentient/Deuniform.cpp
+// `DeuniformPass::duplicateAndUpdateEntriesOfQueryMapInLocalRegions`), AND ITS
+// PRODUCER `mlir::Region::getOps()`.
+//
+// ⛔⛔ THIS KEY HAS A BODY ON THE UNSAFE ARM ONLY -- AND THAT DOES **NOT** MEAN THE
+// REFCOUNT MODEL IS UNAFFECTED.  I ASSERTED THE OPPOSITE HERE FIRST AND MEASURED IT
+// FALSE; THE CORRECTED VERSION IS THE ONE THAT MATTERS TO A READER ADDING A KEY.
+// `converter/translation_rule.cpp:487-494` (`Load()`) reads `ir_unsafe.json`
+// UNCONDITIONALLY FOR BOTH MODELS and overlays `ir_refcount.json` only for
+// `Model::kRefCount`.  So the unsafe body IS the refcount body unless an overlay
+// replaces it: measured, `ir/g3087/mlir/ir_refcount.json` has no `t2900`/`f2900`
+// entry and zero `flat_map`, yet the refcount-model `.rs` for TimeStamps.cpp carries
+// the f2900 body verbatim, and that TU goes `lines=0` -> 41,447 lines ON THE REFCOUNT
+// LEG.  ⭐ Read the f2504/f2507 asymmetry precedent that way too: it means one body
+// serves both models, not that the refcount arm is switched off.
+// See tgt_refcount.rs at the same index for what the shared body costs there (element
+// carrier `*mut fmt::OpInst` vs this model's `libcc2rs::Ptr<fmt::OpInst>` -- a `rustc`
+// type error at the use site, i.e. loud, and no dropped mutation) and for why a
+// FAITHFUL overlay still cannot be written: `Ptr::borrow_vec`
+// (libcc2rs/src/rc.rs:281) is the only aliasing constructor and its signature is
+// `borrow_vec(owner: &Value<Vec<T>>)`, while `fmt::Block::ops` is a PLAIN
+// `Vec<OpInst>` two levels below the `&mut fmt::Region` receiver the converter hands
+// over, so the only writable overlay would be `Ptr::alloc(o.clone())` -- a fabricated
+// copy, the silent miscompile this family exists to avoid.
+//
+// ⭐⭐ WHY A SNAPSHOT `Vec` IS FAITHFUL HERE, AGAINST BOTH t2750's OWN COMMENT AND
+// THE ROW BRIEF, WHICH BOTH NAME THIS SPELLING AS THE FORBIDDEN CASE.
+// t2750 wrote: "for a range whose element is a `mlir::Operation &` ... a snapshot
+// `Vec` TYPE-CHECKS AND SILENTLY DROPS EVERY MUTATION THROUGH THE RANGE", and
+// listed `<mlir::Region::OpIterator>` as deliberately unkeyed for that reason.
+// ⛔ THAT IS WRONG, and the refutation is a LANDED KEY in this same file:
+// `mlir::Operation &` is ALREADY carried as `*mut dataflowir_gen::fmt::OpInst` on
+// the unsafe arm -- f2505 (`simple_ilist<Operation>::front()`) and f2506 (`back()`)
+// both take `mlir::Operation &` to exactly that, and f2502's comment states the
+// requirement in words: "the aliasing Ptr-into-Vec model ... NOT an allocating Ptr
+// -- mutation through the iterator must land in the owning `fmt::Block.ops`".
+// So `Operation &` is NOT a by-value record in this model; it is a pointer, and the
+// t2750 aliasing licence applies to it UNCHANGED.  The by-value record cases in
+// this family are `mlir::OpOperand` (t43 -> `()`) and `mlir::func::FuncOp`
+// (t157 -> `fmt::OpInst` BY VALUE) -- see the omission list below.
+//
+// ⛔ THE PRODUCER IS IN THE SAME CHANGE OR NOTHING IS -- t2750's rule.  `getOps()`
+// is a MEMBER, and an unmapped member is emitted TEXTUALLY (rc=0, then a silent
+// rustc E0599 that no bucket census sees), so a bare t2900 would be strictly worse
+// than no key.  f2900 is that producer.  ⚠️ It is the NON-TEMPLATE `getOps()`
+// (Region.h:172), not the `template <typename OpT> getOps()` at :185 -- the
+// templated one produces `iterator_range<op_iterator<OpT, OpIterator>>`, which is
+// rank295 5 and is REFUSED below for a different reason.
+//
+// SWALLOW-SAFETY, re-argued rather than inherited.  `GetTypeMapKey` truncates at
+// the first `<`, so the bucket `llvm::iterator_range` now holds TWO candidates
+// (t2750, t2900).  Both spellings are FULLY CONCRETE -- no `T<digits>` anywhere --
+// so `matchTemplate`'s placeholder capture never runs and the same-depth-comma
+// swallow is ruled out by construction; and neither spelling contains an operator
+// name, so the `operator>=` angle-depth desync cannot apply.  The two differ at the
+// first template argument, so no ordering between them can matter.
+//
+// ⛔ WHAT IS DELIBERATELY LEFT OUT OF THIS FAMILY, WITH ITS MEASUREMENT -- and it
+// is MOST of the family.  All four remaining spellings are blocked, each for a
+// DIFFERENT and separately measured reason; none is a matter of effort.
+//
+//  (a) ⛔⛔ THE USE-LIST HALF -- 10 of the 18 open TUs -- IS BLOCKED IN THE
+//      GENERATED MODEL, NOT IN THIS FILE.  `llvm::iterator_range<mlir::
+//      ValueUseIterator<mlir::OpOperand>>` (rank 7, n=4),
+//      `<mlir::ValueUserIterator<mlir::ResultRange::UseIterator, mlir::OpOperand>>`
+//      (rank 8, n=4), `<mlir::ResultRange::UseIterator>` (rank 83, n=1) and
+//      `<mlir::ValueUserIterator<mlir::ValueUseIterator<mlir::OpOperand>,
+//      mlir::OpOperand>>` (rank 85, n=1) are all produced by `getUses()` /
+//      `getUsers()` -- a REVERSE use-def edge.
+//      MEASUREMENT OF WHAT IS ABSENT: `dataflowir-gen/src` (13 files) has ZERO code
+//      hits for a use list.  Anchored, with a known-positive control so the zero is
+//      the tool working and not the tool failing:
+//        grep -onE '\b(users|use_list|uses)\b *[:(=]' *.rs   -> 1 hit, and that one
+//            is `td.rs:21: uses:` -- PROSE inside a doc comment.
+//        grep -onE 'pub (operands|results|regions)\b' *.rs   -> 10 hits (control).
+//      `fmt::OpInst` carries `operands`, `results`, `regions`; NOTHING anywhere
+//      records who uses a value.  ⭐ Rank 8 and rank 85 are the POINTER case at the
+//      element (`ValueUserIterator` derives from `llvm::mapped_iterator_base<...,
+//      Operation *>` and `mapElement` returns `Operation *`, UseDefLists.h:341-351),
+//      so the t2750 licence WOULD apply -- the element type is not what blocks them.
+//      FAILURE MODE OF THE ALTERNATIVE: the only writable body is `Vec::new()`,
+//      which asserts "this value has no users" and turns every rewrite loop in those
+//      10 TUs into a silent no-op at rc=0.  That is the forbidden placeholder.
+//      DISCRIMINATOR: f2900 right here -- the same `Vec`-of-pointers body IS correct
+//      for `Region::getOps()`, because the FORWARD edge (`Region.blocks` ->
+//      `Block.ops`) is in the model and the reverse edge is not.
+//      NAMED UNBLOCKER, IN THE RIGHT LAYER: a use-def index on
+//      `dataflowir_gen::fmt` -- either a `users: Vec<(usize, usize)>` reverse edge on
+//      `ir::Value`, or a whole-module `fn users_of(&self, v: &ir::Value) ->
+//      Vec<*mut OpInst>` walking `operands`.  That is `dataflowir-gen`, i.e. the
+//      generator layer, and it is queue row g3076.  ⛔ NOT rules work; a rules key
+//      cannot invent an edge the runtime model does not carry.
+//      LOUDNESS: all four are already the FIRST ABORT of their TUs as a TYPE gate,
+//      so they stay loud with no marker needed.
+//      ⚠️ Rank 7 and rank 83 carry a SECOND, independent block on top: their element
+//      is `mlir::OpOperand &` (`OperandType &operator*() const`, UseDefLists.h:315;
+//      `OpOperand &operator*() const`, ValueRange.h:360) and t43 maps
+//      `mlir::OpOperand` to the OPAQUE UNIT `()`.  A `Vec<()>` carries no
+//      information at all, so those two would not be usable even with a use list.
+//
+//  (b) ⛔ `llvm::iterator_range<mlir::detail::op_iterator<mlir::func::FuncOp,
+//      mlir::Region::OpIterator>>` -- rank295 5, n=5, THE HIGHEST-RANKED MEMBER OF
+//      THE FAMILY -- IS THE FORBIDDEN TRADE, and the row brief had this exactly
+//      backwards ("a by-value copy may be faithful here -- that is the standard MLIR
+//      idiom").
+//      MEASUREMENT: `mlir::detail::op_iterator<OpT, IteratorT>` derives from
+//      `llvm::mapped_iterator<op_filter_iterator<OpT, IteratorT>, OpT (*)(Operation
+//      &)>` with `static OpT unwrap(Operation &op) { return cast<OpT>(op); }`
+//      (BlockSupport.h:156-170), so the element is `mlir::func::FuncOp` BY VALUE.
+//      In C++ that is a pointer-sized handle and a copy is faithful -- but IN THIS
+//      MODEL `t157` maps `mlir::func::FuncOp` to `dataflowir_gen::fmt::OpInst` BY
+//      VALUE on BOTH arms (tgt_unsafe.rs:1611, tgt_refcount.rs:1415), NOT to a
+//      pointer and NOT to a handle.  A `Vec<OpInst>` is therefore a vector of DEEP
+//      COPIES.
+//      FAILURE MODE OF THE ALTERNATIVE: dbo/src/InitBin.cpp:60-63 is
+//      `for (auto declaration : module.getOps<func::FuncOp>()) if
+//      (declaration.getSymName() == name) declaration.setType(...)` -- a MUTATION
+//      THROUGH the range element.  A snapshot `Vec<OpInst>` type-checks, reaches
+//      rc=0, and drops the retype of every function in the module.  Four more sites
+//      (WrapProgramDfir.cpp:89, CorrectAtRuntime.cpp:406, ReduceToInitBin.cpp:176,
+//      SdscToDataflowIr.cpp:91) are the same shape.
+//      DISCRIMINATOR: t2750, whose element is `mlir::Operation *` -> `*mut OpInst`,
+//      and f2900 here, whose element is `mlir::Operation &` -> `*mut OpInst`.  Both
+//      copy a POINTER; `FuncOp` would copy the OBJECT.  The element type is the same
+//      op in all three cases -- it is the CARRIER that differs, and the carrier is
+//      decided at t157, not here.
+//      NAMED UNBLOCKER, IN THE RIGHT LAYER: change t157 so `mlir::func::FuncOp` is
+//      carried as a HANDLE (`*mut fmt::OpInst` / `libcc2rs::Ptr<fmt::OpInst>`),
+//      which is what it is in C++; then this key is f2900's body with an `isa`
+//      filter and it is the cheapest 5 TUs on the board.  ⛔ That is a t157-owning
+//      row (it moves every landed `FuncOp` body), not this one.
+//      LOUDNESS: rank 5 is already the first abort of all 5 TUs.
+//
+//  ⭐ `llvm::iterator_range<mlir::Value *>` (rank 84, n=1, dbo/src/SymbolExpr.cpp)
+//  is the one remaining spelling that is neither blocked on the use list nor on a
+//  by-value carrier -- its iterator is a raw `mlir::Value *`.  It is left out here
+//  only because its producer was not identified inside this row's budget, and it is
+//  a one-TU row; it stays loud as a TYPE gate.
+//
+// ⛔ NO MEMBER of `iterator_range` is declared for t2900, t2750's rule: `begin()`,
+// `end()`, `empty()`, `size()` are real members of the real class and the corpus's
+// only use of this spelling is the range-`for`, so a declaration would record a key
+// with nothing under it and any future site asking for one must ABORT LOUDLY.
+using t2900 = llvm::iterator_range<mlir::Region::OpIterator>;
+
+// f2900 -- `llvm::iterator_range<mlir::Region::OpIterator> mlir::Region::getOps()`.
+// The f460 form exactly: a free function whose FIRST parameter is the receiver,
+// body calling NOTHING but the member.
+// ⚠️ `mlir::Region &` and not `const mlir::Region &`: Region.h:172 is NON-CONST,
+// and f460 -- the other `Region` member in this file -- takes the same receiver and
+// lowers to `&mut dataflowir_gen::fmt::Region` on both arms.
+llvm::iterator_range<mlir::Region::OpIterator> f2900(mlir::Region &r) {
+  return r.getOps();
 }
 
 // ===========================================================================

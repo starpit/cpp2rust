@@ -4761,6 +4761,57 @@ fn f2750(
         .collect()
 }
 
+// ⛔⛔ t2900 / f2900 (`llvm::iterator_range<mlir::Region::OpIterator>` and
+// `mlir::Region::getOps()`) HAVE NO REFCOUNT *OVERLAY* BODY -- AND THAT IS **NOT** THE
+// SAME THING AS HAVING NO REFCOUNT BODY.  I WROTE THE OPPOSITE HERE FIRST AND IT WAS
+// FLATLY WRONG; THE CORRECTION IS THE MEASUREMENT BELOW, KEPT BECAUSE THE MISTAKE IS
+// THE EASY ONE TO MAKE.
+// ⭐⭐ `converter/translation_rule.cpp:487-494` `Load()` reads `ir_unsafe.json`
+// UNCONDITIONALLY FOR BOTH MODELS and then, for `Model::kRefCount` only, OVERLAYS
+// `ir_refcount.json` on top of it.  So an unsafe-arm-only key is NOT inert on the
+// refcount leg: its unsafe body is what the refcount model emits.  Measured, not
+// argued: `ir/g3087/mlir/ir_refcount.json` contains ZERO occurrences of `flat_map`
+// (and no `t2900`/`f2900` entry at all), yet the refcount-model emission of
+// `dcc/src/Transform/Sentient/Analyses/TimeStamps.cpp` contains the f2900 body
+// VERBATIM at its line 20281, and that TU went from `lines=0` at this exact gate to a
+// full 41,447-line `.rs` on the REFCOUNT leg.  ⚠️ The f2504/f2507 asymmetry precedent
+// therefore means "one body serves both models", NOT "the refcount arm is switched
+// off" -- do not read it the way I first did.
+// ⛔ WHAT THAT COSTS, STATED PLAINLY RATHER THAN HIDDEN: the shared body yields
+// `Vec<*mut fmt::OpInst>`, while this model's carrier for `mlir::Operation *` /
+// `mlir::Operation &` is `libcc2rs::Ptr<fmt::OpInst>` (f2505/f2506).  So on the
+// refcount leg the element type disagrees with the model's own convention wherever
+// the element is USED (in the gate TU it is only counted, so nothing consumes it).
+// ⭐ That disagreement is a `rustc` TYPE ERROR at the use site -- raw pointer where
+// `Ptr<T>` is expected -- i.e. LOUD one stage later.  It is emphatically NOT the
+// silent class this family guards against: no mutation is dropped, because the raw
+// pointers alias the live buffers exactly as on the unsafe arm.
+// ⛔ AND THE FAITHFUL OVERLAY STILL CANNOT BE WRITTEN.  The unsafe arm hands out
+// INTERIOR RAW POINTERS into the owning
+// `fmt::Block::ops` (tgt_unsafe.rs f2900).  The refcount equivalent of that is
+// `libcc2rs::Ptr<fmt::OpInst>` with borrow provenance, and the ONLY aliasing
+// constructor for one is `Ptr::borrow_vec(owner: &Value<Vec<T>>)`
+// (libcc2rs/src/rc.rs:281) -- it requires a `Value<Vec<T>>`.  `fmt::Block::ops` is
+// a PLAIN `Vec<OpInst>` (fmt.rs:480) reached through a plain `&mut fmt::Region`
+// (f460's receiver on this arm too), so there is no `Value<Vec<OpInst>>` anywhere on
+// the path and no provenance to borrow from.
+// ⚠️ WHY f2502/f2503 ESCAPE THIS AND f2900 CANNOT: there the CONVERTER supplies the
+// provenance, because the RECEIVER *is* the ops list and decays to
+// `PtrKind::StackVec` (rc.rs:1047) before the body runs -- `a0` arrives already
+// borrow-provenanced and the body returns it unchanged.  f2900's receiver is a
+// `Region`, two levels above the `Vec`, and the converter has no provenance for an
+// inner field.
+// ⛔ THE ONLY WRITABLE ALTERNATIVE IS `Ptr::alloc(o.clone())`, WHICH FABRICATES A
+// COPY -- the exact silent miscompile (mutation-through dropped at rc=0) that this
+// whole family's model boundary is written to prevent.  Between a loud `rustc` type
+// mismatch at the use site (the shared body) and a silent dropped mutation
+// (`Ptr::alloc(clone())`), the project's rule picks loud.  So this arm deliberately
+// carries NO overlay and inherits the unsafe body, rather than carrying a wrong one.
+// NAMED UNBLOCKER, IN THE RIGHT LAYER: either a `Ptr::borrow_field`-style
+// constructor in `libcc2rs` that can take provenance from a `&mut T` interior, or
+// `fmt::Block::ops` promoted to `Value<Vec<OpInst>>` in `dataflowir-gen`.  Both are
+// outside `rules/`.
+
 // ============================================================================================
 // ROW g3081 -- GAP FAMILY F1 continuation: the three MEASURED-GATE dialect-op keys, t2650-t2652.
 //

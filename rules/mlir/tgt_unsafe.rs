@@ -5330,6 +5330,45 @@ unsafe fn f2750(
     }
 }
 
+// t2900 -- `llvm::iterator_range<mlir::Region::OpIterator>`.  t2750's body and
+// t2750's model: a `Vec` OF POINTERS.  The element of this range is
+// `mlir::Operation &` (`Operation &operator*() const`, mlir/IR/Region.h:143), and
+// `mlir::Operation &` is ALREADY carried as `*mut fmt::OpInst` on this arm --
+// f2505/f2506 (`simple_ilist<Operation>::front()`/`back()`) take exactly that
+// reference to exactly this pointer.  So the snapshot copies POINTERS, the loop
+// body's mutations land on the real ops, and t2750's aliasing licence transfers
+// unchanged.  ⛔ See src.cpp at t2900 for why this contradicts t2750's own comment
+// and the row brief, both of which listed this spelling as the forbidden case.
+// `init` is the empty range, the only thing a default-constructed `iterator_range`
+// can be.
+fn t2900() -> Vec<*mut dataflowir_gen::fmt::OpInst> {
+    Vec::new()
+}
+
+// f2900 -- `mlir::Region::getOps()`.  The receiver lowers to `&mut fmt::Region`,
+// f460's formal verbatim.
+// ⭐ INTERIOR POINTERS INTO THE LIVE BUFFERS, not copies: `b.ops` is the OWNING
+// `Vec<OpInst>` (fmt.rs:480) and each element address is taken in place, which is
+// f461's / rules/vector f13's model -- `Vec::push`-ing clones here would be the
+// silent-miscompile this key exists to avoid.
+// ⚠️ THE FLATTENING IS THE SEMANTICS, not a convenience.  C++'s `OpIterator` walks
+// the region's blocks in order and, within each, that block's operations in program
+// order, skipping blocks with no ops (`skipOverBlocksWithNoOps`, Region.h:152);
+// `flat_map` over `blocks` then `ops` reproduces exactly that sequence, and an
+// empty `ops` contributes nothing, which is the skip.
+unsafe fn f2900(
+    a0: &mut dataflowir_gen::fmt::Region,
+) -> Vec<*mut dataflowir_gen::fmt::OpInst> {
+    a0.get_blocks_mut()
+        .iter_mut()
+        .flat_map(|b| {
+            b.ops
+                .iter_mut()
+                .map(|o| o as *mut dataflowir_gen::fmt::OpInst)
+        })
+        .collect()
+}
+
 // ============================================================================================
 // ROW g3081 -- GAP FAMILY F1 continuation: the three MEASURED-GATE dialect-op keys, t2650-t2652.
 //
