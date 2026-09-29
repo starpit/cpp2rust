@@ -9752,7 +9752,29 @@ std::string Converter::GetMappedAsString(clang::Expr *expr, clang::Expr **args,
 
   auto result = ConvertIRFragment(tgt_ir->body, expr, args, num_args, ctx);
   if (tgt_ir->multi_statement) {
-    return '{' + result + '}';
+    // ⛔ THE PARENTHESES ARE LOAD-BEARING AND A BARE `{ ... }` IS A PARSE ERROR
+    // HALF THE TIME IT IS USED.
+    //
+    // `Mapper::parenthesizeBodyIfNeeded` deliberately skips multi-statement
+    // rules on the grounds that `{ ... }` "is already a single primary
+    // expression". It is not: in Rust a block at the START of a STATEMENT is
+    // parsed as a *statement*, not as an operand, so as soon as the surrounding
+    // emission appends a binary operator the block terminates the statement and
+    // the operator has nothing to bind to. Measured on
+    // `dcc/src/Conversion/DataflowToSentient/DataflowToSentient.cpp`, where
+    // `src_unit_name.substr(0, 2) != "l3"` -- `substr` being a multi-statement
+    // rule -- emitted
+    //     if {let s = ...; {let mut __tmp1 = ...; __tmp1}  != <rhs>}
+    // and rustfmt REFUSED the file with 5x `error: expected expression, found
+    // `!=``. The block is the tail expression of the `if` condition's own
+    // block, i.e. statement position, so `{...} != rhs` cannot parse. The same
+    // shape is one `as` or one `.method()` away in every other consumer.
+    //
+    // Wrapping is safe in the other direction too: a parenthesised block is a
+    // primary expression everywhere a block expression was already accepted as
+    // an *operand*, and a statement-position use of a mapped call is emitted
+    // with its own terminator by ConvertStmt, so `({ ... }) ;` is well-formed.
+    return "({" + result + "})";
   }
   return result;
 }
