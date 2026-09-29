@@ -183,14 +183,19 @@ fn f22<T1, T2>(a0: T1, a1: T2) -> (Value<T1>, Value<T2>) {
 // f23 -- `pair<T1,T2>::pair(const pair<T3,T4> &)`.  Body is f2's VERBATIM: both
 // pairs share the `(T1, T2)` model, so the converting copy is a plain clone.  See
 // rules/pair/src.cpp's f23 note for the blast-radius argument.
+// ⛔ NOT `.try_into().expect(..)`: a C++ implicit narrowing conversion TRUNCATES
+// and never traps, so a panicking body is a behaviour change, not a translation --
+// and for the `f64 -> i32` the 14 real sites need, `TryFrom` does not even exist.
+// `libcc2rs::CxxConvert` lowers to `as`.  ⚠️ See libcc2rs/src/cxx_convert.rs for
+// the one divergence: `as` saturates where C++ float -> int overflow is UB.
 fn f23<T1: Clone, T2: Clone>(a0: (Value<T1>, Value<T2>)) -> (Value<T1>, Value<T2>) {
     (
-        Rc::new(RefCell::new(
-            a0.0.borrow().clone().try_into().expect("failed conversion"),
-        )),
-        Rc::new(RefCell::new(
-            a0.1.borrow().clone().try_into().expect("failed conversion"),
-        )),
+        Rc::new(RefCell::new(libcc2rs::CxxConvert::<T1>::cxx_convert(
+            a0.0.borrow().clone(),
+        ))),
+        Rc::new(RefCell::new(libcc2rs::CxxConvert::<T2>::cxx_convert(
+            a0.1.borrow().clone(),
+        ))),
     )
 }
 

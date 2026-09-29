@@ -4,6 +4,9 @@
 mod reinterpret;
 pub use reinterpret::ByteRepr;
 
+mod cxx_convert;
+pub use cxx_convert::*;
+
 mod rc;
 pub use rc::*;
 
