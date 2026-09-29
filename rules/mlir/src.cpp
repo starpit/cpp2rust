@@ -9614,3 +9614,96 @@ f1106(mlir::Operation *a0) {
 template <typename T1> void f1300(mlir::Operation *a0, T1 &&a1) {
   return a0->walk(std::move(a1));
 }
+
+// ===========================================================================
+// PASS 2026-09-29: t1500 `mlir::detail::PassOptions::Option<DCC::ProgIRFormat>`
+// -- ONE key, and the THIRD instantiation of the template t66/t1200 already hold.
+//
+// THE ROW.  The single verbatim first abort of 13 candidate TUs across
+// dcc/dbo/hcc/dvs/dsm/dr5, and the gate standing in FRONT of t1200's own win:
+//     LLVM ERROR: unsupported system type has no rule:
+//       `mlir::detail::PassOptions::Option<DCC::ProgIRFormat,
+//        mlir::detail::PassOptions::GenericOptionParser<DCC::ProgIRFormat>>`
+//       ... rule key: searched as:
+//        mlir::detail::PassOptions::Option<DCC::ProgIRFormat>;
+//       from decl (NOT a key -- canonicalised, defaulted args kept):
+//        mlir::detail::PassOptions::Option<DCC::ProgIRFormat,
+//        mlir::detail::PassOptions::GenericOptionParser<DCC::ProgIRFormat>>
+//       at .../mlir/Pass/PassOptions.h:192:9
+// ⭐ THE TWO FORMS DIFFER AND ONLY THE FIRST IS A KEY.  Read out of
+// `out.BEFORE/dcc__src__Driver__dcc.cpp.log` with `grep -o 'searched as: [^;]*'`.
+// This row is a live instance of the from-decl trap: the abort text's own type
+// carries a SECOND template argument (`GenericOptionParser<...>`, selected because
+// `llvm::cl::parser<E>` for an enum derives from `cl::generic_parser_base` --
+// PassOptions.h:179-187), and the `searched as:` form ELIDES it.  The ONE-parameter
+// `class Option` declared at :1424 makes it impossible for the recorded key to drift
+// to the dead canonical spelling; that is the t66 discipline, unchanged.
+//
+// ⛔ WHY AN OPAQUE UNIT AND NOT AN ENUM MODEL.  `dcc-pass-option.h:92-98` is
+//     Option<DCC::ProgIRFormat> progir_format{*this, "progir-format", ...,
+//         llvm::cl::values(clEnumValN(kGeneral,...), kSenProg, kSmc),
+//         llvm::cl::init(DCC::ProgIRFormat::kGeneral)};
+// so the compiled-in default is `kGeneral`, which is enumerator VALUE 0
+// (dcc.hpp:58 `enum ProgIRFormat { kGeneral = 0, kSenProg = 1, kSmc = 2 };`).
+// ⚠️ THAT MAKES THE ENUM MODEL LOOK FREE AND IT IS A TRAP.  `kGeneral == 0` means a
+// `Default::default()` payload would coincide with the compiled-in default TODAY --
+// i.e. the wrongness would be INVISIBLE in this corpus while the model itself is
+// still the one t1200 forbids.  The value does not come from `init(...)`; it comes
+// from argv parsing inside `llvm::cl`, which this port does not translate at all, so
+// any keyed value type answers `kGeneral` for `--progir-format=smc` as well.  A unit
+// has no value to default, so it cannot flip anything.  ⭐ NO VALUE IS MODELLED BY
+// THIS KEY, and that is the claim, not an omission.
+//
+// ⛔ THE MEMBER SURFACE, CENSUSED (an unmapped MEMBER does not abort -- it is emitted
+// textually -- so the surface has to be stated, not assumed).  `rg -n
+// 'progir_format|Option<DCC::ProgIRFormat>' repos/dt_src` over the whole corpus finds
+// exactly TWO sites touching THIS instantiation:
+//   * `dcc/tools/Options/dcc-pass-option.h:92` -- the DECLARATION itself.  Not a use.
+//   * `dcc/tools/dcc-standalone/dcc-standalone-main.cpp:757` -- `options.progir_format`
+//     passed to a `DCC::ProgIRFormat` parameter, i.e. ONE READ through the inherited
+//     `llvm::cl::opt::operator DataType`.  ⭐ MEASURED NOT EMITTED: that TU's own first
+//     abort is `mlir::tracing::DebugConfig`, BEFORE this key is ever consulted
+//     (BEFORE.tsv row 3), so the site cannot reach an emitted `.rs` today.
+// There is NO `.getValue()`, NO `hasValue()` and NO `operator=` on this instantiation
+// anywhere in the corpus.  All are left UNDECLARED; when the DebugConfig gate clears,
+// the one read becomes a loud rustc error on a unit -- the state t66 has deliberately
+// held for `<int>` since it landed.
+//
+// ⛔⛔ AND THE SIBLING `mlir::Pass::Option<DCC::ProgIRFormat>` (queue g344, 3 TUs) IS
+// DELIBERATELY LEFT OUT -- this is the one asymmetry in the family and it is measured.
+// That instantiation is the TABLEGEN pass-base member `progIRFormat`
+// (SentientToProgIR/Passes.td, `Option<"progIRFormat","progir-format","DCC::n",
+// /*default=*/"DCC::n::kGeneral">`), and its value IS READ IN A BRANCH:
+//     SentientToProgIR.cpp:716  if (progIRFormat == DCC::kSenProg) {
+//     SentientToProgIR.cpp:722  } else if (progIRFormat == DCC::kSmc) {
+//     SentientToProgIR.hpp:89   this->progIRFormat = progir_format;   (operator=)
+// Two of those three DECIDE CONTROL FLOW.  Keying the type without keying `operator==`
+// would trade one loud translate-time abort for a silent-looking member call on a
+// unit, and keying a VALUE would make both comparisons read false for every input.
+// Neither is defensible from here, so `mlir::Pass::Option<DCC::ProgIRFormat>` stays
+// LOUD.  ⭐ The 13-TU gate this row clears is the `detail::PassOptions` one; g344 is a
+// separate row with a separate, harder payload decision.
+//
+// SWALLOW-SAFETY.  `GetTypeMapKey` truncates at the first `<`, so the bucket
+// `mlir::detail::PassOptions::Option` now holds t66 `<int>`, t1200 `<bool>` and t1500
+// `<DCC::ProgIRFormat>`.  ALL THREE ARE FULLY CONCRETE -- no `T_` placeholder anywhere
+// in the bucket -- so `matchTemplate`'s same-depth-comma capture has nothing to
+// capture and cannot fire.  No `>` appears inside any of the three arguments either,
+// so the `operator>=` angle-depth desync class does not apply.
+// ===========================================================================
+
+// ⭐ DECLARED ONLY SO THE KEY CAN BE SPELLED, exactly as the t69 `OpPrintingFlags`
+// note argues.  `DCC` is a global CLASS in the corpus (`dcc/src/Driver/dcc.hpp:38
+// class DCC { public: ... };`), NOT a namespace, and `ProgIRFormat` is an unscoped
+// member enum at :58 -- so the template argument only spells as `DCC::ProgIRFormat`
+// if the enclosing entity is a class.  ⛔ NOTHING ELSE of `DCC`'s surface is declared,
+// and `DCC::ProgIRFormat` is NOT keyed here: it is a PROJECT type, and the converter
+// synthesises an identity rule for a type defined in the TU via
+// `LooksLikeUserDefinedTypeName`/`user_tags_`.  Keying it in a SYSTEM rules module
+// would shadow that with a second, competing answer.
+class DCC {
+public:
+  enum ProgIRFormat { kGeneral = 0, kSenProg = 1, kSmc = 2 };
+};
+
+using t1500 = mlir::detail::PassOptions::Option<DCC::ProgIRFormat>;

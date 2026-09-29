@@ -3966,3 +3966,30 @@ fn f1300<T1: FnMut(&mut dataflowir_gen::fmt::OpInst)>(
 ) -> () {
     a0.with_mut_ref(|o| o.walk_any_mut(&mut a1))
 }
+
+// t1500 `mlir::detail::PassOptions::Option<DCC::ProgIRFormat>` -> AN OPAQUE UNIT.
+//   13 gating TUs across dcc/dbo/hcc/dvs/dsm/dr5; the gate standing in FRONT of
+//   t1200's own win.  The PROJECT-ENUM instantiation of MLIR's command-line-backed
+//   pass option (PassOptions.h:192:9), parsed by `GenericOptionParser` rather than
+//   `llvm::cl::parser` because `cl::parser<E>` for an enum derives from
+//   `generic_parser_base`.
+//   ⛔ NOT an enum, and the reason is sharper here than for t66/t1200:
+//   `dcc-pass-option.h:98` is `llvm::cl::init(DCC::ProgIRFormat::kGeneral)` and
+//   `kGeneral == 0` (dcc.hpp:58), so a value model's `Default::default()` would
+//   COINCIDE with the compiled-in default and the wrongness would be INVISIBLE in
+//   this corpus -- while `--progir-format=smc` would still silently read `kGeneral`,
+//   because the value comes from argv parsing inside `llvm::cl`, which this port does
+//   not translate.  A unit has no value to default.  ⭐ NO VALUE IS MODELLED.
+//   ⛔ COST, censused over the whole corpus: exactly ONE read exists --
+//   `dcc-standalone-main.cpp:757` `options.progir_format` through the inherited
+//   `operator DataType` -- and it is MEASURED NOT EMITTED (that TU aborts first on
+//   `mlir::tracing::DebugConfig`).  No `.getValue()`, no `hasValue()`, no `operator=`
+//   on this instantiation anywhere.  All left UNDECLARED and loud.
+//   ⛔ The sibling `mlir::Pass::Option<DCC::ProgIRFormat>` (g344) is deliberately NOT
+//   keyed: its value decides control flow at SentientToProgIR.cpp:716/:722.
+// ⚠️ IDENTICAL IN BOTH MODELS and spelled in BOTH overlays (the t72/t990/t1200
+// precedent).  The body is `()`, NOT empty -- an empty rule body panics at
+// syntactic.rs:591.
+fn t1500() -> () {
+    ()
+}
