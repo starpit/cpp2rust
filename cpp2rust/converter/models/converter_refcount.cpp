@@ -2014,25 +2014,91 @@ void ConverterRefCount::EmitByValueShadow(const std::string &loop_var_name,
   }
 }
 
+// The REFCOUNT map-range iterator whose `MapIterator` impl a decomposing loop
+// can address, or nullptr for a class this model cannot spell one for.
+//
+// MEASURED out of libcc2rs/src/iterators.rs: `impl MapIterator for
+// RefcountMapIter<K, V>` (:151) and `impl MapIterator for
+// RefcountHashMapIter<K, V>` (:413) both give `first() -> Value<K>` and
+// `second() -> Value<V>`, i.e. the EXACT two accessors the unsafe decomposition
+// lowering uses, already in this model's native local form. `llvm::DenseMap` is
+// deliberately absent: rules/densemap's refcount t4 is `RefcountHashMapIter`
+// too, but the base VisitCXXForRangeStmt (converter.cpp:3926) already refuses a
+// decomposing DenseMap range under refcount BEFORE dispatch reaches here, so
+// listing it would be dead code that only looks like coverage.
+static const char *RefCountMapRangeIteratorName(const std::string &class_name) {
+  if (class_name == "std::map") {
+    return "RefcountMapIter";
+  }
+  if (class_name == "std::unordered_map") {
+    return "RefcountHashMapIter";
+  }
+  return nullptr;
+}
+
 bool ConverterRefCount::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
   auto *loop_var = stmt->getLoopVariable();
-  // A decomposing loop variable is NOT lowered in this model: the unsafe map
-  // path synthesises an iterator name and emits `EmitMapDecompositionBindings`
-  // raw-pointer bindings (converter.cpp:2310-2337), which this model has no
-  // equivalent for -- its holder would be `Rc<RefCell<..>>` and the bindings
-  // unreachable without duplicating the access-mode expansion. That is a
-  // DELIBERATE refusal, but a DecompositionDecl has no name of its own, so
-  // falling through to GetNamedDeclAsString here reached the generic namer and
-  // died with `report_fatal_error("Unexpected unnamed construct")`
+  auto *decomp = llvm::dyn_cast<clang::DecompositionDecl>(loop_var);
+  // A DecompositionDecl has no name of its own, so the iterator the loop binds
+  // needs a synthetic one -- the SAME helper the unsafe map path uses
+  // (converter.cpp:3812), so two nested decomposing loops cannot collide.
+  // Falling through to GetNamedDeclAsString for a decomposition reached the
+  // generic namer and died with
+  // `report_fatal_error("Unexpected unnamed construct")`
   // (converter_lib.cpp:847) -- a refusal presenting as an internal error.
-  // Route it to the refusal that names the construct, its bindings and the
-  // source location instead.
-  if (auto *decomp =
-          llvm::dyn_cast<clang::DecompositionDecl>(stmt->getLoopVariable())) {
-    ReportUnsupportedStructuredBinding(decomp);
+  const std::string loop_var_name =
+      decomp ? GetDecompositionIterName(decomp)
+             : GetNamedDeclAsString(loop_var);
+  // ⭐ THE DECOMPOSING ARM. It used to be an unconditional
+  // ReportUnsupportedStructuredBinding, on the stated grounds that the unsafe
+  // path's bindings are RAW POINTERS this model has no equivalent for. That
+  // premise is wrong in one specific, measured way: the unsafe path does not
+  // build pointers itself, it calls `<iter>.first()` / `<iter>.second()` on the
+  // MODELLED ITERATOR and the POINTER-ness comes from
+  // `impl MapIterator for UnsafeMapIterator`. The refcount iterator implements
+  // the same trait returning `Value<K>` / `Value<V>` -- which IS the refcount
+  // form of a local -- so the identical emission is correct here and needs
+  // nothing new in libcc2rs and no new rule key.
+  //
+  // ⛔ AND NO `ptr_bindings_` REGISTRATION, which is the whole difference from
+  // the unsafe arm. There the bindings are `*const K` / `*mut V` and
+  // VisitDeclRefExpr must deref at every use; here they are already `Value<..>`,
+  // so registering them would emit `(*k)` for a non-pointer -- E0614 at rc=0,
+  // i.e. exactly the silent-wrongness class this project refuses.
+  //
+  // ALIASING, which is what `auto &[k, v]` asks for: `second()` hands back
+  // `m.get(key).clone()` on a `BTreeMap<K, Value<V>>`, and cloning an
+  // `Rc<RefCell<V>>` SHARES the storage, so a write through `v` reaches the map
+  // exactly as the C++ reference does. `first()` hands back a fresh
+  // `Rc::new(RefCell::new(key.clone()))`, i.e. a COPY -- sound because a map
+  // key is `const` in C++ (`value_type` is `pair<const K, V>`) and no
+  // well-formed program writes through `k`.
+  if (decomp != nullptr) {
+    const char *const iter_type =
+        RefCountMapRangeIteratorName(GetClassName(stmt->getRangeInit()->getType()));
+    // Any range class this model cannot name a `MapIterator` for, and any arity
+    // other than two (EmitMapDecompositionBindings' accessor table has exactly
+    // two entries), stays on the LOUD refusal path naming the shape. Gate
+    // BEFORE emitting anything so a refused shape leaves no partial text.
+    if (iter_type == nullptr || decomp->bindings().size() != 2) {
+      ReportUnsupportedStructuredBinding(decomp);
+      return false;
+    }
+    StrCat("'loop_:");
+    StrCat(keyword::kFor, loop_var_name, keyword::kIn,
+           std::string(iter_type) + "::begin(",
+           ConvertObject(stmt->getRangeInit()), ')');
+    PushBrace brace(*this);
+    // No EmitByValueShadow: that shadows a NAMED loop variable with a boxed
+    // `Value<pair>`; a decomposition has no name to shadow and its two bindings
+    // are boxed individually by the accessors below.
+    if (!EmitMapDecompositionBindings(decomp, loop_var_name)) {
+      ReportUnsupportedStructuredBinding(decomp);
+      return false;
+    }
+    ConvertForRangeBody(stmt, loop_var);
     return false;
   }
-  auto loop_var_name = GetNamedDeclAsString(loop_var);
 
   StrCat("'loop_:");
   StrCat(keyword::kFor, loop_var_name, keyword::kIn, "RefcountMapIter::begin(",
