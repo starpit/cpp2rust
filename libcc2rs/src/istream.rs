@@ -286,6 +286,35 @@ impl IStream {
         }
     }
 
+    /// `operator>>(float&)`.
+    ///
+    /// ⛔ NOT `extract_f64` NARROWED WITH `as f32`, and the difference is a
+    /// SILENT WRONG ANSWER rather than a rounding nicety.  `num_get` sets
+    /// failbit when the parsed value does not fit the target type
+    /// ([facet.num.get.virtuals]/3, C++11 LWG 2176), and `1e40 as f32` in Rust
+    /// is a SATURATING cast that yields `f32::INFINITY` with no error -- so a
+    /// `dtGetEnv<float>("X")` over `"1e40"` would come back `Some(inf)` where
+    /// C++ returns `std::nullopt`.  The overflow is therefore detected
+    /// explicitly, in the one place where the f64 is still finite.
+    ///
+    /// UNDERFLOW TO ZERO IS DELIBERATELY *NOT* A FAILURE: `1e-50` is a denormal
+    /// loss that C++ also reports as success (num_get only fails on values
+    /// outside the representable RANGE), so `0.0` is the right answer there.
+    pub fn extract_f32(&mut self, out: &mut f32) {
+        if !self.sentry() {
+            return;
+        }
+        match self.float_field().and_then(|s| s.parse::<f64>().ok()) {
+            Some(v) if v.is_finite() && (v as f32).is_finite() => *out = v as f32,
+            // Either the field did not parse at all, or it parsed to a magnitude
+            // no `float` can hold.  Both are `num_get` failures.
+            _ => {
+                self.failbit = true;
+                *out = 0.0;
+            }
+        }
+    }
+
     /// `operator>>(char&)`: one non-whitespace character.  A char extraction
     /// that fails leaves the argument alone -- `num_get` is not involved, so
     /// LWG 2176's zeroing does not apply here.
@@ -298,6 +327,77 @@ impl IStream {
         if self.pos >= self.buf.len() {
             self.eofbit = true;
         }
+    }
+
+    // -- the numeric `operator>>` rule ABI ------------------------------------
+    //
+    // ⭐ EVERY ONE OF THESE EXISTS FOR A RULE-ABI REASON, not for convenience,
+    // and the reason is the SAME ONE that made `extract_token_reporting` return
+    // `*mut Self`: a rule body is INLINED and each `aN` re-expands to the
+    // caller's argument expression VERBATIM, so a body may name each operand
+    // EXACTLY ONCE.  `std::basic_istream::operator>>` must hand the stream back
+    // (that is what makes `if (ss >> parsed)` a stream test and `in >> a >> b`
+    // chain), and the `extract_*` methods above return `()`.  A body written as
+    //     { a0.extract_i32(a1); a0 }
+    // names `a0` twice -- for a caller like `f(v) >> x` that RE-EVALUATES
+    // `f(v)`, on a fresh stream, so the extraction would be thrown away.  These
+    // wrappers make the single-mention body possible.
+    //
+    // ⛔ AND THEY MUST BE METHODS, not free functions taking `&mut IStream`: for
+    // a `std::istream &` parameter the converter emits the BARE LVALUE, not
+    // `&mut lvalue` (measured; see `rules/iostream/tgt_unsafe.rs` f8, where
+    // `let __s: *mut IStream = a0;` came out `let __s = ss;` with E0308, rc=0
+    // and no placeholder).  A method call is immune because Rust auto-refs the
+    // receiver, so `a0.shr_i32(..)` compiles both as `(&mut IStream).shr_i32`
+    // and as `ss.shr_i32`.
+    //
+    // ⚠️ NO `shr_u8`/`shr_token` HERE, and the asymmetry is real rather than an
+    // oversight.  `std::string` extraction needs `extract_token_reporting`'s
+    // extra bool because the RULE BODY has to do the write-back itself (the
+    // tree's `std::string` is a NUL-terminated `Vec<libc::c_char>`, so the rule
+    // stages into a `Vec<u8>` and converts), and it must not write on the sticky
+    // path.  A numeric target is written by the extractor DIRECTLY, and the two
+    // failure cases are already distinguished in there:
+    //   * sentry failed (sticky / empty input) -> the argument is UNTOUCHED;
+    //   * sentry succeeded but the conversion failed -> zero, per LWG 2176.
+    // So there is no decision left for the rule body to make, and no flag.
+
+    /// `std::istream & operator>>(int &)`.
+    pub fn shr_i32(&mut self, out: &mut i32) -> *mut Self {
+        self.extract_i32(out);
+        self
+    }
+
+    /// `std::istream & operator>>(unsigned int &)`.
+    pub fn shr_u32(&mut self, out: &mut u32) -> *mut Self {
+        self.extract_u32(out);
+        self
+    }
+
+    /// `std::istream & operator>>(long &)` -- and `long long &`, which is a
+    /// DISTINCT C++ overload with the identical Rust representation (both i64 on
+    /// LP64), so both rule keys land on this one method.
+    pub fn shr_i64(&mut self, out: &mut i64) -> *mut Self {
+        self.extract_i64(out);
+        self
+    }
+
+    /// `std::istream & operator>>(unsigned long &)` / `unsigned long long &`.
+    pub fn shr_u64(&mut self, out: &mut u64) -> *mut Self {
+        self.extract_u64(out);
+        self
+    }
+
+    /// `std::istream & operator>>(float &)`.
+    pub fn shr_f32(&mut self, out: &mut f32) -> *mut Self {
+        self.extract_f32(out);
+        self
+    }
+
+    /// `std::istream & operator>>(double &)`.
+    pub fn shr_f64(&mut self, out: &mut f64) -> *mut Self {
+        self.extract_f64(out);
+        self
     }
 
     /// `operator>>(std::string&)`: one whitespace-delimited token.  The buffer
@@ -816,6 +916,182 @@ mod tests {
         }
         assert_eq!(a, 0);
         assert_eq!(b, 22, "sticky no-op through the unsafe entry point");
+        assert!(st.fail());
+    }
+
+    // ========================================================================
+    // ⭐⭐ THE ROUND-TRIP TEST FOR THE `dtGetEnv<T>` ROW -- i.e. the gate on
+    // `dxp/dxp_standalone.cpp`.  This is deliberately NOT a unit test of
+    // `shr_i32`; it REPRODUCES `util/dtgetenv.hpp:121-131` line for line, so
+    // that the property under test is the one the corpus depends on:
+    //
+    //     std::stringstream ss(ptr);
+    //     T parsed;
+    //     if ((ss >> parsed) && ss.eof()) { ret = parsed; }
+    //
+    // ⛔ THE FORBIDDEN OUTCOME THIS EXISTS TO CATCH: an identity / no-op
+    // `operator>>` body makes `(ss >> parsed)` ALWAYS TRUE, so EVERY
+    // `dtGetEnv<int>` returns `Some(<uninitialised>)`.  That compiles, runs, and
+    // silently changes program behaviour -- nothing upstream of a differential
+    // run would see it.  Every assertion below fails against such a body.
+    fn dt_get_env_i32(text: &str) -> Option<i32> {
+        let mut ss = s(text);
+        // `T parsed;` -- DEFAULT-INITIALISED, i.e. indeterminate in C++.  The
+        // sentinel stands in for that garbage: if it ever reaches the `Some`,
+        // the test says so by value and not just by flag.
+        let mut parsed: i32 = i32::MIN;
+        // `(ss >> parsed) && ss.eof()`: the rule body is `a0.shr_i32(a1)`, whose
+        // value is the stream, and the stream's truthiness is `to_bool()`.
+        let stream_ok = {
+            let r = ss.shr_i32(&mut parsed);
+            unsafe { (*r).to_bool() }
+        };
+        if stream_ok && ss.eof() {
+            Some(parsed)
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn dtgetenv_shr_int_parses_rejects_trailing_garbage_and_fails_loudly() {
+        // 1. "12" -> PARSES, and the whole input was consumed so eof() is true.
+        assert_eq!(dt_get_env_i32("12"), Some(12));
+
+        // 2. "12abc" -> the extraction SUCCEEDS (C++ stops at the first
+        //    non-digit) but `eof()` is FALSE, because "abc" is still there.
+        //    `dtGetEnv` therefore returns nullopt.  ⭐ This is the case a body
+        //    built on `str::parse` over the WHOLE field would get wrong in the
+        //    other direction, and the case an identity body gets wrong in this
+        //    one.
+        let mut st = s("12abc");
+        let mut v: i32 = -1;
+        st.extract_i32(&mut v);
+        assert_eq!(v, 12, "the numeric prefix IS consumed");
+        assert!(!st.fail(), "a trailing-garbage extraction is not a failure");
+        assert!(!st.eof(), "but the stream is NOT at eof -- this is the guard");
+        assert_eq!(dt_get_env_i32("12abc"), None);
+
+        // 3. "abc" -> the stream is FALSY, so the sentinel never escapes.
+        assert_eq!(dt_get_env_i32("abc"), None);
+        let mut st = s("abc");
+        let mut v: i32 = 7;
+        assert!(!unsafe { (*st.shr_i32(&mut v)).to_bool() }, "stream is falsy");
+        assert!(st.fail());
+        // ⚠️ MEASURED C++ SEMANTICS, and it differs from "untouched": C++11
+        // LWG 2176 / [facet.num.get.virtuals] has a FAILED NUMERIC extraction
+        // STORE ZERO, so `parsed` becomes 0 rather than keeping its old value.
+        // (The leave-it-alone rule is for `std::string` and `char`, which is why
+        // `extract_token_reporting` carries a write-back flag and the numeric
+        // wrappers do not.)  What protects the caller here is the FALSY STREAM,
+        // not an untouched argument -- so that is what is asserted.
+        assert_eq!(v, 0, "LWG 2176: a failed numeric extraction stores 0");
+
+        // 4. Leading/trailing WHITESPACE is consumed by the sentry and by the
+        //    `eof()` check respectively, so `" 12 "` is still a success -- as it
+        //    is in C++, and as a corpus env var with a stray space needs.
+        assert_eq!(dt_get_env_i32("  12"), Some(12));
+
+        // 5. An EMPTY / whitespace-only value: the sentry sets eofbit AND
+        //    failbit, so the stream is falsy.  `dtGetEnv` guards `ptr[0] != 0`
+        //    itself, but a whitespace-only var reaches here.
+        assert_eq!(dt_get_env_i32("   "), None);
+
+        // 6. OUT OF RANGE for the target type is a failure, not a wrap.
+        assert_eq!(dt_get_env_i32("99999999999"), None);
+    }
+
+    // The remaining widths the `dtGetEnv<T>` census found in the corpus:
+    // `int64_t`/`long` (i64), `size_t`/`unsigned long` (u64), `double`, `float`.
+    // One case each for the three properties that matter, per width.
+    #[test]
+    fn dtgetenv_shr_other_widths_agree_with_the_int_case() {
+        // long / int64_t
+        let mut st = s("-9007199254740993");
+        let mut i: i64 = 0;
+        assert!(unsafe { (*st.shr_i64(&mut i)).to_bool() });
+        assert_eq!(i, -9007199254740993);
+        assert!(st.eof());
+
+        // unsigned long / size_t -- and a NEGATIVE value must FAIL, not wrap.
+        let mut st = s("-1");
+        let mut u: u64 = 5;
+        assert!(!unsafe { (*st.shr_u64(&mut u)).to_bool() });
+        assert_eq!(u, 0);
+
+        let mut st = s("134217727");
+        let mut u: u64 = 0;
+        assert!(unsafe { (*st.shr_u64(&mut u)).to_bool() });
+        assert_eq!(u, 134217727);
+        assert!(st.eof());
+
+        // double -- and trailing garbage leaves eof() false, as for int.
+        let mut st = s("0.2x");
+        let mut d: f64 = 0.0;
+        assert!(unsafe { (*st.shr_f64(&mut d)).to_bool() });
+        assert_eq!(d, 0.2);
+        assert!(!st.eof(), "the `x` is still unread");
+
+        // unsigned int
+        let mut st = s("16");
+        let mut w: u32 = 0;
+        assert!(unsafe { (*st.shr_u32(&mut w)).to_bool() });
+        assert_eq!(w, 16);
+    }
+
+    // ⛔ THE ONE PLACE `float` IS NOT `double`-NARROWED, and the reason it has
+    // its own extractor: `1e40 as f32` is a SATURATING cast in Rust and yields
+    // `f32::INFINITY` silently, whereas `num_get` sets failbit.  Without this,
+    // `dtGetEnv<float>("1e40")` would answer `Some(inf)` where C++ answers
+    // `std::nullopt` -- a wrong value with no diagnostic anywhere.
+    #[test]
+    fn shr_float_fails_on_a_value_no_float_can_hold() {
+        let mut st = s("1.5");
+        let mut f: f32 = 0.0;
+        assert!(unsafe { (*st.shr_f32(&mut f)).to_bool() });
+        assert_eq!(f, 1.5);
+        assert!(st.eof());
+
+        let mut st = s("1e40");
+        let mut f: f32 = 3.0;
+        assert!(
+            !unsafe { (*st.shr_f32(&mut f)).to_bool() },
+            "out of float range must set failbit, not saturate to inf"
+        );
+        assert_eq!(f, 0.0);
+
+        // Underflow to a denormal/zero is NOT a failure in C++ either.
+        let mut st = s("1e-50");
+        let mut f: f32 = 3.0;
+        assert!(unsafe { (*st.shr_f32(&mut f)).to_bool() });
+        assert_eq!(f, 0.0);
+    }
+
+    // The CHAINING property every one of these wrappers exists for: the returned
+    // pointer is the SAME stream, so `in >> a >> b` observes one failbit.
+    #[test]
+    fn shr_wrappers_chain_and_share_one_failbit() {
+        let mut st = s("1 zz 3");
+        let mut a: i32 = -1;
+        let mut b: i32 = -1;
+        let mut c: i32 = -1;
+        unsafe {
+            let p = st.shr_i32(&mut a);
+            let p = (*p).shr_i32(&mut b);
+            (*p).shr_i32(&mut c);
+        }
+        assert_eq!(a, 1);
+        // ⭐ THE TWO FAILURE CASES ARE NOT THE SAME, and this assertion pair is
+        // what proved it (a first cut of this test asserted `c == 0` and FAILED):
+        //   * `b` -- the sentry SUCCEEDED and the CONVERSION failed, so LWG 2176
+        //     applies and `num_get` stores 0.
+        //   * `c` -- the stream was ALREADY failed, so the sentry returns false,
+        //     `num_get` is never reached, and the argument is left STRICTLY
+        //     UNTOUCHED.  That is why `extract_i32`/`extract_u32` check
+        //     `self.fail()` before delegating, and it is the reason a numeric
+        //     extractor needs no write-back flag: the conditional lives inside.
+        assert_eq!(b, 0, "LWG 2176: zero on the failing conversion");
+        assert_eq!(c, -1, "sticky: the sentry fails, so nothing is written");
         assert!(st.fail());
     }
 }

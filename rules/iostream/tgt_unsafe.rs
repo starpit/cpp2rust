@@ -221,3 +221,76 @@ unsafe fn f10(
 fn t5() -> i32 {
     0
 }
+
+// ============================================================================
+// f11-f18 -- the MEMBER `operator>>` numeric extractions.  See src.cpp for the
+// eight recorded key spellings, for why the shift keys carry no class
+// qualification, for the `dtGetEnv<T>` instantiation census, and for the
+// narrowing of the blanket "member operators are unwritable" claim at f8.
+//
+// ⛔ THE BODY IS A SINGLE METHOD CALL ON `a0`, AND BOTH HALVES OF THAT ARE HARD
+// REQUIREMENTS measured on this family, not style:
+//   * METHOD CALL, because an `aN` for a `std::istream &` parameter re-expands to
+//     the BARE LVALUE and not to `&mut lvalue` (f8's comment records the E0308
+//     that taught us: `let __s: *mut IStream = a0;` emitted `let __s = ss;`).
+//     Rust auto-refs a receiver, so `a0.shr_i32(..)` compiles under both the
+//     declared `&mut IStream` shape and the substituted `ss` shape.
+//   * EACH OPERAND EXACTLY ONCE, because the body is inlined verbatim.  That is
+//     the entire reason `libcc2rs::IStream::shr_*` returns `*mut Self` instead of
+//     `()`: the two-statement alternative `{ a0.extract_i32(a1); a0 }` names `a0`
+//     twice and would re-evaluate the caller's receiver expression.
+//
+// `a1` IS A REFERENCE TO A PRIMITIVE, which the converter DOES emit as
+// `&mut lvalue` -- rules/string f82 (`std::from_chars(const char *, const char *,
+// long &)`, `a2: &mut i64`) is the standing precedent for that shape, and it is
+// the one place this family differs from f8, where the `std::string &` argument
+// needed a staging buffer and a conditional write-back.  A numeric extractor
+// writes its argument itself and already distinguishes the two failure cases
+// (sentry-failed leaves it UNTOUCHED, conversion-failed stores 0 per LWG 2176),
+// so there is no flag and no `if`.
+//
+// ⛔ AN IDENTITY BODY HERE WOULD BE THE FORBIDDEN OUTCOME, not a stub: the corpus
+// caller tests the returned stream (`if ((ss >> parsed) && ss.eof())`), so a
+// truthy no-op makes every `dtGetEnv<int>` return an indeterminate value with no
+// diagnostic anywhere.  `shr_*` goes through the sentry and the failbit; the
+// round-trip proof is in libcc2rs/src/istream.rs
+// (`dtgetenv_shr_int_parses_rejects_trailing_garbage_and_fails_loudly`).
+unsafe fn f11(a0: &mut libcc2rs::IStream, a1: &mut i32) -> *mut libcc2rs::IStream {
+    a0.shr_i32(a1)
+}
+
+unsafe fn f12(a0: &mut libcc2rs::IStream, a1: &mut u32) -> *mut libcc2rs::IStream {
+    a0.shr_u32(a1)
+}
+
+unsafe fn f13(a0: &mut libcc2rs::IStream, a1: &mut i64) -> *mut libcc2rs::IStream {
+    a0.shr_i64(a1)
+}
+
+unsafe fn f14(a0: &mut libcc2rs::IStream, a1: &mut u64) -> *mut libcc2rs::IStream {
+    a0.shr_u64(a1)
+}
+
+// `long long` is a DISTINCT C++ overload from `long` -- overload resolution is
+// exact, so it needs its own key -- but both are i64 on LP64, so both land on
+// `shr_i64`.  Same for f16 against f14.
+unsafe fn f15(a0: &mut libcc2rs::IStream, a1: &mut i64) -> *mut libcc2rs::IStream {
+    a0.shr_i64(a1)
+}
+
+unsafe fn f16(a0: &mut libcc2rs::IStream, a1: &mut u64) -> *mut libcc2rs::IStream {
+    a0.shr_u64(a1)
+}
+
+// ⛔ f17 IS NOT f18 NARROWED.  `shr_f32` parses through f64 and then REJECTS a
+// magnitude no `float` can hold, because `1e40 as f32` in Rust is a SATURATING
+// cast that yields `f32::INFINITY` silently while `num_get` sets failbit --
+// i.e. `dtGetEnv<float>("1e40")` would answer `Some(inf)` where C++ answers
+// `std::nullopt`.  Tested: `shr_float_fails_on_a_value_no_float_can_hold`.
+unsafe fn f17(a0: &mut libcc2rs::IStream, a1: &mut f32) -> *mut libcc2rs::IStream {
+    a0.shr_f32(a1)
+}
+
+unsafe fn f18(a0: &mut libcc2rs::IStream, a1: &mut f64) -> *mut libcc2rs::IStream {
+    a0.shr_f64(a1)
+}

@@ -514,6 +514,14 @@ public:
   std::string MarkUnmappedFunctionRef(const clang::FunctionDecl *fn,
                                       std::string name);
 
+  // The VARIABLE half of the same class. A reference to a global/static whose
+  // canonical decl sits in a SYSTEM header is never emitted by this TU nor by
+  // any other (`VisitTranslationUnitDecl` only descends past
+  // `IsUserDefinedDecl`), so the bare `name_<N>` spelling is a dangling name.
+  // Returns "" when the decl is NOT such a reference, so the caller falls
+  // through to the normal path. See the block comment above the definition.
+  std::string ConvertSystemGlobalVarRef(clang::DeclRefExpr *expr);
+
   // An ADL name clang could not resolve. There is no lowering; this exists only
   // so the failure is LOUD and names the construct instead of traversing to
   // nothing and tripping the sentinel assert in Convert(Expr*, ...).

@@ -6259,6 +6259,118 @@ std::string Converter::MarkUnmappedFunctionRef(const clang::FunctionDecl *fn,
   return marked;
 }
 
+// ⭐ THE VARIABLE HALF OF THE UNDEFINED-NAME CLASS, and the #1 compile-level gate
+// that a FUNCTION census is structurally blind to: the site is a variable, not a
+// call, so `Cpp2RustUnmappedFn_` above could never reach it. Measured on the
+// 210-TU compile census (stubgen, first-abort ranking): E0425 is the first abort
+// of 80 of 207 measurable TUs, and 19 of those 80 abort on a global/static
+// LazyCell reference whose `static` item is nowhere in the file --
+//   (*std::cell::LazyCell::force_mut(&mut *&raw mut digits_25))
+// with no `digits_25` anywhere. Two DIFFERENT causes share this one emission
+// site, which is why the function-local-static form and the header-global form
+// ("Class G", 71 names / 31 files) are ONE defect:
+//   * `static constexpr int digits = std::numeric_limits<size_t>::digits;`
+//     -- the PROJECT's `digits_24` IS emitted; its INITIALIZER refers to the
+//     system static data member `numeric_limits<size_t>::digits`, which is not
+//     (8 of the 19 TUs: dbo/Pipeline, dbo/Utils/sdsc_bundle/*, ...).
+//   * `if (llvm::DebugFlag)` -- a file-scope `extern bool` in an `-isystem`
+//     header, emitted as `DebugFlag_117` and defined by NO TU in the corpus
+//     (5 of the 19).
+// The remaining 6 (`rapidUnitAccessMap_<N>`) are NOT this class and are
+// deliberately left alone: `SystemDefinitions::rapidUnitAccessMap` is a PROJECT
+// static data member, defined in `sys-arch-spec/sysdef.cpp`, and IS emitted --
+// as `rapidUnitAccessMap_39` in `sys-arch-spec__sysdef.cpp.rs`. Their defect is a
+// cross-TU decl-id MISMATCH (_39 vs _75/_37/_94/_170), a different row; marking
+// them would break a whole-program emission where the name does resolve. Same
+// conservative direction as the callee path above.
+//
+// TWO OUTCOMES, and the split is on whether C++ itself fixes the value:
+//  1. CONSTANT-FOLD. A system integral constant has exactly one value and clang
+//     evaluates it right here, so emitting that value is not a fabricated
+//     initializer -- it is the value C++ produces. `numeric_limits<size_t>::digits`
+//     becomes `64`. ⛔ NOT done when the address is taken (`&64` would be a
+//     temporary, not the object) and not for non-integral or non-constant decls.
+//  2. MARK. Anything else gets `Cpp2RustUnmappedVar_<name>` plus a `note:`.
+//     ⛔ Deliberately NOT wrapped in `LazyCell::force_mut(&raw mut ...)`: that
+//     wrapper asserts a `LazyCell` item exists for the decl, and the whole point
+//     is that it never will. This does NOT lower the E0425 count for those sites
+//     and is not claimed to -- it converts a name that is INDISTINGUISHABLE from
+//     a real project global (`DebugFlag_117` would silently bind to a project
+//     `DebugFlag` that happened to get decl id 117 in a whole-program build --
+//     the converter.cpp:145 hazard) into one that can only ever fail to resolve
+//     and is attributable by prefix alone.
+// ⛔ A fabricated initializer is forbidden here for a reason: a C++
+// function-local `static` initialises exactly once, on first use, and persists
+// across calls, so a wrong initializer or a per-call re-init is silently wrong in
+// a way nothing downstream would catch.
+static const clang::VarDecl *SystemGlobalVarDecl(const clang::ASTContext &ctx,
+                                                 const clang::Expr *expr) {
+  const auto *ref = clang::dyn_cast<clang::DeclRefExpr>(expr->IgnoreImplicit());
+  if (ref == nullptr) {
+    return nullptr;
+  }
+  const auto *var = clang::dyn_cast<clang::VarDecl>(ref->getDecl());
+  if (var == nullptr) {
+    return nullptr;
+  }
+  const clang::VarDecl *canonical = var->getCanonicalDecl();
+  const clang::SourceLocation loc = canonical->getLocation();
+  if (loc.isInvalid()) {
+    // Compiler builtins; `isInSystemHeader` cannot classify these. Left to the
+    // existing path, same as the callee side.
+    return nullptr;
+  }
+  const auto &src_mgr = ctx.getSourceManager();
+  if (!src_mgr.isInSystemHeader(loc) && !src_mgr.isInSystemMacro(loc)) {
+    return nullptr;
+  }
+  return canonical;
+}
+
+std::string Converter::ConvertSystemGlobalVarRef(clang::DeclRefExpr *expr) {
+  const clang::VarDecl *canonical = SystemGlobalVarDecl(ctx_, expr);
+  if (canonical == nullptr) {
+    return {};
+  }
+  const auto &src_mgr = ctx_.getSourceManager();
+  const clang::SourceLocation loc = canonical->getLocation();
+
+  std::string name = GetNamedDeclAsString(expr->getDecl());
+  if (!isAddrOf() && !expr->isValueDependent() &&
+      expr->getType()->isIntegralOrEnumerationType()) {
+    clang::Expr::EvalResult result;
+    if (expr->EvaluateAsRValue(result, ctx_) && result.Val.isInt() &&
+        !result.hasSideEffects()) {
+      if (expr->getType()->isBooleanType()) {
+        return result.Val.getInt().getBoolValue() ? std::string(keyword::kTrue)
+                                                  : std::string(keyword::kFalse);
+      }
+      llvm::SmallString<40> digits;
+      result.Val.getInt().toString(digits, 10);
+      return std::string(digits);
+    }
+  }
+
+  const std::string marked = "Cpp2RustUnmappedVar_" + name;
+  static std::set<std::string> reported;
+  if (reported.insert(name).second) {
+    std::string detail =
+        "system global has no rule and no constant value: `" +
+        canonical->getQualifiedNameAsString() + "` : `" +
+        canonical->getType().getAsString() +
+        "` (would be emitted as the undefined name `" + name +
+        "`); emitting the marked placeholder `" + marked +
+        "` so the miss is visible";
+    if (curr_function_ != nullptr) {
+      detail += ", reached while converting `" +
+                curr_function_->getQualifiedNameAsString() + "`";
+    }
+    llvm::errs() << "note: read " << detail << " (declared at "
+                 << loc.printToString(src_mgr) << ")\n";
+  }
+  return marked;
+}
+
 std::string Converter::ConvertDeclRefExpr(clang::DeclRefExpr *expr) {
   if (isAddrOf()) {
     clang::Expr *addrof_op = ToAddrOf(ctx_, expr);
@@ -6293,6 +6405,11 @@ std::string Converter::ConvertDeclRefExpr(clang::DeclRefExpr *expr) {
   }
 
   if (IsGlobalVar(expr)) {
+    // A system-header global/static is never emitted by ANY TU, so the LazyCell
+    // wrapper below would reference an item that does not exist.
+    if (auto str = ConvertSystemGlobalVarRef(expr); !str.empty()) {
+      return str;
+    }
     if (LazyStaticInit()) {
       return std::format("(*std::cell::LazyCell::force_mut(&mut *&raw mut {}))",
                          GetNamedDeclAsString(decl));

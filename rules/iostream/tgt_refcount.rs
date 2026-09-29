@@ -196,3 +196,84 @@ fn f10(a0: Ptr<libcc2rs::IStream>, a1: Ptr<Vec<u8>>) -> Ptr<libcc2rs::IStream> {
 fn t5() -> i32 {
     0
 }
+
+// ============================================================================
+// f11-f18 -- the MEMBER `operator>>` numeric extractions.  See src.cpp for the
+// eight recorded keys and the semantics; see tgt_unsafe.rs for why each operand
+// is named exactly once.
+//
+// THIS OVERRIDE IS REQUIRED and not merely for pointer syntax: BOTH parameter
+// types are model-dependent.  An lvalue reference is `Ptr<T>` here and `&mut T`
+// in the unsafe model (rules/string f82 is the precedent for the primitive case,
+// `Ptr<i64>` against `&mut i64`), and the return is `Ptr<IStream>` rather than
+// `*mut IStream`.  Inheriting the unsafe bodies would give E0308 three times per
+// key.
+//
+// EACH `aN` IS NAMED EXACTLY ONCE, via the `let` prelude -- the same shape f8
+// uses.  `Ptr` is Copy, so the local can be mentioned twice; the ARGUMENT
+// EXPRESSION cannot.  The nested `with_mut_ref` is safe because the two `Ptr`s
+// address different cells (a stream and a scalar); this is f8's pattern with the
+// output side generalised from `Vec<u8>` to a primitive.
+//
+// ⛔ NO IDENTITY SHORTCUT, for the reason src.cpp gives: the caller tests the
+// returned stream, so a truthy no-op silently makes every `dtGetEnv<int>`
+// succeed with an indeterminate value.
+fn f11(a0: Ptr<libcc2rs::IStream>, a1: Ptr<i32>) -> Ptr<libcc2rs::IStream> {
+    let __s = a0;
+    let __o = a1;
+    __s.with_mut_ref(|__st| __o.with_mut_ref(|__v| __st.extract_i32(__v)));
+    __s
+}
+
+fn f12(a0: Ptr<libcc2rs::IStream>, a1: Ptr<u32>) -> Ptr<libcc2rs::IStream> {
+    let __s = a0;
+    let __o = a1;
+    __s.with_mut_ref(|__st| __o.with_mut_ref(|__v| __st.extract_u32(__v)));
+    __s
+}
+
+fn f13(a0: Ptr<libcc2rs::IStream>, a1: Ptr<i64>) -> Ptr<libcc2rs::IStream> {
+    let __s = a0;
+    let __o = a1;
+    __s.with_mut_ref(|__st| __o.with_mut_ref(|__v| __st.extract_i64(__v)));
+    __s
+}
+
+fn f14(a0: Ptr<libcc2rs::IStream>, a1: Ptr<u64>) -> Ptr<libcc2rs::IStream> {
+    let __s = a0;
+    let __o = a1;
+    __s.with_mut_ref(|__st| __o.with_mut_ref(|__v| __st.extract_u64(__v)));
+    __s
+}
+
+// `long long` / `unsigned long long`: distinct C++ overloads, identical Rust
+// width on LP64.
+fn f15(a0: Ptr<libcc2rs::IStream>, a1: Ptr<i64>) -> Ptr<libcc2rs::IStream> {
+    let __s = a0;
+    let __o = a1;
+    __s.with_mut_ref(|__st| __o.with_mut_ref(|__v| __st.extract_i64(__v)));
+    __s
+}
+
+fn f16(a0: Ptr<libcc2rs::IStream>, a1: Ptr<u64>) -> Ptr<libcc2rs::IStream> {
+    let __s = a0;
+    let __o = a1;
+    __s.with_mut_ref(|__st| __o.with_mut_ref(|__v| __st.extract_u64(__v)));
+    __s
+}
+
+// ⛔ `extract_f32`, NOT `extract_f64` narrowed: `1e40 as f32` saturates to
+// infinity silently where `num_get` sets failbit.  See tgt_unsafe.rs f17.
+fn f17(a0: Ptr<libcc2rs::IStream>, a1: Ptr<f32>) -> Ptr<libcc2rs::IStream> {
+    let __s = a0;
+    let __o = a1;
+    __s.with_mut_ref(|__st| __o.with_mut_ref(|__v| __st.extract_f32(__v)));
+    __s
+}
+
+fn f18(a0: Ptr<libcc2rs::IStream>, a1: Ptr<f64>) -> Ptr<libcc2rs::IStream> {
+    let __s = a0;
+    let __o = a1;
+    __s.with_mut_ref(|__st| __o.with_mut_ref(|__v| __st.extract_f64(__v)));
+    __s
+}

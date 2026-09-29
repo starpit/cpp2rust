@@ -4574,3 +4574,92 @@ unsafe fn f1706(
 ) -> libcc2rs::RangeIter<dataflowir_gen::ir::Value> {
     libcc2rs::RangeIter::begin((*a0).results.clone())
 }
+
+// ===========================================================================
+// PASS 2026-09-29: `mlir::WalkResult` -- t1710 + f1710-f1713, and
+// `mlir::Region::walk` (f1800).  See rules/mlir/src.cpp for the census that
+// decided this row is FIVE WalkResult keys and not six.
+//
+// ⭐⭐ `LocWalkResult` NEEDED NOTHING ADDED.  All four members already exist and
+// are `pub` in dataflowir-gen (ir.rs:804 the enum; :813 `advance`, :818
+// `interrupt`, :823 `skip`, :833 `was_interrupted`), and the derived
+// `PartialEq`/`Eq` already covers the corpus's `==`/`!=` against a result.  The
+// only thing this row needed from the crate is `Region::walk_any_mut`.
+//
+// ⭐ THIS BLOCK IS IDENTICAL TEXT IN BOTH OVERLAYS (modulo `unsafe fn`).
+// `LocWalkResult` is a plain `Copy` enum -- a VALUE, not a handle into an owner --
+// so no `Ptr<...>` / `*mut` adapter arises for it and there is nothing for the two
+// memory models to disagree about.  f1800's `&mut fmt::Region` receiver is
+// likewise identical in both, the f460 (`getBlocks`) precedent verbatim.
+// ===========================================================================
+
+// t1710 `mlir::WalkResult` -> `ir::LocWalkResult`.
+// ⭐⭐ THE INIT IS `Advance`.  MLIR's `WalkResult(ResultEnum result = Advance)`
+// (Visitors.h:33) makes a default-initialised WalkResult mean "keep going".
+// ⛔ NOT `Default::default()` -- that would make the init an accident of whatever
+// `#[derive(Default)]` or the first variant happens to be, and it is not derived
+// on this enum anyway.  ⛔ NOT `Interrupt` -- that would silently turn every
+// default-init into an early exit: the walk stops at the first node and the
+// converted program still compiles and still runs.
+fn t1710() -> dataflowir_gen::ir::LocWalkResult {
+    dataflowir_gen::ir::LocWalkResult::Advance
+}
+
+// f1710 -- `static WalkResult mlir::WalkResult::advance()`, 60 sites.
+fn f1710() -> dataflowir_gen::ir::LocWalkResult {
+    dataflowir_gen::ir::LocWalkResult::advance()
+}
+
+// f1711 -- `static WalkResult mlir::WalkResult::interrupt()`, 24 sites.
+fn f1711() -> dataflowir_gen::ir::LocWalkResult {
+    dataflowir_gen::ir::LocWalkResult::interrupt()
+}
+
+// f1712 -- `static WalkResult mlir::WalkResult::skip()`, 36 sites.
+// ⭐ `Skip` is a REAL THIRD STATE, not an alias for `Advance`: `walk_any_r_mut`
+// prunes the node's children on it and then continues.  `tests/walk.rs` proves the
+// pruning NON-VACUOUSLY -- it asserts the pruned traversal is a strict subsequence
+// of the full one behind a `pruned.len() > 100` anti-vacuity gate, so a
+// `Skip`-means-`Advance` regression fails the test rather than passing it trivially.
+fn f1712() -> dataflowir_gen::ir::LocWalkResult {
+    dataflowir_gen::ir::LocWalkResult::skip()
+}
+
+// f1713 -- `bool mlir::WalkResult::wasInterrupted() const`, 13 sites.
+// ⚠️ BY-VALUE FORMAL in src.cpp (the f1 precedent) is what records the `const`
+// member's key; the Rust side takes it by value too because `LocWalkResult` is
+// `Copy`.
+// ⛔ `Skip` IS NOT AN INTERRUPT: a walk that ended on a pruned subtree COMPLETED,
+// so this is false for `Skip` exactly as it is for `Advance`.  The crate method is
+// `matches!(self, LocWalkResult::Interrupt)` -- it does NOT collapse the two
+// "not advance" cases, which would turn every prune into an early exit at the
+// caller's `if (...wasInterrupted())`.
+fn f1713(a0: dataflowir_gen::ir::LocWalkResult) -> bool {
+    a0.was_interrupted()
+}
+
+// f1800 -- `void mlir::Region::walk(T1 &&)`.  The f1300 shape with a REGION
+// receiver; real site `dcc/src/Transform/Sentient/Analyses/Liveness.cpp:75`, which
+// before this key emitted the SILENT TEXTUAL `(*region).walk(&mut _callback)`.
+// ⛔ NEVER A HAND-ROLLED TRAVERSAL.  A two-level `for b in
+// (*region).get_blocks_mut() { for o in b.get_operations_mut() { ... } }` body
+// converts at rc=0 and is SILENTLY WRONG: it visits the TOP-LEVEL ops of each
+// block only, with NO DESCENT into nested regions.  `fmt::Region::walk_any_mut`
+// (fmt.rs:784) is pre-order over the whole subtree, and `tests/walk.rs` proves the
+// order by SEQUENCE EQUALITY OF NODE ADDRESSES for every region at every depth
+// (328 regions in one reference file, 752 in another) plus a hand-built
+// three-block region -- the reference files are 100% single-block, so that
+// hand-built case is the only thing that can catch a reverse-block-order or
+// entry()-only bug.
+// ⭐ The closure adapter is f1300's verbatim: the converter hands us a callback
+// over the overlay's own op representation, and `walk_any_mut` wants
+// `&mut impl FnMut(&mut OpInst)`, so the one line here is the representation
+// bridge and nothing else.
+unsafe fn f1800<T1: FnMut(*mut dataflowir_gen::fmt::OpInst)>(
+    a0: &mut dataflowir_gen::fmt::Region,
+    mut a1: T1,
+) -> () {
+    a0.walk_any_mut(&mut |o: &mut dataflowir_gen::fmt::OpInst| {
+        a1(::core::ptr::from_mut(o))
+    })
+}

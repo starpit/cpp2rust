@@ -259,3 +259,118 @@ using t5 = std::ios_base::seekdir;
 // BOTH rows -- at which point the manipulators become one-line setf bodies.
 // Until then: 1 TU each, refused, loud.
 // ============================================================================
+
+// ============================================================================
+// f11-f18 -- THE **MEMBER** `operator>>` OVERLOADS, i.e. the numeric
+// extractions.  ⭐⭐ THIS IS THE GATE ON `dxp/dxp_standalone.cpp`, the stated
+// port goal.  Recorded keys (read back from ir_src.json, and character-for-
+// character what the converter's own refusal printed):
+//     std::istream & operator shr(int &)                    f11
+//     std::istream & operator shr(unsigned int &)           f12
+//     std::istream & operator shr(long &)                   f13
+//     std::istream & operator shr(unsigned long &)          f14
+//     std::istream & operator shr(long long &)              f15
+//     std::istream & operator shr(unsigned long long &)     f16
+//     std::istream & operator shr(float &)                  f17
+//     std::istream & operator shr(double &)                 f18
+//
+// ⭐ THE KEY IS A MEMBER AND THAT IS THE WHOLE ROW.  f8 above is the FREE
+// `operator>>(std::istream &, std::string &)`, TWO parameters.  These are
+// `std::basic_istream::operator>>(int &)` etc. -- ONE parameter, receiver
+// implicit.  `ss >> std::string` resolves to the free overload, `ss >> int` to
+// the member, and a different declaring context is a DIFFERENT KEY: f8 could
+// never have matched and must not be widened to try.
+//
+// WHY THE CLASS QUALIFICATION IS ABSENT while every other member key in the tree
+// carries one (`std::map<T1, T2>::operator[]`, `llvm::APInt::operator!=`): for
+// the FOUR SHIFT OPERATORS ONLY, Mapper::ToString (mapper.cpp:2853-2870) takes a
+// special branch that prints `func_decl->getQualifier()` -- the WRITTEN
+// nested-name-specifier, which is empty for a declaration inside its class --
+// and then the rewritten name `shl`/`shr`/`shleq`/`shreq`, INSTEAD OF
+// `printQualifiedName()`.  The rewrite exists so matchTemplate's bracket-depth
+// tracker never sees the `>` of `>>`; dropping the class is a side effect of
+// taking that branch.  rules/raw_ostream is the precedent -- its 14 member
+// insertions record as `llvm::raw_ostream & operator shl(int)` and friends, with
+// no class either.  ⛔ DO NOT widen the rewrite range to cover more operators:
+// it changes the STORED key spelling, which a frozen IR pin holds in raw form,
+// so every surviving key breaks and a full IR regen is forced.  The sibling
+// `operator>=` angle-depth bug was fixed on the CONVERTER-side tracker instead
+// (`MaskOperatorNameBrackets`, eb437fae) for exactly this reason.
+//
+// ⭐ THE PRIOR REFUSAL RECORDED AT f8 ("THE MEMBER `operator>>` OVERLOADS ARE
+// DELIBERATELY NOT HERE ... a member call's receiver arrives through a
+// DerivedToBase cast that the converter emits as
+// `(<recv> as Cpp2RustUnmapped_std_ios)`") DOES NOT APPLY TO THESE, and the
+// distinction is the DECLARING CLASS of the member, not member-ness:
+//   * `eof()`/`good()`/`operator bool()` are members of `std::basic_ios`, and
+//     `std::ios` HAS NO TYPE RULE in this tree (row g2894 refused it), so their
+//     receiver cast names an UNMAPPED type -- hence `Cpp2RustUnmapped_std_ios`
+//     and E0605.
+//   * `operator>>` is a member of `std::basic_istream`, which IS `t4` above, and
+//     `std::stringstream` (rules/basic_stringstream t1) is modelled as the SAME
+//     `libcc2rs::IStream`.  So the DerivedToBase has a mapped target on both
+//     sides.  rules/raw_ostream proves the shape end to end: `llvm::errs()`
+//     returns `raw_fd_ostream &` and every insertion is a `raw_ostream` member,
+//     i.e. the identical derived-receiver situation, and those keys work in both
+//     models.
+// The f8 comment's blanket claim was therefore too broad; it is narrowed here
+// rather than deleted, because the `eof()` half of it is still true.
+//
+// ⛔⛔ WHAT WOULD HAVE BEEN SILENTLY WRONG -- and it is the reason this row is
+// not a one-liner.  The corpus caller is `util/dtgetenv.hpp:129`:
+//     std::stringstream ss(ptr);  T parsed;
+//     if ((ss >> parsed) && ss.eof()) { ret = parsed; }
+// which READS THE STREAM STATE.  An identity / no-op body returns a TRUTHY
+// stream, so EVERY `dtGetEnv<int>` would succeed with an INDETERMINATE `parsed`
+// -- code that compiles, runs, and quietly changes what every env-var-driven
+// flag in the program does.  Nothing short of a differential run would see it.
+// The bodies therefore go through `libcc2rs::IStream`'s sentry + failbit, and
+// `libcc2rs/src/istream.rs` carries the round-trip test over the three cases a
+// no-op body would pass: `"12"` -> Some(12); `"12abc"` -> None (extraction
+// succeeds, `eof()` is FALSE); `"abc"` -> the stream is FALSY.
+//
+// ⚠️ IT IS A FAMILY, NOT ONE KEY, and `int` is only the one that aborts FIRST.
+// `dtGetEnv<T>` is a template, so each `T` instantiates its own member
+// `operator>>`.  Census over repos/dt_src (219 `dtGetEnv<...>` sites in 88
+// files): std::string 154, bool 45, int 7, int64_t 6, double 2, unsigned long 1,
+// size_t 1, long 1, float 1.  `std::string` is f8; `bool` is a FULL
+// SPECIALISATION at dtgetenv.hpp:140 that switches on `ptr[0]` and never touches
+// a stream at all; the rest are these keys (int64_t == long, size_t ==
+// unsigned long on LP64).  f12/f15/f16 are not instantiated by the corpus today
+// and are written because they are the same three lines and libcxx declares
+// them.
+//
+// ⛔ DELIBERATELY NOT KEYED, so it keeps failing loudly:
+//   * `operator>>(long double &)` -- `libcc2rs::IStream` parses through `f64`,
+//     so an 80-bit target would silently lose the range `num_get` accepts.  No
+//     corpus site instantiates it.
+//   * `operator>>(short &)` / `unsigned short &` -- honest to write, but no
+//     corpus site asks and an unused key is an unverified one.
+//   * `operator>>(bool &)`, `void *&`, `std::streambuf *`, and the
+//     `basic_istream(*pf)(basic_istream&)` manipulator overload -- no corpus
+//     caller, and the last one needs a function-pointer-into-stream model.
+//
+// HOW THE KEY IS HARVESTED: the declared parameter types below only steer
+// OVERLOAD RESOLUTION; the recorded signature is the resolved libcxx member's
+// own, printed with the typedef-preferring printer (so `basic_istream<char,
+// char_traits<char>> &` reads back as `std::istream &`, exactly as t4/f8 prove).
+// `o.operator>>(v)` is written in explicit member-call form so the MEMBER, not
+// the free string overload, is the one resolved.
+// ============================================================================
+std::istream &f11(std::istream &o, int &v) { return o.operator>>(v); }
+
+std::istream &f12(std::istream &o, unsigned int &v) { return o.operator>>(v); }
+
+std::istream &f13(std::istream &o, long &v) { return o.operator>>(v); }
+
+std::istream &f14(std::istream &o, unsigned long &v) { return o.operator>>(v); }
+
+std::istream &f15(std::istream &o, long long &v) { return o.operator>>(v); }
+
+std::istream &f16(std::istream &o, unsigned long long &v) {
+  return o.operator>>(v);
+}
+
+std::istream &f17(std::istream &o, float &v) { return o.operator>>(v); }
+
+std::istream &f18(std::istream &o, double &v) { return o.operator>>(v); }

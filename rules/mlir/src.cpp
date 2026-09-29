@@ -182,6 +182,19 @@ public:
 class Region {
 public:
   llvm::iplist<Block> &getBlocks();
+
+  // ⚠️ DECLARED HERE AND NOT LATER, the f460 discipline: a C++ class cannot be
+  // reopened, so `walk` must go INSIDE this block.  Appending a second
+  // `namespace mlir { class Region { ... } }` is a redefinition error; that exact
+  // collision cost a merge earlier today with `class Operation`.
+  // f1800's key.  mlir/IR/Region.h -- `template <WalkOrder Order = PostOrder,
+  // typename Iterator = ForwardIterator, typename FnT, typename RetT = ...>
+  // RetT walk(FnT &&callback)`.  The rule declares the ONE-TEMPLATE-PARAMETER
+  // form for the same reason f1300 does for `Operation::walk`: the filter and the
+  // order live only in the closure type / the defaulted non-type args, neither of
+  // which a key can carry, so the recorded key is the bare
+  // `void mlir::Region::walk(T1 &&)`.
+  template <typename T1> void walk(T1 &&);
 };
 
 // `Value`, `Type` and `Attribute` are HANDLES in real MLIR -- each wraps one
@@ -9936,4 +9949,155 @@ llvm::detail::indexed_accessor_range_base<
     mlir::OpResult, mlir::OpResult>::iterator
 f1706(mlir::Operation *a0) {
   return a0->result_begin();
+}
+
+// ===========================================================================
+// PASS 2026-09-29: `mlir::WalkResult` -- t1710 + f1710-f1713, and `Region::walk`
+// (f1800).  Queue row: the walk-result half of the walk family.
+//
+// THE ROW.  `mlir::Operation::walk` landed as f1300 (19c4ce90) but its CALLBACKS'
+// return type did not, so every corpus callback that returns a `WalkResult` was in
+// the silent-textual-member class: an unmapped MEMBER call is emitted TEXTUALLY,
+// rc=0, rustfmt-clean, and only then a silent E0599/E0624.  Measured site counts,
+// free at 5bd18269:
+//     f1710  WalkResult::advance()      60 sites
+//     f1711  WalkResult::interrupt()    24 sites
+//     f1712  WalkResult::skip()         36 sites
+//     f1713  wasInterrupted()           13 sites
+//
+// ⛔⛔ THE CENSUS THAT DECIDED THIS ROW IS FIVE KEYS AND NOT SIX.  MLIR's
+// `WalkResult(LogicalResult)` converting constructor (WalkResult.h) would be a
+// SIXTH conversion key if any corpus walk callback returned a `LogicalResult`.
+// Censused 2026-09-29 by brace/paren-matched extraction of every `.walk(` /
+// `->walk(` callback body in the corpus (dcc, dsc, dcg, ddc, ddb, dbo, common,
+// dataflow-scheduler): 394 walk call sites, 384 of them with a LAMBDA argument,
+// and EVERY return statement inside those 384 bodies classified:
+//     84  return WalkResult::advance();
+//     71  return WalkResult::interrupt();
+//     32  return WalkResult::skip();
+//     81  return;                          (the void-callback `walk` forms)
+//      2  a WalkResult-valued ternary       (EmitSpyreCode.cpp:162,
+//                                            Planner.cpp:314 -- `failed(r) ? ...`
+//                                            tests a LogicalResult but RETURNS a
+//                                            WalkResult, so no conversion)
+//      1  return GenerateProgIR(...);       (SentientToProgIR.cpp:107 -- the
+//                                            overload at :119 is declared
+//                                            `WalkResult SentientToProgIRLowering
+//                                            Pass::GenerateProgIR(`, so this is a
+//                                            WalkResult too)
+//     16  returns of nullptr/true/false/a comparison -- all from lambdas NESTED
+//         INSIDE a walk callback (find_if predicates etc.), not from the callback
+//     ------
+//      0  return mlir::failure();   0  return failure();   0  return success();
+//      0  any LogicalResult-valued return anywhere in any walk callback
+// ⭐ And `WalkResult(<arg>)` is constructed with a non-empty argument list at
+// EXACTLY 0 corpus sites.  So the converting constructor is UNREACHABLE from this
+// corpus and keying it could only fabricate a value.  ⛔ If a future callback does
+// `return failure();`, THAT is when the sixth key is owed -- and it will announce
+// itself as a silent E0599 on `LocWalkResult`, not as an abort.
+//
+// ⛔ DELIBERATELY EXCLUDED, each measured:
+//   * `wasSkipped()` -- 0 corpus sites (grepped the whole tree).  ⭐ Note the
+//     ASYMMETRY this leaves and why it is correct: `LocWalkResult::Skip` exists and
+//     f1712 produces it, but nothing in the corpus ASKS whether a result was
+//     skipped, so there is no key to hang on it.  A key with no site is a rule the
+//     preprocessor carries with nothing under it (the t243-t246 discipline).
+//   * `WalkResult(Diagnostic &&)` / `WalkResult(InFlightDiagnostic &&)` --
+//     `InFlightDiagnostic` is ALREADY AN OPAQUE UNIT (f39), so a body for these
+//     could only FABRICATE an `Interrupt` out of a value that carries no
+//     information.  ⛔ Forbidden-silent-wrongness, not merely unhelpful.
+//   * `mlir::Block::walk` -- its ONLY corpus site (PipelineScope.cpp:35) is a
+//     FILTERED walk, and the op type being filtered on is UNRECOVERABLE FROM THE
+//     KEY (it lives in the closure type, exactly as f1300's filter does).  So the
+//     only body this rule could have would visit the WRONG NODE SET.  Two slots
+//     refused it; `fmt::Block::walk_any_mut`/`walk_any_r_mut` exist in the crate
+//     but do NOT unblock it, because the missing information is the filter, not the
+//     traversal.  ⛔ Do not attempt it.
+//   * the `&`-receiver forms (`Region::walk_any`, `Block::walk_any_r`, ...) -- no
+//     corpus site asks, and the converter's emitted closure takes `*mut OpInst` /
+//     `Ptr<OpInst>`, neither of which is makeable from `&OpInst` without UB.
+//   * filtered `walk<T>` on Region/Block -- the f1300 reason, verbatim.
+// ===========================================================================
+namespace mlir {
+
+// `class WalkResult` is restated here with its FOUR MEMBERS.  mlir/IR/Visitors.h.
+//
+// ⛔⛔ A TYPE KEY WITH NO METHOD KEY IS STRICTLY WORSE THAN NO KEY -- it bypasses
+// the loud "unsupported system type has no rule" path and leaves the member calls
+// to be emitted TEXTUALLY (measured today on `std::hash`, and see
+// [[cpp2rust-unmapped-members-do-not-abort]]).  That is why t1710 does not land
+// without f1710-f1713, and why all five are one commit.
+//
+// ⭐ The three producers are STATIC and the one consumer is CONST.  The static
+// three are keyed as free functions returning `mlir::WalkResult` (f1710-f1712);
+// the const member is keyed off a BY-VALUE parameter (f1713), which is the
+// `rules/mlir` f1 precedent -- `bool f1(mlir::Attribute a, mlir::Attribute b)`
+// records `bool mlir::Attribute::operator==(const mlir::Attribute &) const` from a
+// by-value param.  Writing f1713's receiver as `const mlir::WalkResult &a0`
+// instead gives a DEAD KEY.
+class WalkResult {
+public:
+  static WalkResult advance();
+  static WalkResult interrupt();
+  static WalkResult skip();
+  bool wasInterrupted() const;
+};
+
+} // namespace mlir
+
+// ---- t1710: the TYPE -------------------------------------------------------
+// ⭐⭐ THE INIT IS `Advance`, NOT `Default::default()` AND NOT `Interrupt`.  MLIR's
+// own default constructor is `WalkResult(ResultEnum result = Advance)`
+// (mlir/IR/Visitors.h:33), so a default-initialised `WalkResult` MEANS "keep
+// going".  ⛔ An `Interrupt` init would silently turn EVERY default-init into an
+// early exit -- the walk would stop at the first node and the converted program
+// would still compile and still run.  That is the forbidden-silent-wrongness case
+// for this row, and it is the reason the init is written out in both overlays
+// rather than left to `Default`.
+using t1710 = mlir::WalkResult;
+
+// ---- f1710/f1711/f1712: the three static producers -------------------------
+// 60 / 24 / 36 sites.  Free-function shape because the members are `static`.
+mlir::WalkResult f1710() { return mlir::WalkResult::advance(); }
+mlir::WalkResult f1711() { return mlir::WalkResult::interrupt(); }
+mlir::WalkResult f1712() { return mlir::WalkResult::skip(); }
+
+// ---- f1713: `wasInterrupted() const` ---------------------------------------
+// 13 sites, e.g. `bodyResult.wasInterrupted()` at KTIRLegalityCheck.cpp:109.
+// ⚠️ BY-VALUE RECEIVER.  See the f1 note on `class WalkResult` above: a
+// `const mlir::WalkResult &a0` formal records a key the corpus never asks for.
+// ⛔ `Skip` IS NOT AN INTERRUPT -- a walk that ended on a pruned subtree
+// COMPLETED.  Collapsing the two "not advance" cases in the body would turn every
+// prune into an early exit at the caller's `if (...wasInterrupted())`.  The crate
+// method is `matches!(self, LocWalkResult::Interrupt)`, which is exact.
+bool f1713(mlir::WalkResult a0) { return a0.wasInterrupted(); }
+
+// ---- f1800: `mlir::Region::walk` -------------------------------------------
+// The f1300 shape for a REGION receiver.  `T1 &&a1` + `std::move(a1)` is
+// load-bearing: it records `void mlir::Region::walk(T1 &&)`, and the ask ends
+// ` &&)`.  ⛔ `T1 a1` + `static_cast<T1 &&>(a1)` would record `(T1 &)` -- an
+// LVALUE reference -- and the key would be DEAD, because after `T1`
+// `matchTemplate` hunts the literal ` &)`, which does not occur inside ` &&)`.
+// ⛔ An EXPLICIT template argument (`a0.walk<T1>(...)`) makes
+// `cpp-rule-preprocessor` print `No viable function` and then SEGFAULT.
+// ⭐ The spelling is READ BACK OUT OF ir_src.json after every regen; nothing else
+// shows it, because the preprocessor reports success either way.
+//
+// ⭐⭐ THE REAL SITE AND WHY THE BODY MUST BE `walk_any_mut` AND NOT A HAND-ROLLED
+// TRAVERSAL.  Liveness.cpp:75 previously emitted the SILENT TEXTUAL
+// `(*region).walk(&mut _callback)`.  A hand-rolled two-level body was tried and it
+// converts at rc=0, but what it emits is
+//     for b in (*region).get_blocks_mut() { for o in b.get_operations_mut() { ... } }
+// -- the TOP-LEVEL ops of each block only, WITH NO DESCENT INTO NESTED REGIONS.
+// That visits the wrong node set at rc=0, which the hard rules forbid outright.
+// `fmt::Region::walk_any_mut` (dataflowir-gen, fmt.rs:784) is pre-order over the
+// whole subtree, and `tests/walk.rs` proves the order by SEQUENCE EQUALITY OF NODE
+// ADDRESSES for every region at every depth.
+// ⚠️ An earlier slot reported that a multi-node rule body triggers
+// `LLVM ERROR: unsupported unmapped type (lambda at ...) has no model in types_`
+// and theorised that naming the closure type is what does it.  ⛔ THAT WAS NOT
+// REPRODUCIBLE -- a tree carrying that exact body converts at rc=0.  The argument
+// for `walk_any_mut` is the NO-DESCENT bug above, not an abort.
+template <typename T1> void f1800(mlir::Region &a0, T1 &&a1) {
+  return a0.walk(std::move(a1));
 }

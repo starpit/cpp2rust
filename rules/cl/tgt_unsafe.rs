@@ -63,3 +63,16 @@ fn f670<T1>(a0: &Vec<T1>) -> u64 {
 fn f671<T1>(a0: &Vec<T1>) -> bool {
     a0.is_empty()
 }
+
+// t1900 `llvm::cl::initializer<char[_]>` -> `Vec<u8>`.
+//   CommandLine.h:430 is a one-field carrier `const Ty &Init`; for `Ty = char[N]` the
+//   field IS the char array, and the converter already lowers a C++ char-array literal
+//   as a byte-string slice (`(b"]\r" as &[u8])`, fresh38 isa.cpp.rs:959).  `Vec<u8>` is
+//   the owning form of that -- a rule TYPE target cannot spell a lifetime.
+//   ⛔ No member is declared: `Init` is the only one and it is never read by name in the
+//   corpus, so a future read fails loudly instead of answering.
+//   ⛔ This does NOT carry `cl::init(...)`'s value into an `Option`: that goes through
+//   the variadic ctor, which no rule signature can spell.  See src.cpp.
+fn t1900() -> Vec<u8> {
+    Vec::new()
+}

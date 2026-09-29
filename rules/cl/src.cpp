@@ -287,3 +287,80 @@ template <typename T1> bool f671(const llvm::cl::list_storage<T1, bool> &a0) {
 // `self.tileSizes[(i)]` / `for .. in 0..(self.tileSizes.len())` lines at 4697/4713/4727/4728
 // are byte-identical -- so nothing but the two keyed members moved, and the `Vec` model this
 // row asserts is demonstrably the one those untouched lines already rely on.
+
+
+// ===========================================================================
+// PASS 2026-09-29: t1900 `llvm::cl::initializer<char[_]>` -- THE KEY THIS FILE
+// RECORDED AS UNSPELLABLE, NOW MEASURED SPELLABLE.
+//
+// ⛔ THE RECORDED REFUSAL ABOVE IS OVERTURNED BY MEASUREMENT, NOT BY ARGUMENT.
+// The t3 block says: "llvm::cl::initializer<char[N]> (the `initializer_chararr_arr_`
+// spelling, 15 A-TUs): the recorded spelling of an array type is not yet read back
+// verbatim, and keying it from the mangled name is exactly the guess this project
+// forbids."  ⭐ It IS read back verbatim.  Probed in this module and read out of
+// `ir_src.json`:
+//     using tP = llvm::cl::initializer<char[1]>;   ->  "llvm::cl::initializer<char[_]>"
+//     using tQ = char[1];                          ->  "char[_]"
+//     template <typename T1> using tR = T1[1];     ->  "T1[_]"
+// The ARRAY BOUND records as `_` whatever integer is written, so ONE fully concrete
+// key covers every `char[N]` instantiation in the corpus -- `cl::init("")` (N=1) and
+// `cl::init("host_senprog.so")` (N=17) land on the same recorded key.  This is no
+// longer a guess from a mangled name; it is the recorded string.
+//
+// ⭐ AND THE KEY IS FULLY CONCRETE, WHICH IS WHAT MAKES IT SAFE.  The t3 refusal's
+// OTHER half -- "once the key MATCHES, the converter must map the template ARGUMENT,
+// and `char[_]` has no model anywhere in the tree, so it aborts" -- was measured
+// against the PLACEHOLDER key `initializer<T1>`, whose `T1` has to bind to a mapped
+// type.  `initializer<char[_]>` has NO placeholder, so `matchTemplate`'s capture has
+// nothing to capture and the `char[_]` argument is never itself looked up.  ⛔ AND
+// `char[_]` IS DELIBERATELY *NOT* KEYED HERE: a concrete `char[_]` key would match
+// EVERY one-dimensional char array in the corpus (`char buf[256]` included), which is
+// a blast radius this row has not censused.  The probe above proves it is spellable;
+// spelling it is a separate row.
+//
+// THE ROW.  `llvm::cl::initializer<char[_]>` is the 7th-largest `searched as:` string
+// in the fresh38 403-TU sweep (154 occurrences) and it is the MEASURED SUCCESSOR GATE
+// of rules/mlir's t1200/t1201: that block records, verbatim, that after t1201 landed
+// dbo/src/Transforms/EmitSpyreCode.cpp moved from
+//   `mlir::Pass::Option<std::string, llvm::cl::parser<std::string>>`  to
+//   `llvm::cl::initializer<char[_]>` ... reached while converting
+//   `mlir::dbo::impl::EmitSpyreCodePassBase<...>::EmitSpyreCodePassBase`
+//   at CommandLine.h:430:28
+// i.e. reached INSIDE the generated pass-base constructor, lowering the
+// `::llvm::cl::init("")` argument of the variadic `Option` ctor.
+//
+// THE MODEL, AND WHAT IT DOES *NOT* CLAIM.  CommandLine.h:430 is
+//     template <class Ty> struct initializer { const Ty &Init; ... };
+// -- a one-field carrier.  For `Ty = char[N]` the field IS the char array, and the
+// converter already lowers a C++ char-array literal as a Rust BYTE-STRING SLICE:
+// measured in fresh38/out/sys-arch-spec__isa__isa.cpp.rs:959, `(b"]\r" as &[u8])`.
+// `Vec<u8>` is the owning form of that, chosen over `&[u8]` because a rule target
+// cannot spell a lifetime for a type key.  ⛔ NO MEMBER IS DECLARED: `Init` is the
+// only one, it is never read by name anywhere in the corpus (`rg -n
+// '\.Init\b' repos/dt_src` over the corpus finds no `cl::initializer` receiver), and
+// leaving it undeclared makes any future read a loud rustc error rather than a wrong
+// answer.
+// ⛔⛔ AND THIS KEY DOES NOT MAKE `cl::init(...)`'s VALUE REACH AN `Option`.  It gives
+// the CARRIER a model so the translation proceeds; the carrier is then handed to
+// `Option`'s VARIADIC ctor (PassOptions.h:192-204), which no rule signature can spell,
+// so the constructed option still does not receive it.  That is the g2964 payload
+// problem and it is NOT solved here -- see the report for the specification.  This row
+// claims exactly one thing: the carrier type has a model.
+//
+// SWALLOW-SAFETY.  `GetTypeMapKey` truncates at the first `<`, so the bucket is
+// `llvm::cl::initializer`.  `grep -n 'cl::initializer' rules/*/src.cpp` finds the name
+// only in this module's comments and in rules/mlir's t700 note; the bucket therefore
+// holds exactly t1900 and it is FULLY CONCRETE, so the same-depth-comma capture bug
+// cannot fire.  No `>` occurs inside the argument, so the `operator>=` angle-depth
+// desync class does not apply either.
+// ===========================================================================
+namespace llvm {
+namespace cl {
+// Restated from llvm/Support/CommandLine.h:430.  Re-declared here (the declaration
+// near the top of this file was removed with t3) purely so the key can be spelled;
+// no member is declared, deliberately.
+template <class Ty> struct initializer;
+}  // namespace cl
+}  // namespace llvm
+
+using t1900 = llvm::cl::initializer<char[1]>;
