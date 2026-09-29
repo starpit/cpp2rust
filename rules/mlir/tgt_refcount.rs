@@ -3992,6 +3992,8 @@ fn f1300<T1: FnMut(&mut dataflowir_gen::fmt::OpInst)>(
 // syntactic.rs:591.
 fn t1500() -> () {
     ()
+}
+
 // ===========================================================================
 // ⭐⭐ THE RESULT HALF OF THE RANGE-ITERATOR FAMILY -- queue row g2958 (`next`)
 // t1700/t1701 + f1700-f1706, the one-for-one mirror of t1100/t1101 + f1100-f1106.
