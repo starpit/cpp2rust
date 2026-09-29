@@ -1563,8 +1563,59 @@ bool ConverterRefCount::VisitExplicitCastExpr(clang::ExplicitCastExpr *expr) {
   }
   switch (expr->getStmtClass()) {
   case clang::Stmt::CXXReinterpretCastExprClass:
-    assert(expr->getType()->isPointerType() &&
-           "Only pointer casts are supported in reinterpret_cast");
+    // ⛔ THE `assert(0)`-SURVIVES-NDEBUG CLASS AGAIN, and this instance was a
+    // SIGSEGV, not a bad emission. The guard here used to be
+    //   assert(expr->getType()->isPointerType() &&
+    //          "Only pointer casts are supported in reinterpret_cast");
+    // which the release build compiles to NOTHING, so a non-pointer target fell
+    // straight through to `getPointeeType()` -- a NULL QualType -- and
+    // GetUnsafeTypeAsString -> Converter::Convert(QualType) dereferenced it.
+    // MEASURED: `sys-arch-spec/senulatorprog/senulatorProg.cpp:328`
+    //   `int64_t bin = reinterpret_cast<int64_t>(initBin);`
+    // and `util/memtracker/mem_track.cpp` both died `rc=139` with NO
+    // `LLVM ERROR` line and an unsymbolised stack -- the worst outcome in this
+    // pipeline, because there is no diagnostic for a census to classify.
+    //
+    // ⭐ AND IT IS AN ACCIDENTAL ASYMMETRY, NOT A MISSING FEATURE. A pointer/
+    // integral `reinterpret_cast` carries the SAME clang CastKind as the
+    // C-style cast of the same operand (`CK_PointerToIntegral` /
+    // `CK_IntegralToPointer`), and the CStyleCast/StaticCast arm below already
+    // translates exactly those two kinds. Only the SPELLING differed, so
+    // routing both here is not a semantic choice -- it is deleting the
+    // asymmetry. Kept as a separate block rather than merged case labels
+    // because the rest of that arm (void-pointer peeling, function-pointer
+    // casts) is NOT valid for `reinterpret_cast`.
+    if (expr->getCastKind() == clang::CastKind::CK_PointerToIntegral) {
+      StrCat(std::format("{}.to_int()", ToString(expr->getSubExpr())));
+      computed_expr_type_ = ComputedExprType::FreshValue;
+      return false;
+    }
+    if (expr->getCastKind() == clang::CastKind::CK_IntegralToPointer) {
+      std::string dst_type;
+      {
+        PushConversionKind push(*this, ConversionKind::Unboxed);
+        dst_type = ToString(expr->getType());
+      }
+      StrCat(std::format("<{}>::from_int({})", dst_type,
+                         ToString(expr->getSubExpr())));
+      computed_expr_type_ = ComputedExprType::FreshPointer;
+      return false;
+    }
+    // Anything else with a non-pointer target is genuinely unhandled. It must
+    // be a failure that SURVIVES NDEBUG, so it is a `report_fatal_error` that
+    // NAMES the written type and the location -- a loud abort is strictly
+    // better than a segfault because the TU becomes classifiable.
+    // `getPointeeType()` is null for references too on some shapes, so the test
+    // stays on the TARGET type rather than on the pointee.
+    if (!expr->getType()->isPointerType()) {
+      llvm::report_fatal_error(
+          llvm::Twine("unsupported reinterpret_cast to non-pointer type `") +
+              expr->getTypeAsWritten().getAsString() + "` (cast kind `" +
+              expr->getCastKindName() + "`, operand type `" +
+              expr->getSubExpr()->getType().getAsString() + "`) at " +
+              expr->getExprLoc().printToString(ctx_.getSourceManager()),
+          /*gen_crash_diag=*/false);
+    }
     StrCat(
         std::format("{}.reinterpret_cast::<{}>()", ToString(expr->getSubExpr()),
                     GetUnsafeTypeAsString(expr->getType()->getPointeeType())));
