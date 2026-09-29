@@ -35,6 +35,36 @@
 //        std::chrono::time_point<std::chrono::system_clock, std::chrono::duration<long long, std::ratio<_, _>>>
 //    -- the digits I typed are GONE from the recorded key.  So the erasure is on
 //    the RULE side too, and a duration key demonstrably cannot carry its Period.
+//    ⚠️⚠️ THE READBACK ABOVE IS DATED 2026-09-28 AND IT NO LONGER REPRODUCES.
+//    RE-MEASURED 2026-09-29 against snap/coord44/cpp-rule-preprocessor
+//    md5 a46d45dc97f80a5ba8ee07b3eb5b6a96, regenerating THIS FILE UNCHANGED into a
+//    fresh clone of pin/ir.v40.  `chrono/ir_src.json` now reads back
+//        t1 = std::chrono::time_point<std::chrono::steady_clock, std::chrono::duration<long long, std::ratio<1, 1000000000>>>
+//        t2 = std::chrono::time_point<std::chrono::system_clock, std::chrono::duration<long long, std::ratio<1, 1000000000>>>
+//        t3 = std::chrono::time_point<std::chrono::system_clock>
+//    -- THE DIGITS ARE PRESENT.  So the `\b\d+\b` -> `_` erasure described above is
+//    NOT happening on the rules side at coord44, and the `ratio<_, _>` collapse this
+//    refusal's FIRST premise rests on is, on that side, STALE.
+//    ⛔ THAT IS NOT PERMISSION TO KEY `duration`, AND THE REFUSAL STANDS.  Three
+//    things are still unmeasured, and every one of them is independently fatal if it
+//    goes the wrong way:
+//      (a) the SEARCH side.  Only a rules-side readback was re-run.  Until a ns key
+//          is shown to match ONLY ns sites -- and a ms key ONLY ms sites -- in a real
+//          translation, the collapse may simply have moved rather than gone, and a
+//          per-unit key set would tie and resolve arbitrarily.
+//      (b) `duration_cast<Unit>(d)` and `.count()` are refused on a SECOND,
+//          independent ground: their only distinguishing argument is an EXPLICIT
+//          template argument, which no module in this tree records (no module carries
+//          the `explicit-template-args` marker).  Digit preservation does not touch
+//          that.
+//      (c) the loud-path loss.  Keying `duration` as a TYPE while `.count()`,
+//          `duration_cast` and `operator-=` stay unkeyed makes those three emit
+//          TEXTUALLY instead of aborting -- see the g165 note below -- which is
+//          strictly worse than the current state.
+//    ⭐ So the correct next step is a measurement row of its own: re-run the ratio
+//    collapse experiment on BOTH sides at coord44 and, only if per-unit keys are
+//    shown to discriminate, revisit this file's first premise TOGETHER with the
+//    method keys that keep the path loud.  Do NOT key `duration` before then.
 //    (This is also why t1/t2 are safe: an Instant/SystemTime has no unit to get
 //    wrong, so for them the erasure is harmless rather than fatal.)
 //    Contrast the t2/t3 default-suppression split below,
@@ -84,6 +114,47 @@
 //    there is no Rust type to declare for it, and its value at the sole call
 //    site is the negative duration from g148.  Both reasons are independently
 //    fatal.
+//    ⭐⭐ IS `+` SEPARABLE FROM `-`?  NO -- AND THIS IS NOW MEASURED, not inferred.
+//    2026-09-29, pin/ir.v40 (96 modules) + snap/coord44/cpp2rust
+//    md5 a1bc90153318514a178849ebd27944fa.  `+` is a fair question to ask, because
+//    unlike `-` it is TOTAL in both languages: `time_point + duration` cannot
+//    overflow into a sign problem, so the g148 refusal does NOT cover it on its own
+//    reasoning.  It is refused for two INDEPENDENT measured reasons.
+//
+//    (1) THE TWO OPERATORS ARE THE SAME EXPRESSION.  A COMPLETE `--survey` run
+//    (rc=0, not truncated) over `common/logging.cpp` -- the ONLY TU in the corpus
+//    that reaches this row; measured 1, not the 4 a bucket census had estimated --
+//    reports EXACTLY TWO chrono gaps in the whole TU, and their recorded contexts are
+//        operator+   @ external/g3log/g3log/time.hpp:75:60   count=1 distinct=1
+//        operator-   @ external/g3log/g3log/time.hpp:75:66   count=1 distinct=1
+//    i.e. the SAME LINE, six columns apart.  Line 75 is
+//        return time_point_cast<system_clock::duration>(sys_now + (ts - hrs_now));
+//    so the `+`'s right operand IS `(ts - hrs_now)`, the result of the refused `-`.
+//    ⭐ Therefore landing `+` alone closes NOTHING: the TU would abort six columns
+//    later on the `-`, which is correctly refused.  There is no site where `+`
+//    appears without `-`, so there is no separable half to land.
+//
+//    (2) LANDING `+` REQUIRES KEYING `duration`, WHICH IS THE SIDE DOOR.  The key
+//    the converter asks for is, verbatim from the abort,
+//        std::chrono::time_point<std::chrono::system_clock, std::chrono::duration<long long, std::ratio<1, 1000000000>>>
+//        std::chrono::operator+(const std::chrono::time_point<std::chrono::system_clock> &,
+//                               const std::chrono::duration<long long, std::ratio<1, 1000000000>> &)
+//    -- the SECOND PARAMETER is a `duration`, so writing this rule at all forces a
+//    Rust type for `duration`, i.e. the very type key refused at the top of this
+//    file for the ratio-collapse reason.  And a `duration` type key is worse than
+//    just re-opening g818: an UNMAPPED MEMBER DOES NOT ABORT -- the converter emits
+//    the call TEXTUALLY -- so once `duration` has a type, the three constructs that
+//    today fail LOUDLY (`.count()`, `duration_cast<Unit>()`, `operator-=`) stop
+//    failing and start emitting, WITHOUT the `Cpp2RustUnmapped` marker the
+//    placeholder census greps for.  That converts three loud gates into three
+//    silent ones at the g3log `to_string` site whose corruption is printed in the
+//    fraction field of every log line.  A type key with no method key is strictly
+//    worse than no key at all, and that is exactly what this would be.
+//
+//    ⛔ SO: `+` stays out.  The refusal was written against `-`, `+` was re-examined
+//    on its own merits, and it fails for reasons of its own.  The fix is still the
+//    converter's key normalization (carry non-type template arguments instead of
+//    erasing them); until then nothing in this family is separable.
 //  * QUEUE g818, `duration::operator-=(const duration&)` -- REFUSED for the ratio
 //    reason: receiver and operand are both the collapsed duration key, so one
 //    body would serve a nanosecond and a millisecond duration alike.
