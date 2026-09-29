@@ -4599,3 +4599,36 @@ fn t2616() -> dataflowir_gen::fmt::OpInst {
         <dataflowir_gen::ops::mlir_func_ReturnOp as dataflowir_gen::MlirOp>::DEF,
     )
 }
+
+// ===========================================================================
+// ⭐ ROW g3066 -- `mlir::tracing::DebugConfig`, GAP FAMILY F2's largest gate (6 TUs).
+// t2700 + f2700/f2701/f2702 as ONE SET.  See src.cpp for the verbatim abort, the
+// five-use census, the TWO-`DebugConfig`-CLASSES correction, the destructor test and
+// the g3062 aggregate-init check.
+// ⚠️ SPELLED IDENTICALLY TO THE UNSAFE OVERLAY, the t72/t990/t1200/t1500 precedent for
+// a unit type key: the value is repeated in both overlays rather than relying on a
+// "value types are not repeated" convention, which is the guess that reads as a dead
+// key.  ⛔ NO `ptr_bindings_` and no `Value<...>` wrapper: there is nothing to wrap.
+// ===========================================================================
+
+// t2700 `mlir::tracing::DebugConfig` -> AN OPAQUE UNIT.  6 gating TUs.  Argument in
+//   full in src.cpp and in the unsafe overlay: argv-parsed fields the port does not
+//   translate, no destructor, non-owned pointers, zero member calls in the corpus.
+fn t2700() -> () {
+    ()
+}
+
+// f2700 -- the default constructor for t2700; the unit, per t2700.
+fn f2700() -> () {
+    ()
+}
+
+// f2701 -- `tracing::DebugConfig::registerCLOptions()`, static and `void`.
+fn f2701() -> () {
+    ()
+}
+
+// f2702 -- `tracing::DebugConfig::createFromCLOptions()`, the static factory.
+fn f2702() -> () {
+    ()
+}

@@ -11441,3 +11441,120 @@ using t2615 = mlir::affine::AffineYieldOp;
 // t2616 -- `mlir::func::ReturnOp`.  Gate TU
 // dsc-based-utils/DSC2ToDataflowIR/DSC2ToDataflowIR.cpp.
 using t2616 = mlir::func::ReturnOp;
+
+// ===========================================================================
+// ⭐ ROW g3066 -- GAP FAMILY F2 (MLIR PASS-MANAGER INFRASTRUCTURE), THE
+// `mlir::tracing::DebugConfig` GATE: 6 TUs, THE LARGEST SINGLE GATE IN F2.
+// t2700 (the TYPE) + f2700/f2701/f2702 (the DEFAULT CONSTRUCTOR AND BOTH
+// STATICS), LANDED AS ONE SET so the `std::hash<int>` bargain -- a type key with
+// no method key -- cannot arise.  THE ENTIRE CORPUS SURFACE OF THIS TYPE IS
+// COVERED BY THOSE FOUR KEYS; that is measured below, not assumed.
+//
+// Verbatim abort, `verif/g3059M.gates.json`, converter 683f24ef / md5
+// 7089f1ad66d2c9ec7757dc9a5db4dc4c, 218-TU cohort:
+//   LLVM ERROR: unsupported system type has no rule: `mlir::tracing::DebugConfig`
+//   (would be emitted as the undefined name `mlir_tracing_DebugConfig`) rule key:
+//   searched as: mlir::tracing::DebugConfig; from decl (NOT a key -- canonicalised,
+//   defaulted args kept): mlir::tracing::DebugConfig at
+//   .../include/mlir/Debug/CLOptionsSetup.h:22:7
+// ⭐ The `searched as:` line has NO `reached while converting` clause and the key is
+// the bare non-template name, so t2700's spelling is READ, not inferred.
+// The six TUs: dbo/src/Pipeline/{Driver,PrepareRuntimeCorrection,RunProgramPipelines}.cpp,
+// dbo/tools/dbo-opt/dbo-opt.cpp, dcc/src/Driver/dcc.cpp,
+// dcc/tools/dcc-standalone/dcc-standalone-main.cpp.
+//
+// ---- THE CENSUS, AND THE TWO-TYPES CORRECTION IT FORCED -------------------
+// ⛔⛔ THERE ARE TWO UNRELATED `DebugConfig` CLASSES IN THIS CORPUS and an
+// unqualified grep conflates them.  `dsm/debugConfig.h:23` declares a PROJECT
+// `class DebugConfig` with its own `DebugConfig(bool need_initialize = true,
+// int64_t iter_idx = 0)` ctor; it is ported under its own name and is NOT this
+// type.  Scoped to `repos/dt_src` minus `external/`, `*.cpp/.h/.hpp/.inc`, the
+// unqualified name is 67 sites in 24 files -- and MOST OF THOSE ARE THE PROJECT
+// CLASS.  `mlir::tracing::DebugConfig`'s own surface, counted on the
+// `tracing::`-qualified spellings only, is FIVE USES and nothing else:
+//     4  `tracing::DebugConfig debugConfig;`             DEFAULT CONSTRUCTION of a
+//                                                        data member            -> f2700
+//     4  `tracing::DebugConfig::registerCLOptions();`    static, side-effecting  -> f2701
+//     4  `...setDebugConfig(tracing::DebugConfig::createFromCLOptions())`
+//                                                        static factory          -> f2702
+//     5  `[const] tracing::DebugConfig &getDebugConfig()` project accessor,
+//                                                        RETURN TYPE only        -> t2700
+//     4  `setDebugConfig(tracing::DebugConfig config)`    project setter,
+//                                                        BY-VALUE PARAMETER      -> t2700
+// ⭐ ZERO MEMBER CALLS ON A `mlir::tracing::DebugConfig` RECEIVER ANYWHERE IN THE
+// CORPUS.  `getDebugConfig`/`setDebugConfig` are PROJECT methods on the four
+// `*OptMainConfig` structs, ported normally; none of MLIR's own members
+// (`enableDebuggerActionHook`, `isDebuggerActionHookEnabled`, `logActionsTo`,
+// `getLogActionsTo`, `getProfileActionsTo`, `addLogActionLocFilter`,
+// `getLogActionsLocFilters`) is called on any site.  They are therefore NOT
+// DECLARED above and NOT mapped, so a future call ABORTS LOUDLY.
+//
+// ---- WHY AN OPAQUE UNIT IS THE HONEST MODEL, AND WHY g3062's HAZARD DOES NOT
+// ---- ARISE HERE ----------------------------------------------------------
+// The t40 (`mlir::Pass`) / t64 (`mlir::PassManager`) / t80
+// (`detail::PreservedAnalyses`) / t1200 / t1500 argument, unchanged: every field
+// of this class (`enableDebuggerActionHookFlag`, `logActionsToFlag`,
+// `profileActionsToFlag`, `logActionLocationFilter`) is populated by `llvm::cl`
+// ARGV PARSING, which this port does not translate, so a value model would hand
+// back default-initialised flags and lie.  A unit has no value to default.
+// DESTRUCTOR TEST, the t80/OwningOpRef discriminator: CLOptionsSetup.h declares NO
+// `~DebugConfig`; the four fields are a `bool`, two `std::string` and a
+// `std::vector<BreakpointManager *>` of NON-OWNED pointers ("Ownership stays with
+// the caller", CLOptionsSetup.h:57).  ⭐ So there is NO observable effect at end of
+// scope -- the axis on which `mlir::OwningOpRef<ModuleOp>` (g055) was REFUSED.
+// ⛔⛔ AND THE g3062 LESSON IS CHECKED, NOT ASSUMED: "an opaque `()` key is safe
+// only where the corpus never NAMES the type, and CONSTRUCTION NAMES IT."  g3062's
+// `llvm::cl::OptionEnumValue` broke because it is an AGGREGATE and
+// `VisitInitListExpr` prints the mapped type's name as the struct-literal PATH,
+// giving `() { Name : ... }`.  `mlir::tracing::DebugConfig` is NOT an aggregate (it
+// has protected data members and user-declared member functions), and MEASURED over
+// the same scope there are ZERO `DebugConfig{...}` or `DebugConfig(...)` sites on
+// this type -- the single paren-ctor hit belongs to the dsm PROJECT class.  All
+// construction is default-init of a member (f2700) or the static factory (f2702),
+// both keyed, so no InitListExpr path is reachable.
+//
+// ⚠️ f2701 DROPS A SIDE EFFECT AND THAT IS STATED, NOT HIDDEN.
+// `registerCLOptions()` registers global `llvm::cl` options.  There is no `cl`
+// registry in this port to register into -- every `cl::opt` in the tree is itself
+// an opaque unit (rules/cl t1900, mlir t66/t67/t68/t1200/t1500) -- so the unit body
+// is the faithful image of "register into a registry that does not exist", and the
+// only alternative reachable today is a loud abort on a call whose result nothing
+// observes.  f2702 is the same statement in value position.
+//
+// ⭐ WHAT THE SUCCESSOR IS EXPECTED TO BE, so the next slot does not re-derive it:
+// three of the six TUs pass `config.getDebugConfig()` into
+// `mlir::tracing::InstallDebugHandler` (dr5-opt-main.cpp:466,
+// hcc-standalone-main.cpp:679, dcc-standalone-main.cpp:1301) -- a genuine RAII type
+// whose destructor UNINSTALLS the handlers, i.e. exactly the OwningOpRef axis, and
+// it is NOT keyed here.  It is declared nowhere in this file and will abort loudly.
+// ===========================================================================
+namespace mlir {
+namespace tracing {
+// mlir/Debug/CLOptionsSetup.h:22 -- `class DebugConfig`.  Declared with ONLY the
+// default constructor and the two statics, because those are the only three things
+// the corpus reaches (census above).  NO member is declared: a
+// declared-but-unmapped member records nothing, and an undeclared one aborts.
+class DebugConfig {
+public:
+  DebugConfig();
+  static void registerCLOptions();
+  static DebugConfig createFromCLOptions();
+};
+}  // namespace tracing
+}  // namespace mlir
+
+using t2700 = mlir::tracing::DebugConfig;
+
+// f2700 -- `tracing::DebugConfig debugConfig;`, the default constructor.  The unit,
+// per t2700.  A type key with no constructor is rc=0 and then `error[E0433]` (f49's
+// measured note), which is why this is in the same change as t2700.
+mlir::tracing::DebugConfig f2700() { return mlir::tracing::DebugConfig(); }
+
+// f2701 -- `tracing::DebugConfig::registerCLOptions()`, static, void.  4 sites.
+void f2701() { return mlir::tracing::DebugConfig::registerCLOptions(); }
+
+// f2702 -- `tracing::DebugConfig::createFromCLOptions()`, static factory.  4 sites.
+// Static-member-function key form copied from f1710 (`WalkResult::advance()`).
+mlir::tracing::DebugConfig f2702() {
+  return mlir::tracing::DebugConfig::createFromCLOptions();
+}

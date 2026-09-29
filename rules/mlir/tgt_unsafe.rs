@@ -5146,3 +5146,51 @@ fn t2616() -> dataflowir_gen::fmt::OpInst {
         <dataflowir_gen::ops::mlir_func_ReturnOp as dataflowir_gen::MlirOp>::DEF,
     )
 }
+
+// ===========================================================================
+// ⭐ ROW g3066 -- `mlir::tracing::DebugConfig`, GAP FAMILY F2's largest gate (6 TUs).
+// t2700 + f2700/f2701/f2702 as ONE SET.  See src.cpp for the verbatim abort, the
+// five-use census, the TWO-`DebugConfig`-CLASSES correction, the destructor test and
+// the g3062 aggregate-init check.
+// ===========================================================================
+
+// t2700 `mlir::tracing::DebugConfig` -> AN OPAQUE UNIT.  6 gating TUs.  Every field
+//   is populated by `llvm::cl` argv parsing, which this port does not translate, so a
+//   value model would hand back default-initialised flags and lie -- the t1200/t1500
+//   argument verbatim.  ⭐ NO VALUE IS MODELLED.  No `~DebugConfig` exists and the
+//   breakpoint-manager pointers are NON-OWNED, so there is no end-of-scope effect to
+//   drop (the axis `OwningOpRef` was refused on).
+//   ⛔ COST, censused: MLIR's own seven members (`enableDebuggerActionHook`,
+//   `isDebuggerActionHookEnabled`, `logActionsTo`, `getLogActionsTo`,
+//   `getProfileActionsTo`, `addLogActionLocFilter`, `getLogActionsLocFilters`) are
+//   called at ZERO sites in the corpus and are left UNDECLARED, so any future call
+//   aborts loudly rather than answering from an empty model.
+// ⚠️ IDENTICAL IN BOTH MODELS and spelled in BOTH overlays (the t72/t990/t1200/t1500
+// precedent).  The body is `()`, NOT empty -- an empty rule body panics at
+// syntactic.rs:591.
+fn t2700() -> () {
+    ()
+}
+
+// f2700 -- the default constructor for t2700 (`tracing::DebugConfig debugConfig;`,
+// 4 sites); the unit, per t2700.  f49's precedent: a type key without its
+// constructor is rc=0 and then `error[E0433]`.
+unsafe fn f2700() -> () {
+    ()
+}
+
+// f2701 -- `tracing::DebugConfig::registerCLOptions()`, static and `void`, 4 sites.
+// ⚠️ THE DROPPED SIDE EFFECT IS STATED IN src.cpp: it registers global `llvm::cl`
+// options and this port has no `cl` registry to register into -- every `cl::opt` in
+// the tree is itself an opaque unit.  Takes no argument, so nothing is dropped by
+// the inlined body.
+unsafe fn f2701() -> () {
+    ()
+}
+
+// f2702 -- `tracing::DebugConfig::createFromCLOptions()`, the static factory, 4 sites.
+// The same statement in value position: a unit config built from options that were
+// never parsed.  Takes no argument, so the inlined body drops no evaluation.
+unsafe fn f2702() -> () {
+    ()
+}
