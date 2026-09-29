@@ -336,12 +336,10 @@ unsafe fn f56<T1: Eq + Hash, T2>(a0: Vec<(T1, T2)>) -> HashMap<T1, Box<T2>> {
 // its argument, and the receiver of a member call is a place expression.
 unsafe fn f57<T1: Eq + Hash + Clone, T2>(
     a0: &mut HashMap<T1, Box<T2>>,
-    a1: T1,
-    a2: T2,
+    init: (T1, T2),
 ) -> (UnsafeHashMapIterator<T1, T2>, bool) {
     {
-        let __k = a1;
-        let __v = a2;
+        let (__k, __v) = init;
         let __inserted = !a0.contains_key(&__k);
         if __inserted {
             a0.insert(__k.clone(), Box::new(__v));

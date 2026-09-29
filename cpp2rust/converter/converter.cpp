@@ -9864,6 +9864,29 @@ Converter::ConvertInitFragment(clang::Expr *expr,
                   .getTemplateInstantiationArgs(callee)(tgt_ir->init_type.depth,
                                                         tgt_ir->init_type.index)
                   .getAsType();
+  // Replay the nested-argument descent recorded by cpp-rule-preprocessor's
+  // `findTemplateArgument` (see InitTypeLocation).  Every step MUST resolve:
+  // silently keeping the outer type would construct the WRONG type at every
+  // arrival site with nothing for a census to see.
+  for (unsigned step : tgt_ir->init_type.path) {
+    const auto *spec =
+        clang::dyn_cast_or_null<clang::ClassTemplateSpecializationDecl>(
+            type->getAsCXXRecordDecl());
+    auto args = spec ? spec->getTemplateArgs().asArray()
+                     : llvm::ArrayRef<clang::TemplateArgument>();
+    if (step >= args.size() ||
+        args[step].getKind() != clang::TemplateArgument::Type) {
+      llvm::report_fatal_error(
+          llvm::Twine("cpp2rust: rule init type: '") + Mapper::ToString(type) +
+              "' has no type template argument " + llvm::Twine(step) +
+              ", so the recorded init_type path cannot be replayed for the "
+              "call to '" +
+              Mapper::ToString(callee) + "' at " +
+              expr->getExprLoc().printToString(ctx_.getSourceManager()),
+          /*gen_crash_diag=*/false);
+    }
+    type = args[step].getAsType();
+  }
 
   Buffer buf(*this);
   ConvertConstructFromArgs(
@@ -9876,7 +9899,35 @@ void Converter::ConvertConstructFromArgs(clang::QualType type,
                                          llvm::ArrayRef<clang::Expr *> args,
                                          clang::SourceLocation loc) {
   auto *init = BuildInitExpr(GetSema(), type, args, loc);
-  assert(init && "type cannot be initialized from the arguments");
+  // ⛔ THIS USED TO BE `assert(init && ...)`, WHICH IS A NO-OP IN THE SHIPPED
+  // RelWithDebInfo (-DNDEBUG) BUILD -- the null then flowed into
+  // `init->IgnoreImplicit()` and the tool died with SIGSEGV naming nothing, or
+  // worse, emitted a partially-constructed value.  Same precedent as
+  // cpp_rule_preprocessor.cpp's `fail`.
+  //
+  // ⭐ THE CASE THAT MAKES THIS LOAD-BEARING: an `Init<>` pack key carries NO
+  // arity in its `src` spelling (libc++'s `emplace(Args&&...)` prints as
+  // `emplace(&&...)` at every arity), so an arity-3+ call -- e.g.
+  // `emplace(piecewise_construct, ...)` -- reaches here with 3 arguments for a
+  // 2-element `pair`.  There is no aN placeholder count to bound it, so the
+  // ONLY thing standing between that call and a silently mis-constructed value
+  // is this diagnostic.  It must name the type, the arity and the site.
+  if (!init) {
+    std::string arg_types;
+    for (const auto *arg : args) {
+      if (!arg_types.empty()) {
+        arg_types += ", ";
+      }
+      arg_types += Mapper::ToString(arg->getType());
+    }
+    llvm::report_fatal_error(
+        llvm::Twine("cpp2rust: rule body's `init` cannot construct '") +
+            Mapper::ToString(type) + "' from the " + llvm::Twine(args.size()) +
+            " argument(s) supplied at the call site (" + arg_types +
+            ") at " + loc.printToString(ctx_.getSourceManager()) +
+            " -- the rule key does not discriminate this arity",
+        /*gen_crash_diag=*/false);
+  }
   if (auto *ctor =
           clang::dyn_cast<clang::CXXConstructExpr>(init->IgnoreImplicit())) {
     ConvertConstructedValue(type, ctor);
