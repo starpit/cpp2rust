@@ -3299,7 +3299,7 @@ bool Converter::EmitVectorDecompositionBindings(
   // ScopedPtrBindings, which would make `VisitDeclRefExpr` deref a binding that
   // is a VALUE, not a pointer. The caller is responsible for skipping that when
   // this returns on the by-value arm; see VisitCXXForRangeStmtIndexBased.
-  return !by_value || true;
+  return true;
 }
 
 void Converter::ConvertForRangeBody(clang::CXXForRangeStmt *stmt,
@@ -3777,7 +3777,16 @@ bool Converter::VisitCXXForRangeStmtIndexBased(clang::CXXForRangeStmt *stmt,
         ReportUnsupportedStructuredBinding(decomp);
         return false;
       }
-      ptr_bindings.emplace(*this, decomp);
+      // ⭐ THE GUARD MUST FOLLOW THE FORM THAT WAS ACTUALLY EMITTED. A REFERENCE
+      // loop variable gets the `&raw` pointer form, so every use needs the
+      // per-use deref this registration installs. A BY-VALUE loop variable gets
+      // a plain `holder.N` VALUE, and registering it here would make
+      // `VisitDeclRefExpr` emit `(*binding)` for a non-pointer -- E0614, at rc=0.
+      // The condition is the same one EmitVectorDecompositionBindings branches
+      // on, so the two cannot drift apart silently.
+      if (decomp->getType()->isReferenceType()) {
+        ptr_bindings.emplace(*this, decomp);
+      }
     }
     ConvertForRangeBody(stmt);
   }
