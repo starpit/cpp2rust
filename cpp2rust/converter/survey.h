@@ -32,6 +32,26 @@ enum class GapKind : uint8_t {
   // the kinds above because those crowd the sweep: the one current producer
   // (BaseTargetNamesTrait) fired in 269 TUs and blocked none of them.
   kInfo,
+  // NOT A GAP IN cpp2rust, AND NOT A TRANSLATION RESULT AT ALL: the TU was
+  // never surveyed, because clang emitted an error/fatal diagnostic and what
+  // the converter walked was a TRUNCATED AST.
+  //
+  // WHY THIS KIND HAS TO EXIST (measured 2026-09-29, row g3003, on
+  // pin/cpp2rust 5bf5cd9f + pin/ir.v43). Survey mode used to write, for such a
+  // TU, a record BYTE-IDENTICAL beyond the `#tu` line to the record of a
+  // fully-translated, perfectly clean TU: `0 distinct gaps`. Proven with
+  // `#include "nope_does_not_exist.h"` + a trivial function against a trivial
+  // function alone -- `diff` of the two TSVs past line 1 is empty. So the
+  // survey did not merely mis-set an exit code, IT ASSERTED FULL COVERAGE OF A
+  // TU IT HAD NOT READ, and the survey is what the queue's per-TU blocked
+  // counts are built from. An absent row is a silent under-count no consumer
+  // can see; this row is one it cannot miss.
+  //
+  // It is deliberately NOT one of the gap kinds above: nothing here is work
+  // for a rule author or for the converter. `queue/build.py` classifies the
+  // equivalent sweep-derived `missing-header` kind as owner `harness`, and
+  // that is this row's owner too.
+  kHarnessFault,
 };
 
 inline const char *KindName(GapKind kind) {
@@ -46,6 +66,8 @@ inline const char *KindName(GapKind kind) {
     return "missing-trait-body";
   case GapKind::kInfo:
     return "info";
+  case GapKind::kHarnessFault:
+    return "harness-fault";
   }
   return "unknown";
 }
