@@ -220,3 +220,57 @@ template <class T1, class T2> auto f21(T1 &a0, T2 &a1) {
 template <class T1, class T2> auto f22(T1 &a0, T2 &&a1) {
   return std::make_pair(a0, std::move(a1));
 }
+
+// ---------------------------------------------------------------------------
+// f23 -- THE CONVERTING COPY CONSTRUCTOR `pair<T1,T2>::pair(const pair<T3,T4> &)`,
+// i.e. a pair built from a pair WITH DIFFERENT TEMPLATE ARGUMENTS.
+//
+// ⭐ WHAT THIS IS ACTUALLY FOR, and it is not what the row it closes guessed.
+// `dxp/dxp.cpp:1126-1129` does
+//     const std::vector<std::pair<VariableSymbol, ValueType>> &v;   // pair<long, long>
+//     std::unordered_map<VariableSymbol, ValueType> values;          // value_type =
+//     for (const auto &symVal : v) values.emplace(symVal);           //   pair<CONST long, long>
+// so rules/unordered_map's f57 `Init<std::pair<const T1, T2>, Args>` has to construct a
+// `pair<const long, long>` FROM a `pair<long, long>`.  That is libc++'s
+// `template<class U1, class U2> pair(const pair<U1,U2> &)`, and NO rules/pair key had
+// four generics on the source side: f2 is `pair(const std::pair<T1, T2> &)`, which can
+// only unify when the argument's arguments are the RECEIVER's arguments.
+//
+// ⛔ THE HYPOTHESIS THIS REFUTES: the row was filed as "a generic type key may not bind
+// when a template argument is cv-qualified -- does T1 refuse to bind `const long`?".
+// IT DOES NOT.  Measured 2026-09-29, wt/fta.cpp2rust (md5 01e13ca7a1a986b12c84e497b
+// 7d127ff) + ir/ftarow1, on a 10-line probe (cvprobe/p.cpp):
+//     search type std::pair<const long, long>, result: (T1, T2)            <- t1 BINDS
+//     search expr void std::pair<const long, long>::pair(
+//         const std::pair<const long, long> &), result:
+//     Matching: void std::pair<T1, T2>::pair(const std::pair<T1, T2> &)    <- f2 BINDS
+// `matchTemplate` captures `T1 = const long` without complaint; `GetTypeMapKey` buckets
+// on the text before the first `<`, so the cv-qualifier is not in the bucket either.
+// The defect is a MISSING RULE SHAPE, not a Mapper-level cv defect.  The reproduction
+// that does fail is cvprobe/p2.cpp (14 lines, vector<pair<long,long>> -> emplace):
+//     search expr void std::pair<const long, long>::pair(
+//         const std::pair<long, long> &), result: None
+// `const` is load-bearing only in that it is WHY the two pairs differ here -- any
+// `pair<A,B>` built from a `pair<C,D>` hits the same hole.
+//
+// ⚠️ BLAST RADIUS.  `search()`'s tie-break prefers the LONGER `src`, and f23's src is
+// longer than f2's, so f23 DISPLACES f2 on the same-arguments case too (T3=T1, T4=T2).
+// That is deliberate and safe because the emitted body is f2's VERBATIM: both inline to
+// `<arg>.clone()` over the `(T1, T2)` model, so the displacement is byte-identical
+// emission, not a behaviour change.  This is the one thing that makes widening the match
+// here safe -- cf. the shadow-rule defect (0525e24b), where the two rules under one
+// spelling emitted DIFFERENT targets and iteration order decided which won.
+//
+// ⚠️ CONST IS NOT HANDED OUT MUTABLY.  `pair<const long, long>` and `pair<long, long>`
+// have the SAME model `(i64, i64)` -- `const` has no Rust representation on a tuple
+// element (same argument as f20's `const T2 &`).  The map key reaches the container
+// through rules/unordered_map f57, which clones it (`values.insert(__k.clone(), ..)`),
+// so nothing derived from this rule yields `&mut` to a key.
+//
+// NOT ADDED, and why: the rvalue sibling `pair(std::pair<T3,T4> &&)` is UNMEASURED --
+// no ask for it appears in either probe log.  Adding an unasked-for key is how a type
+// key gets a method key it does not need; the loud path stays loud without it.
+template <class T1, class T2, class T3, class T4>
+std::pair<T1, T2> f23(const std::pair<T3, T4> &a0) {
+  return std::pair<T1, T2>(a0);
+}
