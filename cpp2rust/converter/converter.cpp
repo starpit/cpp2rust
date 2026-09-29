@@ -2314,6 +2314,17 @@ bool Converter::ShouldConvertMethod(const clang::CXXMethodDecl *decl) {
 }
 
 bool Converter::ConvertOutOfLineMethod(clang::CXXMethodDecl *decl) {
+  // ALREADY inside `impl <same record> { ... }` (ConvertCXXMethodDecls opened it
+  // and is now walking ForEachTemplateInstantiatedMethod): emit the method as a
+  // member of THAT block. Opening a second `impl` here nests one item-level
+  // block inside another, which Rust rejects outright -- and because rustfmt is
+  // the pipeline's only Rust parser, the whole TU then yields no `.rs` at all.
+  // Measured 2026-09-29 on dcc/src/Analysis/{LoopTree,OperationTree}.cpp and
+  // .../VectorChainToSentientPT/Analysis/LoopMaskTree.cpp: 7 nested blocks each,
+  // whole-TU translation otherwise complete, all three rc=1 solely on this.
+  if (open_item_block_record_ == GetRecordName(decl->getParent())) {
+    return ConvertCXXMethodDecl(decl);
+  }
   StrCat(keyword::kImpl, GetRecordName(decl->getParent()));
   PushBrace impl_brace(*this);
   return ConvertCXXMethodDecl(decl);
@@ -8872,10 +8883,19 @@ void Converter::ConvertCXXMethodDecls(
     bool (*predicate)(clang::CXXMethodDecl *),
     llvm::ArrayRef<clang::CXXMethodDecl *> inherited) {
   bool first = true;
+  // Held for exactly as long as the block below is open, so that an out-of-line
+  // method reached from either loop knows it is ALREADY inside
+  // `<signature> { ... }` and must not open a second, nested `impl` -- which
+  // Rust rejects ("implementation is not supported in `trait`s or `impl`s") and
+  // therefore costs the whole TU its `.rs`. See open_item_block_record_.
+  std::optional<PushOpenItemBlockRecord> open_block;
   auto open = [&] {
     if (first) {
       StrCat(signature, token::kOpenCurlyBracket);
       first = false;
+      if (!in_trait_body_) {
+        open_block.emplace(*this, GetRecordName(decl));
+      }
     }
   };
   auto convert_method = [&](clang::CXXMethodDecl *method) {
@@ -8904,6 +8924,7 @@ void Converter::ConvertCXXMethodDecls(
   }
   if (!first) {
     StrCat(token::kCloseCurlyBracket);
+    open_block.reset();
   }
 }
 
