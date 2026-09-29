@@ -11558,3 +11558,114 @@ void f2701() { return mlir::tracing::DebugConfig::registerCLOptions(); }
 mlir::tracing::DebugConfig f2702() {
   return mlir::tracing::DebugConfig::createFromCLOptions();
 }
+
+// ============================================================================================
+// ROW g3073 -- GAP FAMILY F1, continuation of g3064: the three NAMED SUCCESSOR dialect-op keys,
+// t2617-t2619.  All three gates were RE-DERIVED against this row's own baseline (0483cbf4, which
+// already contains g3064's t2610-t2616) and all three REPRODUCED -- unlike two of g3064's seven,
+// which had already moved before it changed anything.
+//
+//   t2617  mlir::arith::AndIOp            dcc/src/Conversion/StandardToSentient/StandardToSentient.cpp
+//   t2618  mlir::affine::AffineApplyOp    dcc/src/Conversion/AffineToStandard/AffineToStandard.cpp
+//   t2619  mlir::arith::ConstantIntOp     dsc-based-utils/DSC2ToDataflowIR/DSC2ToDataflowIR.cpp
+//                                     AND dcc/src/Transform/Dataflow/LoopUnrollForShuffleOp.cpp
+//
+// ⭐⭐ THE ONE REAL FINDING, AND IT CORRECTS THE BRIEF'S DICHOTOMY.  `mlir::arith::ConstantIntOp`
+// has NO generated marker -- `grep -aoF mlir_arith_ConstantIntOp` reads **0** on the rmeta this
+// tree type-checks against and **0** on both generated `dataflow_ods.rs` -- and the standing
+// instruction for an absent marker is "that op is generator-side, out of scope."  ⛔ THAT IS THE
+// WRONG CONCLUSION HERE, because there is a THIRD case between "ODS op with a DEF" and "dialect
+// the .td parser never saw": the HAND-WRITTEN VIEW CLASS.  `mlir/Dialect/Arith/IR/Arith.h:54`
+// declares `class ConstantIntOp : public arith::ConstantOp` with
+// `resolveTypeID() { return TypeID::get<ConstantOp>(); }` -- it adds no state, has no ODS record,
+// and at runtime IS an `arith.constant`.  So the absent marker is the model AGREEING with the
+// header, not a coverage gap, and the correct DEF is `ConstantOp`'s own.
+// ⭐ AND THIS IS NOT A NEW MODEL CLAIM: `t162` (`mlir::arith::ConstantIndexOp`, Arith.h:113, the
+// sibling view class, marker likewise **0**) IS ALREADY LANDED WITH EXACTLY THIS BODY, and its
+// comment at :3686 argues it in full.  t2619 is a verbatim t162 copy.
+//
+// ⭐ MARKER VERIFICATION, POSITIVE AND NEGATIVE CONTROL IN THE SAME BATCH, against
+// `pin/target_preprocessor/release/build/dataflowir-gen/48cebb0c20af925b/out/
+// libdataflowir_gen-48cebb0c20af925b.rmeta` (the artifact `rule-preprocessor/src/semantic.rs`
+// `find_artifact` resolves; md5 `0ed4a952cad1155f4fd4acae06eaed12` -- ⚠️ NOT the `f4ac1f4295ae`
+// g3064 recorded three hours earlier; the rmeta is REBUILT under the fleet, so pin the md5 you
+// measured, never the one you inherited).  `grep -aoF <name> | wc -l`, and the second instrument
+// `grep -oE "struct <name>\b"` on the current release `dataflow_ods.rs`:
+//       name                             rmeta   ods
+//       mlir_arith_ConstantOp   POS CTL      2     1
+//       mlir_arith_AndIOp                    2     1
+//       mlir_affine_AffineApplyOp            2     1
+//       mlir_arith_ConstantIntOp             0     0   <-- absent, and CORRECTLY so (see above)
+//       mlir_arith_ConstantIndexOp           0     0   <-- t162's, absent for the same reason
+//       mlir_FAKE_NegCtl_XYZ    NEG CTL      0     0
+//
+// ⛔⛔ THE HONEST COST, MEASURED AND NOT INHERITED: ALL THREE OPS HAVE ACCESSOR CALLS ON BOUND
+// HANDLES IN THE CORPUS, INCLUDING INSIDE THEIR OWN GATE TUs, AND NO MEMBER IS KEYED.  Scoped to
+// the declarations that actually bind a handle of each type (an unscoped identifier grep
+// over-counts badly -- `op` is reused for four other op types in AffineToStandard.cpp alone):
+//   AndIOp          `op->replaceAllUsesWith(t)` StandardToSentient.cpp:275; `op` also passed by
+//                   value to ConstructIFRecursively and to `OpBuilder builder(op)`;
+//                   `andi_op.getOperand(0)` :407; `and_op` :146 binds and only tests;
+//                   `.getResult()` once on an `AndIOp::create` temporary (AffineToStandard:106,
+//                   a VALUE position -- an inlined body there has no address).
+//   AffineApplyOp   `op.getLoc()`, `op.getAffineMap()`, `op.getOperands()` -- all three inside
+//                   `AffineApplyLowering::matchAndRewrite`, i.e. in the gate TU itself;
+//                   plus `affine_op`/`cloned_op`/`apply_op` handles in 3 further TUs.
+//   ConstantIntOp   `const_int_op.getValue()` and `const_int_op.value()`
+//                   StandardToSentient.cpp:363,365; `OpBuilder builder(const_int_op)` :360.
+// Position census over `repos/dt_src`: AndIOp 11 mentions/4 files (5 `::create` sinks, 4
+// cast/isa), AffineApplyOp 24/11 (3 sinks, 2 casts, the rest template arguments of
+// `OpRewritePattern`/`SmallVector`/`walk`), ConstantIntOp 29/17 (17 sinks, 12 casts) -- of which 5
+// are `torch::Torch::ConstantIntOp`, a DIFFERENT class, and are excluded.  **0 default
+// constructions** of any of the three, so NO `fN` ctor key is warranted, t161's grep repeated.
+// ⛔ A SITE COUNT IS NOT AN ERROR COUNT, and these are upper bounds on leakage, not errors.
+// ⚠️ An unmapped MEMBER does not abort (`converter.cpp` `VisitCallExpr` gates on
+// `Mapper::Contains` and falls through to `ConvertCallExpr`, emitting the literal C++ name), so
+// those accessors will fail at rustc rather than at translate time.  That is the `g3067`
+// capability gap, PRE-EXISTING and large -- across 453 already-emitted `.rs`, textual C++
+// accessor names read `getLhs` 217 sites/144 files, `getRhs` 203/144, `getPredicate` 150/125 --
+// and the SAME bargain is already struck by every landed op key in this file (t25 `OpState`,
+// t61 `ModuleOp`, t157 `func::FuncOp`, t158 `affine::AffineForOp`, t161/t162, t2610-t2616).
+// ⛔ NO MEMBER COVERAGE IS CLAIMED FOR THESE THREE.  It is named, not papered over.
+//
+// ⛔ t25's PROHIBITION APPLIES UNCHANGED TO ALL THREE: no `operator==`, no `operator!=`, no
+// identity test.  A C++ op handle compares `Operation *`; an `OpInst` is an op's printed CONTENT.
+// ⚠️ SWALLOW / DEAD-KEY SAFETY: all three spellings have arity 0 -- no `<`, no comma at any
+// depth, no operator name -- so neither `matchTemplate`'s same-depth-comma over-run nor the
+// `operator>=` angle-bracket-depth desync can apply.  The keys are read back out of
+// `ir_src.json` with `value == spelling` after the regen rather than assumed.
+//
+// `mlir::arith::AndIOp` is ALREADY DECLARED at :5276 (the `OneTypedResult` block, whose `t191`
+// spells it as a trait argument), so only the two new classes are declared here.
+namespace mlir {
+namespace arith {
+// mlir/Dialect/Arith/IR/Arith.h:54 -- `class ConstantIntOp : public arith::ConstantOp`, the
+// HAND-WRITTEN view class argued above: `using arith::ConstantOp::ConstantOp;`, static `build`/
+// `create`/`classof`, `resolveTypeID() -> TypeID::get<ConstantOp>()`, and NO state.  Declared the
+// way t162's `ConstantIndexOp` is, deriving, for exactly its reason.
+// ⛔ BECAUSE IT DERIVES, THIS FILE CANNOT RELOCATE ANY INHERITED MEMBER'S KEY (the measured
+// `llvm::FailureOr` lesson): a member declared by `ConstantOp` keys as `mlir::arith::ConstantOp::`
+// whatever is written here.  Nothing is claimed for one.
+// No destructor exists (`grep -n '~ConstantIntOp' Arith.h` = 0 hits), so the handle model is
+// permitted -- the OwningOpRef test.
+class ConstantIntOp : public ConstantOp {};
+} // namespace arith
+namespace affine {
+// mlir/Dialect/Affine/IR/AffineOps.h.inc `class AffineApplyOp : public ::mlir::Op<AffineApplyOp,
+// ...>` -- an ordinary ODS-generated op class, one `Operation *` through its OpState base, with
+// its own generated `DEF`.  Declared here ONLY so t2618's key can be SPELLED.  No member mapped.
+class AffineApplyOp {};
+} // namespace affine
+} // namespace mlir
+
+// t2617 -- `mlir::arith::AndIOp`.  Gate TU
+// dcc/src/Conversion/StandardToSentient/StandardToSentient.cpp (the gate g3064 named; it is the
+// op that TU really aborts on, which is why g3064's t2612 `CmpIOp` could not move it alone).
+using t2617 = mlir::arith::AndIOp;
+// t2618 -- `mlir::affine::AffineApplyOp`.  Gate TU
+// dcc/src/Conversion/AffineToStandard/AffineToStandard.cpp (g3064's own successor there).
+using t2618 = mlir::affine::AffineApplyOp;
+// t2619 -- `mlir::arith::ConstantIntOp`.  Gate TU
+// dsc-based-utils/DSC2ToDataflowIR/DSC2ToDataflowIR.cpp, AND a second, unlisted gate TU found by
+// this row: dcc/src/Transform/Dataflow/LoopUnrollForShuffleOp.cpp aborts on the same spelling.
+using t2619 = mlir::arith::ConstantIntOp;

@@ -4632,3 +4632,47 @@ fn f2701() -> () {
 fn f2702() -> () {
     ()
 }
+
+// ============================================================================================
+// ROW g3073 -- GAP FAMILY F1 continuation: the three named successor dialect-op keys,
+// t2617-t2619.  REFCOUNT arm.
+//
+// Each maps to `fmt::OpInst` carrying the op's generated `DEF`, which is t161/t162's body with
+// the concrete op substituted.  See `src.cpp` at t2617 for the DEF verification (positive AND
+// negative control, two independent instruments, and the rmeta md5 re-measured rather than
+// inherited), for the position census that is why there is NO `fN` constructor on any of the
+// three, and for the MEMBER finding: no member of any of the three is mapped, and that is a
+// NAMED residue (`g3067`), not a closed argument.
+//
+// ⭐ t2619 CARRIES `mlir_arith_ConstantOp`'s DEF ON PURPOSE, and it is t162's body verbatim, not
+// an approximation: `arith::ConstantIntOp` (Arith.h:54) is a hand-written view class over the
+// `arith.constant` ODS op -- no state, no ODS record, `resolveTypeID() -> TypeID::get<ConstantOp>()`
+// -- so `dataflowir_gen::ops` carrying `mlir_arith_ConstantOp` and NO `mlir_arith_ConstantIntOp`
+// is the model agreeing with the header.  Identical situation, identical body, as t162's
+// `ConstantIndexOp`.
+//
+// The `init` is t25's/t152's/t157's/t158's/t161's/t162's/t2610-t2616's, and for their reason: a
+// default-constructed ODS op handle is the NULL handle, `fmt::OpInst` has no null, and this
+// expression exists only to type-check the type key.
+//
+// ⛔ t25's PROHIBITION APPLIES UNCHANGED: no `operator==`, no `operator!=`, no identity test.
+// ⚠️ THIS ARM IS NOT THE OTHER ARM'S `sed`: it comes out byte-identical to the other, for the
+// reason t157's and t2610's arms record -- `fmt::OpInst` is a plain generated value type, it is
+// not behind a `Value<T>`/`Ptr<T>` wrapper in either model, and NO `ptr_bindings_` is registered
+// here (registering one on the refcount arm is `E0614`).  Each body was reasoned for its own
+// model and the identity is the conclusion, not the method.
+fn t2617() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_AndIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+fn t2618() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_affine_AffineApplyOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+fn t2619() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_ConstantOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
