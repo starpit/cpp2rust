@@ -1600,7 +1600,53 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
     }
   }
 
-  // ⭐ REFCOUNT: THE CONST-LVALUE-REFERENCE HOLDER ARM IS NOW LOWERED; every
+  // ⭐⭐ REFCOUNT, SECOND STEP: THE POINTER-FORM SUB-ARMS OF THE
+  // LVALUE-REFERENCE HOLDER ARE NOW LOWERED TOO -- the MUTABLE reference
+  // holder, and the const holder with a RECORD-typed element. They were left
+  // refused by the first step (the const/scalar arm) on the stated ground that
+  // `&raw mut/const (*h).N` + a `ptr_bindings_` registration "has no
+  // established refcount form". MEASURED, that is not a missing form -- it is a
+  // form that does not EXIST in this model, because the distinction the
+  // pointer form makes does not exist here:
+  //
+  //   * In the unsafe model the element read `(*h).N` is a MOVE OUT OF the pair
+  //     (E0507 for a record) and a COPY (a dropped write, for a mutable
+  //     holder), so a record/mutable element has to be taken by raw pointer.
+  //   * In the refcount model the very same place `(*h.upgrade().deref()).N`
+  //     has type `Value<T>` = `Rc<RefCell<T>>` (`rules/pair/tgt_refcount.rs`
+  //     maps `std::pair` to a BARE 2-tuple `(Value<T1>, Value<T2>)`, not a
+  //     boxed tuple), and `DecompositionHolderElement` clones it. CLONING AN
+  //     `Rc` SHARES THE CELL. So the binding is already a handle ON the pair's
+  //     own element -- nothing is copied and nothing is moved, which is
+  //     exactly the property the raw pointer was introduced to obtain.
+  //
+  // ⭐⭐ WHY A WRITE TRAVELS BACK, which is the whole correctness question on
+  // the MUTABLE arm and is NOT the same argument the const arm used (there,
+  // every binding is const and there is no write to lose):
+  //     auto &[coord, data] = pr;   //  pr : std::pair<std::deque<long>,
+  //     coord.push_back(3);         //       std::vector<long>> &
+  //   ->
+  //     let h: Ptr<(Value<Deque<i64>>, Value<Vec<i64>>)> = ..;
+  //     let coord = (*h.upgrade().deref()).0.clone();
+  //     coord.borrow_mut().push_back(3);
+  // `coord` and the pair's `.0` are two `Rc` handles to ONE `RefCell`, so
+  // `borrow_mut()` through either reaches the same storage: the write is
+  // visible through the pair, and through the container the pair lives in,
+  // because this model never copies a `Value<T>` -- it copies the handle. The
+  // C++ `coord` is a `std::deque<long> &` naming `pr.first`; the Rust `coord`
+  // names the same cell `(*h..).0` names. OBJECT IDENTITY IS PRESERVED IN BOTH
+  // DIRECTIONS, read and write. (This is also why `mut` is NOT emitted for such
+  // a binding: the handle is never reassigned, mutation goes through the cell.)
+  //
+  // ⛔ AND THE POINTER FORM IS POSITIVELY WRONG HERE, not merely unnecessary: a
+  // `ptr_bindings_` registration makes `VisitDeclRefExpr` (:6530) deref every
+  // use, and `(*coord)` where `coord : Value<T>` is not a raw pointer is a hard
+  // rustc error. So `ptr_form` is CLEARED for this model rather than special
+  // cased at each use site -- one statement, and every downstream test
+  // (`ptr_form.contains`, the registration loop) then behaves as it already
+  // does for the const/scalar arm that is known to work.
+  //
+  // ⭐ REFCOUNT: THE LVALUE-REFERENCE HOLDER ARM IS LOWERED; every
   // other arm of this function stays refused for that model.
   //
   // `keyword_unsafe_` is the only model discriminator the base class has --
@@ -1647,16 +1693,23 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
   //   * the BY-VALUE holder (`ref_holder` false, which includes the
   //     temporary-holder arm that deliberately clears it): the E0609 case
   //     above.
-  //   * the POINTER-FORM arms -- the MUTABLE reference holder, and a const
-  //     holder with a record-typed element -- emit `&raw mut/const (*h).N`
-  //     plus a `ptr_bindings_` registration, i.e. a RAW POINTER binding whose
-  //     uses this model derefs its own way. `ptr_form` is non-empty for both
-  //     (the mutable arm inserts every binding), so one test covers them.
   //   * the MEMBER-WISE arm: `(*h).field_` on a refcount struct reaches an
   //     `Rc<RefCell<..>>` FIELD, which is a different spelling again and has
   //     no measured witness under this model.
-  if ((keyword_unsafe_ == nullptr || *keyword_unsafe_ == '\0') &&
-      !(ref_holder && ptr_form.empty() && memberwise_fields.empty())) {
+  const bool refcount_model =
+      keyword_unsafe_ == nullptr || *keyword_unsafe_ == '\0';
+  // See the POINTER-FORM block above: in this model the element read is already
+  // a shared-`Rc` handle, so the raw-pointer form is both unnecessary and
+  // unspellable. Remember that it WAS non-empty, because the annotation check
+  // below is what keeps a record element with no model from being emitted as a
+  // `let` whose type does not exist.
+  const bool ptr_form_cleared =
+      refcount_model && ref_holder && memberwise_fields.empty() &&
+      !ptr_form.empty();
+  if (ptr_form_cleared) {
+    ptr_form.clear();
+  }
+  if (refcount_model && !(ref_holder && memberwise_fields.empty())) {
     return false;
   }
 
@@ -1689,7 +1742,15 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
   // the element types (`Mapper::Map` does not -- it answers the unsubstituted
   // `(T1, T2)` template text), so a placeholder-free holder annotation is
   // precisely "every element's own model is a mapped value type".
-  if (temp_holder || !memberwise_fields.empty() || !ptr_form.empty()) {
+  // ⭐ `ptr_form_cleared` is in this test because clearing the set must not
+  // remove the check the set used to trigger: the elements that were in it are
+  // exactly the record-typed ones, i.e. the ones whose own model can be
+  // missing. Without it a refcount record element with no rule would emit
+  // `let x = (*h.upgrade().deref()).0.clone();` against a holder annotation
+  // containing `Cpp2RustUnmapped` -- rc=0 and dead at rustc, the one outcome
+  // that is worse than the abort.
+  if (temp_holder || !memberwise_fields.empty() || !ptr_form.empty() ||
+      ptr_form_cleared) {
     std::string annotation;
     {
       Buffer buf(*this);
@@ -1764,9 +1825,7 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
       // how this model already spells its own locals
       // (`let r: Value<i32> = Rc::new(RefCell::new(0));`, measured on the
       // hand-written equivalent of the target shape).
-    } else if (ptr_form.contains(binding) ||
-               (ref_holder &&
-                (keyword_unsafe_ == nullptr || *keyword_unsafe_ == '\0'))) {
+    } else if (ptr_form.contains(binding) || (ref_holder && refcount_model)) {
       // A pointer-form binding is a const alias that is never reassigned, so
       // `mut` would only be an `unused_mut` warning -- and this is the same
       // plain `let` that `EmitVectorDecompositionBindings` already emits for the
