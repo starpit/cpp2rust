@@ -234,6 +234,46 @@ llvm::function_ref<T1()> f16(T2 &&a0) {
   return llvm::function_ref<T1()>(std::move(a0));
 }
 
+// PER-ARITY SIBLINGS OF f16, arities 1..5 -- the CONSTRUCTOR twins of t9..t13, the same
+// way f17..f22 (below) are the CALL-OPERATOR twins.  ⛔⛔ THIS WAS THE ACTUAL GAP IN THE
+// FAMILY, found 2026-09-29 by measuring the CURRENT pin (a0b0a707 + ir.v45, which already
+// carries t8-t13 and f16-f22) against a real corpus TU:
+// dataflow-scheduler/lib/Analysis/OperationTree.cpp (`mlir::function_ref<OperationTreeNode
+// *(OperationTreeNode *)>`, an ARITY-1 instantiation) comes back `A complete rc=0 762`
+// while its EMITTED `.rs` contains, verbatim, three sites of
+//   llvm_function_ref_scheduler_OperationTreeNode_ptr_scheduler_OperationTreeNode_ptr__::new_1(...)
+// -- a FABRICATED constructor, defined nowhere, invisible to every bucket census AND to
+// no-placeholders.sh (same shape as f16's own note above, and the same class as the
+// `std::hash<int>` 427-site precedent).  The type key (t9) and the call operator (f18)
+// both matched -- `dyn Fn(` appears in the same file -- but NOTHING matched the
+// CONSTRUCTOR for any arity above 0, because f16 alone only covers `T1()`.
+// ⛔ So "one generic key" was true for the TYPE and the CALL, but NOT for the
+// CONSTRUCTOR: that one is arity-specific and was only ever written once.
+template <typename T1, typename T2, typename T3>
+llvm::function_ref<T1(T2)> f23(T3 &&a0) {
+  return llvm::function_ref<T1(T2)>(std::move(a0));
+}
+
+template <typename T1, typename T2, typename T3, typename T4>
+llvm::function_ref<T1(T2, T3)> f24(T4 &&a0) {
+  return llvm::function_ref<T1(T2, T3)>(std::move(a0));
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5>
+llvm::function_ref<T1(T2, T3, T4)> f25(T5 &&a0) {
+  return llvm::function_ref<T1(T2, T3, T4)>(std::move(a0));
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5, typename T6>
+llvm::function_ref<T1(T2, T3, T4, T5)> f26(T6 &&a0) {
+  return llvm::function_ref<T1(T2, T3, T4, T5)>(std::move(a0));
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5, typename T6, typename T7>
+llvm::function_ref<T1(T2, T3, T4, T5, T6)> f27(T7 &&a0) {
+  return llvm::function_ref<T1(T2, T3, T4, T5, T6)>(std::move(a0));
+}
+
 // ---------------------------------------------------------------------------
 // PER-ARITY `llvm::function_ref` CALL OPERATORS -- the t8..t13 twins of the
 // `std::function` keys f4/f6/f8/f10/f12/f14.  MUST be written in CALL form
