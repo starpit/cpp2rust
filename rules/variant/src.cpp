@@ -12,12 +12,17 @@
 // WHY AN ENUM AND NOT A TUPLE: a tuple lets a read of an INACTIVE alternative
 // succeed, which is the one thing a variant exists to forbid.
 //
-// std::get IS DELIBERATELY NOT KEYED.  `get<0>` and `get<1>` record
-// BYTE-IDENTICAL keys (the explicit non-type template argument does not reach
-// the key -- the same defect queue row c004 records for std::tuple), so a rule
-// for it could only ever return one fixed alternative.  That would be silent
-// wrongness; it stays a LOUD abort instead.  Same reason holds_alternative<T>
-// is absent: its alternative is likewise an explicit template argument.
+// ⛔ THE PARAGRAPH THAT STOOD HERE -- "std::get IS DELIBERATELY NOT KEYED,
+// `get<0>` and `get<1>` record BYTE-IDENTICAL keys" -- IS MEASURABLY FALSE FOR
+// std::get AND IS RETRACTED.  The explicit INDEX does not reach the key, but the
+// RETURN TYPE does, and a variant's alternatives are distinct types, so the eight
+// keys are pairwise distinct.  std::get IS NOW KEYED: f21-f36, and the twelve
+// search keys it was verified against are quoted verbatim there.
+// ⭐ holds_alternative<T> IS STILL NOT KEYED, and now for a MEASURED reason
+// rather than this one: its whole key is `_Bool (const variant<..8..> &)` --
+// bool return, no alternative anywhere in it -- so all four call sites in
+// dxp_standalone.cpp record ONE key and any rule would answer three of them
+// wrongly and silently.  See the note above f21.
 // index() is keyable because it carries no explicit template argument.
 
 #include <cstddef>
@@ -191,4 +196,164 @@ template <typename T1, typename T2, typename T3, typename T4, typename T5,
 bool f20(const std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0,
          const std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a1) {
   return operator==(a0, a1);
+}
+
+// ---- f21-f36 -- std::get<I> on the 8-ary variant (the 18-site `get` class on
+// ---- the port goal, dxp/dxp_standalone.cpp) ---------------------------------
+//
+// ⭐ THIS RETRACTS THIS FILE'S OWN REFUSAL NOTE AT THE TOP, WHICH IS MEASURABLY
+// FALSE FOR std::get.  That note says `get<0>` and `get<1>` "record
+// BYTE-IDENTICAL keys (the explicit non-type template argument does not reach the
+// key)".  The INDEX indeed does not reach the key -- but THE RETURN TYPE DOES,
+// and for a variant every alternative has a different type, so the eight keys are
+// pairwise distinct.  Read back verbatim out of the converter's own search lines
+// on dxp_standalone.cpp (all twelve, with the allocator/comparator arguments
+// elided here only for width):
+//     const long &                     (const variant<..8..> &)
+//     const std::map<int, long> &      (const variant<..8..> &)
+//     const float &                    (const variant<..8..> &)
+//     const std::map<int, float> &     (const variant<..8..> &)
+//     const std::array<unsigned, 4> &  (const variant<..8..> &)
+//     const std::map<int, std::array<unsigned,4> > & (const variant<..8..> &)
+//     const std::string &              (const variant<..8..> &)
+//     const std::map<int, std::string> & (const variant<..8..> &)
+//     std::map<int, long> &            (variant<..8..> &)
+//     std::map<int, float> &           (variant<..8..> &)
+//     std::map<int, std::array<unsigned,4> > & (variant<..8..> &)
+//     std::map<int, std::string> &     (variant<..8..> &)
+// -- i.e. the CONST slice uses all eight alternatives and the NON-CONST slice
+// four of them.  A search key binds T1..T8 from the variant's alternative list
+// and then the return type selects exactly one of the sixteen srcs; binding
+// `const T2 &` from a `get<0>` call would contradict the T2 bound from the
+// variant's second alternative, so there is no tie.  Same mechanism rules/tuple
+// f10/f11 landed on.
+//
+// ⛔ THE ONE CASE THIS IS WRONG FOR, stated so it is not rediscovered:
+// `std::variant<X, ..., X>` with two EQUAL alternatives -- both keys then match
+// and `search()` would have to tie-break between equal-length srcs.  The corpus
+// has exactly ONE variant instantiation (`OperandAttr::data_`,
+// sys-arch-spec/progir/progir.h:256) and its eight alternatives are pairwise
+// distinct, so this is not exercised; if such a variant appears it must abort,
+// not pick.
+//
+// ⛔ WHY ALL SIXTEEN AND NOT THE TWELVE THE GOAL TU USES: a key set that covers
+// some alternatives and not others is the worst outcome, because the covered
+// sites go quiet while the uncovered ones stay loud and the file then reads as
+// "std::get is handled".  Both const-ness slices, all eight alternatives.
+//
+// ⛔ WHY holds_alternative<T> IS STILL NOT KEYED, now measured rather than
+// assumed: its recorded key is `_Bool (const variant<..8..> &) noexcept` -- the
+// alternative appears ONLY as the explicit template argument, and the converter's
+// search key does NOT carry explicit template arguments (all four call sites in
+// dxp_standalone record the ONE key above, which is why they became four
+// distinct `Cpp2RustUnmappedFn_holds_alternative_*` names for a single key).  A
+// rule for it could only ever test one fixed alternative and would answer three
+// of the four sites WRONGLY AND SILENTLY.  `--explicit-template-args` does not
+// rescue it: that flag changes what the PREPROCESSOR records for the rule, not
+// what the CONVERTER searches for, so it would only make the key dead.  It stays
+// a loud placeholder.
+//
+// BODIES.  `Variant8` is a real Rust enum, so the wrong-alternative path has no
+// field to read: the body matches and PANICS, which is the faithful model of
+// `throw std::bad_variant_access`.  That is a real behaviour, not a stub.
+// tgt_refcount.rs deliberately omits all sixteen for exactly the reason it omits
+// f8/f9/f19/f20 -- refcount passes a variant reference as `Ptr<Variant8<..>>`
+// whose accessors are bounded on `ByteRepr`, which an enum over arbitrary
+// alternatives cannot satisfy -- so refcount inherits the unsafe body and fails
+// to COMPILE rather than returning a wrong alternative.
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+const T1 &f21(const std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0) {
+  return std::get<0>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+const T2 &f22(const std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0) {
+  return std::get<1>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+const T3 &f23(const std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0) {
+  return std::get<2>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+const T4 &f24(const std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0) {
+  return std::get<3>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+const T5 &f25(const std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0) {
+  return std::get<4>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+const T6 &f26(const std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0) {
+  return std::get<5>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+const T7 &f27(const std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0) {
+  return std::get<6>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+const T8 &f28(const std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0) {
+  return std::get<7>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+T1 &f29(std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0) {
+  return std::get<0>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+T2 &f30(std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0) {
+  return std::get<1>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+T3 &f31(std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0) {
+  return std::get<2>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+T4 &f32(std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0) {
+  return std::get<3>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+T5 &f33(std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0) {
+  return std::get<4>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+T6 &f34(std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0) {
+  return std::get<5>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+T7 &f35(std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0) {
+  return std::get<6>(a0);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5,
+          typename T6, typename T7, typename T8>
+T8 &f36(std::variant<T1, T2, T3, T4, T5, T6, T7, T8> &a0) {
+  return std::get<7>(a0);
 }
