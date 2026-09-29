@@ -2191,9 +2191,217 @@ bool ConverterRefCount::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
   return false;
 }
 
+// Is any BindingDecl of `decomp` the operand of a `std::move` anywhere inside
+// `stmt`?
+//
+// ⛔ WHY THIS IS A REFUSAL AND NOT A LOWERING. `std::move(data)` out of a
+// structured binding is a MOVE OF THE ELEMENT in C++: the callee takes ownership
+// and the container element is left empty. In this model the binding is an `Rc`
+// clone of the element's own `RefCell`, so every candidate spelling is WRONG in a
+// different way:
+//   * emitting the handle (what the model does for `std::move` today) transfers
+//     NOTHING -- the callee and the container end up SHARING one cell, so a later
+//     read of the container sees the value C++ had moved out. Silent, at rc=0.
+//   * `RefCell::take()` / `replace(Default::default())` does empty the element,
+//     but it requires the element type to have a `Default` and it CHANGES OBJECT
+//     IDENTITY for every other alias of that cell -- and nothing here establishes
+//     that no other alias exists.
+// Neither is establishable from the AST at this point, so the sub-shape is
+// refused LOUDLY and BEFORE any emission. Measured site:
+// util/foldManager/foldInfrastructure.h:1265, `func(std::move(data), ..)` inside
+// `for (auto& [coord, data] : getDataAndFoldCoordinates(..))`.
+static bool IsBindingMovedFrom(const clang::Stmt *stmt,
+                               const clang::DecompositionDecl *decomp) {
+  if (stmt == nullptr) {
+    return false;
+  }
+  if (const auto *call = llvm::dyn_cast<clang::CallExpr>(stmt)) {
+    const auto *fn = call->getDirectCallee();
+    if (fn != nullptr && call->getNumArgs() == 1 &&
+        (fn->getNameAsString() == "move" ||
+         fn->getNameAsString() == "forward")) {
+      const auto *arg = call->getArg(0)->IgnoreParenImpCasts();
+      if (const auto *ref = llvm::dyn_cast<clang::DeclRefExpr>(arg)) {
+        for (const auto *binding : decomp->bindings()) {
+          if (ref->getDecl() == binding) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+  for (const clang::Stmt *child : stmt->children()) {
+    if (IsBindingMovedFrom(child, decomp)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Split `text` on TOP-LEVEL commas. ⛔ Depth is counted over `<>`, `()` AND `[]`
+// together: a same-depth-comma bug in exactly this kind of scan is the recorded
+// "swallow" class, and a Rust tuple element can be `Ptr<HashMap<K, V>>` or
+// `[i8; 4]`, both of which contain commas that are NOT separators.
+static std::vector<std::string> SplitTopLevelCommas(std::string_view text) {
+  std::vector<std::string> parts;
+  int depth = 0;
+  size_t start = 0;
+  for (size_t i = 0; i < text.size(); ++i) {
+    const char c = text[i];
+    if (c == '<' || c == '(' || c == '[') {
+      ++depth;
+    } else if (c == '>' || c == ')' || c == ']') {
+      --depth;
+    } else if (c == ',' && depth == 0) {
+      parts.emplace_back(text.substr(start, i - start));
+      start = i + 1;
+    }
+  }
+  parts.emplace_back(text.substr(start));
+  for (auto &part : parts) {
+    while (!part.empty() && part.front() == ' ') {
+      part.erase(part.begin());
+    }
+    while (!part.empty() && part.back() == ' ') {
+      part.pop_back();
+    }
+  }
+  return parts;
+}
+
+// A DECOMPOSING range-for over an indexable container, in THIS model.
+//
+// ⭐ THE SHAPE, and it is NOT the index-based one the base class emits. This
+// model's vector range-for is an ITERATOR loop whose variable is a
+// `Ptr<element>` (measured on a hand probe, refcount, `Ptr<Vec<(Value<Vec<i64>>,
+// Value<Vec<i64>>)>>`):
+//     'loop_: for mut e in v.decay() as Ptr<(Value<Vec<i64>>, Value<Vec<i64>>)>
+// so the element fields are reached as `(*e.upgrade().deref()).N`, and a
+// `.clone()` of such a field is an `Rc` CLONE THAT SHARES THE ELEMENT'S OWN
+// `RefCell`. That is what makes a MUTABLE `auto& [a, b]` binding sound here
+// without any pointer form: `a` and the pair's `.0` are two `Rc`s to ONE cell, so
+// `borrow_mut()` through either reaches the same storage and a write travels back
+// into the container exactly as the C++ requires.
+//
+// ⛔ AND THEREFORE NO `ptr_bindings_` REGISTRATION. A binding emitted here is a
+// `Value<T>`, not a pointer; registering it would make `VisitDeclRefExpr` spell
+// every use `(*a)`, which is a hard rustc error on a non-pointer.
+bool ConverterRefCount::VisitCXXForRangeStmtVectorDecomposition(
+    clang::CXXForRangeStmt *stmt, clang::DecompositionDecl *decomp) {
+  auto bindings = decomp->bindings();
+  auto *range_init = stmt->getRangeInit();
+  auto elem_type = decomp->getType().getNonReferenceType().getUnqualifiedType();
+
+  // ================= EVERY GATE IS BEFORE ANY EMISSION =================
+  // (1) The element spelling. `.0`/`.1` only mean the C++ elements for a type
+  // modelled as a Rust tuple, and only `std::pair` is established here; a
+  // member-wise struct would need field NAMES (E0609 otherwise) and has no
+  // measured witness under this model.
+  if (bindings.size() != 2 || GetClassName(elem_type) != "std::pair") {
+    ReportUnsupportedStructuredBinding(decomp);
+    return false;
+  }
+  // (2) BOTH tuple components must be `Value<..>` in this model -- that is the
+  // whole aliasing argument above. A component that is a bare value (a POD
+  // field, say) would be COPIED by `.clone()` and a write through the binding
+  // would be silently dropped; a component that is a raw pointer model
+  // (`Value<*const T>`) has the recorded `no method named upgrade` defect. The
+  // element text is taken from the very same `ConvertPtrType` the `as` cast
+  // below emits, so the check cannot drift from what is emitted.
+  const std::string ptr_type = ConvertPtrType(range_init->getType());
+  std::string elem_text;
+  if (ptr_type.starts_with("Ptr<") && ptr_type.ends_with(">")) {
+    elem_text = ptr_type.substr(4, ptr_type.size() - 5);
+  }
+  if (elem_text.size() < 2 || elem_text.front() != '(' ||
+      elem_text.back() != ')') {
+    ReportUnsupportedStructuredBinding(decomp);
+    return false;
+  }
+  const auto components = SplitTopLevelCommas(
+      std::string_view(elem_text).substr(1, elem_text.size() - 2));
+  if (components.size() != bindings.size()) {
+    ReportUnsupportedStructuredBinding(decomp);
+    return false;
+  }
+  for (const auto &component : components) {
+    if (!component.starts_with("Value<")) {
+      ReportUnsupportedStructuredBinding(decomp);
+      return false;
+    }
+  }
+  // (3) ⛔ THE BY-VALUE HOLDER IS REFUSED, and this gate is the whole reason the
+  // arm is not simply "lower every decomposing vector range-for". `for (auto
+  // [a, b] : v)` copies the element in C++, so a write through `a` must NOT reach
+  // the container -- but the ONLY spelling this model has for the element field is
+  // `.clone()` of a `Value<..>`, which is an `Rc` clone that SHARES the cell. The
+  // aliasing that makes the reference holder correct makes the by-value holder
+  // SILENTLY WRONG (a write travels back where C++ dropped it, at rc=0, with no
+  // placeholder token for any census to see). A deep copy would be the sound
+  // spelling and this model has no established one for an arbitrary element, so
+  // the sub-shape is refused LOUDLY -- which is also exactly the status quo, since
+  // the wholesale refusal refused it too.
+  if (!decomp->getType()->isReferenceType()) {
+    ReportUnsupportedStructuredBinding(decomp);
+    return false;
+  }
+  // (4) `std::move` out of a binding: see IsBindingMovedFrom.
+  if (IsBindingMovedFrom(stmt->getBody(), decomp)) {
+    ReportUnsupportedStructuredBinding(decomp);
+    return false;
+  }
+  // ====================== COMMITTED TO EMITTING ======================
+  // A DecompositionDecl has no name of its own, so the holder needs one.
+  // Source-location-derived so it cannot collide with a user local or with a
+  // second loop in the same scope.
+  // The raw encoding of the source location is a stable per-TU offset (no
+  // SourceManager needed here, and this file does not have a complete one), so
+  // the name is deterministic for a given TU and cannot collide with a user
+  // local or with a second loop in the same scope.
+  const std::string holder =
+      std::format("__elem_{}", decomp->getBeginLoc().getRawEncoding());
+
+  StrCat("'loop_:");
+  StrCat(keyword::kFor, "mut", holder, keyword::kIn,
+         ConvertObject(range_init, ObjectShape::Element));
+  StrCat(keyword::kAs, ptr_type);
+
+  PushBrace brace(*this);
+  const char *deref = GetPointerDerefSuffix(elem_type);
+  unsigned index = 0;
+  for (const auto *binding : bindings) {
+    const std::string binding_name = GetNamedDeclAsString(binding);
+    // ⛔ `let mut _ = ..` is not legal Rust (`_` is a wildcard PATTERN, not an
+    // identifier), and `_` is the conventional C++ spelling for an unused
+    // element, so `mut` is conditional on the name.
+    StrCat(keyword::kLet);
+    if (binding_name != "_") {
+      StrCat("mut");
+    }
+    StrCat(binding_name, token::kAssign,
+           std::format("(*{}{}).{}.clone()", holder, deref, index),
+           token::kSemiColon);
+    ++index;
+  }
+
+  ConvertForRangeBody(stmt);
+
+  return false;
+}
+
 bool ConverterRefCount::VisitCXXForRangeStmtVector(
     clang::CXXForRangeStmt *stmt) {
   auto *loop_var = stmt->getLoopVariable();
+
+  // ⛔ THE DISPATCH MUST PRECEDE `GetNamedDeclAsString`, not merely the emission:
+  // a DecompositionDecl is UNNAMED, and that helper is fatal ("Unexpected unnamed
+  // construct") on it -- measured, as an abort on the very probe this arm exists
+  // for. It has no name of its own and needs the element fields bound one by one;
+  // everything below assumes a named loop variable.
+  if (auto *decomp = llvm::dyn_cast<clang::DecompositionDecl>(loop_var)) {
+    return VisitCXXForRangeStmtVectorDecomposition(stmt, decomp);
+  }
+
   auto loop_var_name = GetNamedDeclAsString(loop_var);
 
   StrCat("'loop_:");

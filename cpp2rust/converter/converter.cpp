@@ -3723,13 +3723,26 @@ bool Converter::IsHoistFreeDecompositionRange(clang::CXXForRangeStmt *stmt) {
   if (class_name != "std::vector") {
     return false;
   }
-  // Refcount is refused wholesale: that model wraps every local in
-  // `Rc<RefCell<..>>`, so `&raw mut (*holder).0` is unreachable without
-  // duplicating its access-mode expansion. `keyword_unsafe_` is the only model
-  // discriminator the base class has.
-  if (keyword_unsafe_ == nullptr || *keyword_unsafe_ == '\0') {
-    return false;
-  }
+  // ⭐ THE REFCOUNT WHOLESALE REFUSAL IS GONE, and the comment it carried was
+  // wrong about WHY. It said `&raw mut (*holder).0` is unreachable in that model
+  // -- true, but irrelevant, because THE REFCOUNT MODEL NEVER TAKES THE
+  // INDEX-BASED PATH AT ALL. `ConverterRefCount::VisitCXXForRangeStmtVector`
+  // (converter_refcount.cpp) lowers a vector range-for as an ITERATOR loop over
+  // `Ptr<element>` (`for mut e in v.decay() as Ptr<(Value<A>, Value<B>)>`,
+  // measured on a hand probe), so there is no `as_mut_ptr().add(i)` and no
+  // `&raw` spelling to reproduce: the element is reached as
+  // `(*e.upgrade().deref()).N`, and `.clone()` of that field is an `Rc` clone
+  // that SHARES the element's `RefCell` -- exactly the aliasing a mutable
+  // `auto& [a, b]` binding needs. Refusing here also refused the BY-VALUE
+  // decomposing loop, which that model could always have lowered.
+  //
+  // ⛔ The refcount arm still refuses several sub-shapes, but it does so in its
+  // OWN override, where the element model is visible -- and it refuses there
+  // BEFORE any emission, via ReportUnsupportedStructuredBinding, so a refusal
+  // still leaves no partial text. The two re-evaluation preconditions above are
+  // deliberately left in place for that model even though its header emits the
+  // range init exactly once: they are satisfied by every measured corpus site,
+  // so keeping them costs nothing and keeps one gate rather than two.
   return true;
 }
 
