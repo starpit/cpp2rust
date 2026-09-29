@@ -263,7 +263,24 @@ void LoadIrSrc(ExprRules &exprs, TypeRules &types,
         it->second.init_type = InitTypeLocation{
             (unsigned)*init_type->getInteger("depth"),
             (unsigned)*init_type->getInteger("index"),
+            {},
         };
+        // Absent for an ir_src.json written before nested init types existed;
+        // an absent path is the empty path, i.e. the old meaning exactly.
+        if (auto *path = init_type->getArray("path")) {
+          for (const auto &step : *path) {
+            auto n = step.getAsInteger();
+            if (!n) {
+              llvm::report_fatal_error(
+                  llvm::Twine("cpp2rust: rule module '") +
+                      ModuleOf(json_path) + "': expr key '" + name +
+                      "' has a non-integer step in its init_type path -- "
+                      "re-run cpp-rule-preprocessor for this module",
+                  /*gen_crash_diag=*/false);
+            }
+            it->second.init_type.path.push_back((unsigned)*n);
+          }
+        }
         continue;
       }
       it->second.src = val->str();
@@ -359,7 +376,11 @@ void ExprRule::dump() const {
   log() << "Matching: " << src << '\n';
   if (init_type.valid()) {
     log() << "  init type: depth " << init_type.depth << ", index "
-          << init_type.index << '\n';
+          << init_type.index;
+    for (unsigned step : init_type.path) {
+      log() << ", nested arg " << step;
+    }
+    log() << '\n';
   }
   unsigned i = 0;
   for (auto &info : params) {

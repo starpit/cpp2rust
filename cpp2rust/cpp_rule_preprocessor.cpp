@@ -253,13 +253,19 @@ private:
       return;
     }
 
-    auto [depth, index] = findTemplateArgument(callee, init_type);
-    out_.try_emplace(func->getQualifiedNameAsString(),
-                     llvm::json::Object{
-                         {"key", std::move(key)},
-                         {"init_type", llvm::json::Object{{"depth", depth},
-                                                          {"index", index}}},
-                     });
+    auto loc = findTemplateArgument(callee, init_type);
+    llvm::json::Array path;
+    for (unsigned step : loc.path) {
+      path.push_back((int64_t)step);
+    }
+    out_.try_emplace(
+        func->getQualifiedNameAsString(),
+        llvm::json::Object{
+            {"key", std::move(key)},
+            {"init_type", llvm::json::Object{{"depth", loc.depth},
+                                             {"index", loc.index},
+                                             {"path", std::move(path)}}},
+        });
   }
 
   clang::QualType getInitType(const clang::FunctionDecl *func,
@@ -282,24 +288,104 @@ private:
                         rule->getTemplateSpecializationArgs()->asArray());
   }
 
-  std::pair<unsigned, unsigned>
-  findTemplateArgument(const clang::FunctionDecl *callee,
-                       clang::QualType type) {
+  // Where an `Init<T, Args>` pack's `T` lives, relative to the CALLEE's own
+  // template-argument list.  `path` is a descent into the NESTED template
+  // arguments of the argument named by (depth, index): empty means "the
+  // argument itself", `{0}` means "template argument 0 of that argument", and
+  // so on.  See the class comment on the nested search below for why the
+  // nesting is needed at all.
+  struct InitTypeLoc {
+    unsigned depth = 0;
+    unsigned index = 0;
+    llvm::SmallVector<unsigned, 2> path;
+  };
+
+  // The whole point of this encoding is that the CALL SITE, not the rule, knows
+  // the concrete init type: at translate time the converter re-reads the
+  // callee's instantiation arguments and replays (depth, index, path).  So the
+  // encoding may only name things that are recoverable from those arguments.
+  //
+  // ⭐ A TOP-LEVEL (depth, index) ALONE IS TOO WEAK, and `unordered_map` is the
+  // case that proves it.  `unordered_map<K, V>::emplace` constructs a
+  // `pair<const K, V>`, and that type is NOT one of the container's template
+  // arguments -- those are K, V, hash<K>, equal_to<K> and
+  // allocator<pair<const K, V>>.  It IS, however, template argument 0 of the
+  // ALLOCATOR, so `{depth, index=4, path={0}}` names it exactly.  Hence the
+  // nested descent.  ⛔ DELIBERATELY NOT GENERALISED: this searches only
+  // argument types reachable by repeatedly taking a class template
+  // specialization's own template arguments.  A `T` that is *computed* rather
+  // than *contained* (`typename A::value_type` where A is not a specialization,
+  // a type built by a metafunction, a pointer/array/function type wrapping a
+  // parameter) is still unrepresentable, and MUST fail loudly below rather than
+  // be approximated -- a wrong init type is a silent mis-construction at every
+  // arrival site.
+  InitTypeLoc findTemplateArgument(const clang::FunctionDecl *callee,
+                                   clang::QualType type) {
     auto args = sema_->getTemplateInstantiationArgs(callee);
+    // Two passes, so that a type which IS a top-level argument keeps exactly
+    // the (depth, index) it had before this nesting existed -- every already
+    // recorded module must re-record byte-identically.
     for (unsigned depth = 0; depth < args.getNumLevels(); ++depth) {
       for (unsigned index = 0; index < args.getNumSubsitutedArgs(depth);
            ++index) {
         const auto &arg = args(depth, index);
         if (arg.getKind() == clang::TemplateArgument::Type &&
             sema_->Context.hasSameType(arg.getAsType(), type)) {
-          return {depth, index};
+          return {depth, index, {}};
         }
       }
     }
-    llvm::errs() << "ERROR: Init type " << Mapper::ToString(type)
-                 << " is not a template argument of "
-                 << Mapper::ToString(callee) << '\n';
-    std::exit(EXIT_FAILURE);
+    for (unsigned depth = 0; depth < args.getNumLevels(); ++depth) {
+      for (unsigned index = 0; index < args.getNumSubsitutedArgs(depth);
+           ++index) {
+        const auto &arg = args(depth, index);
+        if (arg.getKind() != clang::TemplateArgument::Type) {
+          continue;
+        }
+        llvm::SmallVector<unsigned, 2> path;
+        if (findNestedTemplateArgument(arg.getAsType(), type, path)) {
+          return {depth, index, std::move(path)};
+        }
+      }
+    }
+    fail(llvm::Twine("cpp-rule-preprocessor: Init type '") +
+         Mapper::ToString(type) +
+         "' is neither a template argument of '" + Mapper::ToString(callee) +
+         "' nor a nested template argument of one of them, so it cannot be "
+         "recovered at the call site.  Spell the Init<> type as a type that is "
+         "reachable from the callee's template arguments, or key this call "
+         "without an Init<> pack.");
+  }
+
+  // Depth-first search for `want` among `in`'s nested template arguments,
+  // recording the index path taken.  `kMaxDepth` is a guard, not a policy: the
+  // libc++ types involved nest two or three deep, and an unbounded walk over a
+  // recursively-defined specialization would not terminate.
+  bool findNestedTemplateArgument(clang::QualType in, clang::QualType want,
+                                  llvm::SmallVectorImpl<unsigned> &path) {
+    static constexpr unsigned kMaxDepth = 4;
+    if (path.size() >= kMaxDepth) {
+      return false;
+    }
+    const auto *spec =
+        llvm::dyn_cast_or_null<clang::ClassTemplateSpecializationDecl>(
+            in->getAsCXXRecordDecl());
+    if (!spec) {
+      return false;
+    }
+    auto nested = spec->getTemplateArgs().asArray();
+    for (unsigned i = 0; i < nested.size(); ++i) {
+      if (nested[i].getKind() != clang::TemplateArgument::Type) {
+        continue;
+      }
+      path.push_back(i);
+      if (sema_->Context.hasSameType(nested[i].getAsType(), want) ||
+          findNestedTemplateArgument(nested[i].getAsType(), want, path)) {
+        return true;
+      }
+      path.pop_back();
+    }
+    return false;
   }
 
   void forceCompleteDefinition(clang::QualType type) {
