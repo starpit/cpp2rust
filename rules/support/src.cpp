@@ -388,3 +388,191 @@ bool f24(llvm::ParseResult a0) { return a0.operator bool(); }
 // Every other member is REFUSED -- see the class comment for each reason.
 
 llvm::SMLoc f25() { return llvm::SMLoc(); }
+
+// --- llvm::cast / dyn_cast / dyn_cast_or_null / isa -- REFUSED, AND WHY -----
+//
+// llvm/Support/Casting.h.  This four-function family is the LARGEST
+// undefined-name row in the project.  A census of called-but-undefined
+// `name_<N>` functions over 312 emitted .rs measured
+//     cast              54,082 sites / 212 TUs / 781 distinct _N variants
+//     dyn_cast_or_null  39,866 / 205 / 603
+//     dyn_cast           2,773 / 185 / 607
+//     isa                1,428 / 170 / 432
+// ~98,000 sites, and because an undefined NAME stops rustc at NAME RESOLUTION,
+// every type and borrow error behind one is unobservable -- which is why no
+// whole-TU rustc run has ever been possible.
+//
+// NO KEY IS WRITTEN HERE.  The reason is a cpp-rule-preprocessor limitation,
+// not a key-spelling problem, and it is recorded here so the next slot does not
+// re-derive it.  Everything below is measured, 2026-09-29.
+//
+// ============================================================================
+// 1. THE KEY SPELLINGS, READ OFF `-verbose` `search expr` LINES WITH grep -A1
+// ============================================================================
+//     mlir::StringAttr  llvm::cast(const mlir::StringAttr &)        result: None
+//     mlir::IntegerAttr llvm::cast(mlir::Attribute &)               result: None
+//     mlir::VectorType  llvm::dyn_cast(const mlir::VectorType &)    result: None
+//     mlir::scf::ForOp  llvm::dyn_cast(mlir::Operation *)           result: None
+//     mlir::StringAttr  llvm::dyn_cast_or_null(const mlir::StringAttr &)
+//     bool              llvm::isa(mlir::Operation *const &)         result: None
+//     bool              llvm::isa(const mlir::Attribute &)          result: None
+//
+// ⭐ FOR THE THREE CAST FUNCTIONS THE TARGET TYPE `To` IS IN THE RETURN
+// POSITION, exactly as for rules/tuple's `std::get` (f10/f11): the explicit
+// template argument does not reach the key, but the deduced return type does.
+// So `cast<A>(x)` and `cast<B>(x)` record DIFFERENT keys and ARE separable.
+//
+// ⛔ `isa` IS NOT SEPARABLE, AND THAT IS A HARD MEASURED FACT.  `isa<To>(x)`
+// returns `bool`, so `To` appears NOWHERE in its key.  All 1,428 sites across
+// 170 TUs collapse onto just TWO key strings -- one for the Operation hierarchy
+// and one for the Attribute hierarchy -- so a single body would have to answer
+// `isa<ForOp>(op)` and `isa<WhileOp>(op)` identically.  That is silent
+// wrongness, so the loud (if invisible) miss is kept deliberately.  ⭐ Closing
+// `isa` requires a CONVERTER change that puts the explicit template argument
+// list into the recorded key.  It cannot be closed by any rule.
+//
+// ============================================================================
+// 2. THE SLICE THAT WOULD HAVE BEEN SAFE: `To == From`
+// ============================================================================
+// The same `-verbose` census shows the IDENTITY shape is DOMINANT -- it is the
+// top entry of every log examined:
+//     48  mlir::StringAttr llvm::dyn_cast_or_null(const mlir::StringAttr &)
+//     32  mlir::StringAttr llvm::cast(const mlir::StringAttr &)
+//     24  mlir::{IntegerAttr,DictionaryAttr,AffineMapAttr,IntegerSetAttr,
+//             ArrayAttr} llvm::cast(const <the same type> &)
+//     ... plus mlir::Value, mlir::Attribute, mlir::VectorType,
+//         mlir::detail::DenseArrayAttrImpl<int64_t>
+// These come from tablegen'd accessors and from `cast<T>` applied to something
+// already statically a `T`.
+//
+// ⭐ AND IT IS THE ONE SLICE WITH NO SEMANTIC GAP AT ALL, so `return a0;` would
+// be the WHOLE function rather than an approximation of a downcast:
+//   * `cast<T>(x : T)` asserts `isa<T>(x)`, a TAUTOLOGY when To == From, then
+//     returns x.
+//   * `dyn_cast<T>(x : T)` returns x when `isa<T>(x)` and the empty value
+//     otherwise.  `isa<T>(x : T)` holds, so THE FAILURE BRANCH IS UNREACHABLE
+//     -- there is no failure path to preserve, because such a key cannot match
+//     a cast that is able to fail.
+//   * `dyn_cast_or_null<T>(x : T)` is x when x is non-null and the empty value
+//     when x is null -- and when To == From THE EMPTY VALUE IS x.  Exact on
+//     BOTH paths.
+// A body that panicked, or that produced anything other than a0, would be the
+// wrong one.  Both models agree: a `const T1 &` parameter lowers to `&T1` and a
+// by-value `T1` return stays `T1` (cf. rules/functional f4), so tgt_unsafe.rs
+// and tgt_refcount.rs would be byte-identical.
+//
+// ⭐ AND THE GENERIC SPELLING `T1 llvm::cast(const T1 &)` IS SWALLOW-SAFE.  Two
+// mechanisms in matchTemplate (mapper.cpp:547) make it exact:
+//   1. THE REPEATED PLACEHOLDER IS CHECKED LITERALLY -- mapper.cpp:711-717.  On
+//      the SECOND occurrence of T1 `repl.has_value()` is true, so the code takes
+//      the `matchLiteralAt(instantiated, si, *repl)` branch and returns nullopt
+//      on mismatch.  `mlir::IntegerAttr llvm::cast(mlir::Attribute &)` therefore
+//      captures T1 = `mlir::IntegerAttr` at the return position and then FAILS
+//      against `mlir::Attribute`.  ⛔ A NON-IDENTITY CAST CANNOT REACH THE KEY,
+//      so the over-match that rules/tuple f10 tolerates cannot happen here.
+//   2. THE FIRST CAPTURE IS ANCHORED ON A UNIQUE LITERAL -- T1's `nextLit` is
+//      the whole run ` llvm::cast(const `, and findNextLiteralSameDepth stops at
+//      its first base-depth occurrence.  That substring occurs exactly once in
+//      any instantiated signature, so the capture is the return type and cannot
+//      swallow into the parameter list.
+// Angle depth is safe too: every observed `To` is balanced (including
+// `mlir::detail::TypedValue<mlir::IndexType>`), and there is no
+// `operator<`/`operator>=` token anywhere in the spelling, so the
+// MaskOperatorNameBrackets desync class cannot reach it either.
+//
+// ============================================================================
+// 3. ⛔ WHY IT STILL CANNOT BE WRITTEN: cpp_rule_preprocessor.cpp:680-693
+// ============================================================================
+// `regularNameLookup` resolves the callee of a DEPENDENT call inside a rule
+// TEMPLATE by looking the bare DeclarationName up in EXACTLY TWO scopes:
+//     if (clang::NamespaceDecl *std_ns = sema_->getStdNamespace())
+//       sema_->LookupQualifiedName(decls, std_ns);
+//     if (decls.empty())
+//       sema_->LookupQualifiedName(decls, sema_->Context.getTranslationUnitDecl());
+// namespace `std`, then the GLOBAL namespace.  `LookupQualifiedName` on the TU
+// decl does NOT descend into nested namespaces, and the nested-name-specifier
+// actually written in the rule body is discarded.  ⛔ SO `namespace llvm` IS
+// NEVER SEARCHED, and every `llvm::` FUNCTION TEMPLATE is unreachable from a
+// rule template.  The failure is `No viable function` followed by a SEGFAULT on
+// the `assert(0 && "Rule resolution failed")` path at :887 -- and note that
+// regen-rule.sh core-dumps there with EXIT 0, so a caller that does not check
+// for the `OK <module> -> <dir>` line reads it as success.
+//
+// MEASURED MATRIX (each row a separate cpp-rule-preprocessor run):
+//   OK    #include <algorithm>; const T1 &f(const T1 &,const T1 &){return std::max(...);}
+//                                            -> const T1 & std::max(const T1 &, const T1 &)
+//   OK    #include <utility>;   void f(T1 &,T1 &){return std::swap(...);}
+//   OK    global-namespace template: T1 f(const T1 &a0){return gident<T1>(a0);}
+//                                            -> T1 gident(const T1 &)
+//   OK    NON-template rule, llvm:: template callee:
+//         int f(const int &a0){return llvm::cast<int>(a0);}
+//                                            -> int llvm::cast(const int &)
+//   FAIL  template rule, restated `namespace llvm` template, qualified call
+//   FAIL  ... with <T1, T1> instead of <T1>
+//   FAIL  ... with ::llvm::cast
+//   FAIL  ... with a single-parameter `template <typename To> To cast(const To &)`
+//   FAIL  ... with `using llvm::cast;` + unqualified call
+//   FAIL  ... with `using llvm::cast;` + ::cast
+//   FAIL  ... with an `inline namespace` inside llvm
+//   FAIL  ... with the declaration moved into a local header
+//   FAIL  ... with that header reached through -isystem (a SYSTEM header)
+//   FAIL  ... with the REAL #include <llvm/Support/Casting.h>
+// ⭐ The boundary is exactly "dependent call inside a rule TEMPLATE": a
+// NON-template rule resolves `llvm::cast` fine, because clang resolves its
+// non-dependent call at parse time and this lookup machinery never runs.  That
+// is also why f5 (`llvm::success`) and f22 (`llvm::llvm_unreachable_internal`)
+// above work -- both are non-template rules.
+//
+// ⛔ AND NO KEY SPELLING ESCAPES IT.  Moving `cast` to the global namespace
+// makes it resolve but records `T1 cast(const T1 &)`, which does not match the
+// corpus key; putting it in `std` records `T1 std::cast(const T1 &)`.  The key
+// string follows the RESOLVED DECL's qualified name, so the namespace the
+// preprocessor must search is the namespace the key must name.
+//
+// ⭐ THE CONVERTER ASK, one function, and it unblocks ~96,600 of the ~98,000
+// sites at once (everything except `isa`):
+//   FILE      cpp2rust/cpp_rule_preprocessor.cpp
+//   FUNCTION  regularNameLookup, :680
+//   CHANGE    thread the call's nested-name-specifier (the CXXScopeSpec /
+//             NestedNameSpecifierLoc already present on the dependent
+//             DeclRefExpr that lookupCallee is re-resolving) into a
+//             sema_->LookupQualifiedName(decls, <that namespace>) BEFORE the
+//             std/TU fallbacks, so a qualified dependent call resolves in the
+//             namespace it names.
+//   TEST      a scratch module whose src.cpp is
+//               namespace llvm { template <typename To, typename From>
+//                                To cast(const From &Val); }
+//               template <typename T1> T1 f1(const T1 &a0) {
+//                 return llvm::cast<T1>(a0); }
+//             must record `T1 llvm::cast(const T1 &)` instead of printing
+//             `No viable function` and core-dumping.
+//   SECOND, INDEPENDENT FIX: :887 `assert(0 && "Rule resolution failed")` should
+//             be a diagnostic + nonzero exit.  It currently core-dumps while
+//             regen-rule.sh returns 0.
+//
+// ============================================================================
+// 4. THE TWO NON-IDENTITY CLASSES, REFUSED FOR THEIR OWN REASONS
+// ============================================================================
+//   * `mlir::IntegerAttr llvm::cast(mlir::Attribute &)` and friends are real
+//     DOWNCASTS in an MLIR type hierarchy.  A generic `T1 llvm::cast(const T2 &)`
+//     binds T1/T2 independently and its body would have to manufacture a T1 from
+//     a T2; there is no cast-free, transmute-free projection that does that.  For
+//     `dyn_cast`/`dyn_cast_or_null` the body would ALSO have to be able to FAIL,
+//     and a checked downcast collapsed to an unchecked one is wrong in a way no
+//     compile and no probe would show.
+//   * `mlir::scf::ForOp llvm::dyn_cast(mlir::Operation *)` HAS `To` in the return
+//     position, and `OpInst::is_a::<T>()` (dataflowir-gen src/isa.rs) is exactly
+//     the right discriminator -- but the VALUE the `true` branch must yield is a
+//     ported op-wrapper struct with no Rust model.  The generated `MlirOp`
+//     markers are ZERO-SIZED marker types, usable only as the type argument of
+//     `is_a`, never as a returned op value.  Refused until the op wrappers have
+//     a model.
+//
+// ⭐ ALSO NOT KEYED, once the preprocessor is fixed: the NON-CONST lvalue
+// overload `T1 llvm::cast(T1 &)` (~1/3 of identity sites).  A non-const `T1 &`
+// parameter lowers to `&mut T1` in the unsafe model but to `Ptr<T1>` in refcount
+// (rules/algorithm f9), and reading a value back out of a `Ptr<T1>` needs a
+// `ByteRepr` bound the MLIR handle types are not known to satisfy -- that would
+// trade this row's E0425 for an E0277 at every site.  Start with the const
+// overload, which carries the majority of the mass and is identical in both
+// models.
