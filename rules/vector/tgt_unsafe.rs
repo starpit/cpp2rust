@@ -173,7 +173,7 @@ unsafe fn f36<T1>(a0: Vec<T1>) -> Vec<T1> {
 unsafe fn f37<T1: TryFrom<T2>, T2: Clone>(a0: *mut T2, a1: *mut T2) -> Vec<T1> {
     core::slice::from_raw_parts(a0, (a1).offset_from(a0) as usize)
         .iter()
-        .map(|x| T1::try_from(x.clone()).ok().unwrap())
+        .map(|x| <T1>::try_from(x.clone()).ok().unwrap())
         .collect()
 }
 
@@ -408,7 +408,7 @@ unsafe fn f91<T1>(a0: Vec<T1>) -> Vec<T1> {
 unsafe fn f92<T1: TryFrom<T2>, T2: Clone>(a0: *mut T2, a1: *mut T2) -> Vec<T1> {
     core::slice::from_raw_parts(a0, (a1).offset_from(a0) as usize)
         .iter()
-        .map(|x| T1::try_from(x.clone()).ok().unwrap())
+        .map(|x| <T1>::try_from(x.clone()).ok().unwrap())
         .collect()
 }
 

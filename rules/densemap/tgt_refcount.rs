@@ -84,11 +84,11 @@ fn f5<T1>() -> () {
 // Rc<std::cell::RefCell<T>>` (libcc2rs/src/rc.rs:16), so the constructor is spelled exactly
 // as rules/pair spells it: `Rc::new(std::cell::RefCell::new(..))`, never `Value::new(v)`.
 fn t7<T1: Default, T2: Default>() -> (T1, Value<T2>) {
-    (T1::default(), Rc::new(std::cell::RefCell::new(T2::default())))
+    (<T1>::default(), Rc::new(std::cell::RefCell::new(<T2>::default())))
 }
 
 fn f6<T1: Default, T2: Default>() -> (T1, Value<T2>) {
-    (T1::default(), Rc::new(std::cell::RefCell::new(T2::default())))
+    (<T1>::default(), Rc::new(std::cell::RefCell::new(<T2>::default())))
 }
 
 // f7-f10 -- begin()/end().  rules/unordered_map's committed f22/f23/f25/f26

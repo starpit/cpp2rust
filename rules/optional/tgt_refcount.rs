@@ -39,7 +39,7 @@ fn f3<T1>(a0: ()) -> Option<Value<T1>> {
 
 fn f4<T1: Clone>(a0: &Option<Value<T1>>) -> Option<Value<T1>> {
     a0.as_ref().map(|v| {
-        Rc::new(RefCell::new(T1::clone(&*v.borrow())))
+        Rc::new(RefCell::new(<T1>::clone(&*v.borrow())))
     })
 }
 
@@ -58,7 +58,7 @@ fn f7<T1: ByteRepr>(a0: Ptr<Option<Value<T1>>>, a1: T1) {
 fn f8<T1: Clone + ByteRepr>(a0: Ptr<Option<Value<T1>>>, a1: &Option<Value<T1>>) {
     a0.write(
         a1.as_ref().map(|v| {
-            Rc::new(RefCell::new(T1::clone(&*v.borrow())))
+            Rc::new(RefCell::new(<T1>::clone(&*v.borrow())))
         }),
     )
 }
@@ -89,7 +89,7 @@ fn f14<T1>(a0: &Option<Value<T1>>) -> Ptr<T1> {
 
 fn f15<T1: Clone + ByteRepr>(a0: &Option<Value<T1>>, a1: Ptr<T1>) -> T1 {
     match a0.as_ref() {
-        Some(v) => T1::clone(&*v.borrow()),
+        Some(v) => <T1>::clone(&*v.borrow()),
         None => a1.read(),
     }
 }
@@ -169,7 +169,7 @@ fn f32() -> () {
 // present value is read out of the shared cell by CLONE, never moved.
 fn f33<T1: Clone + ByteRepr>(a0: &Option<Value<T1>>, a1: T1) -> T1 {
     match a0.as_ref() {
-        Some(v) => T1::clone(&*v.borrow()),
+        Some(v) => <T1>::clone(&*v.borrow()),
         None => a1,
     }
 }
@@ -178,7 +178,7 @@ fn f33<T1: Clone + ByteRepr>(a0: &Option<Value<T1>>, a1: T1) -> T1 {
 // model also expands to `Ptr<T1>`.
 fn f34<T1: Clone + ByteRepr>(a0: &Option<Value<T1>>, a1: Ptr<T1>) -> T1 {
     match a0.as_ref() {
-        Some(v) => T1::clone(&*v.borrow()),
+        Some(v) => <T1>::clone(&*v.borrow()),
         None => a1.read(),
     }
 }
