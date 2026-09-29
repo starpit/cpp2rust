@@ -241,31 +241,51 @@ fn t5<T1: Eq + Hash + Clone + 'static>() -> RefcountHashSetIter<T1> {
     RefcountHashSetIter::null()
 }
 
+// ⛔⛔ g3099 -- THE RETURN IS `(Value<Iter>, Value<bool>)`, NOT `(Iter, bool)`:
+// the residual this module's own f57 note (point 4) named, closed here.
+// `src.cpp`'s f41/f42 return `std::pair<std::unordered_set<T1>::iterator, bool>`
+// and `std::pair` is modelled by **rules/pair**, whose `t1` is `(T1, T2)` under
+// unsafe but `(Value<T1>, Value<T2>)` under refcount, while its `::second`
+// (pair/f1) is `a0.1` in BOTH -- so under refcount the converter emits a
+// `.borrow()` on `.1` and a plain `bool` gives
+//   error[E0599]: no method named `borrow` found for type `bool`
+// in the EMITTED code while the rule itself compiles.  Landed precedent:
+// `rules/smallptrset/tgt_refcount.rs` f1 and f57 below (commit e17a894c).
+// ⭐⭐ REDISCOVERED THREE TIMES -- a call site that DISCARDS the pair reports a
+// CLEAN PASS, so an error count of 0 on this key is not evidence of health.
+// ⛔ The UNSAFE arm's plain `(Iter, bool)` is CORRECT and must stay.
 fn f41<T1: Eq + Hash + Clone + 'static>(
     a0: Ptr<HashSet<T1>>,
     a1: T1,
-) -> (RefcountHashSetIter<T1>, bool) {
+) -> (Value<RefcountHashSetIter<T1>>, Value<bool>) {
     {
         let __p = a0;
         let __k = a1;
         let __inserted = Ptr::with_mut(&__p, |__s: &mut HashSet<T1>| {
             HashSet::insert(__s, __k.clone())
         });
-        (RefcountHashSetIter::find_key(__p, &__k), __inserted)
+        (
+            Rc::new(RefCell::new(RefcountHashSetIter::find_key(__p, &__k))),
+            Rc::new(RefCell::new(__inserted)),
+        )
     }
 }
 
+// g3099 -- same fix as f41; see the note there.
 fn f42<T1: Eq + Hash + Clone + 'static>(
     a0: Ptr<HashSet<T1>>,
     a1: T1,
-) -> (RefcountHashSetIter<T1>, bool) {
+) -> (Value<RefcountHashSetIter<T1>>, Value<bool>) {
     {
         let __p = a0;
         let __k = a1;
         let __inserted = Ptr::with_mut(&__p, |__s: &mut HashSet<T1>| {
             HashSet::insert(__s, __k.clone())
         });
-        (RefcountHashSetIter::find_key(__p, &__k), __inserted)
+        (
+            Rc::new(RefCell::new(RefcountHashSetIter::find_key(__p, &__k))),
+            Rc::new(RefCell::new(__inserted)),
+        )
     }
 }
 

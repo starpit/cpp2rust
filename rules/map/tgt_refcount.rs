@@ -352,10 +352,29 @@ fn f42<T1, T2>(a0: &mut Vec<(T1, Value<T2>)>) {
 // call site constructed, so forwarding it shares that cell (correct for
 // `emplace`, which takes ownership of the argument) where a fresh cell would
 // silently detach any alias the call site still holds.
+// ⛔⛔ g3099 -- AND THE RETURN IS `(Value<Iter>, Value<bool>)`, NOT `(Iter, bool)`.
+// `src.cpp`'s f43 returns `std::pair<std::map<T1,T2>::iterator, bool>`, and
+// `std::pair` is modelled by **rules/pair**, whose `t1` is `(T1, T2)` under
+// unsafe but `(Value<T1>, Value<T2>)` under refcount, while its `::second`
+// (pair/f1) is `a0.1` in BOTH.  So under refcount the converter emits a
+// `.borrow()` on `.1`, and a plain `bool` in that slot compiles as a RULE and
+// fails in the EMITTED code with
+//   error[E0599]: no method named `borrow` found for type `bool`
+// Landed precedent, both measured: `rules/smallptrset/tgt_refcount.rs` f1
+// (`(Value<*const T1>, Value<bool>)`) and `rules/unordered_map` f57 (commit
+// e17a894c, 2 sites on sys-arch-spec/isa/isa.cpp, 2 E0599 -> 0, 0 new errors).
+// ⭐⭐ THIS CLASS HAS NOW BEEN REDISCOVERED THREE TIMES; THIS NOTE IS SO THAT IS
+// THE LAST TIME.  It hides because a call site that DISCARDS the returned pair
+// reports a CLEAN PASS -- 14 of 23 corpus sites in the smallptrset note discard
+// it -- so "I measured 0 errors on this key" is NOT evidence the shape is fine.
+// TREAT THE SHAPE AS THE DEFECT AND THE ERROR COUNT AS A BONUS.
+// Both elements are boxed because rules/pair boxes both uniformly; do not box
+// only `.1`.  ⛔ The UNSAFE arm's plain `(Iter, bool)` is CORRECT -- rules/pair's
+// unsafe `t1` is a plain tuple and `.1` is not followed by `.borrow()`.
 fn f43<T1: Ord + Clone + 'static, T2: 'static>(
     a0: Ptr<BTreeMap<T1, Value<T2>>>,
     init: (Value<T1>, Value<T2>),
-) -> (RefcountMapIter<T1, T2>, bool) {
+) -> (Value<RefcountMapIter<T1, T2>>, Value<bool>) {
     {
         let __p = a0;
         // ANNOTATED, exactly as this module's f38 already documents: the call
@@ -375,7 +394,10 @@ fn f43<T1: Ord + Clone + 'static, T2: 'static>(
                 __m.insert(__k.clone(), __v);
             });
         }
-        (RefcountMapIter::find_key(__p, &__k), __inserted)
+        (
+            Rc::new(RefCell::new(RefcountMapIter::find_key(__p, &__k))),
+            Rc::new(RefCell::new(__inserted)),
+        )
     }
 }
 
