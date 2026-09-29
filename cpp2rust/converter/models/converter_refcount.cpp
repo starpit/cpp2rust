@@ -2035,8 +2035,37 @@ bool ConverterRefCount::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
   auto loop_var_name = GetNamedDeclAsString(loop_var);
 
   StrCat("'loop_:");
+  // ⭐ ConvertFreshObject, NOT ConvertObject. `RefcountMapIter<K, V>` is
+  // `MapIter<K, Ptr<BTreeMap<K, Value<V>>>>` and `MapIter::begin` takes its
+  // `MapRef` BY VALUE (libcc2rs/src/iterators.rs:75); `Ptr<T>` is `Clone` but
+  // deliberately NOT `Copy` (rc.rs:180 -- there is no `impl Copy for Ptr`), so
+  // handing it a PLACE moves it.
+  //
+  // MEASURED 2026-09-29 on snap/coord44/cpp2rust (md5 a1bc9015..) with
+  // pin/ir.v41, -model=refcount: two range-`for`s over one `std::map &`
+  // parameter both emitted `RefcountMapIter::begin(m)` at rc=0, and rustc gave
+  //   error[E0382]: use of moved value: `m`
+  //   move occurs because `m` has type `libcc2rs::Ptr<BTreeMap<i32,
+  //   Rc<RefCell<i32>>>>`, which does not implement the `Copy` trait
+  // -- a SILENT translation failure, visible only at rustc.
+  //
+  // ConvertFreshObject is the existing helper for exactly this (:351): it is
+  // `ConvertObject(expr, ObjectShape::Whole)` plus `.clone()` when the result is
+  // NOT already fresh, so a LOCAL map -- which converts to the fresh temporary
+  // `one.as_pointer()` -- is emitted unchanged and only a place gains the clone.
+  // Reusing it rather than writing a second freshness test is what keeps this
+  // arm from drifting from the rest of the model.
+  //
+  // ⚠️ ALIASING IS UNCHANGED, which is why this is the call-site fix and not a
+  // `begin(&MapRef)` signature change. `Ptr::clone` copies `offset` and clones
+  // `kind` (a `Weak`, rc.rs:180) -- it clones the HANDLE, never the map -- so
+  // both loops observe the same storage and a write through `second()` still
+  // reaches it. NO C++ program changes meaning. Making `begin` BORROW instead
+  // would (a) break every unsafe-model call site, which passes a `*const Map`
+  // rvalue, and (b) turn an in-loop mutation of the map into a borrow-checker
+  // error rather than leaving it expressible through `Ptr::with_mut`.
   StrCat(keyword::kFor, loop_var_name, keyword::kIn, "RefcountMapIter::begin(",
-         ConvertObject(stmt->getRangeInit()), ')');
+         ConvertFreshObject(stmt->getRangeInit()), ')');
   PushBrace brace(*this);
 
   EmitByValueShadow(
