@@ -20,7 +20,7 @@ fn t1<T1>() -> Vec<T1> {
     Vec::new()
 }
 
-fn t2<T1, T2>() -> *const T1 {
+fn t2<T1>() -> *const T1 {
     std::ptr::null()
 }
 

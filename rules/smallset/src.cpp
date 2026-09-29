@@ -188,8 +188,44 @@ template <typename T1> using t1 = llvm::SmallSet<T1, 4>;
 
 // t2 is the insert-return iterator.  Written 3-ary because SmallSetIterator
 // defaults nothing.
-template <typename T1, typename T2>
-using t2 = llvm::SmallSetIterator<T1, 4, T2>;
+//
+// ⛔⛔ THE COMPARATOR IS PINNED TO `std::less<T1>`, NOT LEFT AS A FREE `T2`, AND
+// THAT IS THE WHOLE OF ROW g120/g121/g122.  MEASURED, 2026-09-29, on
+// pin/cpp2rust a0b0a70761208ff7559492f8a5fd8cca + pin/ir.v45 (98 modules),
+// -model=refcount, dcc/src/Transform/Sentient/Analyses/ExpressionEvaluatorUtils.cpp:
+//
+//   LLVM ERROR: unsupported unmapped type `std::less<long>` has no model in
+//   types_, while mapping `std::pair<llvm::SmallSetIterator<long, _,
+//   std::less<long>>, bool>`
+//   LEAF record `std::less` declared at
+//   toolchain/libcxx/__functional/operations.h:356:8 [system type]: type
+//   `std::less<long>` is not present in types_ (rule key `std::less`)
+//
+// A FREE `T2` MATCHES THE ITERATOR AND THEN DEMANDS A types_ MODEL FOR WHATEVER
+// IS BOUND TO IT.  `SmallSet`'s `C` is DEFAULTED, so what is bound is always
+// `std::less<T>` -- a type this port deliberately leaves UNKEYED (rules/hash's
+// standing note: `std::less<int>` has no type key and ABORTS LOUDLY, while
+// `std::hash<int>` had one with no `operator()` key and silently emitted `0(v)`
+// at 427 sites in 190 TUs).  So the free `T2` converted a deliberate loud
+// refusal into a GATE ON 10 TUs that has nothing to do with comparing anything.
+//
+// ⭐ PINNING IS CORRECT AND COMPLETE FOR THIS CORPUS, not a narrowing: all 15
+// `SmallSet<` instantiations in dt_src are 2-ary (`git grep -n "SmallSet<"`,
+// 15 of 15), so `C` is the default at every one of them.  A site that ever
+// passes an explicit comparator no longer matches this key and FAILS LOUDLY,
+// which is the required outcome -- it is exactly the site where the comparator
+// would be semantics rather than the defaulted `<`.
+//
+// ⛔ AND THIS IS WHY IT IS NOT FIXED BY KEYING `std::less` INSTEAD.  A `()`
+// model for an empty comparator functor COLLAPSES DISTINCT COMPARATORS ONTO ONE
+// VALUE, and the corpus has a site where that is observable:
+// senulator/pcfg2compute.cpp:463,465 store `std::less<float>()` and
+// `std::less_equal<float>()` as VALUES in the same table, keyed by operator, so
+// a unit model makes the two table entries identical -- silent wrongness that
+// compiles.  Pinning here needs no `std::less` model at all and leaves that
+// site loud.
+template <typename T1>
+using t2 = llvm::SmallSetIterator<T1, 4, std::less<T1>>;
 
 // --- MEMBERS ---------------------------------------------------------------
 template <typename T1> bool f1(const llvm::SmallSet<T1, 4> &o) {
