@@ -248,6 +248,12 @@ public:
   // `(*os)` behind a `*mut File`.
   virtual std::string StreamValue(const std::string &stream);
   bool OstreamChainValueIsUsed(clang::Expr *expr);
+  // True when `expr` is an ostream `<<` chain, i.e. an expression
+  // ConvertCallToOstream lowers and whose C++ value is `std::ostream&`. Such an
+  // expression is already the reference VALUE in BOTH models -- see
+  // IsOstreamChainValue's definition -- so ConvertVarInit must not take its
+  // address.
+  bool IsOstreamChainValue(clang::Expr *expr);
 
   struct TempMaterializationCtx {
     std::vector<std::optional<clang::QualType>> materialized_args;

@@ -4698,6 +4698,66 @@ bool Converter::OstreamChainValueIsUsed(clang::Expr *expr) {
   return false;
 }
 
+// ⭐ THE RULE ConvertVarInit's `&mut` IMPLEMENTS, stated so this narrowing can
+// be judged: a C++ `T&` parameter maps to a Rust `*mut T`, and MOST arguments
+// bound to one are PLACES (an lvalue object of type `T`), so the initialiser has
+// to take an address -- `&mut <place>`, which coerces to `*mut T`.
+// `IsReferenceType(expr)` is the place-vs-value discriminator: when the
+// expression is ALREADY a reference value (a call returning `T&`, a DeclRef to a
+// `T&` variable, a `T&` member) it is passed through instead.
+//
+// That discriminator deliberately excludes CXXOperatorCallExpr wholesale
+// (converter.cpp:6370), and for good reason: a mapped operator's rule body is
+// INLINED TEXT, and the reference-returning ones overwhelmingly lower to a
+// Rust PLACE, not a pointer -- `v[i]` for a `T& operator[]`, the assigned-to
+// object for a `S& operator=`. Dropping the `&mut` for those would be wrong in
+// the other direction.
+//
+// The ostream `<<` chain is the exception, and it is an exception in BOTH
+// models: since 6a468a27 a chain whose value is consumed is emitted as a BLOCK
+// whose tail is StreamValue(), which is `&raw mut (*os)` under unsafe and
+// `(os).clone()` under refcount. Both of those are the reference VALUE, never a
+// place. So `&mut` on top of it produced
+//     let _os: *mut std::fs::File = &mut { ...; &raw mut (*out) };
+// i.e. a `&mut *mut File` bound to a `*mut File` -- E0308.
+//
+// ⚠️ This is a PRE-EXISTING ConvertVarInit defect, not a regression from
+// 6a468a27, and it was invisible in the refcount model because
+// ConverterRefCount::IsReferenceType (converter_refcount.cpp:3567) ALREADY
+// overrides the base predicate with exactly the missing case (any
+// CXXOperatorCallExpr returning a reference). Only the unsafe model, which uses
+// the base predicate, wraps the chain. That asymmetry is why the row had to run
+// both models to see it at all.
+//
+// Narrower than the refcount override on purpose: this keys on the ONE construct
+// whose lowering is known to yield a pointer value, so no mapped
+// subscript/assignment operator changes.
+//
+// ⛔⛔ THE `OstreamChainValueIsUsed` CONJUNCT IS LOAD-BEARING, AND I FIRST WROTE
+// THE OPPOSITE HERE: "a ConvertVarInit initialiser slot consumes its value by
+// construction, so the extra conjunct would be VACUOUS." MEASURED FALSE at TU
+// scale on sys-arch-spec/dpc/dpc.cpp, unsafe model, which has THREE sites, not
+// one. Two of them are `return <chain>;` out of a
+// `std::ostream &operator<<(std::ostream &, Isa::InstOpCode)`:
+//     return &mut (*os).write_all(&([..].concat()));   // *mut File <- &mut Result
+// `OstreamChainValueIsUsed` walks GetParentExpr, and a ReturnStmt is a Stmt, not
+// an Expr, so it returns FALSE there -- no block is emitted and there is no
+// StreamValue tail to pass through. Dropping the `&mut` at those two sites turns
+// `&mut Result<(),Error>` into `Result<(),Error>`: still E0308, just differently
+// wrong, on text that was not mine to change. With the conjunct they are left
+// BYTE-IDENTICAL.
+// ⭐ The residue is therefore named, not hidden: `return <ostream chain>;` in a
+// reference-returning `operator<<` is a SECOND defect of the same family, living
+// in `OstreamChainValueIsUsed`'s parent walk (return position is not an Expr
+// parent), which this row was told not to touch. 2 sites in dpc.cpp.
+bool Converter::IsOstreamChainValue(clang::Expr *expr) {
+  auto *call =
+      clang::dyn_cast<clang::CXXOperatorCallExpr>(expr->IgnoreParenImpCasts());
+  return call != nullptr &&
+         call->getOperator() == clang::OverloadedOperatorKind::OO_LessLess &&
+         IsCallToOstream(call) && OstreamChainValueIsUsed(call);
+}
+
 void Converter::ConvertCallToOstream(clang::CallExpr *expr) {
   clang::Expr *stream = nullptr;
   auto collect_args = [expr, &stream]() -> std::vector<clang::Expr *> {
@@ -8810,7 +8870,11 @@ std::string Converter::GetUnsafeTypeAsString(clang::QualType qual_type) const {
 }
 
 void Converter::ConvertVarInit(clang::QualType qual_type, clang::Expr *expr) {
-  if (qual_type->isReferenceType() && !IsReferenceType(expr)) {
+  // See IsOstreamChainValue: an ostream `<<` chain is already the reference
+  // VALUE a `std::ostream&` maps to in both models, so it must not be
+  // address-of'd here.
+  if (qual_type->isReferenceType() && !IsReferenceType(expr) &&
+      !IsOstreamChainValue(expr)) {
     if (llvm::isa<clang::MaterializeTemporaryExpr>(expr->IgnoreImpCasts())) {
       StrCat(EmitMaterializedTempBinding(qual_type, expr));
       return;
