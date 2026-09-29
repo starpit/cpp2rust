@@ -1886,12 +1886,78 @@ using t60 = mlir::IndexType;
 // t61: `mlir::ModuleOp` -> AN OPAQUE UNIT.  83 TUs.  Reached as a RETURN type
 // (`runOnOperation`, BuiltinOps.h.inc:199).  Gate cleared the same way as t59:
 // `search expr` hits mentioning ModuleOp across the three verbose logs = 0.
-// ⛔ `fmt::OpInst` (fmt.rs:391) WAS CHECKED AND REFUSED as the target.  An
-// `OpInst` carries a `def` that is "a row of the GENERATED `TD_OPS` table, so an
-// `OpInst` cannot name an op the table does not contain" (fmt.rs:388) -- and
-// `builtin.module` is an MLIR BUILTIN, not a DataflowIR op, so it has no TD_OPS
-// row.  Mapping ModuleOp to OpInst would require naming an op the generated
-// table cannot spell.  t40 (`Pass`) / t43 (`OpOperand`) precedent applies.
+// ⛔⛔ THE REFUSAL BELOW IS RETAINED VERBATIM BUT ITS STATED REASON IS **FALSE AT
+// HEAD**, and the retraction is EXECUTED, not argued.  Read the correction that
+// follows it before reusing it.
+//
+//   ⛔ `fmt::OpInst` (fmt.rs:391) WAS CHECKED AND REFUSED as the target.  An
+//   `OpInst` carries a `def` that is "a row of the GENERATED `TD_OPS` table, so an
+//   `OpInst` cannot name an op the table does not contain" (fmt.rs:388) -- and
+//   `builtin.module` is an MLIR BUILTIN, not a DataflowIR op, so it has no TD_OPS
+//   row.  Mapping ModuleOp to OpInst would require naming an op the generated
+//   table cannot spell.  t40 (`Pass`) / t43 (`OpOperand`) precedent applies.
+//
+// ⭐⭐ RETRACTED, 2026-09-29 (slot `opass`).  `builtin.module` HAS A `TD_OPS` ROW.
+// `dataflowir-gen/build.rs:35` lists `("builtin", &["IR/BuiltinDialect.td",
+// "IR/BuiltinOps.td"])` in `UPSTREAM_FILES`, so the `builtin` dialect's ops are
+// parsed like every other dialect's.  PROVEN BY EXECUTION, not by reading:
+// `cargo test --test isa` -> `a_marker_and_the_string_lookup_reach_one_row ... ok`,
+// and that test's table (tests/isa.rs:58) contains the row
+// `("builtin", "module", "ModuleOp")` with an `op_def_in(dialect, mnemonic)
+// .unwrap_or_else(|| panic!("no row for {dialect}.{mnemonic}"))`.  10/10 isa tests
+// pass.  `tests/isa.rs:166` additionally asserts the GENERATED MARKER `mlir_ModuleOp`
+// exists (and `:172` that `mlir_builtin_ModuleOp` does NOT -- builtin ops live
+// directly in `namespace mlir`, build.rs:530).  `lib.rs:25` says `tests/module.rs`
+// "builds ONE `OpInst` for the whole `builtin.module`" and does it for two real
+// 1,792- and 7,283-line reference files.  So an `OpInst` CAN name `builtin.module`.
+//
+// ⛔⛔ AND YET THE KEY STILL MUST NOT BE WRITTEN, FOR A DIFFERENT AND MEASURED
+// REASON: `OpInst` HAS NO PUBLIC `walk`, and the converter ALREADY EMITS ONE.
+//   * The traversal STRUCTURE is entirely present: `OpInst.regions` is a `pub
+//     Vec<Region>` (fmt.rs:445), `Region::get_blocks() -> &Vec<Block>` (fmt.rs:631)
+//     and `Block::get_operations() -> &Vec<OpInst>` (fmt.rs:492) are both `pub`.
+//   * The RETURN type is already modelled in full: `ir::LocWalkResult` (ir.rs:806)
+//     is `mlir::WalkResult` with ALL THREE variants incl. `Skip`, and its own doc
+//     says it is deliberately ONE type for "every `Operation::walk` body".
+//   * The TYPE FILTER is already modelled: `isa.rs`'s generated `MlirOp` markers
+//     plus `OpInst::is_a::<T>()`, which is exactly what `walk([](FooOp){...})` needs.
+//   * ⛔ WHAT IS MISSING IS THE METHOD, and the name is ALREADY TAKEN: `impl OpInst`
+//     (fmt.rs:728) has a PRIVATE `fn walk(&self, elems, elided, e, emit, ctx)`
+//     (fmt.rs:1238) -- the assembly-FORMAT element walker, an unrelated thing.
+//     MEASURED with real rustc on the converter's own emitted shape:
+//     **`error[E0624]: method `walk` is private`**, not E0599.  So the collision is
+//     a fact, and any `walk` added to `OpInst` requires the private one RENAMED.
+//
+// ⭐⭐ THE SILENT DAMAGE ALREADY EXISTS AT HEAD, WITH NO KEY OF MINE.  Grepped over
+// the 68 emitted `.rs` files of the `fresh39` 403-TU sweep (bucket A, binary md5
+// a855a649…, rules pin/ir.v36): **10 `.walk(&mut _callback)` call sites in 7 TUs**
+// (PipelineScope.cpp, Reuse.cpp, SbfUtils.cpp, Liveness.cpp,
+// CFGDeepMergingConditionalTree.cpp, InstructionEstimation.cpp, Collector.cpp),
+// with receivers `(*op)`, `(*root)`, `(*root_op)`, `(*region)` and
+// `(*loop_.getBody(None))`.  The receiver type at those sites is
+// `*mut dataflowir_gen::fmt::OpInst` -- `mlir::Operation *` is ALREADY mapped to it
+// -- so `OpInst::walk` is not a speculative enabler for a future row, it is a
+// PRE-EXISTING measured defect in already-converted TUs, invisible to every bucket
+// census because rc=0.
+//
+// ⛔ AND THE MEASUREMENT THAT KEEPS THIS ROW LOUD.  A PROBE key for
+// `mlir::OperationPass<mlir::ModuleOp>` (the gate on 42 TUs; abort text
+// `searched as: mlir::OperationPass<mlir::ModuleOp>`, placeholder
+// `mlir_OperationPass_mlir_ModuleOp_`, Pass.h:367:7) was written as an opaque unit,
+// regenerated, and swept over all 42.  Of the 30 measured: **19 stayed B with a NEW,
+// LATER, DIFFERENT LOUD abort** (`mlir::memref::AllocOp`, `mlir::scf::WhileOp`,
+// `mlir::affine::AffineApplyOp`, `mlir::arith::CeilDivUIOp`, `mlir::WalkResult`,
+// `mlir::PassWrapper<...>`, `mlir::OpPassManager`, `AffineExpr::operator-`,
+// 4x structured-binding, bare `throw;`) -- so "40 loud aborts become 40 silent ones"
+// is EMPIRICALLY FALSE for those -- but **11 went B -> A**, and in their emitted
+// `.rs` the unmapped members are emitted TEXTUALLY: 9 `.walk(`, 12 `.getSymName(`,
+// 10 `.getBodyRegion(`, 13 `.emitError(`, 6 `.getBody(`, 2 `.getOps(` -- every one a
+// silent `E0599`/`E0624` at rc=0.  ELEVEN loud gates traded for ~50 silent ones is
+// still the forbidden trade, so the PROBE WAS REVERTED and `mlir::OperationPass<…>`
+// KEEPS ABORTING LOUDLY.  ⭐ THE ORDER IS THEREFORE FIXED: `OpInst::walk` (and the
+// `ModuleOp` remodel) LANDS FIRST, in `dataflowir-gen`; the type key is worth
+// writing only after it.  The exact method wanted, in the shape the converter
+// already emits, is specified at the t61 block in `tgt_unsafe.rs`.
 // ⛔ NO EQUALITY IS ADDED for this or any op handle, on purpose.  Two distinct
 // handles to ONE operation must compare EQUAL, and two handles to two ops that
 // happen to print identically must compare UNEQUAL -- mapping a handle onto a

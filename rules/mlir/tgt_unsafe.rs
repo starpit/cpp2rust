@@ -791,6 +791,78 @@ fn t60() -> dataflowir_gen::ir::Ty {
 //   added for this or any op handle -- mapping a handle onto a printed-content
 //   type would make two handles to ONE op, and two handles to two
 //   identically-printing ops, compare the wrong way round.  Body is `()`.
+// ⭐⭐ THE "no such row" HALF IS RETRACTED -- `builtin` IS in build.rs's
+//   UPSTREAM_FILES and `cargo test --test isa` proves the row and the marker
+//   `mlir_ModuleOp` exist.  The FULL retraction, and the measurement that keeps
+//   `mlir::OperationPass<mlir::ModuleOp>` aborting loudly anyway, is at the t61
+//   block in `src.cpp`.  The NO-EQUALITY half stands unchanged.
+//
+// ⛔⛔ SPECIFICATION FOR `dataflowir-gen`, NOT EDITED HERE (crate slot's half).
+//   Nothing in this module changes until this lands.  Everything below is READ OFF
+//   THE CONVERTER'S OWN EMITTED TEXT, not designed:
+//
+//   FILE      dataflowir-gen/src/fmt.rs
+//   IMPL      `impl OpInst` -- the one opened at fmt.rs:728 (NOT the `Debug` impl
+//             at :716).  ANCHOR: immediately AFTER `pub fn find_op` / before
+//             `pub fn print`, i.e. anywhere in that block; order is not load-bearing.
+//
+//   STEP 0 (MANDATORY, AND IT IS A HARD ERROR IF SKIPPED)
+//             RENAME the existing PRIVATE `fn walk(&self, elems, elided, e, emit,
+//             ctx)` at fmt.rs:1238 to `fn walk_format(...)` and update its two
+//             callers (fmt.rs:1135 and the self-recursive call at fmt.rs:1347).
+//             ⛔ The name collides: real rustc on the converter's emitted shape
+//             gives `error[E0624]: method `walk` is private`, NOT E0599, so a
+//             `pub fn walk` added beside it does not compile.  This is MEASURED.
+//
+//   STEP 1    pub fn walk<T: crate::isa::MlirOp>(&self, f: &mut impl FnMut(&OpInst))
+//             -- MLIR's `Operation::walk` with the callback's argument type as the
+//             FILTER.  PRE-ORDER, and pre-order is the semantics not a choice:
+//             `dcc/src/Utils/Utils.cpp:279` returns `WalkResult::skip()` to collect
+//             the OUTERMOST `ProgramUnitOp`s, which only works pre-order.
+//             Traversal: `self` first if `self.is_a::<T>()`, then for each
+//             `r in &self.regions`, each `b in r.get_blocks()`, each
+//             `o in b.get_operations()`, recurse.
+//   STEP 2    pub fn walk_r<T: crate::isa::MlirOp>(&self, f: &mut impl FnMut(&OpInst)
+//                 -> crate::ir::LocWalkResult) -> crate::ir::LocWalkResult
+//             -- the `WalkResult`-returning C++ OVERLOAD.  BOTH are needed: MLIR
+//             deduces `RetT` from the lambda and the corpus uses both forms.
+//             `Interrupt` abandons the whole walk and PROPAGATES; `Skip` prunes THIS
+//             node's subtree and continues with siblings and NEVER propagates out
+//             (ir.rs:988 already states that contract for `Location::walk`; match it).
+//   STEP 3    the MUTATING overloads, `walk_mut` / `walk_r_mut`, taking
+//             `&mut self` and `&mut impl FnMut(&mut OpInst)`.  `get_blocks_mut`
+//             (fmt.rs:639) and `get_operations_mut` (fmt.rs:497) already exist, and
+//             22 of the 42 `OperationPass<ModuleOp>` walk bodies MUTATE (they
+//             `push` into a vector, set insertion points, or rewrite).
+//   STEP 4    an UNTYPED form for the 3 corpus sites whose callback takes
+//             `Operation*` rather than a typed op -- either `walk::<AnyOp>` with a
+//             blanket marker, or a separate `walk_any`.  ⛔ DO NOT make `T`
+//             defaultable to "match everything" silently; an unfiltered walk where
+//             the C++ filtered visits ops the C++ never saw.
+//
+//   ⛔ IT CANNOT LIVE IN A RULE BODY, and this is not a preference.  The traversal is
+//   SELF-RECURSIVE, and `converter c86b7748` records that "a self-recursive lambda has
+//   no finite inline expansion" -- it was the last SEGV.  Same argument fmt.rs:917
+//   makes for `set_operands_flat`.
+//
+//   THE TEST THAT PROVES IT, and it must be this one rather than a synthetic tree:
+//   `tests/module.rs` already builds ONE `OpInst` for the whole `builtin.module` of
+//   two real 1,792- and 7,283-line reference files.  Add to `tests/` :
+//     (a) `walk::<ops::mlir_dataflow_ProgramUnitOp>` over `matmul_demo`'s module
+//         visits exactly as many ops as `print_generic` shows `dataflow.program_unit`
+//         lines -- a count DERIVED from the file, not chosen;
+//     (b) a `walk_r` returning `Skip` at the first `ProgramUnitOp` collects only the
+//         OUTERMOST ones, and the count is STRICTLY LESS than (a) when nesting
+//         exists -- this is the `Utils.cpp:279` semantics and the one thing a
+//         two-variant `WalkResult` could not express;
+//     (c) `walk_r` returning `Interrupt` visits exactly 1 op and the returned value
+//         satisfies `was_interrupted()`, while a walk that only ever `Skip`ped does
+//         NOT (ir.rs's own contract);
+//     (d) pre-order: the FIRST op visited by an unfiltered walk is the module itself.
+//
+//   ⭐ WHAT IT BUYS IMMEDIATELY, measured, independent of this row: the 10 already-
+//   emitted `.walk(&mut _callback)` sites in 7 bucket-A TUs of the `fresh39` sweep
+//   stop being silent compile errors.  See src.cpp for the file list.
 fn t61() -> () {
     ()
 }
