@@ -18,6 +18,7 @@
 #include "compat/platform_flags.h"
 #include "converter/converter.h"
 #include "converter/models/converter_refcount.h"
+#include "converter/survey.h"
 #include "frontend_action.h"
 #include "tu_guard.h"
 
@@ -222,6 +223,37 @@ std::string TranspileSrc(std::string_view cc_code, Model model,
   if (!RunOneTU(factory, cc_code, std::move(tool_args), filename)) {
     llvm::errs() << "cpp2rust: FATAL DIAGNOSTIC in TU " << filename
                  << " -- not translated\n";
+    // MEASUREMENT INTEGRITY, --survey half (row g3003). The empty return above
+    // is the whole signal on the translate path: cpp2rust.cpp turns it into
+    // `ERROR: empty output file` + EXIT_FAILURE. SURVEY MODE NEVER REACHES
+    // THAT CHECK -- it returns EXIT_SUCCESS before it, by design, because a
+    // survey legitimately produces no Rust. So the two things survey mode does
+    // produce, the record and the exit code, BOTH have to be told.
+    //
+    // MEASURED, not inferred: before this, `--survey` on a TU with an
+    // unresolvable #include exited 0 and wrote a record byte-identical past the
+    // `#tu` line to a clean TU's, i.e. "0 distinct gaps". THAT is the defect;
+    // the exit code is the lesser half.
+    //
+    // 1. The RECORD, because a number nobody reads is not a signal. A missing
+    //    row is invisible to every survey consumer; a `harness-fault` row is
+    //    not. Record() itself rewrites the TSV, so this survives even if the
+    //    process is killed before cpp2rust.cpp's own Write().
+    if (survey::Enabled()) {
+      survey::Record(survey::GapKind::kHarnessFault,
+                     "clang emitted an error/fatal diagnostic: the AST was "
+                     "TRUNCATED and this TU was NOT surveyed -- its zero gaps "
+                     "mean nothing; see stderr for the diagnostic",
+                     std::string(filename));
+    }
+    // 2. The EXIT CODE, through the signal --dir already uses rather than a
+    //    third convention: cpp2rust.cpp reads tu_guard::DroppedCount() and has
+    //    code 3 for "output written, but TU(s) dropped". On the translate path
+    //    this changes nothing -- the empty return hits `rs_code.empty()` and
+    //    returns EXIT_FAILURE long before the DroppedCount() check -- so the
+    //    --file= behaviour proven at d6151ccb is untouched.
+    ++tu_guard::g_dropped;
+    tu_guard::g_summary += "  " + std::string(filename) + '\n';
     return {};
   }
   Converter::EmitOpaqueRecords(rs_code);

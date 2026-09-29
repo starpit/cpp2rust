@@ -231,6 +231,27 @@ int main(int argc, char *argv[]) {
     cpp2rust::survey::Write();
     llvm::errs() << "survey: " << cpp2rust::survey::state().gaps.size()
                  << " distinct gaps written to " << SurveyOut << '\n';
+    // MEASUREMENT INTEGRITY -- the --survey twin of the two checks below, and
+    // the THIRD and last place rc=0 lied (--dir was fixed first, --file= at
+    // d6151ccb). This `return EXIT_SUCCESS` sat ABOVE both the empty-output
+    // check and the DroppedCount() check, so a survey cut from a TRUNCATED AST
+    // exited 0.
+    //
+    // A survey's contract is NOT a translation's: it deliberately continues
+    // past what a translation aborts on, so "nonzero on any gap" would be
+    // wrong. A fatal clang diagnostic is not a gap, though -- it means the TU
+    // was never read, so every gap count in the record, including zero, is
+    // fiction. That is the same "output written, but TU(s) dropped" state code
+    // 3 already names, hence the same code rather than a fourth convention.
+    // The record carries a `harness-fault` row for it too (see
+    // cpp2rust_lib.cpp): an exit code alone would be a signal nobody reads.
+    if (cpp2rust::tu_guard::DroppedCount() > 0) {
+      llvm::errs() << "cpp2rust: SURVEY IS NOT A RESULT -- "
+                   << cpp2rust::tu_guard::DroppedCount()
+                   << " TU(s) dropped on a fatal diagnostic; the gap counts in "
+                   << SurveyOut << " are cut from a TRUNCATED AST\n";
+      return 3;
+    }
     return EXIT_SUCCESS;
   }
 
