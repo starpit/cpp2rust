@@ -9773,7 +9773,29 @@ std::string Converter::GetMappedAsString(clang::Expr *expr, clang::Expr **args,
 
   auto result = ConvertIRFragment(tgt_ir->body, expr, args, num_args, ctx);
   if (tgt_ir->multi_statement) {
-    return '{' + result + '}';
+    // ⛔ THE PARENTHESES ARE LOAD-BEARING AND A BARE `{ ... }` IS A PARSE ERROR
+    // HALF THE TIME IT IS USED.
+    //
+    // `Mapper::parenthesizeBodyIfNeeded` deliberately skips multi-statement
+    // rules on the grounds that `{ ... }` "is already a single primary
+    // expression". It is not: in Rust a block at the START of a STATEMENT is
+    // parsed as a *statement*, not as an operand, so as soon as the surrounding
+    // emission appends a binary operator the block terminates the statement and
+    // the operator has nothing to bind to. Measured on
+    // `dcc/src/Conversion/DataflowToSentient/DataflowToSentient.cpp`, where
+    // `src_unit_name.substr(0, 2) != "l3"` -- `substr` being a multi-statement
+    // rule -- emitted
+    //     if {let s = ...; {let mut __tmp1 = ...; __tmp1}  != <rhs>}
+    // and rustfmt REFUSED the file with 5x `error: expected expression, found
+    // `!=``. The block is the tail expression of the `if` condition's own
+    // block, i.e. statement position, so `{...} != rhs` cannot parse. The same
+    // shape is one `as` or one `.method()` away in every other consumer.
+    //
+    // Wrapping is safe in the other direction too: a parenthesised block is a
+    // primary expression everywhere a block expression was already accepted as
+    // an *operand*, and a statement-position use of a mapped call is emitted
+    // with its own terminator by ConvertStmt, so `({ ... }) ;` is well-formed.
+    return "({" + result + "})";
   }
   return result;
 }
@@ -9789,6 +9811,37 @@ std::string Converter::ConvertIRFragment(
   std::string result;
   for (auto &frag : fragments) {
     if (auto *t = std::get_if<TextFragment>(&frag)) {
+      // A rule body's text fragment that OPENS A NEW LINE closes the previous
+      // one, and rustfmt REFUSES a file with `error[internal]: left behind
+      // trailing whitespace` -- an internal error, not a parse error, so the
+      // Rust is otherwise fine and the whole file simply goes unformatted.
+      //
+      // The whitespace is not in the rule source. `rules/support`'s
+      // `llvm_unreachable` body ends a line with the bare placeholder `a2`, and
+      // the converter's expression emitter renders an integer literal with a
+      // TRAILING SPACE (`66_u32 `), so the substitution lands a space at
+      // end-of-line. Measured on
+      // `dcc/.../TransformPagedMemViewManager.cpp` (line 14365, `66_u32 `) and
+      // `dsc-based-utils/.../SNStickMaskLowering.cpp` (line 43581, `6073_u32 `)
+      // -- the only two trailing-whitespace refusals in the 312-TU corpus.
+      //
+      // ⭐ TRIMMED HERE AND NOT AT THE LITERAL EMITTER, AND NOT AS A WHOLE-FILE
+      // POST-PASS. Dropping the literal emitter's trailing space would change
+      // interior spacing in every emitted file for no correctness gain, and a
+      // whole-file trim would edit the INTERIOR of a multi-line string literal
+      // (rule bodies are inlined verbatim, string literals included). Trimming
+      // only the bytes that sit immediately before a rule-body newline touches
+      // nothing rustc can observe: the one way it could reach inside a literal
+      // is a rule body whose multi-line string literal has a PLACEHOLDER as the
+      // last thing on one of its lines, which no rule body does -- a rule's
+      // format string uses `{}`, not `a0`.
+      if (!t->text.empty() && t->text.front() == '\n') {
+        auto end = result.size();
+        while (end > 0 && (result[end - 1] == ' ' || result[end - 1] == '\t')) {
+          --end;
+        }
+        result.resize(end);
+      }
       result += t->text;
     } else if (auto *g = std::get_if<GenericFragment>(&frag)) {
       result += Mapper::InstantiateTemplate(GetCalleeOrExpr(expr), g->n);
