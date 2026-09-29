@@ -416,75 +416,182 @@ std::istream &f18(std::istream &o, double &v) { return o.operator>>(v); }
 std::istream &f100(std::istream &a0, char &a1) { return operator>>(a0, a1); }
 
 // ============================================================================
-// ⛔ DELIBERATELY NOT KEYED, AND MEASURED RATHER THAN ARGUED: THE **MEMBER**
-// `operator>>` TAKING AN `std::ios_base` MANIPULATOR, i.e. `in >> std::hex`.
-// Recorded key, verbatim (verif/g3078M.gates.json, n=3, gate TU
-// dcg/tools/mda/SCVerifier.cpp):
-//     LLVM ERROR: unsupported CXXOperatorCallExpr:
+// t6 / f101-f104 -- `in >> std::hex`, THE INPUT FORMATTING-STATE FAMILY.
+// Row g3090; the `std::ios_base` TYPE KEY is row g2894.
+//
+// The four keys below are the ones `d51eb9da` deliberately left out, and the
+// block they replace refused them for ONE stated reason: "there is no type rule
+// for `std::ios_base`, so the parameter type `std::ios_base &(*)(std::ios_base &)`
+// cannot be spelled here."  THAT REFUSAL DID NOT SURVIVE CONTACT.  Measured, in
+// this module, with the pinned preprocessor (18cd96ef): the type key records, and
+// the fn-pointer parameter ROUND-TRIPS -- the recorded key reads back out of
+// ir_src.json as
+//     "f101": "std::istream & operator shr(std::ios_base &(*)(std::ios_base &))"
+// which is the census string CHARACTER FOR CHARACTER (verif/g3090/).
+//
+// RECORDED KEYS, verbatim from the 295-TU refcount census
+// (verif/g3085CTL.tus.json, binary md5 086c2ff4363bfda3647a8eb5b5d6500f):
 //     >> on (std::istream, std::ios_base &(*)(std::ios_base &))
 //     rule key: std::istream & operator shr(std::ios_base &(*)(std::ios_base &))
-//     at /home/agent/work/repos/dt_src/dcg/tools/mda/memDumpAnalyzer.h:244:18
-// and the three manipulators themselves record as
-//     std::ios_base & std::hex(std::ios_base &)      (also dec, oct)
-// -- the same shape rows g858/g861 record for `std::boolalpha`/`std::left`.
-// BOTH spellings were CONFIRMED by regenerating this module with the keys
-// present and reading them back out of `ir_src.json` character for character.
+// at dcg/tools/mda/memDumpAnalyzer.h:244:18 (2 TUs) and
+// util/sendefs/sendefs.cpp:432:10 (1 TU).  All three sites are `>> std::hex >>`
+// into an integer whose value is then used arithmetically.
 //
-// 1. WHAT IS ABSENT FROM THE MODEL, AND IT IS **NOT** THE RADIX.  The radix was
-//    the obvious candidate and it is now PRESENT: `libcc2rs::IStream` carries a
-//    `basefield` (10/16/8, default 10), `set_basefield`/`shr_basefield` apply it,
-//    and `extract_i64`/`extract_u64` consume it through `from_str_radix`.  What
-//    is still absent is a TYPE RULE FOR `std::ios_base` (row g2894).  Measured on
-//    a standalone probe (`/home/agent/work/g3084probe/hexrow.cpp`) with the keys
-//    landed and the pin converter a0b0a707 against a 98-module tree:
-//        unsafe: LLVM ERROR: unsupported system type has no rule: `std::ios_base`
-//        (would be emitted as the undefined name `std_ios_base`), reached while
-//        converting `main` ... at /home/agent/work/toolchain/libcxx/ios:253:33
-//    i.e. keying the operator only moves the abort one step, onto the type of the
-//    manipulator the operator takes.  The manipulator key is ALSO not usable: in
-//    the refcount leg it translated and then emitted `libcc2rs::hex_refcount`, an
-//    undefined name (E0425), because the recorded key has ARITY 1 while the C++
-//    site merely REFERENCES `std::hex` with no argument, and a zero-argument
-//    declref form (`std::ios_base &(*f102())(std::ios_base &) { return std::hex; }`)
-//    is NOT RECORDED AS A KEY AT ALL by the rule preprocessor.
+// ⭐ IT IS THE **MEMBER** FORM: ONE parameter, no `std::istream &` in the key.
+// libcxx declares the manipulator overload as a member of `basic_istream`
+// (`basic_istream& operator>>(ios_base& (*__pf)(ios_base&))`), so this is
+// f11-f18's shape and NOT f8/f100's free two-parameter shape.  `o.operator>>(m)`
+// is written in explicit member-call form for the same reason f11 is.
 //
-// 2. FAILURE MODE OF THE ALTERNATIVE -- shipping the operator key anyway.  It
-//    would REPLACE a translate-time CONVERTER-ABORT with a compile-time E0425 on
-//    an undefined manipulator name.  That is not silent, but it is strictly less
-//    loud, and it would make three TUs read as "gate cleared" in every
-//    first-abort census while nothing about them actually translates.  That is
-//    the false-closure pattern, and it is why the key is left out.
-//    ⛔⛔ AND THE OTHER ALTERNATIVE -- AN IDENTITY BODY FOR `std::hex` -- IS THE
-//    FORBIDDEN TRADE, NOT MERELY A WEAK ONE.  The C++ site is
-//        inFile >> std::hex >> lineno;   ...   addr = lineno * 4 + bank;
-//    so a body that returned the stream unchanged type-checks, translates rc=0,
-//    passes no-placeholders.sh, compiles, runs, and reads `"1f"` as DECIMAL `1`
-//    instead of `31` -- a WRONG MEMORY ADDRESS in a memory-dump analyzer,
-//    observable only by diffing the program's bytes.  Verified against C++ ground
-//    truth by the probe above, whose C++ leg prints `hex[31,32,156]`.
+// 1. WHAT THE MODEL NOW HAS, AND IT IS THE WHOLE OF IT.  `libcc2rs::IStream`
+//    carries a `basefield` (10/16/8, default 10) that every `extract_*` consumes
+//    through `from_str_radix`; `shr_ios_manip` applies a manipulator to it and
+//    hands the stream back, so `inFile >> std::hex >> lineno` lowers to
+//        IStream::shr_i64(&mut *inFile.shr_ios_manip(libcc2rs::hex_unsafe), &mut lineno)
+//    with each operand named exactly once.  Verified against EXECUTED C++
+//    (g3084probe/hexrow.cpp prints hex[31,32,156] / decrestore[16,10] / oct[15] /
+//    dec[42,-7] / hexfail[0,0]); the Rust side reproduces all five in
+//    `ios_manipulators_thread_the_base_through_and_match_cpp`.
 //
-// 3. DISCRIMINATOR -- a landed key where the same body IS correct: f100 below.
-//    It is the OTHER half of this row, it is a FREE `operator>>` over `char`, and
-//    it lands precisely because its operand types (`std::istream &`, `char &`)
-//    both have models, while this one's operand is a pointer to a function over a
-//    type that has none.  So the blocker is the `std::ios_base` model and NOT
-//    manipulators being unkeyable -- which also narrows this module's
-//    `std::left`/`std::boolalpha` refusal above: that refusal gave TWO reasons,
-//    "no ostream formatting state" and "no `std::ios_base` type rule", and the
-//    SECOND one is the binding constraint on the input side too.
+// 2. WHY `std::ios_base` IS `u32` AND WHY THAT IS FAITHFUL, NOT A FUDGE.  g2894's
+//    stored refusal reads "no honest Rust model for abstract never-instantiated
+//    `std::ios_base` itself".  The abstractness is real and IRRELEVANT: nothing in
+//    this corpus instantiates an `ios_base` OBJECT.  What the corpus needs is a
+//    type that can be the pointee of a function-pointer parameter, and the thing
+//    `ios_base` contributes to these sites is exactly one word of formatting
+//    state.  t6 is that word, and `libcc2rs::IOS_BASEFIELD_*` are its values.
+//    ⛔⛔ AND THE SCOPE IS A LOAD-BEARING LIMIT, NOT A CAVEAT: t6 models the
+//    BASEFIELD only, not `adjustfield`/`floatfield`/`fill`/`width`.  So
+//    `std::left`/`std::right`/`std::setw`/`std::setfill`/`std::setprecision`/
+//    `std::fixed`/`std::boolalpha` MUST NOT be keyed onto it -- each would
+//    silently REPLACE the radix while modelling none of its own effect, which is
+//    a worse trade than the abort they produce today.  They stay out; rows
+//    g858/g861, and section 4 below.
 //
-// 4. NAMED UNBLOCKER, IN THE RIGHT LAYER: row **g2894** -- a type rule for
-//    `std::ios_base` in this module.  With `IStream::basefield` now in place, the
-//    remaining work is exactly (a) g2894, and (b) a rule-preprocessor change so a
-//    zero-argument declref to a FUNCTION records a key, or a converter change so
-//    an arity-1 manipulator key inlines at an arity-0 declref site instead of
-//    emitting `libcc2rs::<name>_<model>`.  Neither is a rules-layer change, so
-//    neither is in this diff.
+// 3. HOW `std::hex` REACHES RUST, AND WHY f102-f104 HAVE BODIES NOBODY INLINES.
+//    The corpus never CALLS `std::hex`; it only NAMES it, as the operand of `>>`.
+//    An inlined rule body has no address, so for a NAMED keyed system function
+//    the converter emits `libcc2rs::<name>_<model>` instead
+//    (`Mapper::MapFunctionName`, cpp2rust/converter/mapper.cpp:2660).  d51eb9da
+//    measured exactly that -- it saw `libcc2rs::hex_refcount` and recorded it as
+//    "an undefined name (E0425)".  ⭐ IT IS ONLY UNDEFINED IF NOBODY DEFINES IT:
+//    `libcc2rs::{hex,dec,oct}_{unsafe,refcount}` are now real `fn` items in
+//    libcc2rs/src/istream.rs.  `libcc2rs/src/cctype.rs` is the standing precedent
+//    for this exact two-route shape (`::tolower` named vs called), so this is a
+//    convention already in the tree and not a new mechanism.
+//    ⚠️ THEREFORE f102-f104's ROLE IS TO MAKE `exprsContain(ToString(decl))` TRUE
+//    (mapper.cpp:2661) so MapFunctionName takes the `libcc2rs::` branch instead of
+//    its mangled-name fallback.  Their bodies are correct and kept in step with
+//    the libcc2rs items, but no corpus site inlines one; the arity-1 spelling is
+//    libcxx's own (`std::ios_base & std::hex(std::ios_base &)`).
 //
-// ⭐ THE RADIX MODEL IS LANDED AHEAD OF ITS KEY ON PURPOSE, and this module's own
-// precedent is f12/f15/f16 ("not instantiated by the corpus today and written
-// because they are the same three lines").  `basefield` DEFAULTS TO 10 and the
-// base-10 field scanner is the ORIGINAL code, unmodified, so every already-landed
-// f11..f18 site behaves exactly as before -- proven as a byte-identical control
-// on dsc/dims.cpp and dxp/dxp.cpp.
+// 4. WHAT THIS DOES **NOT** CLOSE, AND THE SUCCESSOR GATE IT LEAVES STANDING.
+//    `dsc/sdsc-perfmodel/perfmodel.cpp:435` is `oss << std::left << std::setw(w)
+//    << std::setfill(' ') << t` -- the OUTPUT half.  Its first abort today is this
+//    row's missing `std::ios_base` type -- BUT ONLY IN THE REFCOUNT MODEL, and
+//    that qualifier is the whole finding.  ⛔⛔ THE OUTPUT MANIPULATORS DO NOT
+//    ABORT AT ALL IN THE UNSAFE MODEL, AND THAT IS PRE-EXISTING, NOT CAUSED HERE.
+//    Measured on the same 99-module tree, BOTH legs, one binary: perfmodel.cpp
+//    translates `complete rc=0` at 45,995 lines in the unsafe model BEFORE this
+//    row and AFTER it, and the two emitted files are BYTE-IDENTICAL (`diff -q`
+//    silent).  What line 435 -- `oss << std::left << std::setw(width) <<
+//    std::setfill(' ') << t` -- becomes is, verbatim:
+//        write!((*oss), "{:}{:}{:}", Some(left_166), (*width),
+//               (unsafe { Cpp2RustUnmappedFn_setfill_167((' ' as libc::c_char),) }),);
+//    Three different failure modes in one statement, and only one of them is
+//    detectable by the census: `std::left` -> the undefined name `left_166`
+//    (MapFunctionName's fallback ASSERTS, and an assert is a NO-OP under -DNDEBUG);
+//    `std::setfill(' ')` -> the g3058 `Cpp2RustUnmappedFn_` sentinel, which IS a
+//    detectable marker; and ⭐ `std::setw(width)` -> PLAIN `(*width)`, i.e. the
+//    manipulator silently became DATA -- the width integer is printed as a field.
+//    So if a later slot keys `left` and `setfill` without keying `setw`, the TU
+//    compiles and prints the width in the middle of the table.  ⛔ DO NOT TREAT
+//    "the output half aborts loudly" AS TRUE: it is true in refcount only.
+//    In the REFCOUNT model t6 does move perfmodel.cpp, and the successor gate was
+//    also NOT the predicted one.  Predicted: a `<<` operator-call abort on
+//    `(std::ostream, std::ios_base &(*)(std::ios_base &))`.  Measured, verbatim:
+//        LLVM ERROR: unsupported structured binding / DecompositionDecl with 3
+//        bindings [sdscName, opCategory, idealCycles] of type
+//        `const std::tuple<std::string, std::string, long> &` is not implemented,
+//        reached while converting `PerfModel::exportS...`
+//    -- an unrelated decomposition gate EARLIER in emission order, so the `<<`
+//    sites are not reached on this TU at all and the `<<` abort is UNOBSERVED
+//    here.  The refcount arm therefore stays loud; the unsafe arm was never loud.
+//    Closing the output half needs a NEW `OStream`
+//    model with sticky format state (`libcc2rs`'s ostream is `std::fs::File`,
+//    t1/t2/t3, which has no format state at all), which is a separate row.
 // ============================================================================
+using t6 = std::ios_base;
+
+std::istream &f101(std::istream &o, std::ios_base &(*m)(std::ios_base &)) {
+  return o.operator>>(m);
+}
+
+std::ios_base &f102(std::ios_base &a0) { return std::hex(a0); }
+
+std::ios_base &f103(std::ios_base &a0) { return std::dec(a0); }
+
+std::ios_base &f104(std::ios_base &a0) { return std::oct(a0); }
+
+// ============================================================================
+// ⛔ STILL DELIBERATELY NOT KEYED, AND THIS HALF OF THE OLD REFUSAL STANDS:
+// THE **OUTPUT** MANIPULATORS.  `oss << std::left`, `<< std::setw(n)`,
+// `<< std::setfill(c)`, and their `std::setprecision`/`std::fixed`/
+// `std::boolalpha` siblings (rows g858/g861).
+//
+// WHAT IS ABSENT FROM THE MODEL: an ostream with format state.  This module's
+// ostream is `std::fs::File` (t1/t2/t3, f1-f4) -- a File has no basefield, no
+// width, no fill and no adjustfield, exactly as `IStream` had no read cursor
+// before it was written.  So this is a MODEL gap, not a missing key, and t6 above
+// does not help: t6 is the BASEFIELD word and `std::left`/`std::setw` live in
+// `adjustfield`/`width`, which nothing in either model holds.
+//
+// FAILURE MODE OF THE ALTERNATIVE: an identity `std::setw` drops the padding and
+// an identity `std::boolalpha` prints `1` where C++ prints `true` -- a silently
+// mis-shaped column in a performance report, rc=0, no placeholder, no diagnostic
+// at any stage of this harness.  That is the forbidden trade, and it is why the
+// output half is left aborting.
+//
+// DISCRIMINATOR -- a landed key where the same shape IS correct: f101 above.
+// Same `ios_base` manipulator shape, same fn-pointer operand, and it lands
+// because the ONLY state its three manipulators touch is the basefield, and
+// `IStream` holds a real basefield.  So the blocker is the OSTREAM MODEL and not
+// manipulators being unkeyable.
+//
+// NAMED UNBLOCKER, IN THE RIGHT LAYER: a new `libcc2rs::OStream` carrying sticky
+// `basefield`/`adjustfield`/`width`/`fill`/`precision`/`boolalpha`, plus
+// re-pointing t1/t2/t3 and f1-f4 off `std::fs::File` onto it.  Sized in
+// verif/g3090/ostream-surface.txt: 4 manipulator families over 8 spellings,
+// measured site and TU counts.
+//
+// ⛔⛔ AND IT IS **NOT** UNIFORMLY LOUD -- THE OPPOSITE OF WHAT THIS FILE USED TO
+// CLAIM, AND THE CORRECTION IS MEASURED.  Detail in section 4 above; the summary a
+// later slot needs is: in the UNSAFE model `perfmodel.cpp` does not abort at all,
+// before OR after this row (byte-identical 45,995-line output in both legs), and
+// `<< std::setw(width)` lowers to a bare `(*width)` argument -- the manipulator
+// becomes DATA.  Only `std::left` (undefined name `left_166`) and
+// `std::setfill(' ')` (the g3058 `Cpp2RustUnmappedFn_` sentinel) stop it
+// compiling, so the loudness the g858/g861 refusal was resting on is an artifact
+// of two OTHER unkeyed names, not of a gate.  In the REFCOUNT model t6 does move
+// perfmodel.cpp, to an unrelated EARLIER decomposition gate, so the `<<` abort is
+// UNOBSERVED there too.  ⚠️ A LATER SLOT MUST NOT READ "the output half aborts on
+// <<" OFF THIS FILE.  The `>>` sibling abort WAS seen, in isolation, in
+// verif/g3090/hexrow.*.tlog before f101 landed.
+//
+// ⛔ WHAT THIS ROW NEWLY EXPOSES, STATED PLAINLY BECAUSE IT IS A FALSE-CLOSURE
+// RISK IT CREATES: clearing the `>>` gate lets `dip/dip.cpp` and
+// `dip/dip_standalone1.cpp` translate PAST it, and what lies behind it on those
+// two TUs is more of the SAME silent class, in `std::ios`/`std::ios_base` roles
+// this row does not key --
+//     (*inpFile).seekg_i64_i32(0_i64, std_ios_base_seekdir_end)
+//     std_ios_base::sync_with_stdio(Some(false))
+// -- `seekg` itself, the `seekdir` enumerators and the `sync_with_stdio` static
+// are ALL unkeyed and all lower to undefined names at rc=0.  They were previously
+// unreachable behind the `>>` abort.  So `dip.cpp`/`dip_standalone1.cpp` go from
+// "aborts loudly" to "rc=0 and does not compile (E0425)": still detectable, but
+// ONLY at rustc, never by a translate-time census.  89 nested `std::ios::`/
+// `std::ios_base::` sites across the corpus (37 of them `sync_with_stdio`) are in
+// that class.  Keying them needs a get-position model on the ifstream mapping,
+// which `rules/istringstream` already refuses by name -- a separate row.
+// ============================================================================
+

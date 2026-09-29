@@ -302,19 +302,61 @@ fn f100(a0: Ptr<libcc2rs::IStream>, a1: Ptr<u8>) -> Ptr<libcc2rs::IStream> {
     __s
 }
 
-// ⛔⛔ THERE IS DELIBERATELY NO f101/f102/f103/f104 IN THIS FILE EITHER, and a
-// reader who greps for them should find this note rather than silence.  The
-// `std::ios_base` manipulator overload of `operator>>` and the three `basefield`
-// manipulators are UNKEYED in BOTH models, so `in >> std::hex` still aborts
-// LOUDLY at translate time.  The four-part refusal and its measurements are in
-// src.cpp; the shape those keys should take is recorded once, in tgt_unsafe.rs.
+// ⚠️ THE NOTE THAT USED TO SIT HERE SAID "THERE IS DELIBERATELY NO
+// f101/f102/f103/f104 IN THIS FILE EITHER".  THAT IS NO LONGER TRUE and the note
+// is removed rather than left to mislead a grepper: all four are landed, directly
+// below, in both models.  The constraint the old note carried is still live and is
+// restated at the new block: this module HAS a tgt_refcount.rs, so it must carry
+// EVERY key in ir_src.json or the converter ABORTS AT LOAD TIME in the refcount
+// model and poisons every translation (the f5/f6 incident above).
+
+// ============================================================================
+// t6 / f101-f104 -- `in >> std::hex`.  See src.cpp for the recorded key strings,
+// the measurement that overturned g2894's refusal, and why `std::ios_base` is a
+// `u32`.  ⛔ DO NOT COPY THE MANIPULATOR PARAMETER TYPE FROM tgt_unsafe.rs: the two
+// models are MEASURABLY different at this position and the reason is recorded at
+// f101 below.
 //
-// ⛔ AND THE CONSTRAINT WHOEVER LANDS THEM MUST NOT MISS, because this module
-// HAS a tgt_refcount.rs: it must then carry EVERY key.  Omitting one here leaves
-// ir_refcount.json short of ir_src.json and the converter ABORTS AT LOAD TIME in
-// the refcount model, poisoning every translation -- the incident documented at
-// f5/f6 above.  f102-f104 would be model-INDEPENDENT constants, so they are
-// restated byte-identically rather than inherited.
+// t6 is model-independent (a bare u32 formatting-state word), so it is RESTATED
+// byte-identically here rather than inherited -- `ir_refcount.json` must carry
+// every key `ir_src.json` does or the converter aborts at LOAD TIME, which is the
+// incident recorded at f5/f6 above.
+fn t6() -> u32 {
+    libcc2rs::IOS_BASEFIELD_DEC
+}
+
+// f101 -- the MEMBER `operator>>(std::ios_base &(*)(std::ios_base &))`.
+// A `Ptr` is a VALUE here, so the `let` prelude is the idiom (f8/f11/f100): each
+// `aN` is bound once and the cell is reached through `with_mut_ref`.  Unlike the
+// unsafe arm there is no raw pointer to hand back -- the stream `Ptr` itself is
+// the result, so the manipulator's effect and the return are separate statements.
 //
-// ⭐ What IS landed in both models is `libcc2rs::IStream::basefield` itself; only
-// the keys that would set it are missing.
+// ⚠️⚠️ `a1` IS A `fn` ITEM, AND ITS TYPE IS **NOT** THE UNSAFE ARM'S.  MEASURED
+// from the emitted text: on this arm the converter passes the operand with NO
+// cast at all --
+//     let __m = libcc2rs::hex_refcount;
+// -- whereas the unsafe arm emits `(libcc2rs::hex_unsafe as unsafe fn(*mut u32)
+// -> *mut u32)`.  So there is no `Ptr<u32>` in the emitted text to match and the
+// plain state-transformer shape is what type-checks here.  It is `Copy`, so
+// naming it inside the `with_mut_ref` closure is sound.
+fn f101(a0: Ptr<libcc2rs::IStream>, a1: fn(u32) -> u32) -> Ptr<libcc2rs::IStream> {
+    let __s = a0;
+    let __m = a1;
+    __s.with_mut_ref(|__st| __st.set_basefield_via_value(__m));
+    __s
+}
+
+// f102-f104 -- `std::hex` / `std::dec` / `std::oct`.  Model-independent apart from
+// the name the converter asks for (`MapFunctionName` appends the model suffix
+// unconditionally), which is exactly why libcc2rs defines BOTH twins.
+fn f102(a0: u32) -> u32 {
+    libcc2rs::hex_refcount(a0)
+}
+
+fn f103(a0: u32) -> u32 {
+    libcc2rs::dec_refcount(a0)
+}
+
+fn f104(a0: u32) -> u32 {
+    libcc2rs::oct_refcount(a0)
+}

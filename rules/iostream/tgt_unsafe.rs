@@ -313,58 +313,98 @@ unsafe fn f18(a0: &mut libcc2rs::IStream, a1: &mut f64) -> *mut libcc2rs::IStrea
 // path -- so an unconditional write-back would zero `remaining_char` on exactly
 // the read the program asserts must fail.
 //
-// `a1` IS A REFERENCE TO A PRIMITIVE, which the converter DOES emit as
-// `&mut lvalue` (rules/string f82 is the standing precedent).  It is bound to
-// `__p` once so the staging byte can be written back without naming `a1` twice --
-// an `aN` re-expands to the caller's expression verbatim, so a second mention
-// would re-evaluate it.
-unsafe fn f100(
-    a0: &mut libcc2rs::IStream,
-    a1: &mut libc::c_char,
-) -> *mut libcc2rs::IStream {
-    let __p = a1;
+// ⛔⛔ THE `a1` PARAMETER TYPE IS A FIX, AND THE CLAIM IT REPLACES WAS WRONG.
+// This key shipped with `a1: &mut libc::c_char` and a comment asserting "`a1` IS A
+// REFERENCE TO A PRIMITIVE, which the converter DOES emit as `&mut lvalue`
+// (rules/string f82 is the standing precedent)".  MEASURED, that is false for this
+// key: the translated `.rs` for `iss >> remaining_char` reads, verbatim,
+//     let __p = remaining_char;
+//     ...
+//     *__p = __c as libc::c_char;
+// -- the operand re-expands to the BARE LVALUE, exactly as the `a0` note three
+// paragraphs up says it does, so `*__p` is `error[E0614]: type `i8` cannot be
+// dereferenced`.  ⭐ IT TRANSLATED rc=0 AND DID NOT COMPILE: rustfmt parses it,
+// no placeholder appears, and nothing in a bucket census can see it.  The f82
+// "precedent" is not one -- nothing has ever compiled an f82 call site.
+//
+// ⭐ THE FIX USES SUBSTITUTION RATHER THAN A REFERENCE: `a1` is declared at the
+// operand's ACTUAL type (a `c_char` VALUE) and assigned to, so after inlining the
+// body reads `remaining_char = __c as libc::c_char;` -- a plain assignment to the
+// caller's own lvalue, which is what the C++ `char &` out-parameter means.  `a1`
+// is still named exactly ONCE, so the caller's expression is not re-evaluated.
+// Verified end-to-end, not argued: with this signature the hexrow probe compiles
+// and its output is BYTE-EXACT against clang in BOTH models (verif/g3090/).
+unsafe fn f100(a0: &mut libcc2rs::IStream, mut a1: libc::c_char) -> *mut libcc2rs::IStream {
     let mut __c: u8 = 0;
     let (__r, __stored) = a0.extract_char_reporting(&mut __c);
     if __stored {
-        *__p = __c as libc::c_char;
+        a1 = __c as libc::c_char;
     }
     __r
 }
 
 // ============================================================================
-// ⛔⛔ THERE IS DELIBERATELY NO f101/f102/f103/f104 IN THIS FILE, AND THE WHOLE
-// POINT OF THIS BLOCK IS TO SAY SO IN THE PLACE A READER WILL LOOK FOR THEM.
-// The member `operator>>(std::ios_base &(*)(std::ios_base &))` (i.e.
-// `in >> std::hex`) and the three manipulators `std::hex`/`std::dec`/`std::oct`
-// are UNKEYED, so `in >> std::hex` still aborts LOUDLY at translate time.  The
-// four-part refusal, the verbatim aborts, and the measurement that keying the
-// operator alone only moves the abort one step onto `std::ios_base` (row g2894)
-// are all in src.cpp -- read that, not this.
+// t6 / f101-f104 -- `in >> std::hex`.  This block REPLACES the "THERE IS
+// DELIBERATELY NO f101/f102/f103/f104 IN THIS FILE" note that stood here: the
+// four keys are now landed, the reason they were held back (no `std::ios_base`
+// type rule, row g2894) turned out to be a spelling worry that the preprocessor
+// does not actually have, and the fn-pointer parameter round-trips.  The full
+// record -- recorded key strings, the measurement, why `u32`, and what is still
+// refused -- is in src.cpp.  Read that, not this.
 //
-// ⭐ WHAT *IS* LANDED IS THE MODEL UNDERNEATH THEM: `libcc2rs::IStream` now
-// carries a real `basefield` (10/16/8, defaulting to 10) that `extract_i64` /
-// `extract_u64` consume, verified against executed C++ ground truth.  It is
-// landed ahead of its keys on purpose, on this module's own f12/f15/f16
-// precedent, so that whoever lands g2894 has only the keys left to write.
+// t6 -- `std::ios_base` as the formatting-state WORD.  Model-independent (a bare
+// u32), so tgt_refcount.rs restates it byte-identically rather than inheriting.
+// The initializer is base 10 because that is `ios_base`'s default basefield.
+fn t6() -> u32 {
+    libcc2rs::IOS_BASEFIELD_DEC
+}
+
+// f101 -- the MEMBER `operator>>(std::ios_base &(*)(std::ios_base &))`.
 //
-// THE SHAPE THOSE FOUR KEYS SHOULD TAKE, recorded so it is not re-derived:
+// ⛔⛔ THE PARAMETER TYPE IS MEASURED FROM THE EMITTED TEXT, NOT CHOSEN.  A keyed
+// system function that is NAMED rather than CALLED lowers to the `fn` ITEM
+// `libcc2rs::hex_unsafe` (mapper.cpp:2660) -- but the converter does not hand it
+// over bare, it CASTS it to the model-mapped C++ type.  The translated
+// util/sendefs/sendefs.cpp reads, verbatim:
+//     (*ss.shr_ios_manip((libcc2rs::hex_unsafe as unsafe fn(*mut u32) -> *mut u32)))
+// so with t6 = `u32` the operand's type is `unsafe fn(*mut u32) -> *mut u32`.
+// ⭐ THE FIRST VERSION OF THIS KEY USED `fn(u32) -> u32` AND IT TRANSLATED rc=0 --
+// the wrong signature is invisible to rustfmt and would have surfaced as an E0308
+// one stage later.  Reading the emitted cast is what caught it.  Same shape as the
+// refcount arm's f101, which emits NO cast and therefore needs a DIFFERENT
+// signature; see tgt_refcount.rs.
 //
-//   * `u32`, NOT A FUNCTION POINTER, for the manipulator parameter.  The C++
-//     parameter is `std::ios_base &(*)(std::ios_base &)`, but a rule body is
-//     INLINED and the only argument text that can ever appear at that position
-//     is one of the three `libcc2rs::IOS_BASEFIELD_*` constants.  Modelling it
-//     as an actual `fn(&mut …) -> &mut …` would require the `std::ios_base`
-//     type rule and would buy nothing: there is no `ios_base` VALUE anywhere in
-//     either model to pass to such a function.
-//   * `shr_basefield` returns the stream for the same reason `shr_i64` does, so
-//     `inFile >> std::hex >> lineno` would lower to
-//     `shr_i64(shr_basefield(inFile, HEX), &mut lineno)` and the read would see
-//     the base the manipulator set.  Each operand is named exactly once.
+// ⛔ ONE METHOD CALL ON `a0`, FOR f8/f100's REASON: an `aN` for an
+// `std::istream &` parameter re-expands to the BARE LVALUE, so binding it to a
+// local gives E0308 at rc=0 with no placeholder.  A method call is immune because
+// Rust auto-refs the receiver.  Each `aN` is named exactly once.
 //
-// ⭐ AND THE AUDIT THAT WOULD MAKE THE LANDED VERSION CHECKABLE: because bodies
-// are inlined, a correct `in >> std::hex` must emit
-// `inFile.shr_basefield(libcc2rs::IOS_BASEFIELD_HEX)`, so grepping the emitted
-// `.rs` for `IOS_BASEFIELD_HEX` proves the base was threaded through rather than
-// dropped.  An identity body would leave NO trace at all -- which is exactly what
-// would make that trade undetectable at every stage of this harness.
-// ============================================================================
+// ⭐ THE AUDIT THIS MAKES POSSIBLE: because the body is inlined, a correct
+// `inFile >> std::hex` must emit `shr_ios_manip(libcc2rs::hex_unsafe)` into the
+// translated `.rs`, so grepping for `hex_unsafe` proves the base was threaded
+// through rather than dropped.  An identity body would leave no trace at all.
+unsafe fn f101(
+    a0: &mut libcc2rs::IStream,
+    a1: unsafe fn(*mut u32) -> *mut u32,
+) -> *mut libcc2rs::IStream {
+    a0.shr_ios_manip(a1)
+}
+
+// f102-f104 -- `std::hex` / `std::dec` / `std::oct` themselves, at libcxx's own
+// arity-1 signature.  No corpus site CALLS a manipulator, so no corpus site
+// inlines these bodies; their job is to put the three names in `exprs_` so that
+// `Mapper::MapFunctionName` takes its `libcc2rs::` branch at the DECLREF site
+// instead of its mangled-name fallback (which, being an `assert`, is silent under
+// -DNDEBUG).  They forward to the same items that branch names, so the two routes
+// cannot disagree -- rules/cctype + libcc2rs::cctype is the precedent.
+unsafe fn f102(a0: *mut u32) -> *mut u32 {
+    libcc2rs::hex_unsafe(a0)
+}
+
+unsafe fn f103(a0: *mut u32) -> *mut u32 {
+    libcc2rs::dec_unsafe(a0)
+}
+
+unsafe fn f104(a0: *mut u32) -> *mut u32 {
+    libcc2rs::oct_unsafe(a0)
+}

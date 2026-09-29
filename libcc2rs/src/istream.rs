@@ -208,6 +208,87 @@ impl IStream {
         self
     }
 
+    /// Apply an `std::ios_base` MANIPULATOR to this stream's formatting state,
+    /// in the UNSAFE model's spelling.
+    ///
+    /// This is the lowering of `in >> std::hex`, i.e. of the member
+    /// `basic_istream::operator>>(ios_base &(*)(ios_base &))`
+    /// (`rules/iostream` f101).  The manipulator arrives as a real Rust `fn`
+    /// item, because that is what the converter emits for a keyed system
+    /// function that is NAMED rather than CALLED: `libcc2rs::hex_unsafe`
+    /// (`Mapper::MapFunctionName`, cpp2rust/converter/mapper.cpp:2660).  Same
+    /// two-route shape as `rules/cctype` + `libcc2rs::cctype`.
+    ///
+    /// ⛔⛔ THE PARAMETER TYPE IS NOT A DESIGN CHOICE, IT IS MEASURED.  The
+    /// converter does not hand the operand over bare -- it CASTS it to the
+    /// model-mapped C++ type.  The emitted text on
+    /// `util/sendefs/sendefs.cpp:432`, read out of the translated `.rs`, is
+    /// literally
+    ///     (*ss.shr_ios_manip((libcc2rs::hex_unsafe as unsafe fn(*mut u32) -> *mut u32)))
+    /// so with `rules/iostream` t6 mapping `std::ios_base` to `u32`, the operand's
+    /// type is `unsafe fn(*mut u32) -> *mut u32` and nothing else type-checks.
+    /// A first attempt used `fn(u32) -> u32` here; it translated rc=0 and would
+    /// have failed one stage later with E0308, which is exactly the class of
+    /// error `rc=0` cannot see.
+    ///
+    /// ⭐ AND IT IS THE MORE FAITHFUL SHAPE ANYWAY: `ios_base& hex(ios_base& s)`
+    /// really does mutate its argument and hand it back, so the state word is
+    /// passed BY ADDRESS, the manipulator writes through it, and the returned
+    /// pointer is read back.  A null return is treated as "no change" rather than
+    /// dereferenced, because a manipulator that loses its argument must not turn
+    /// into a segfault inside a stream read.
+    ///
+    /// # Safety
+    /// `manip` must be one of the `libcc2rs::{hex,dec,oct}_unsafe` items, or any
+    /// function that accepts a valid `*mut u32` and returns either null or a
+    /// pointer that is valid for reads.
+    pub unsafe fn set_basefield_via(&mut self, manip: unsafe fn(*mut u32) -> *mut u32) {
+        let mut word = self.basefield;
+        // SAFETY: `&mut word` is valid for reads and writes for the call, and the
+        // contract on `manip` says the pointer it returns is null or readable.
+        let next = unsafe {
+            let out = manip(&mut word as *mut u32);
+            if out.is_null() {
+                word
+            } else {
+                *out
+            }
+        };
+        self.set_basefield(next);
+    }
+
+    /// The RULE-ABI form of [`Self::set_basefield_via`]: hands the stream back,
+    /// so `inFile >> std::hex >> lineno` chains exactly as `shr_i64` does and each
+    /// operand is named exactly once.
+    ///
+    /// # Safety
+    /// See [`Self::set_basefield_via`].
+    pub unsafe fn shr_ios_manip(
+        &mut self,
+        manip: unsafe fn(*mut u32) -> *mut u32,
+    ) -> *mut Self {
+        // SAFETY: forwarding this function's own contract on `manip`.
+        unsafe { self.set_basefield_via(manip) };
+        self
+    }
+
+    /// The REFCOUNT model's spelling of the same operation.
+    ///
+    /// ⚠️ THE TWO MODELS ARE ASYMMETRIC HERE AND THAT IS MEASURED, NOT SLOPPY.
+    /// On the refcount arm the converter emits the operand with NO cast at all --
+    /// the translated `.rs` for the same C++ site reads
+    ///     let __m = libcc2rs::hex_refcount;
+    ///     __s.with_mut_ref(|__st| __st.set_basefield_via_value(__m));
+    /// -- so there is no `Ptr<u32>` in the emitted text to match and the plain
+    /// state-transformer shape is both what type-checks and what is simplest.
+    /// `hex_refcount` therefore has a different signature from `hex_unsafe`; they
+    /// are different names to begin with, because `MapFunctionName` appends the
+    /// model suffix unconditionally.
+    pub fn set_basefield_via_value(&mut self, manip: fn(u32) -> u32) {
+        let next = manip(self.basefield);
+        self.set_basefield(next);
+    }
+
     // -- the sentry -----------------------------------------------------------
 
     /// `basic_istream::sentry` with `noskipws == false`: returns false when the
@@ -772,6 +853,93 @@ shr_fn!(istream_shr_u32, u32, extract_u32);
 shr_fn!(istream_shr_f64, f64, extract_f64);
 shr_fn!(istream_shr_u8, u8, extract_u8);
 shr_fn!(istream_shr_string, Vec<u8>, extract_token);
+
+// ════════════════════════════════════════════════════════════════════════════
+// `std::hex` / `std::dec` / `std::oct` AS REAL FUNCTION ITEMS.
+//
+// WHY THESE EXIST AT ALL, AND WHY THEY ARE NOT RULE BODIES.  `rules/iostream`
+// f102/f103/f104 key the three manipulators, but the corpus never CALLS one --
+// it only NAMES one, as the operand of `in >> std::hex`.  An inlined rule body
+// has no address, so for a NAMED keyed system function the converter emits
+// `libcc2rs::<name>_<model>` instead (`Mapper::MapFunctionName`,
+// cpp2rust/converter/mapper.cpp:2660: `std::format("libcc2rs::{}_{}", ...)`).
+// These are those six names.  `libcc2rs/src/cctype.rs` is the standing
+// precedent for the identical two-route shape (`::tolower` named vs called).
+//
+// ⛔ THE `_unsafe` TWINS ARE NOT DECORATION.  `MapFunctionName` appends the
+// model suffix unconditionally, so the unsafe arm asks for `hex_unsafe` and the
+// refcount arm for `hex_refcount`; a single name satisfies exactly one of the
+// two models and leaves the other with an E0425 at rc=0.  They forward to one
+// body so the two models cannot drift, exactly as `tolower_unsafe` does.
+//
+// SEMANTICS, MEASURED AGAINST EXECUTED C++ (g3084probe/hexrow.cpp):
+// `ios_base& hex(ios_base& s) { s.setf(ios_base::hex, ios_base::basefield); return s; }`
+// -- the whole observable effect on an INPUT stream is the new basefield, and
+// it is STICKY (`in >> std::hex >> a >> b` reads BOTH in hex; `>> std::dec`
+// restores 10).  The incoming state word is therefore DISCARDED rather than
+// masked: `setf(v, mask)` REPLACES the masked field, it does not or-in.
+//
+// ⛔⛔ THE STATE WORD IS THE BASEFIELD, NOT THE WHOLE `fmtflags`.  `rules/iostream`
+// t6 maps `std::ios_base` to this one `u32`, which is honest for the three radix
+// manipulators and is ALL the corpus's input half needs.  It is NOT a model of
+// `adjustfield`/`floatfield`/`fill`/`width`, so `std::left`, `std::right`,
+// `std::setw`, `std::setfill`, `std::setprecision`, `std::fixed` and
+// `std::boolalpha` MUST NOT be keyed onto it -- each would silently clobber the
+// radix while modelling none of its own effect.  Those stay unkeyed and loud
+// (rows g858/g861); see `rules/iostream/src.cpp`.
+pub fn hex_refcount(a0: u32) -> u32 {
+    let _ = a0;
+    IOS_BASEFIELD_HEX
+}
+
+pub fn dec_refcount(a0: u32) -> u32 {
+    let _ = a0;
+    IOS_BASEFIELD_DEC
+}
+
+pub fn oct_refcount(a0: u32) -> u32 {
+    let _ = a0;
+    IOS_BASEFIELD_OCT
+}
+
+/// The UNSAFE arm's spelling: `std::ios_base &` maps to `*mut u32`, so the
+/// manipulator mutates the state word in place and returns it, exactly as
+/// `ios_base& hex(ios_base&)` does.  See [`IStream::set_basefield_via`] for the
+/// emitted cast this signature is derived from.
+///
+/// # Safety
+/// `a0` must be null or valid for reads and writes of a `u32`.
+pub unsafe fn hex_unsafe(a0: *mut u32) -> *mut u32 {
+    if !a0.is_null() {
+        // SAFETY: the caller guarantees `a0` is valid for reads and writes.
+        unsafe { *a0 = hex_refcount(*a0) };
+    }
+    a0
+}
+
+/// See [`hex_unsafe`].
+///
+/// # Safety
+/// See [`hex_unsafe`].
+pub unsafe fn dec_unsafe(a0: *mut u32) -> *mut u32 {
+    if !a0.is_null() {
+        // SAFETY: the caller guarantees `a0` is valid for reads and writes.
+        unsafe { *a0 = dec_refcount(*a0) };
+    }
+    a0
+}
+
+/// See [`hex_unsafe`].
+///
+/// # Safety
+/// See [`hex_unsafe`].
+pub unsafe fn oct_unsafe(a0: *mut u32) -> *mut u32 {
+    if !a0.is_null() {
+        // SAFETY: the caller guarantees `a0` is valid for reads and writes.
+        unsafe { *a0 = oct_refcount(*a0) };
+    }
+    a0
+}
 
 pub fn istream_fail(s: Ptr<IStream>) -> bool {
     s.with_ref(IStream::fail)
@@ -1366,5 +1534,99 @@ mod tests {
         assert_eq!((r, stored, ch), (12, false, b'x'));
         assert!(st.fail());
         assert!(!st.to_bool());
+    }
+
+    // THE f101 LOWERING ITSELF, in the exact shape the converter emits.
+    // `rules/iostream` bodies are INLINED, so `inFile >> std::hex >> lineno`
+    // becomes literally
+    //     libcc2rs::IStream::shr_i64(&mut *inFile.shr_ios_manip(libcc2rs::hex_unsafe), &mut lineno)
+    // and the test below is that text, with the same `fn` items the converter
+    // names.  The test above proved the RADIX; this one proves the MANIPULATOR
+    // is threaded through it rather than dropped -- which is precisely what an
+    // identity `std::hex` would make undetectable.  Values are the C++ program's
+    // own output (g3084probe/hexrow.cxxout), copied over unchanged.
+    #[test]
+    fn ios_manipulators_thread_the_base_through_and_match_cpp() {
+        // ⭐ THE TWO ARRAY TYPES ARE THE EXACT TYPES THE CONVERTER WRITES, copied
+        // from the emitted `.rs` -- the unsafe arm casts the operand
+        // (`libcc2rs::hex_unsafe as unsafe fn(*mut u32) -> *mut u32`), the refcount
+        // arm emits it bare (`let __m = libcc2rs::hex_refcount;`).  If either
+        // signature drifts from what its `set_basefield_via*` accepts, these stop
+        // compiling here instead of as an E0308 in a translated TU.
+        let unsafe_arm: [unsafe fn(*mut u32) -> *mut u32; 3] =
+            [hex_unsafe, dec_unsafe, oct_unsafe];
+        let refcount_arm: [fn(u32) -> u32; 3] = [hex_refcount, dec_refcount, oct_refcount];
+        for m in refcount_arm {
+            assert!(matches!(
+                m(IOS_BASEFIELD_DEC),
+                IOS_BASEFIELD_HEX | IOS_BASEFIELD_DEC | IOS_BASEFIELD_OCT
+            ));
+        }
+        for m in unsafe_arm {
+            let mut w = IOS_BASEFIELD_DEC;
+            let out = unsafe { m(&mut w as *mut u32) };
+            assert!(!out.is_null());
+            assert!(matches!(
+                unsafe { *out },
+                IOS_BASEFIELD_HEX | IOS_BASEFIELD_DEC | IOS_BASEFIELD_OCT
+            ));
+            // The pointer arm mutates IN PLACE and returns the same address, which
+            // is what `set_basefield_via` relies on.
+            assert_eq!(out as usize, &mut w as *mut u32 as usize);
+            assert_eq!(w, unsafe { *out });
+        }
+        // `setf` REPLACES the masked field, so the incoming state is irrelevant.
+        let via = |m: unsafe fn(*mut u32) -> *mut u32, incoming: u32| -> u32 {
+            let mut w = incoming;
+            unsafe { *m(&mut w as *mut u32) }
+        };
+        assert_eq!(via(hex_unsafe, IOS_BASEFIELD_OCT), IOS_BASEFIELD_HEX);
+        assert_eq!(via(dec_unsafe, IOS_BASEFIELD_HEX), IOS_BASEFIELD_DEC);
+        assert_eq!(via(oct_unsafe, IOS_BASEFIELD_HEX), IOS_BASEFIELD_OCT);
+        assert_eq!(hex_refcount(IOS_BASEFIELD_OCT), IOS_BASEFIELD_HEX);
+        assert_eq!(dec_refcount(IOS_BASEFIELD_HEX), IOS_BASEFIELD_DEC);
+        assert_eq!(oct_refcount(IOS_BASEFIELD_HEX), IOS_BASEFIELD_OCT);
+
+        // hex[31,32,156] -- memDumpAnalyzer.h:244, `>> std::hex >> lineno` then a
+        // second STICKY extraction, then the address arithmetic.
+        let mut st = IStream::from_bytes(b"1f 20".to_vec());
+        let (mut lineno, mut bank) = (0i64, 0i64);
+        unsafe {
+            IStream::shr_i64(&mut *st.shr_ios_manip(hex_unsafe), &mut lineno);
+        }
+        st.shr_i64(&mut bank);
+        assert_eq!((lineno, bank, lineno * 4 + bank), (31, 32, 156));
+
+        // decrestore[16,10] -- `>> std::hex >> a >> std::dec >> b`, one chain.
+        let mut st = IStream::from_bytes(b"10 10".to_vec());
+        let (mut a, mut b) = (0i64, 0i64);
+        unsafe {
+            IStream::shr_i64(&mut *st.shr_ios_manip(hex_unsafe), &mut a);
+            IStream::shr_i64(&mut *st.shr_ios_manip(dec_unsafe), &mut b);
+        }
+        assert_eq!((a, b), (16, 10));
+
+        // oct[15]
+        let mut st = IStream::from_bytes(b"17".to_vec());
+        let mut e = 0i64;
+        unsafe {
+            IStream::shr_i64(&mut *st.shr_ios_manip(oct_unsafe), &mut e);
+        }
+        assert_eq!(e, 15);
+
+        // hexfail[0,0] -- "zz" is not hex; failbit set and LWG 2176 zeroes the out.
+        let mut st = IStream::from_bytes(b"zz".to_vec());
+        let mut z = 5i64;
+        unsafe {
+            IStream::shr_i64(&mut *st.shr_ios_manip(hex_unsafe), &mut z);
+        }
+        assert_eq!((i32::from(st.to_bool()), z), (0, 0));
+
+        // AND THE CONTROL: no manipulator anywhere, dec[42,-7] unchanged.
+        let mut st = IStream::from_bytes(b"42 -7".to_vec());
+        let (mut p, mut q) = (0i64, 0i64);
+        st.shr_i64(&mut p);
+        st.shr_i64(&mut q);
+        assert_eq!((p, q), (42, -7));
     }
 }
