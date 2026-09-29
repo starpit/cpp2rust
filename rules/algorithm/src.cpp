@@ -159,7 +159,15 @@ void f18(std::string::iterator a0, std::string::iterator a1, const char &a2,
 }
 
 // ===========================================================================
-// ⛔⛔ `std::transform` (4-ARY, OVER `std::__wrap_iter<char *>`) IS NOT KEYABLE
+// ⭐⭐ SUPERSEDED IN PART by f19 below (2026-09-29).  The mechanism analysis in this
+// block is CORRECT and is why f19 exists -- but its verdict "NOT KEYABLE TODAY /
+// BOTH KEYS ARE DELIBERATELY ABSENT" is now FALSE for the BY-NAME (fn-pointer)
+// spelling: converter commit b1c42014 made a mapped function referenced BY NAME in a
+// rule-placeholder operand lower to the CALLABLE form instead of a zero-argument
+// call, which is exactly the abort this block describes.  The TYPE-VARIABLE finding
+// below still stands and is why the GENERIC spelling remains unwritten -- see f19.
+// ===========================================================================
+// ===========================================================================
 // TODAY, AND THE REASON IS A CONVERTER GAP, NOT A MISSING SPELLING.  MEASURED
 // 2026-09-29 on the GOAL TU (dxp/dxp_standalone.cpp), twice.
 //
@@ -190,8 +198,31 @@ void f18(std::string::iterator a0, std::string::iterator a1, const char &a2,
 // ⭐ A TYPE VARIABLE CANNOT DODGE IT: the operand placeholder unifies with
 // `int (*)(int) noexcept` too, so the lambda-only key aborts at the SAME site --
 // measured separately, with f20 removed and f19 alone in the tree.
-// ⛔ SO BOTH KEYS ARE DELIBERATELY ABSENT and all 3 sites stay LOUD.  What has to
 // land first is the CONVERTER: passing a mapped function BY NAME as a callable
 // operand must lower to the callable form (as the unmapped path already does)
 // instead of being translated as a 0-argument call of that function's rule.
 // ===========================================================================
+// f19 -- `std::transform(first, last, d_first, <int (*)(int) noexcept>)`, the
+// `::tolower` LOWERCASING IDIOM over a `std::string`, passed BY NAME.  It is
+// keyable only since the converter learned to lower a by-name function operand
+// as a CALLABLE instead of as a zero-argument call of that function's own rule
+// (converter.cpp ConvertFnPtrCallee) -- before that, ANY rule matching the
+// enclosing `transform` aborted with `rule body references placeholder a0 but
+// the call site supplies only 0 argument(s)` at the OPERAND, not at the call.
+//
+// THE OPERAND IS SPELLED CONCRETELY, NOT AS A TYPE VARIABLE, ON PURPOSE.  A
+// generic `T1` operand records fine and matches the two LAMBDA sites
+// (`[](unsigned char c) { return std::tolower(c); }`) as well -- but one Rust
+// `where T1: Callable1<A, R>` cannot serve both shapes: the by-name operand
+// arrives as `unsafe fn(i32) -> i32` (`Callable1<i32, i32>`) and the lambda as a
+// closure over `unsigned char`.  The lambda sites therefore stay LOUD rather
+// than being swallowed into a body whose bound would be wrong for them.
+//
+// `std::string::iterator` for the iterators, exactly as f13/f18 do: the site's
+// iterators are `std::__wrap_iter<char *>` and a `T1 *` spelling records a DEAD
+// key (see f18's readback correction).
+std::string::iterator f19(std::string::iterator a0, std::string::iterator a1,
+                          std::string::iterator a2,
+                          int (*a3)(int) noexcept) {
+  return std::transform(a0, a1, a2, a3);
+}

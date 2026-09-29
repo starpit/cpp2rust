@@ -128,3 +128,14 @@ fn f18(a0: Ptr<u8>, a1: Ptr<u8>, a2: Ptr<u8>, a3: Ptr<u8>) {
         __it += 1;
     }
 }
+
+fn f19(a0: Ptr<u8>, a1: Ptr<u8>, a2: Ptr<u8>, a3: unsafe fn(i32) -> i32) -> Ptr<u8> {
+    let mut __it = a0;
+    let mut __out = a2;
+    while __it != a1 {
+        __out.write(a3.call(__it.read() as i32) as u8);
+        __it += 1;
+        __out += 1;
+    }
+    __out
+}

@@ -147,3 +147,19 @@ unsafe fn f18(
         __it = __it.add(1);
     }
 }
+
+unsafe fn f19(
+    a0: *mut libc::c_char,
+    a1: *mut libc::c_char,
+    a2: *mut libc::c_char,
+    a3: unsafe fn(i32) -> i32,
+) -> *mut libc::c_char {
+    let mut __it = a0;
+    let mut __out = a2;
+    while __it != a1 {
+        *__out = a3.call(*__it as i32) as libc::c_char;
+        __it = __it.add(1);
+        __out = __out.add(1);
+    }
+    __out
+}

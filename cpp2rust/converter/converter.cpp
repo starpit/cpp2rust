@@ -4567,6 +4567,39 @@ void Converter::ConvertFunctionToFunctionPointer(
 }
 
 std::string Converter::ConvertFnPtrCallee(clang::Expr *arg) {
+  // A FUNCTION PASSED BY NAME IS A CALLABLE, NOT A CALL -- and this function is
+  // reached ONLY from ConvertFnPtrPlaceholder, i.e. only for a RULE placeholder
+  // whose argument has function-pointer type (converter.cpp:9610).
+  //
+  // Without this case, `std::transform(b, e, b, ::tolower)` -- once ANY rule
+  // matches the enclosing `transform` -- lowered its callable operand by
+  // descending into `Convert(arg)` under ExprKind::Callee.  The
+  // CK_FunctionToPointerDecay arm at converter.cpp:5606 then forwards the
+  // sub-expression UNCHANGED when `isCallee()` (it must: a direct call emits
+  // `f(x)`, not `Some(f)(x)`), so the `::tolower` DeclRefExpr arrived in
+  // ConvertDeclRefExpr (:6383) with `isAddrOf()` FALSE.  There
+  // ShouldReplaceWithMappedBody (:9909) returns true, GetMappedAsString
+  // substitutes rules/cctype f1's BODY, and its first `a0` fragment aborts in
+  // ConvertIRFragment (:9750):
+  //   LLVM ERROR: rule body references placeholder a0 but the call site
+  //   supplies only 0 argument(s) at dsc/designSpaceConfig.h:318:66
+  // -- correctly, because a function NAME supplies no arguments.  Measured
+  // 2026-09-29; it made `std::transform` unkeyable (rules/algorithm's header
+  // note) and turned the goal TU from `A rc=0` into a bucket-B abort.
+  //
+  // The ADDR-OF path already gets this right -- ConvertFunctionToFunctionPointer
+  // just above emits `Some(GetFunctionRefName(fn))`, which is why the SAME
+  // operand is harmless while `transform` is unmapped.  So take the same name
+  // here.  ConvertFnPtrPlaceholder supplies the `as unsafe fn(..)` cast in place
+  // of the `Some(..)`, which is what a rule parameter of function-pointer type
+  // needs (libcc2rs' `Callable{N}` is implemented for `unsafe fn(..) -> R`, not
+  // for `Option<..>`), so the two paths now name the SAME callable.
+  if (const auto *ref =
+          clang::dyn_cast<clang::DeclRefExpr>(arg->IgnoreParenImpCasts())) {
+    if (const auto *fn = clang::dyn_cast<clang::FunctionDecl>(ref->getDecl())) {
+      return GetFunctionRefName(fn);
+    }
+  }
   PushExprKind push(*this, ExprKind::Callee);
   Buffer buf(*this);
   Convert(arg);
