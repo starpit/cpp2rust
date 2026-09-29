@@ -331,8 +331,97 @@ bool Converter::VisitBuiltinType(clang::BuiltinType *type) {
   return false;
 }
 
+// TRANSPARENT ONE-FIELD CARRIER -> the payload type it carries, or a null
+// QualType when `decl` is not one.
+//
+// `llvm::cl::initializer<Ty>` (CommandLine.h:430) is the whole family: a class
+// template whose ONLY non-static data member is `const Ty &Init`. It exists to
+// give `cl::init(v)` a distinct type so the variadic `cl::opt` ctor can
+// dispatch on it; it carries no state of its own and has no behaviour beyond
+// `apply`, which nothing in this corpus reaches. So `initializer<Ty>` IS `Ty`
+// as far as emitted Rust is concerned, and the honest lowering is to erase it.
+//
+// ⭐ WHY THIS IS A CONVERTER LOWERING AND NOT A RULE KEY, which is the whole
+// point of the change. A rule key `template <typename T1> using tNNNN =
+// llvm::cl::initializer<T1>;` was measured as a NET REGRESSION and reverted
+// (rules/cl/src.cpp:121): once the key matches, the MAPPER has to map the bound
+// argument T1 through `types_`, and the corpus instantiates
+// `initializer<char[1]>` (from `cl::init("")`, 38 sites), for which `types_`
+// had no entry -- so the key turned one loud abort into a different loud abort
+// on MORE TUs.
+//
+// ⭐ MEASURED, and it corrects what I first wrote here: this lowering CANNOT
+// regress the `char[_]` bucket, because `Converter::Convert(QualType)` consults
+// `Mapper::Map` FIRST (:130) and only falls through to `TraverseType` ->
+// `VisitRecordType` when the lookup came back empty. Every instantiation that
+// already HAS a concrete key -- `rules/cl` t1900 `initializer<char[1]>`,
+// `rules/mlir` t2600 `initializer<DCC::ProgIRFormat>` -- is therefore answered
+// by its key and never reaches this function at all. So this is a pure
+// FALLBACK: it can only fire where the alternative was the loud abort.
+// Two probes measured that (/home/agent/work/initc.probe/):
+//   carrier.cpp  `cl::init("")` + `cl::init(false)` + `cl::init(<enum>)`
+//                BASE: LLVM ERROR on `initializer<Colour>`.  PATCHED: rc=0,
+//                `__tmp_0: Vec<u8>` (t1900's answer, UNCHANGED), `__tmp_1:
+//                bool`, `__tmp_2: Colour`.
+//   noenum.cpp   the same file with the enum option removed, i.e. ONLY the
+//                `char[_]` and `bool` payloads: BASE and PATCHED emissions are
+//                BYTE-IDENTICAL (`diff -q` silent).
+// That byte-identity is the whole answer to the reverted experiment: the rule
+// key had to bind `T1` and so touched the `char[_]` sites; this does not touch
+// them.
+//
+// ⛔ STRUCTURE IS CHECKED, NOT ASSUMED. The name alone is not enough: matching
+// on a spelling and then emitting the first template argument would silently
+// emit the wrong type if the class ever held more than the one reference. So
+// the definition must be visible, have exactly one field, and that field must
+// be an lvalue reference to the template argument. A future `initializer` that
+// is not a transparent carrier therefore falls straight through to the loud
+// `ReportUnmappedSystemType` path instead of being mis-lowered.
+static clang::QualType TransparentCarrierPayload(clang::ASTContext &ctx,
+                                                 const clang::RecordDecl *d) {
+  const auto *spec = clang::dyn_cast<clang::ClassTemplateSpecializationDecl>(d);
+  if (spec == nullptr) {
+    return {};
+  }
+  if (spec->getQualifiedNameAsString() != "llvm::cl::initializer") {
+    return {};
+  }
+  const clang::TemplateArgumentList &args = spec->getTemplateArgs();
+  if (args.size() != 1 || args[0].getKind() != clang::TemplateArgument::Type) {
+    return {};
+  }
+  const clang::CXXRecordDecl *def = spec->getDefinition();
+  if (def == nullptr) {
+    return {};
+  }
+  const clang::QualType payload = args[0].getAsType();
+  clang::QualType field_type;
+  int fields = 0;
+  for (const auto *field : def->fields()) {
+    ++fields;
+    field_type = field->getType();
+  }
+  if (fields != 1 || !field_type->isLValueReferenceType()) {
+    return {};
+  }
+  if (!ctx.hasSameUnqualifiedType(field_type.getNonReferenceType(), payload)) {
+    return {};
+  }
+  return payload;
+}
+
 bool Converter::VisitRecordType(clang::RecordType *type) {
   auto *decl = type->getDecl();
+
+  // Erase a transparent one-field carrier and emit its payload type instead.
+  // Placed before the lambda arm and before the system-type refusal because a
+  // carrier is neither: it is a system record with no rule that nevertheless
+  // has an exact, checkable Rust spelling.
+  if (const clang::QualType payload = TransparentCarrierPayload(ctx_, decl);
+      !payload.isNull()) {
+    Convert(payload);
+    return false;
+  }
   if (auto lambda = clang::dyn_cast<clang::CXXRecordDecl>(decl)) {
     if (lambda->isLambda()) {
       if (in_function_formals_) {
