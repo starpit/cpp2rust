@@ -28,6 +28,8 @@
 #include <unordered_set>
 #include <utility>
 
+template <typename T, typename A> using Init = A;
+
 template <typename T1, typename T2> using t1 = std::unordered_map<T1, T2>;
 
 template <typename T1> using t2 = std::unordered_set<T1>;
@@ -413,21 +415,41 @@ f56(const std::initializer_list<std::pair<const T1, T2>> &a0) {
 // nothing for `pin/no-placeholders.sh` or any bucket census to see.  An unmapped
 // MEMBER does not abort.
 //
-// ARITY IS NOT IN THE KEY AND THE RULE MUST NOT BE VARIADIC.  libc++'s emplace is
-// `template<class... Args> pair<iterator,bool> emplace(Args&&...)`, and
+// ⭐⭐ ARITY IS NOT IN THE KEY, SO THIS RULE IS ARITY-GENERIC VIA `Init<>`.  libc++'s
+// emplace is `template<class... Args> pair<iterator,bool> emplace(Args&&...)`, and
 // `Mapper::ToString` prints the DECLARATION, so both the converter's ask and the
-// recorded key read `emplace(&&...)` whatever the call's arity is -- that is why
-// ONE key serves it.  A variadic RULE (`Init<T, Args> &&...args`, the shape
-// rules/vector f112 and rules/deque_cxx11 f1 use) is NOT usable here: it routes
-// through `cpp_rule_preprocessor.cpp:224 addPackRule`, whose `init` fragment can
-// only construct a type that `findTemplateArgument(callee, init_type)` finds among
-// the CALLEE's own template arguments -- for `unordered_map<K,V,H,E,A>` those are
-// K, V, hash<K>, equal_to<K> and allocator<pair<const K,V>>.  `value_type` =
-// `pair<const K,V>` is NOT among them (only the ALLOCATOR wrapping it is), so
-// `findTemplateArgument` would print "Init type ... is not a template argument"
-// and `std::exit(EXIT_FAILURE)` the preprocessor.  A rule with NO pack instead
-// takes the `add(Mapper::ToString(decl))` path at :153, which records the SAME
-// `(&&...)` spelling while keeping the arguments addressable as a1/a2.
+// recorded key read `emplace(&&...)` whatever the call's arity is -- ONE key serves
+// every arity and no fixed-arity rule can be correct for all of them.  MEASURED: the
+// ask spelling is byte-identical at arity 1 and arity 2 (same md5, `cmp` clean),
+// because `HasFunctionParameterPack` resolves through `getPrimaryTemplate()` and
+// `GetExprCallArity` returns nullopt on a top-level `...`, so the `#arity` bucket that
+// would separate them is never formed.  A longer-`src` sibling key cannot separate
+// them either (same libc++ decl -> same bucket, EQUAL length, and `search`'s tie-break
+// is a strict `>`), and neither can a receiver-specialised key
+// (`unordered_map<long,long>` is emplaced at arity 1 at dxp.cpp:1128 and at arity 2 at
+// eight other sites).  rules/functional f17-f22 and rules/tuple f6-f9 get away with
+// per-arity keys only because their arity lives in the RETURN type; `emplace` returns
+// `pair<iterator,bool>` at every arity.
+//
+// ⭐ THIS NEEDED A PREPROCESSOR FIX AND IT IS WORTH KNOWING WHY.  `Init<T, Args>`
+// routes through `cpp_rule_preprocessor.cpp addPackRule`, which records WHERE `T`
+// lives relative to the CALLEE's template arguments so the converter can recover the
+// concrete type per call site.  For `unordered_map<K,V,H,E,A>` those arguments are K,
+// V, hash<K>, equal_to<K> and allocator<pair<const K,V>> -- `pair<const K,V>` is NOT
+// among them, only the ALLOCATOR wrapping it is, and the old (depth,index)-only
+// encoding therefore aborted with "Init type ... is not a template argument".  The
+// encoding now also carries a NESTED-ARGUMENT PATH, so this type is named as
+// "template argument 0 of template argument 4", and the converter replays that
+// descent.  ⛔ Do NOT drop the `const` from `pair<const T1, T2>`: `pair<T1, T2>` is
+// not the allocator's argument and would fail the same way (measured).
+//
+// ⛔ ARITY 3+ IS NOT SILENTLY ACCEPTED.  An Init<> body has no aN placeholder count to
+// bound it, so an `emplace(piecewise_construct, ...)` call would otherwise have
+// reached `ConvertConstructFromArgs` with 3 arguments for a 2-element pair.
+// `BuildInitExpr` returns null there and that path is now a `report_fatal_error`
+// naming the type, the arity and the site (it was an assert, i.e. a NO-OP in the
+// shipped -DNDEBUG build).  The corpus' four arity-3+ sites are all on std::map /
+// std::set, which have no emplace key, so nothing binds here today.
 //
 // SEMANTICS, both load-bearing and both honest here:
 //   * `inserted` -- C++ emplace returns FALSE and LEAVES THE EXISTING VALUE ALONE
@@ -439,14 +461,15 @@ f56(const std::initializer_list<std::pair<const T1, T2>> &a0) {
 //     routes through f37, whose `second()` yields `*mut T2` into the map's own
 //     node, so a write through it reaches the container.  A cloned value would
 //     have made `it->second = x` a write to a temporary.
-// `a1` and `a2` are each bound to a `let` BEFORE the membership test, so both
-// arguments are evaluated exactly once and unconditionally -- a rule body is
-// inlined as one expression, and `a2` used only inside the `if` would have
-// skipped its side effects on the already-present path.
-template <typename T1, typename T2>
+// `init` is bound to a `let` BEFORE the membership test, so the whole argument list is
+// evaluated exactly once and unconditionally -- a rule body is inlined as one
+// expression, and a value used only inside the `if` would have skipped its side
+// effects on the already-present path.
+template <typename T1, typename T2, typename... Args>
 std::pair<typename std::unordered_map<T1, T2>::iterator, bool>
-f57(std::unordered_map<T1, T2> &o, const T1 &a1, const T2 &a2) {
-  return o.emplace(a1, a2);
+f57(std::unordered_map<T1, T2> &o,
+    Init<std::pair<const T1, T2>, Args> &&...args) {
+  return o.emplace(std::forward<Args>(args)...);
 }
 
 // ===========================================================================

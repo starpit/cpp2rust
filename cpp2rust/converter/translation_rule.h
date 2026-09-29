@@ -4,6 +4,7 @@
 // Distributed under the MIT license that can be found in the LICENSE file.
 
 #include <clang/AST/Expr.h>
+#include <llvm/ADT/SmallVector.h>
 
 #include <filesystem>
 #include <string>
@@ -137,9 +138,18 @@ struct TypeInfo {
   void dump() const;
 };
 
+// Where an `Init<T, Args>` pack's `T` lives, relative to the callee's own
+// template-argument list, as recorded by cpp-rule-preprocessor's
+// `findTemplateArgument`.  `path` is a descent into the NESTED template
+// arguments of the argument named by (depth, index) -- empty for the common
+// case, `{0}` for e.g. `unordered_map`'s `pair<const K, V>`, which is only
+// reachable as template argument 0 of the container's ALLOCATOR argument.
+// ⛔ An ir_src.json written before `path` existed simply has no "path" member;
+// an absent path is the empty path and means exactly what it used to.
 struct InitTypeLocation {
   unsigned depth = -1u;
   unsigned index = -1u;
+  llvm::SmallVector<unsigned, 2> path;
 
   bool valid() const { return depth != -1u; }
 };
