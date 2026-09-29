@@ -2031,7 +2031,59 @@ std::optional<std::string> tryDerivePointerType(const std::string &cpp_type) {
     }
   }
   PushMapContext ctx(cpp_type, map_ctx_.outer_type);
-  return (is_const ? "*const " : "*mut ") + mapTypeStringRecursive(pointee);
+  // ⭐⭐ THE REFCOUNT MODEL OWNS A POINTER; THIS RETURN WAS THE ONE PLACE ON THE
+  // WHOLE POINTER FAMILY THAT STILL SPELLED IT RAW.
+  //
+  // MEASURED 2026-09-29 (binary `wt/cvbind.cpp2rust` 2229b6e1 AND
+  // `pin/cpp2rust` 5bf5cd9f, trees `pin/ir.v42` AND `pin/ir.v43` -- all four
+  // combinations identical), `-model=refcount`, on one TU:
+  //   std::pair<FoldProp *, int>        -> (Value<Ptr<FoldProp>>,    Value<i32>)
+  //   std::pair<const FoldProp *, int>  -> (Value<*const FoldProp>,  Value<i32>)
+  //   std::vector<FoldProp *>           -> Vec<Ptr<FoldProp>>
+  //   std::vector<const FoldProp *>     -> Vec<*const FoldProp>
+  //   std::pair<const int *, int>       -> (Value<Ptr<i32>>,         Value<i32>)
+  //   const FoldProp *raw = &p1;        -> let raw_: Value<Ptr<FoldProp>>
+  // i.e. the defect is NOT `std::pair` and NOT "a pointer element" -- it is a
+  // `const <rule-less record> *` template ARGUMENT, in ANY container, and the
+  // bare `FoldProp *` and the builtin `const int *` are already right. The
+  // non-const record form wins because AddRuleForUserDefinedType registers
+  // `<Record> *` -> `Ptr<Record>` (:2789); the builtin const form wins because
+  // addBuiltinTypes synthesises `const <scalar> *` per scalar; `const Record *`
+  // is registered by neither, so it lands HERE -- and here was model-blind.
+  //
+  // THE CONVENTION THIS NOW MATCHES, all four already `Ptr`-family:
+  //   * AddRuleForUserDefinedType, :2789    `<Record> *`  -> `Ptr<Record>`
+  //   * ConverterRefCount::VisitPointerType (converter_refcount.cpp:259-295)
+  //     -> `Ptr<pointee>`, and `AnyPtr` for `void *`
+  //   * the abstract branch DIRECTLY ABOVE, :2024-2030 -> `PtrDyn<dyn N>`
+  //   * mapper.cpp:1336-1338  `void *` / `const void *` -> `AnyPtr`
+  // So the model switch this return was missing is not a new convention: it is
+  // the one its own sibling branch six lines up already makes.
+  //
+  // WHAT IT COST: `Value<*const FoldProp>` reaches the model's pointer deref,
+  // which appends `.upgrade().deref()` (ConverterRefCount::GetPointerDerefSuffix)
+  // -- `E0599: no method named 'upgrade' found for raw pointer
+  // '*const FoldProp'` -- and the element initialiser is a `Ptr<T>` from
+  // `as_pointer()`, giving `E0277: '*const FoldProp: TryFrom<Ptr<FoldProp>>'`
+  // and `E0308`. All three are ONE spelling.
+  //
+  // ⛔ `rules/pair/tgt_refcount.rs` IS NOT THE DEFECT AND IS DELIBERATELY
+  // UNTOUCHED. `(Value<T1>, Value<T2>)` is correct -- `T1` is the converter's
+  // own lowering of the element type, which is why `std::pair<FoldProp *, int>`
+  // is already right, and why any change to the pair's element model would
+  // break that case while leaving `vector`/`map` broken. The two models are a
+  // UNION and the unsafe pair stays `(T1, T2)`.
+  //
+  // CONSERVATIVE GUARD: if the mapped pointee is ITSELF a raw-pointer spelling
+  // (a rule that hands this model a `*const`/`*mut` target), keep today's raw
+  // composition rather than inventing `Ptr<*const X>`. That can only preserve
+  // existing output.
+  std::string mapped_pointee = mapTypeStringRecursive(pointee);
+  if (model_ == Model::kRefCount && !mapped_pointee.starts_with("*const ") &&
+      !mapped_pointee.starts_with("*mut ")) {
+    return "Ptr<" + mapped_pointee + ">";
+  }
+  return (is_const ? "*const " : "*mut ") + mapped_pointee;
 }
 
 // A TOP-LEVEL `const ` IS DECORATION WITH NO RUST SPELLING AT ALL.
