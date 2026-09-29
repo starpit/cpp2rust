@@ -25,6 +25,17 @@
 
 namespace cpp2rust {
 inline constexpr const char kDestructorName[] = "destructor";
+
+// Shared with ConverterRefCount (converter_refcount.cpp): the member-wise
+// structured-binding discriminator ([dcl.struct.bind]/4). Defined in
+// converter.cpp -- see that definition for the full set of exclusions
+// (reference field, base class, anonymous/bitfield member, a record that
+// already has a rule). Model-agnostic: it only inspects the AST shape, never
+// the target representation, so both models can share one definition rather
+// than risking two that drift.
+std::vector<const clang::FieldDecl *>
+GetMemberwiseBindingFields(const clang::DecompositionDecl *decl);
+
 class Converter : public clang::RecursiveASTVisitor<Converter> {
 
 public:
