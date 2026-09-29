@@ -5884,6 +5884,91 @@ bool Converter::VisitConditionalOperator(clang::ConditionalOperator *expr) {
   return false;
 }
 
+// Mark a FUNCTION name the mapper had no rule for, exactly the way an unmapped
+// TYPE is marked at converter.cpp:233 -- and say so on stderr.
+//
+// WHY. `ConvertDeclRefExpr`'s function branch below is reached ONLY after
+// `Mapper::Contains(callee)` returned false (VisitCallExpr:4311) and
+// `ShouldReplaceWithMappedBody` returned false, i.e. only after a SEARCH MISS.
+// It then returned `GetNamedDeclAsString(canonical)`, which is byte-for-byte the
+// name a PORTED function gets, and printed NOTHING. So `cast<T>(x)` emitted
+// `cast_29 ( x )`: a plausible, undefined, unannounced identifier.
+//
+// The type path had both halves (a `Cpp2RustUnmapped_` spelling *and* a
+// `no rule` note); the function path had neither. That asymmetry is the whole
+// defect. Measured over the 312-TU fresh38 sweep: 304 TUs (97.4%) carry at least
+// one such name, 8366 distinct names, 155962 call sites, three names
+// (`cast`/`dyn_cast_or_null`/`next`) accounting for ~80% of the sites. Every one
+// of those TUs is bucket A, rc=0 and rustfmt-clean, so the gap is invisible to
+// every bucket census -- and `rustc` stops at NAME RESOLUTION, so the type and
+// borrow errors in the rest of the file are UNOBSERVABLE. The undefined name is
+// not a local defect, it is a measurement blackout over the entire TU.
+//
+// ⚠️ THE DISCRIMINATOR IS NOT THE NAME SHAPE. `senComponentsToString_0` (a
+// genuinely ported project global) and `get_109` (a missed llvm accessor) are
+// indistinguishable by spelling; a `_<N>`-suffix rule would rename real decls.
+// The test used here is whether the project can EVER emit an item for the decl:
+// `VisitTranslationUnitDecl` (converter.cpp:590) only descends into decls that
+// pass `IsUserDefinedDecl`, so a function whose canonical declaration sits in a
+// SYSTEM header is never ported by this TU nor by any other -- which is precisely
+// the criterion `ReportUnmappedSystemType` already uses. In the real compile
+// database llvm and mlir arrive through `-isystem`
+// (`-isystem .../LLVM-22.1.3-Linux-X64/include`), so `cast`, `dyn_cast_or_null`,
+// `isa`, `get` and `registerPass` all land here, while the project's own
+// dataflow-scheduler headers arrive through plain `-I` and do not.
+//
+// ⛔ DELIBERATELY CONSERVATIVE, IN ONE DIRECTION ONLY. Three cases are left
+// UNMARKED even though some of them are undefined today:
+//   * a non-system decl with no definition in this TU (defined in a sibling
+//     `.cpp`). Marking it would break a WHOLE-PROGRAM emission, where the other
+//     TU's `fn helper_7` does define the name. Under-marking costs coverage;
+//     over-marking would turn a linkable call into a broken one.
+//   * an invalid location (compiler builtins), which `isInSystemHeader` cannot
+//     classify and which the libc passthrough rules usually catch earlier.
+//   * static methods, which leave through `GetFunctionRefName` above and are a
+//     different naming path (`Record::method`), not a bare identifier.
+// The `Cpp2RustUnmappedFn_` prefix is emitted by nothing else, so -- unlike the
+// bare mangled name -- it can only ever fail to resolve, never silently bind to
+// an unrelated `fn` of the same name emitted in the same file (same argument as
+// converter.cpp:145). It is distinct from the type side's `Cpp2RustUnmapped_` and
+// from `Cpp2RustUnmappedExpr_`/`Cpp2RustUnmappedStmt_` so a census can attribute
+// a site to the callee path by prefix alone.
+static bool IsSystemFunctionDecl(const clang::FunctionDecl *fn) {
+  const clang::FunctionDecl *canonical = fn->getCanonicalDecl();
+  const auto &src_mgr = canonical->getASTContext().getSourceManager();
+  const clang::SourceLocation loc = canonical->getLocation();
+  if (loc.isInvalid()) {
+    return false;
+  }
+  return src_mgr.isInSystemHeader(loc) || src_mgr.isInSystemMacro(loc);
+}
+
+std::string Converter::MarkUnmappedFunctionRef(const clang::FunctionDecl *fn,
+                                               std::string name) {
+  if (!IsSystemFunctionDecl(fn)) {
+    return name;
+  }
+  const std::string marked = "Cpp2RustUnmappedFn_" + name;
+  static std::set<std::string> reported;
+  if (reported.insert(name).second) {
+    std::string detail = "system function has no rule: `" +
+                         fn->getQualifiedNameAsString() + "` : `" +
+                         fn->getType().getAsString() +
+                         "` (would be emitted as the undefined name `" + name +
+                         "`); emitting the marked placeholder `" + marked +
+                         "` so the miss is visible";
+    if (curr_function_ != nullptr) {
+      detail += ", reached while converting `" +
+                curr_function_->getQualifiedNameAsString() + "`";
+    }
+    llvm::errs() << "note: called " << detail << " (declared at "
+                 << fn->getCanonicalDecl()->getLocation().printToString(
+                        ctx_.getSourceManager())
+                 << ")\n";
+  }
+  return marked;
+}
+
 std::string Converter::ConvertDeclRefExpr(clang::DeclRefExpr *expr) {
   if (isAddrOf()) {
     clang::Expr *addrof_op = ToAddrOf(ctx_, expr);
@@ -5905,7 +5990,8 @@ std::string Converter::ConvertDeclRefExpr(clang::DeclRefExpr *expr) {
         return GetFunctionRefName(method);
       }
     }
-    return GetNamedDeclAsString(function->getCanonicalDecl());
+    return MarkUnmappedFunctionRef(
+        function, GetNamedDeclAsString(function->getCanonicalDecl()));
   }
 
   if (auto enum_constant = clang::dyn_cast<clang::EnumConstantDecl>(decl)) {

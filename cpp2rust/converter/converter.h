@@ -505,6 +505,14 @@ public:
 
   virtual bool VisitDeclRefExpr(clang::DeclRefExpr *expr);
   std::string ConvertDeclRefExpr(clang::DeclRefExpr *expr);
+  // A referenced function the mapper had no rule for. Returns `name` unchanged
+  // unless the decl is provably un-portable (system header), in which case it
+  // returns the marked `Cpp2RustUnmappedFn_<name>` spelling and logs the miss --
+  // the function-side counterpart of `Cpp2RustUnmapped_` for types
+  // (converter.cpp:233). See the block comment above the definition for why the
+  // discriminator is the search miss and NOT the shape of the name.
+  std::string MarkUnmappedFunctionRef(const clang::FunctionDecl *fn,
+                                      std::string name);
 
   // An ADL name clang could not resolve. There is no lowering; this exists only
   // so the failure is LOUD and names the construct instead of traversing to
