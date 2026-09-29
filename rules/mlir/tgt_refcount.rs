@@ -1217,18 +1217,22 @@ fn f61() -> dataflowir_gen::ir::AffineExpr {
     dataflowir_gen::ir::AffineExpr::Symbol(u32::MAX)
 }
 
-// t84 -- `mlir::OpAsmParser::UnresolvedOperand` -> `()`.  An opaque unit for a
-// parser token the corpus only ever stores in a SmallVector and forwards to
-// `parseOperandList`/`resolveOperands`, neither of which has a model.  Its three
-// fields are unreachable BY DESIGN -- see src.cpp -- and no `==` exists to lie with.
-fn t84() -> () {
-    ()
+// t84 -- `mlir::OpAsmParser::UnresolvedOperand` -> `String`.  ⭐⭐ REMODELLED from `()`
+// by slot `t84`; the full argument is on the unsafe side and applies verbatim.  The
+// model is the PRINTED SPELLING (`%arg0`, sigil included), which is what the crate's
+// reader half writes and keys its SSA environment by.
+// ⭐ THIS KEY STAYS TWO-SIDED even though the operand-family MEMBER key f880 is
+// unsafe-only: `String` is model-independent -- it needs no `libcc2rs::ByteRepr` and no
+// `Ptr` -- so the refcount tree keeps a working `Vec<UnresolvedOperand>` element type and
+// nothing that depended on the old `()` loses its container.
+fn t84() -> ::std::string::String {
+    ::std::string::String::new()
 }
 
-// f62 -- the default constructor for t84; the unit, per t84.  0-ary, so there is
-// no argument whose evaluation could be dropped (the f52 DominanceInfo hazard).
-fn f62() -> () {
-    ()
+// f62 -- the default constructor for t84; the empty spelling, per t84.  0-ary, so there
+// is no argument whose evaluation could be dropped (the f52 DominanceInfo hazard).
+fn f62() -> ::std::string::String {
+    ::std::string::String::new()
 }
 
 // t86 -- `llvm::SetVector<T1>` -> `Vec<T1>`.  SetVector is INSERTION-ORDERED and

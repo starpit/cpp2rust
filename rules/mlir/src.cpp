@@ -2833,6 +2833,22 @@ llvm::ArrayRef<T1> f60(const mlir::CopyOnWriteArrayRef<T1> &o) {
 // UnresolvedOperand.)  Neither type has a destructor anywhere in
 // mlir/include (`grep -rn '~AffineExpr|~UnresolvedOperand'` = 0 hits), so both
 // pass the OwningOpRef/InFlightDiagnostic destructor test.
+
+// ---- ONE FORWARD DECLARATION for the t84 remodel (slot `t84`) ---------------
+// `class OpAsmParser` below now carries the `parseOperand` declaration f880 keys on, and
+// its return type `llvm::ParseResult` is DEFINED ~1300 lines BELOW this point
+// (src.cpp:4212).  A function DECLARATION may name an incomplete class as its return
+// type, so a forward declaration is sufficient, and it is the minimal change: moving
+// `class OpAsmParser` past 4212 instead would drag `using t84`, `f62` and `using t950`
+// with it.  The rule BODY (f880) lives down beside f871, where `ParseResult` IS complete,
+// because a body returns one by value.
+// ⚠️ THIS BLOCK MUST BE AT GLOBAL SCOPE, i.e. immediately BEFORE the `namespace mlir {`
+// below and not inside it -- `namespaces can only be defined in global or namespace
+// scope`, which is what a hand-placed hunk against the `f60` context line above produces.
+namespace llvm {
+class ParseResult;
+} // namespace llvm
+
 namespace mlir {
 
 // t83 -- `mlir::AffineExpr`, mlir/IR/AffineExpr.h:69.  A uniquer handle
@@ -2899,15 +2915,47 @@ public:
 // Mapping one would be the t72 TypeID error in its purest form -- against a `()`
 // model every token would compare equal, so two distinct `%a`/`%b` uses would
 // read as the same operand.  Nothing here maps one.
-// ⛔ WHAT IS LOST: `location`, `name` and `number` are unreachable.  That is the
-// deliberate content of the decision, not an oversight -- the moment a TU reads
-// one of them, this key must be replaced by a real three-field struct rather than
-// extended, and the read will fail loudly (unmapped member) rather than silently.
+// ⛔⛔ EVERYTHING ABOVE FROM "`()`" ONWARD IS THE SUPERSEDED 2026-09-27 DECISION AND IS
+// KEPT ONLY AS THE RECORD OF WHY IT WAS WRONG.  ⭐⭐ THE MODEL IS NOW `String` (slot
+// `t84`, 2026-09-28): the PRINTED SPELLING, `%arg0`/`%3#2`, sigil included.  The old
+// comment ended "the moment a TU reads one of them, this key must be REPLACED by a real
+// three-field struct rather than extended" -- and the trigger turned out not to be a
+// field read at all.  It was that `()` made the whole 122-site OPERAND FAMILY
+// (`resolveOperands` 61, `parseOperandList` 30, `parseOperand` 28,
+// `parseOptionalOperand` 3) UNKEYABLE: `dataflowir_gen::AsmParser` (dt_src c81086e,
+// asm.rs:1044/1207) is `parse_operand(&mut String)` and `resolve_operands(&[String],
+// &Ty, &mut Vec<Value>)`, so against `()` the parameters arrive as `&mut ()` and
+// `Vec<()>` -- nowhere to put a name, no name to look up -- and the only writable
+// bodies were "discard the token" (accepts anything) or "return false" (accepts
+// nothing), both barred.  A three-field struct was NOT the fix either: `location`
+// needs an `llvm::SMLoc` key this module does not have, and `name`/`number` are
+// redundant once the spelling is carried whole (`%3#2` IS its own result number).
+// ⛔ STILL LOST, stated rather than glossed: `location`, and the `name`/`number` SPLIT.
+// A site reading any of the three is `E0609` at rustc -- the same loud answer `()` gave.
+// ⭐ ON `==`, THE REASONING INVERTS rather than survives: under `()` mapping one would
+// have been the t72 TypeID error in its purest form (every token equal); under `String`
+// an `==` would be CORRECT.  It stays out only because C++ declares none on
+// `UnresolvedOperand`, so a rule would resolve to nothing.
 class OpAsmParser {
 public:
   struct UnresolvedOperand {
     UnresolvedOperand();
   };
+  // f880 -- `parseOperand`, declared HERE and not in the later `class AsmParser` block
+  // because the converter records a key against the DECLARING class and it asks for
+  // `mlir::OpAsmParser::` (measured, see f880's own note -- NOT the `AsmParser` base the
+  // punctuation family f851-f871 keys on).  The signature is the one the converter
+  // actually searched for, read off `-verbose | grep 'search expr'`.
+  // ⛔ `llvm::ParseResult` IS INCOMPLETE HERE; see the forward declaration immediately
+  // before `namespace mlir {` above.
+  // ⚠️ THIS DECLARATION MUST BE INSIDE `class OpAsmParser`.  Its only nearby context line
+  // is `public:`, which occurs dozens of times in this file, so a hand-placed hunk lands
+  // it outside the class and yields `no type named 'ParseResult' in namespace 'llvm'`,
+  // `unknown type name 'UnresolvedOperand'` and `use of class template
+  // 'mlir::OpAsmParser' requires template arguments` -- three errors that all look like a
+  // broken key and are in fact a misplaced brace.
+  llvm::ParseResult parseOperand(UnresolvedOperand &result,
+                                 bool allowResultNumber = true);
   // t950 -- `struct Argument` (OpImplementation.h:1693), ADDED HERE rather than in a
   // second `class OpAsmParser` declaration: a redeclaration is `error: redefinition`
   // and aborts the whole module regen (the `class RewriterBase` note at t541 records
@@ -8075,6 +8123,44 @@ mlir::OpAsmPrinter &f753(mlir::OpAsmPrinter &a0, mlir::Type a1) {
 // extended".  It is a change to an EXISTING key that 11 files depend on, so it needs
 // its own before/after and is deliberately not smuggled in here.
 //
+// ⭐⭐ RESOLVED, 2026-09-28 (slot `t84`): the remodel HAPPENED and `t84` is now `String`.
+// Of the 122 sites, `parseOperand` (28) IS NOW KEYED -- f880, at the bottom of this file.
+// The other three remain out, and NOT for the reason above (which no longer applies) but
+// each for its own, recorded at f880.  ⛔ IN PARTICULAR `resolveOperands` (61) IS STILL
+// OUT AND THAT IS A DELIBERATE DECISION, NOT AN UNFINISHED ONE: a body for it was
+// written, measured and DROPPED.  It type-checked, and a crate-level round trip proved it
+// resolves printed names back to the ORIGINAL `Value`s -- but `resolve_operands` reads
+// the parser's own SSA environment, and that environment is seeded ONLY by
+// `AsmParser::from_printer` or `AsmParser::define_value`, NEITHER OF WHICH IS AN
+// `OpAsmParser` MEMBER.  So no rule can reach either, a translated `FooOp::parse` runs
+// against an EMPTY environment, and the key would return `false` ON EVERY NAME, ALWAYS.
+// ⭐ THE ARGUMENT THAT SETTLED IT: a universal diagnosed `false` is WORSE than the
+// `E0599` it replaces, because `E0599` is a COMPILE-TIME signal while the `false` is a
+// RUNTIME one that a passing build hides.  Keying something into always-failing is the
+// same class of error as a parser that accepts anything, just in the other direction.
+// ⛔ WHAT WOULD MAKE IT LANDABLE is a `dataflowir-gen` decision, not a rules one: make
+// `define_value`/`from_printer` reachable as `OpAsmParser` members (or model region
+// parsing, which is what builds the scope in real MLIR).  Then f881 is three lines:
+//   f881(OpAsmParser &a0, SmallVector<UnresolvedOperand, N> &a1, Type a2,
+//        SmallVectorImpl<Value> &a3) { return a0.resolveOperands(a1, a2, a3); }
+//   -> `AsmParser::resolve_operands(&mut *a0, a1.as_slice(), &a2, a3)`
+// and the key it records is (read back out of ir_src.json when it was briefly landed)
+//   llvm::ParseResult mlir::OpAsmParser::resolveOperands(
+//     llvm::SmallVector<mlir::OpAsmParser::UnresolvedOperand, _> &, mlir::Type,
+//     llvm::SmallVectorImpl<mlir::Value> &)
+// ⚠️ `N` MUST BE A TEMPLATE PARAMETER, not a concrete extent: the mapper elides non-type
+// template arguments, which is the ONLY way the key renders `<..., _>` and matches
+// (rules/smallvector's t1-vs-t5 note is the measurement).  And note the first parameter
+// is a `SmallVector<..., _> &`, NOT the `ArrayRef` OpImplementation.h spells -- the real
+// member is `template <typename Operands = ArrayRef<...>>` and `Operands` DEDUCES to the
+// caller's `SmallVector<UnresolvedOperand, 4> &`.  Both would have been guessed wrong.
+// ⚠️ AND A CORRECTION TO THE 61-SITE FRAMING, measured: `resolveOperands` has FOUR
+// overloads and the corpus reaches all of them.  An AST walk over the 9 hand-written
+// `.cpp` users counts 41 three-arg against 5 four-arg, but the ODS-generated `.inc`
+// bodies -- where most of the 61 live -- are mostly FOUR-arg (all 5 of Symbol.cpp's are).
+// So the 3-arg form above is a MINORITY of the 61, and the four-arg `SMLoc` form needs an
+// `llvm::SMLoc` type key (`llvm::SourceMgr`'s row) on top of the seam.
+//
 // ⛔ ALSO OUT, each for a measured reason and each still failing LOUDLY:
 //  * `emitError(SMLoc, const Twine &)` (16+9 sites) -- returns `InFlightDiagnostic`,
 //    but `AsmParser::emit_error` returns `bool` (it IS the `failure()` shape).  A key
@@ -8658,3 +8744,59 @@ template <typename OpTy> class OwningOpRef {};
 }  // namespace mlir
 
 using t980 = mlir::OwningOpRef<mlir::ModuleOp>;
+// ===========================================================================
+// f880 -- `parseOperand`, unblocked by the t84 remodel (slot `t84`).  28 sites.
+//
+// ⭐ THE KEY WAS READ OFF THE CONVERTER, NOT TRANSCRIBED.  `cpp2rust -verbose |
+// grep 'search expr'` on Symbol.cpp and KtdpOps.cpp (pin/cpp2rust md5 fd1c0fbc) printed
+// EXACTLY:
+//   llvm::ParseResult mlir::OpAsmParser::parseOperand(
+//       mlir::OpAsmParser::UnresolvedOperand &, bool)
+// The declaring class is `OpAsmParser`, not the `AsmParser` base that f851-f871 key on.
+//
+// ⭐ THE CONTRACT, the same one f851-f871 preserve: `true` == success and any method
+// returning `false` HAS CONSUMED NOTHING.  rules/support t4 models `llvm::ParseResult`
+// as `bool` true-is-success, so the body is a forward with no inversion.  The crate's
+// `parse_operand` restores `self.pos` on failure (asm.rs:1044), so the "consumed
+// nothing" half is the crate's guarantee and this key does not weaken it.
+// -> `AsmParser::parse_operand(&mut String)`, which writes the printed spelling
+// INCLUDING the `%` -- the same string t84 now models.
+//
+// ⛔ THE `bool` IS DEFAULTED, so the converter substitutes THE DEFAULT EXPRESSION at the
+// call site and the target parameter is a PLAIN `bool`, not an `Option<bool>`.  This cost
+// a regen cycle and the full note is on the target side, where the wrong version's
+// emitted text is recorded.
+// ⛔⛔ AND `false` IS NOT SILENTLY TREATED AS `true`.  `allowResultNumber=false` means
+// `%foo` is legal but `%foo#2` is not, and the crate cannot express that: the flag exists
+// on the private `AsmParser::ssa_name_end` but `parse_operand` hardcodes `true`.
+// Discarding it would make a parser that must REJECT `%foo#2` accept it -- the exact
+// silent over-acceptance this row's hard rule forbids -- so the body DIAGNOSES that case
+// and returns `false` (nothing consumed).  No corpus site passes it; if one ever does it
+// gets an error message rather than a wrong answer.
+llvm::ParseResult f880(mlir::OpAsmParser &a0, mlir::OpAsmParser::UnresolvedOperand &a1,
+                       bool a2 = true) {
+  return a0.parseOperand(a1, a2);
+}
+
+// ⛔ STILL OUT AFTER THE REMODEL, each with the measurement:
+//  * `resolveOperands` (61) -- the SSA seam.  A body was written, type-checked and
+//    round-trip-proved, then DROPPED: `resolve_operands` reads an environment no rule can
+//    seed, so it would return `false` on every name, always.  See the long note at the
+//    operand-family block above for the argument and for exactly what to write if
+//    `define_value`/`from_printer` ever become `OpAsmParser` members.
+//  * `parseOperandList` (30) -- the converter asks for
+//    `parseOperandList(llvm::SmallVectorImpl<UnresolvedOperand> &,
+//    mlir::AsmParser::Delimiter, bool, int)` and `mlir::AsmParser::Delimiter` has NO TYPE
+//    KEY.  Adding one is not free: `dataflowir_gen::Delimiter` matches variant-for-variant,
+//    but the sites that pass a real enumerator (`Delimiter::Paren`, emitted today as the
+//    bare placeholder `mlir_AsmParser_Delimiter_Paren`) would then need CONSTANT keys per
+//    enumerator, and getting that half wrong turns a placeholder into a WRONG DELIMITER --
+//    a parser that accepts the wrong brackets.  The all-defaulted call form is otherwise
+//    ready (measured `(_result, None, None, None)`, 2 sites in KTDFLoweringOps.cpp and 2
+//    in KtdpOps.cpp), so this is one key plus nine constants away, not a modelling problem.
+//  * `parseOptionalOperand` (3) -- returns `mlir::OptionalParseResult`, not
+//    `llvm::ParseResult`: a THIRD state (absent / present-and-ok / present-and-bad) that
+//    t4's `bool` cannot carry, and `OptionalParseResult` has no type key.  Mapping it onto
+//    `bool` collapses "absent" into one of the other two -- as `true` it accepts nothing
+//    where something was required, as `false` it rejects a legal absence.  Neither is
+//    admissible, so it stays loud until `mlir::OptionalParseResult` is keyed.

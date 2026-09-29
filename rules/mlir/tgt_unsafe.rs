@@ -1290,18 +1290,41 @@ unsafe fn f61() -> dataflowir_gen::ir::AffineExpr {
     dataflowir_gen::ir::AffineExpr::Symbol(u32::MAX)
 }
 
-// t84 -- `mlir::OpAsmParser::UnresolvedOperand` -> `()`.  An opaque unit for a
-// parser token the corpus only ever stores in a SmallVector and forwards to
-// `parseOperandList`/`resolveOperands`, neither of which has a model.  Its three
-// fields are unreachable BY DESIGN -- see src.cpp -- and no `==` exists to lie with.
-unsafe fn t84() -> () {
-    ()
+// t84 -- `mlir::OpAsmParser::UnresolvedOperand` -> `String`.  ⭐⭐ REMODELLED from `()`
+// by slot `t84`, which is the change the old body's own comment committed to ("the
+// moment a TU reads one of them, this key must be REPLACED ... rather than extended").
+// THE MODEL IS THE PRINTED SPELLING -- `%arg0`, `%3#2`, sigil included -- because that
+// is the ONE field of MLIR's `{ SMLoc location; StringRef name; unsigned number; }`
+// that the reader half actually consumes: `dataflowir_gen::AsmParser::parse_operand`
+// writes it (and `resolve_operands` would look it up in the parser's SSA environment,
+// keyed by exactly that string, asm.rs:613).  Against the old `()` neither was writable
+// -- `&mut ()` has nowhere to put a name and `Vec<()>` has no name to look up -- so the
+// whole 122-site operand family was unkeyable, and THAT, not a field read, is what
+// forced the remodel.
+// ⛔ WHAT IS STILL LOST: `location` and the `number`/`name` SPLIT.  `number` is folded
+// into the string (`%3#2` carries its own result number), and `location` has no model
+// because `llvm::SMLoc` has no type key -- a site reading either is `E0609` at rustc,
+// which is the same loud answer the `()` model gave, not a new silence.
+// ⭐ ON `==`: still NOT mapped, and the reasoning INVERTS rather than survives.  Under
+// `()` an `==` would have made every token compare equal (the t72 TypeID error); under
+// `String` an `==` would be *correct* (two uses are the same operand iff they spell the
+// same name).  It stays out only because C++ declares none on `UnresolvedOperand`, so a
+// rule would resolve to nothing -- there is no longer a semantic objection to it.
+// ⛔ THE VALUE IS `String::new()`, NOT A PLACEHOLDER NAME.  An empty spelling is the
+// honest zero: no SSA environment can contain `""`, so a default-constructed operand
+// that is never parsed into resolves to nothing rather than to some other op's value.
+// A sentinel like `"%?"` would be a name that could collide.
+unsafe fn t84() -> ::std::string::String {
+    ::std::string::String::new()
 }
 
-// f62 -- the default constructor for t84; the unit, per t84.  0-ary, so there is
-// no argument whose evaluation could be dropped (the f52 DominanceInfo hazard).
-unsafe fn f62() -> () {
-    ()
+// f62 -- the default constructor for t84; the empty spelling, per t84.  0-ary, so there
+// is no argument whose evaluation could be dropped (the f52 DominanceInfo hazard).
+// ⭐ This is the constructor `SmallVector::resize`/value-init reaches, and it is why
+// `SmallVector<UnresolvedOperand, N>` is now a `Vec<String>` whose elements f880 can
+// fill, and `ArrayRef<UnresolvedOperand>` exactly the `&[String]` the crate asks for.
+unsafe fn f62() -> ::std::string::String {
+    ::std::string::String::new()
 }
 
 // t85 -- `mlir::IntegerSet` -> `dataflowir_gen::ir::IntegerSet` (ir.rs:425), the
@@ -4075,4 +4098,67 @@ unsafe fn f909(a0: std::collections::HashSet<dataflowir_gen::ir::Attr>) -> u32 {
 // with a no-op destructor, so inventing a failure here would be wrong.
 fn t980() -> libcc2rs::OwningOpRef<()> {
     libcc2rs::OwningOpRef::null()
+}
+
+// ===========================================================================
+// f880 -- `parseOperand`, unblocked by the t84 remodel (slot `t84`).  28 sites.
+// Model: `dataflowir_gen::AsmParser::parse_operand` (dt_src c81086e, asm.rs:1044).
+// ⭐ THE CONTRACT: `true` == success, and any body returning `false` HAS CONSUMED
+// NOTHING.  The crate guarantees both halves (it restores `self.pos` on failure) and
+// this body does not weaken either.
+// ⛔ tgt_unsafe.rs-ONLY, exactly as t950-t956/f850-f871 are, and the reason is structural
+// rather than an omission: `dataflowir_gen::AsmParser` has no `impl libcc2rs::ByteRepr`,
+// so `Ptr::<AsmParser>::with_mut` does not exist (libcc2rs/src/rc.rs:507) and a refcount
+// body is `E0277`.  check-ir.sh lists such keys in its `rc_only_types` NOTE, which is the
+// documented green-tree shape.  The one-line crate fix (`impl ByteRepr for AsmParser {}`)
+// belongs to a crate slot, not here.
+// ⚠️ t84 ITSELF IS STILL TWO-SIDED -- `String` needs neither -- so nothing that merely
+// STORES an `UnresolvedOperand` loses its container in the refcount tree.
+//
+// ⛔ `false` IS DIAGNOSED, NOT DISCARDED.  `allowResultNumber=false` must reject `%foo#2`,
+// and the crate's `parse_operand` hardcodes `true` (the flag lives on the private
+// `ssa_name_end`).  Silently treating it as `true` would make a parser accept what it must
+// reject, so that case records an error and returns `false` -- consuming nothing, per the
+// contract.  `emit_error` RETURNS `false`, so it is the whole answer.
+//
+// ⛔⛔ TRAP 1, WORTH MORE THAN THIS KEY: **A RULE BODY IS INLINED INTO THE EMITTED `.rs`
+// -- ITS STRING LITERALS *AND* ITS COMMENTS.**  The diagnostic below first read
+// "parseOperand(allowResultNumber=false) is not modelled...", and then a comment
+// explaining that.  Both put the camelCase token BACK into the output, once per site, so
+// the residue count in Symbol.cpp stayed at exactly 5 -- indistinguishable from a DEAD KEY
+// -- while `-verbose` showed `Matching: llvm::ParseResult mlir::OpAsmParser::
+// parseOperand(...)` at all 5.  Two regen cycles were spent on it.  ⭐ SO: a key's own
+// message and its in-body comments must never contain the token its witness counts, and a
+// flat residue count must ALWAYS be cross-checked against the snake_case ARRIVAL count
+// before it is read as a dead key.  Hence "allow-result-number", hyphenated, and this note
+// living OUTSIDE the body.
+//
+// ⛔⛔ TRAP 2, AND IT IS THE ONE THAT WOULD HAVE SHIPPED BROKEN.  `a2` WAS `Option<bool>`
+// here for one regen cycle, on the f541 precedent that "a DEFAULTED parameter arrives as a
+// bare `None`".  THAT PRECEDENT DOES NOT GENERALISE: f541's parameter is a C++
+// `std::optional<...>`, so its `Option` comes from the TYPE, not from the default.  For a
+// plain `bool` with `= true` the converter substitutes THE DEFAULT EXPRESSION ITSELF, and
+// the emitted site read
+//     if !match true { Option::None | Some(true) => ..., Some(false) => ... }
+// -- a `bool` scrutinee against `Option` patterns, i.e. `E0308` at EVERY site.
+// ⚠️ AND rc WAS 0, rustfmt WAS CLEAN, THE `-verbose` LOG SAID `Matching:`, AND THE
+// snake_case ARRIVAL COUNT WENT 0 -> 5/10.  Every signal this row is normally measured by
+// said the key had landed.  Only extracting the emitted region and running REAL rustc
+// found it, which is why that step is mandatory and not optional.
+// ⭐ THE TELL, for the next slot: the BEFORE (unmapped) emission spells the elided
+// argument `None` because the converter does not know the parameter's type yet; once a
+// rule exists it spells the C++ DEFAULT.  So the BEFORE text is NOT evidence for the
+// target parameter type -- it is evidence of the absence of a rule.
+unsafe fn f880(a0: *mut dataflowir_gen::AsmParser, a1: &mut ::std::string::String, a2: bool) -> bool {
+    if a2 {
+        dataflowir_gen::AsmParser::parse_operand(&mut *a0, a1)
+    } else {
+        let __loc: usize = dataflowir_gen::AsmParser::current_location(&*a0);
+        dataflowir_gen::AsmParser::emit_error(
+            &mut *a0,
+            __loc,
+            "allow-result-number=false is not modelled: the reader cannot reject a \
+             result number, so refusing rather than over-accepting",
+        )
+    }
 }
