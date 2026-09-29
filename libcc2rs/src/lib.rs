@@ -100,4 +100,11 @@ pub use owning_op_ref::*;
 mod getopt;
 pub use getopt::*;
 
+// <ctype.h>, as NAMED functions.  `rules/cctype` models the same three symbols as
+// inlined rule bodies, which is what an ordinary CALL wants; these exist for the
+// sites that pass `::tolower` BY NAME to `std::transform`, where the converter
+// lowers the operand to the callable form and needs a real function item.
+mod cctype;
+pub use cctype::*;
+
 pub use libcc2rs_macros::{ByteRepr, goto, goto_block, switch};
