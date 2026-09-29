@@ -7028,6 +7028,26 @@ void Converter::ConvertCXXConstructExprArgs(clang::CXXConstructExpr *expr) {
   }
 }
 
+// Is `expr` a place Rust is ALLOWED to move out of?  Exactly one shape is: a
+// whole local variable or parameter, which the function owns.  Everything else
+// -- `*p`, `p->f`, `self.f`, a reference-returning call, a global -- is a place
+// the function does not own, and moving out of it is E0507 ("cannot move out of
+// a raw pointer" / "of a shared reference").  A local of REFERENCE type is
+// excluded too: its Rust model is a pointer, so the C++ `std::move(r)` is a move
+// out of `*r`, not out of `r`.
+//
+// Used only to keep the move-constructor clone below from firing where C++'s
+// move already translates to a plain Rust move -- `return attr;` must not become
+// `return attr.clone();`.
+static bool IsMovableRustPlace(const clang::Expr *expr) {
+  const auto *e = IgnoreTransparentStdCall(expr)->IgnoreParenImpCasts();
+  if (const auto *ref = clang::dyn_cast<clang::DeclRefExpr>(e)) {
+    const auto *var = clang::dyn_cast<clang::VarDecl>(ref->getDecl());
+    return var && var->hasLocalStorage() && !var->getType()->isReferenceType();
+  }
+  return false;
+}
+
 bool Converter::VisitCXXConstructExpr(clang::CXXConstructExpr *expr) {
   PushSuppressIteratorClone push(*this, expr);
 
@@ -7045,7 +7065,49 @@ bool Converter::VisitCXXConstructExpr(clang::CXXConstructExpr *expr) {
     // Take suppress before recursing into the child.
     bool suppress = PushSuppressIteratorClone::take(*this);
     Convert(expr->getArg(0));
-    if ((ctor->isCopyConstructor() || IsDefaultedMoveConstructor(ctor)) &&
+    // A DEFAULTED MOVE CONSTRUCTOR OF A *SYSTEM* RECORD WAS EXCLUDED, AND THAT
+    // IS AN E0507 AT EVERY TABLEGEN `construct`.  IsDefaultedMoveConstructor
+    // additionally requires IsUserDefinedDecl(ctor->getParent()) -- correct for
+    // its other job (deciding which implicit members to PORT) but wrong here,
+    // where the only question is whether the Rust model needs an owned value.
+    // Measured witness, `AccessTileTypeStorage::construct` in KtdpDialect.cpp
+    // (KeyTy = std::tuple<llvm::ArrayRef<int64_t>, mlir::Type>):
+    //   auto shape       = std::move(std::get<0>(tblgenKey));
+    //   auto elementType = std::move(std::get<1>(tblgenKey));
+    // `mlir::Type` declares `Type(const Type &) = default`, which SUPPRESSES the
+    // implicit move constructor, so overload resolution picks the COPY ctor and
+    // the first disjunct already emits `.clone()`.  `llvm::ArrayRef<T>` declares
+    // no copy ctor, so the implicit MOVE ctor is selected -- and because
+    // `llvm::` is not user code the second disjunct was false, so the sibling
+    // line got no `.clone()` and read `let mut shape: Vec<i64> = (*p);`, i.e.
+    // `cannot move out of a raw pointer`.  Two lines apart, same shape, opposite
+    // treatment.
+    //
+    // ⛔ NOT A BLANKET CLONE, AND THE TWO EXTRA GATES ARE BOTH MEASURED.  A
+    // clone where C++ moved is a silent copy, so the new disjunct fires only for
+    // the shape Rust genuinely cannot express:
+    //   * `!TypeIsCopyable` (already there) asks about the RUST MODEL's derives,
+    //     via Mapper::MappedDerives -- a system record whose model does derive
+    //     Copy is untouched.  t19 `llvm::ArrayRef<T1>` -> `Vec<T1>` records no
+    //     derives, so it is correctly non-Copy here.
+    //   * `!isFresh()` drops the case where the operand already came out as an
+    //     owned value; there is nothing to clone.
+    //   * `!IsMovableRustPlace` drops the case where the operand is a whole local
+    //     or parameter, which Rust CAN move out of.  Without it this row also
+    //     rewrote 10 x `return attr;` -> `return attr.clone();` and
+    //     `shape: shape` -> `shape: shape.clone()` in the same TU: all legal
+    //     before and after, so all pure pessimisation.  Measured delta with the
+    //     gate in place across the five dialect TUs: exactly the E0507 lines.
+    // What survives is a move out of a place the function does not own, for which
+    // `.clone()` is the conservative spelling.  `std::mem::take(&mut place)` is
+    // the tighter translation of a genuine move (ConvertPlaceholder's kTake arm
+    // uses it) but is NOT usable here: it is sound only when the source is
+    // provably dead, and for a handle-modelled type (`ir::Ty`, `mlir::Attr`) it
+    // would additionally clear a handle the caller may still read.  Clone matches
+    // the copy-ctor arm above, which is what the `mlir::Type` sibling relies on.
+    if ((ctor->isCopyConstructor() || IsDefaultedMoveConstructor(ctor) ||
+         (ctor->isMoveConstructor() && !isFresh() &&
+          !IsMovableRustPlace(expr->getArg(0)))) &&
         !suppress && !TypeIsCopyable(expr->getType())) {
       StrCat(".clone()");
       SetFreshType(expr->getType());
