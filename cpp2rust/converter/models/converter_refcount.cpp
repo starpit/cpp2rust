@@ -2119,6 +2119,74 @@ std::string ConverterRefCount::DecompositionMapIterReceiver(
   return "(*" + GetNamedDeclAsString(iter_ref->getDecl()) + ".borrow())";
 }
 
+// ⭐ THE REFCOUNT binding for `for (const auto &e : <set>)`.
+//
+// THE DEFECT THIS FIXES (measured, `dsc/dims.cpp` `--model=refcount`,
+// pin/ir.v45, at `.rs:25664` inside `pruneMaxSymbolicVolumes`, the ONLY
+// `std::ptr::from_ref` in the whole 39,253-line refcount emission):
+//     for __elem_741_5 in ((*symDims.borrow_mut()).iter()) {
+//         let symDim = std::ptr::from_ref(__elem_741_5);   // *const K
+//         ... let ___k : Ptr<PrimaryDimTypes> = (symDim).clone();
+//         ... (symDim.read())
+// The USES are already correct refcount code -- `Ptr<T>` is `Clone`, and
+// `Ptr::read` (rc.rs:718) is a SAFE `&self` method. It is the BINDING that is
+// from the other model: `std::ptr::from_ref` yields `*const K`, on which
+// `.read()` is `<*const T>::read`, an UNSAFE fn -- `E0133`, outside any `unsafe`
+// block -- and `.clone()` yields `*const K` where `Ptr<K>` is annotated (E0308).
+// So the base's binding is not merely unidiomatic here, it is the one statement
+// standing between this loop and type-checking.
+//
+// WHY A BOXED CLONE, and why that is not an invention: it is the SAME lowering
+// libcc2rs already publishes for `*it` on a set iterator in this model --
+// `impl SetIterator for RefcountSetIter<K> { type Element = Value<K>; ... }`
+// returns `Rc::new(RefCell::new(key.clone()))` (iterators.rs:855-861), whose
+// comment records the `MapIterator::first()` precedent it follows. A set's
+// elements are not individually `Rc`-boxed (a `Value<BTreeSet<K>>` holds plain
+// `K`s), so there is no pre-existing cell for a `Ptr` to point at and a fresh
+// box is the only thing this model CAN hand back.
+//
+// ⛔ THE OWNING LOCAL IS LOAD-BEARING, not a style choice. `Ptr<T>` is a `Weak`
+// (rc.rs:16 `Value<T> = Rc<RefCell<T>>`), so the one-statement spelling
+// `Rc::new(RefCell::new(e.clone())).as_pointer()` would drop its `Rc` at the end
+// of that very statement and every use in the body would then be an upgrade of a
+// dead pointer -- a RUNTIME panic where the base has a COMPILE error, i.e.
+// strictly worse. The `__box_` local keeps the strong count up for the body's
+// scope, which is the same two-line shape the converter already emits for `this`
+// in every refcount constructor (`let __this: Value<T> = Rc::new(..); let this:
+// Ptr<T> = __this.as_pointer();`).
+//
+// ⛔ CONST ONLY. A non-const `T &` element would need writes to reach the
+// container, and a clone cannot carry them -- that is silent wrongness, the one
+// outcome worse than the E0133. Declining leaves such a loop on the base's
+// raw-pointer binding, i.e. exactly as broken as it is today and just as loud,
+// which is the honest state for a shape with no witness in the corpus. (Note a
+// true `std::set` cannot produce one: `*iterator` is `const T &`, so `auto &`
+// deduces const. The reachable non-const witnesses would be other set-LIKE
+// classes admitted by `HasSetLikeClassName`, none measured here.)
+std::string ConverterRefCount::ForRangeSetRefElementBinding(
+    const std::string &loop_var_name, const std::string &elem_name,
+    clang::QualType loop_var_type) {
+  auto pointee = loop_var_type->getPointeeType();
+  if (!pointee.isConstQualified()) {
+    return {};
+  }
+  std::string elem_type;
+  {
+    PushConversionKind push(*this, ConversionKind::FullRefCount);
+    elem_type = ToStringBase(pointee.getUnqualifiedType());
+  }
+  if (elem_type.empty()) {
+    return {};
+  }
+  // `.clone()` and not `*`: `K` is `Clone` for any set this model can spell
+  // (`RefcountSetIter<K>` is bounded `K: Ord + Clone`), while `Copy` is not
+  // guaranteed, and `.clone()` is correct for a `Copy` element too.
+  const std::string box_name = "__box_" + loop_var_name;
+  return std::format("let {0} : Value<{1}> = Rc::new(RefCell::new({2}.clone())); "
+                     "let {3} : Ptr<{1}> = {0}.as_pointer();",
+                     box_name, elem_type, elem_name, loop_var_name);
+}
+
 // The REFCOUNT map-range iterator whose `MapIterator` impl a decomposing loop
 // can address, or nullptr for a class this model cannot spell one for.
 //

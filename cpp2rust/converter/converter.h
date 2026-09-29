@@ -980,6 +980,25 @@ protected:
   // rather than emitting bindings whose receiver has no accessors.
   virtual std::string DecompositionMapIterReceiver(clang::DeclRefExpr *iter_ref);
 
+  // ⭐ THE WHOLE `let` FOR A REFERENCE-TYPED loop variable of a SET range-for
+  // (`VisitCXXForRangeStmtSet`, converter.cpp:4081). Model-specific for the same
+  // reason `DecompositionMapIterReceiver` is: the two models give a C++
+  // `const T &` to a container element two DIFFERENT Rust representations, and
+  // the base's `std::ptr::from_ref(elem)` is the UNSAFE one (a `*const T`).
+  //
+  // ⛔ Returns the EMPTY STRING to DECLINE, and must emit nothing when it does;
+  // the caller then falls back to its own raw-pointer binding, which is the
+  // behaviour that shipped before this hook existed. Declining is therefore
+  // never a regression -- it is the status quo -- which is why the refcount
+  // override declines the shapes it has no measurement for instead of aborting.
+  //
+  // The returned text must be one or more COMPLETE statements, `let` and
+  // trailing `;` included, and must bind `loop_var_name`.
+  virtual std::string
+  ForRangeSetRefElementBinding(const std::string &loop_var_name,
+                               const std::string &elem_name,
+                               clang::QualType loop_var_type);
+
   std::string GetMappedAsString(clang::Expr *expr, clang::Expr **args = nullptr,
                                 unsigned num_args = 0,
                                 TempMaterializationCtx *ctx = nullptr);
