@@ -3994,6 +3994,15 @@ fn t1500() -> () {
     ()
 }
 
+// t2600 `llvm::cl::initializer<DCC::ProgIRFormat>` -> AN OPAQUE UNIT.
+//   Row g063; identical to the unsafe overlay because a unit has no reference shape
+//   to differ on (the t1500 precedent directly above).  See src.cpp for the model,
+//   for why this is NOT the t700/t701 payload model, and for the two things left
+//   loud (no member declared; no `fN` for `cl::init<DCC::ProgIRFormat>`).
+fn t2600() -> () {
+    ()
+}
+
 // ===========================================================================
 // ⭐⭐ THE RESULT HALF OF THE RANGE-ITERATOR FAMILY -- queue row g2958 (`next`)
 // t1700/t1701 + f1700-f1706, the one-for-one mirror of t1100/t1101 + f1100-f1106.

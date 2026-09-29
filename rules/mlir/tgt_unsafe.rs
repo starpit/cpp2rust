@@ -4480,6 +4480,30 @@ fn t1500() -> () {
     ()
 }
 
+// t2600 `llvm::cl::initializer<DCC::ProgIRFormat>` -> AN OPAQUE UNIT.
+//   Row g063: the measured first abort of 42 of 42 TUs once `cl::OptionEnumValue`
+//   (rules/cl t2410) cleared the gate in front of it.  The carrier that
+//   `cl::init(DCC::ProgIRFormat::kGeneral)` builds is consumed ONLY by the variadic
+//   ctor of the option -- and MEASURED on the emitted Rust, that consumer is the
+//   2-ARY `Option<DCC::ProgIRFormat, GenericOptionParser<DCC::ProgIRFormat>>`, which
+//   has NO key (t1500 above is the 1-ary spelling) and is emitted as a FABRICATED
+//   `::new_1` on an undefined name.  ⭐ So the payload's only consumer is itself an
+//   undefined name: nothing can observe it, and no `fN` can deliver it.
+//   ⛔ NOT the t700/t701 payload model: those map `<bool>`/`<int>` to `bool`/`i32`
+//   because a rules target can NAME those Rust types.  `DCC::ProgIRFormat` is a
+//   PROJECT enum the converter ports under its own name, which a system rules module
+//   cannot spell, so a payload model here would be `i32` standing in for a ported
+//   enum -- the wrong type, silently.  ⭐ NO VALUE IS MODELLED.
+//   ⛔ NO MEMBER DECLARED (`Init` is the only one and is never read by name on any
+//   `cl::initializer` receiver in the corpus), and NO `fN` for
+//   `cl::init<DCC::ProgIRFormat>`: an unkeyed `cl::init` is the marked placeholder
+//   `Cpp2RustUnmappedFn_init_<N>`, not an abort, so leaving it unkeyed keeps the
+//   unmodelled payload VISIBLE.  See src.cpp.
+// ⚠️ IDENTICAL IN BOTH MODELS and spelled in BOTH overlays, exactly as t1500 is.
+fn t2600() -> () {
+    ()
+}
+
 // ===========================================================================
 // ⭐⭐ THE RESULT HALF OF THE RANGE-ITERATOR FAMILY -- queue row g2958 (`next`)
 // t1700/t1701 + f1700-f1706, the one-for-one mirror of t1100/t1101 + f1100-f1106.

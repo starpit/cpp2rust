@@ -9953,6 +9953,88 @@ public:
 };
 
 using t1500 = mlir::detail::PassOptions::Option<DCC::ProgIRFormat>;
+
+// ===========================================================================
+// PASS 2026-09-29 (slot init, queue row g063).  t2600 --
+// `llvm::cl::initializer<DCC::ProgIRFormat>`, the MEASURED FIRST ABORT OF 42 OF
+// 42 TUs once t2410 (`cl::OptionEnumValue`) cleared the gate in front of it.
+//
+// ⛔ THIS OVERTURNS THE REFUSAL AT THE TAIL OF THE t700/t701 BLOCK ABOVE, which
+// reads: "`initializer<DCC::ProgIRFormat>` (1 site) is a project enum with no
+// keyed model ... would need a payload decision this row has not made".  The
+// "1 site" is the SITE COUNT, and a site count is not a gate count: the type is
+// reached from the IMPLICIT constructor of `dcc::EmitProgIROptions`
+// (dcc/tools/Options/dcc-pass-option.h:92-98), which every TU including
+// `dcc-pass-option.h` instantiates -- 42 of them.
+//
+// ⭐ THE PAYLOAD HAS NO OBSERVER, AND THAT IS READ OFF THE EMITTED RUST, NOT
+// ARGUED.  The carrier built by `cl::init(DCC::ProgIRFormat::kGeneral)` is handed
+// to the VARIADIC ctor of the option, and the emitted site is
+// (verif/g063.AFTER/dcc__src__Transform__Sentient__RegisterPacking.cpp.rs:6993)
+//     let mut __tmp_67 : () = ( unsafe { let mut _Val : DCC_ProgIRFormat =
+//         DCC_ProgIRFormat_kGeneral ; Cpp2RustUnmappedFn_init_541 ( & mut _Val ,
+//         ) } ) ;
+//     mlir_detail_PassOptions_Option_DCC_ProgIRFormat__mlir_detail_PassOptions_
+//         GenericOptionParser_DCC_ProgIRFormat__ :: new_1 ( ... )
+// ⚠️ NOTE THE CONSUMER IS *NOT* t1500.  t1500 is the 1-ary spelling
+// `PassOptions::Option<DCC::ProgIRFormat>`; the spelling actually instantiated
+// here is the 2-ARY `Option<DCC::ProgIRFormat, GenericOptionParser<...>>`, which
+// has NO key and is emitted as a FABRICATED `::new_1` on an undefined name.  So
+// the carrier's only consumer at the only site that exists is itself an undefined
+// name -- the payload cannot arrive even in principle, and `cl::init` stays a
+// MARKED placeholder (`Cpp2RustUnmappedFn_init_541`) so that is visible.
+// ⭐ The t1500 argument still supplies the *reason* a value model would be wrong
+// even if a consumer existed: the value does not come from `init(...)`, it comes
+// from argv parsing inside `llvm::cl`, which this port does not translate, and
+// `kGeneral == 0` (dcc.hpp:58) would make a defaulted value model's wrongness
+// INVISIBLE in this corpus.  ⭐ NO VALUE IS MODELLED BY THIS KEY, and that is the
+// claim, not an omission.
+// ⛔ NOT the t700/t701 payload model, and the asymmetry is forced rather than
+// chosen.  t700/t701 map `initializer<bool>`/`<int>` to `bool`/`i32` because a
+// rules target can NAME those Rust types.  `DCC::ProgIRFormat` is a PROJECT enum
+// that the converter ports under its own name (the emitted note is `no Rust type
+// text for <E> (Enum), but it is a project leaf type this TU ports; emitting its
+// PORTED name`), and a system rules module cannot name a ported project type --
+// so a payload model here would have to be `i32`, i.e. the wrong type, silently
+// substituted for the ported enum.  ⛔ `i32` is also NOT the rules/cl t4
+// precedent: t4 models `cl::NumOccurrencesFlag`, a SYSTEM enum with no ported
+// Rust counterpart, where i32 IS the whole type.
+//
+// ⛔ WHAT STAYS LOUD, deliberately.  (1) NO MEMBER IS DECLARED: `initializer`'s
+// only member is `const Ty &Init`, and it is never read by name on any
+// `cl::initializer` receiver in the corpus (the same census the rules/cl t1900
+// block records), so a future read emits textually against a `()` and fails in
+// rustc (E0609) rather than answering with a fabricated value.  (2) ⭐ NO `fN`
+// FOR `llvm::cl::init<DCC::ProgIRFormat>` -- unlike the t700+f600 / t701+f601
+// pairs.  Two independent reasons: an `fN` parameter would have to SPELL the
+// ported project enum, which a rules module cannot do; and `cl::init` having no
+// rule is NOT an abort -- it is the marked placeholder `Cpp2RustUnmappedFn_init_
+// <N>`, verified in the abort log of the 42 (a `note:` on the line immediately
+// before the `LLVM ERROR:`).  Leaving it a marked placeholder keeps the
+// unmodelled payload VISIBLE, which is the same posture `cl::values` is held in
+// by rules/cl t2410/t2411.
+// ⚠️ THE PAYLOAD PROBLEM (g2964) IS UNCHANGED, neither better nor worse: the
+// enum-to-flag-string mapping that `cl::values` carries and the default that
+// `cl::init` carries still do not reach the constructed option.  This key claims
+// exactly one thing: the CARRIER TYPE has a model.
+//
+// SWALLOW-SAFETY.  `GetTypeMapKey` truncates at the first `<`, so the bucket is
+// `llvm::cl::initializer`.  Across the whole tree it holds t700 `<bool>`, t701
+// `<int>` (both above) and rules/cl's t1900 `<char[_]>` -- ⭐ ALL FULLY CONCRETE,
+// and t2600 is fully concrete too, so `matchTemplate`'s same-depth-comma capture
+// (`findNextLiteralSameDepth`) has nothing to capture and cannot fire.  ⛔ The
+// PLACEHOLDER spelling `initializer<T1>` is deliberately NOT used: rules/cl's t3
+// block records it as a MEASURED NET REGRESSION (it forces the converter to map
+// the bound argument, and `char[_]` has no model), which is why this bucket is
+// concrete-only by construction.  No `>` occurs inside the argument, so the
+// `operator>=` angle-depth desync class does not apply, and `DCC::ProgIRFormat`
+// carries no defaulted template argument for SuppressDefaultTemplateArgs to drop.
+// ⭐ `class DCC` IS ALREADY RESTATED IN THIS MODULE (just above, for t1500), so
+// this key introduces NO new project name into a system rules module -- which is
+// also why it lives here and not in rules/cl.
+// ===========================================================================
+using t2600 = llvm::cl::initializer<DCC::ProgIRFormat>;
+
 // ⭐⭐ THE RESULT HALF OF THE RANGE-ITERATOR FAMILY -- queue row g2958 (`next`)
 // ===========================================================================
 // THE ROW.  `next` is the third-largest name in the undefined-name census (30,934
