@@ -4937,3 +4937,48 @@ unsafe fn f2410(a0: &mut dataflowir_gen::fmt::Block) -> Vec<dataflowir_gen::ir::
 unsafe fn f2411(a0: Vec<dataflowir_gen::ir::Ty>, a1: u64) -> dataflowir_gen::ir::Ty {
     a0[a1 as usize].clone()
 }
+
+// ===========================================================================
+// f2500 -- `mlir::WalkResult mlir::OpState::walk((lambda at <path>:_:_) &&)`
+//          -> `fmt::OpInst::walk_any_r_mut` (fmt.rs:1446).  Row g3037.
+// THE SIXTH KEY OF THE WALK FAMILY: f1300 (`Operation::walk`, void), f1800
+// (`Region::walk`, void), t1710 + f1710-f1713 (`WalkResult` and its four members),
+// and now the `WalkResult`-returning `OpState::walk`.  See rules/mlir/src.cpp for
+// the re-verified return-form split and the corpus census.
+//
+// ⭐⭐ NOTHING IS ADDED TO `dataflowir-gen` AND NOTHING NEEDED TO BE.
+// `OpInst::walk_any_r_mut(&mut self, f: &mut impl FnMut(&mut OpInst) ->
+// ir::LocWalkResult) -> ir::LocWalkResult` (fmt.rs:1446) is the exact shape, it is
+// `pub`, and it is `walk_pre_mut(&|_| true, f)` -- UNFILTERED PRE-ORDER, which is
+// what MLIR's untyped `walk` does.  ⛔ NEVER a hand-rolled traversal: f1800's block
+// records that a two-level `get_blocks_mut()`/`get_operations_mut()` body converts
+// at rc=0 and visits only the TOP-LEVEL ops, with NO DESCENT into nested regions --
+// silently wrong at rc=0, the one outcome the hard rules forbid outright.
+//
+// ⭐ `walk_any_r_mut` AND NOT `walk_any_mut`, and the difference is semantic and not
+// cosmetic: `walk_any_mut` DISCARDS the callback's result (fmt.rs:1438 returns
+// `LocWalkResult::Advance` unconditionally), so a callback returning `skip()` or
+// `interrupt()` would be IGNORED -- the walk would keep going and keep descending.
+// Collector.cpp:143/157 both return `WalkResult::skip()` to PRUNE a subtree, so
+// `walk_any_mut` here would silently visit ops the C++ never visits.  That is the
+// whole reason this key had to wait for t1710.
+//
+// ⭐ THE BOUND IS THE SHAPE THE CONVERTER EMITS, f1300's measured finding: in the
+// UNSAFE model the callback parameter arrives as `*mut OpInst`, so the bound is
+// `FnMut(*mut OpInst) -> LocWalkResult` and the one line of body is the
+// representation bridge (`::core::ptr::from_mut` on a LIVE `&mut OpInst`, so a
+// mutating body's writes land IN the tree and nothing is deep-copied).
+// ⚠️ `&mut` IS WRITTEN ONLY ON A LOCAL TEMPORARY CLOSURE, never on `a0` or `a1`.
+// ⭐ The result is RETURNED, not dropped: `wasInterrupted()` (f1713) is a real
+// corpus consumer of a walk's result, so swallowing it would be the
+// `Skip`-means-`Advance` mistake one level up.
+unsafe fn f2500<
+    T1: FnMut(*mut dataflowir_gen::fmt::OpInst) -> dataflowir_gen::ir::LocWalkResult,
+>(
+    a0: &mut dataflowir_gen::fmt::OpInst,
+    mut a1: T1,
+) -> dataflowir_gen::ir::LocWalkResult {
+    a0.walk_any_r_mut(&mut |o: &mut dataflowir_gen::fmt::OpInst| {
+        a1(::core::ptr::from_mut(o))
+    })
+}

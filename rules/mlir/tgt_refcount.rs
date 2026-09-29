@@ -4437,3 +4437,21 @@ fn f2410(a0: &mut dataflowir_gen::fmt::Block) -> Vec<dataflowir_gen::ir::Ty> {
 fn f2411(a0: Vec<dataflowir_gen::ir::Ty>, a1: u64) -> dataflowir_gen::ir::Ty {
     a0[a1 as usize].clone()
 }
+
+// ===========================================================================
+// f2500 -- `mlir::WalkResult mlir::OpState::walk((lambda at <path>:_:_) &&)`
+//          -> `fmt::OpInst::walk_any_r_mut` (fmt.rs:1446).  Row g3037.
+// ⭐ THE ONLY DIFFERENCE FROM THE UNSAFE OVERLAY IS THE CALLBACK'S PARAMETER SHAPE,
+// f1800's precedent verbatim: the refcount model hands the callback `&mut OpInst`
+// rather than `*mut OpInst`, so no `::core::ptr::from_mut` bridge is needed and the
+// closure is forwarded straight through.  Everything else -- `walk_any_r_mut` and
+// not `walk_any_mut` (the latter DISCARDS the callback's `skip()`/`interrupt()`,
+// which Collector.cpp:143/157 rely on to prune), the `&mut` receiver rather than a
+// by-value one, returning the result rather than dropping it -- is identical and is
+// argued in tgt_unsafe.rs and rules/mlir/src.cpp.
+fn f2500<T1: FnMut(&mut dataflowir_gen::fmt::OpInst) -> dataflowir_gen::ir::LocWalkResult>(
+    a0: &mut dataflowir_gen::fmt::OpInst,
+    mut a1: T1,
+) -> dataflowir_gen::ir::LocWalkResult {
+    a0.walk_any_r_mut(&mut a1)
+}

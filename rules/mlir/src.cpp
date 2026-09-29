@@ -133,6 +133,17 @@ namespace mlir {
 
 class Operation;
 
+// ⚠️ FORWARD DECLARATION ONLY, for f2500 (`mlir::OpState::walk`) -- row g3037.
+// `class WalkResult` is DEFINED far below (~:10190, with its four members for
+// t1710/f1710-f1713), but `class OpState` at ~:936 must declare a `walk` whose
+// RETURN TYPE is `WalkResult`, and a C++ class cannot be reopened, so the return
+// type has to be nameable 9,250 lines before it is complete.  ⭐ An incomplete
+// return type is legal in a member DECLARATION -- the same licence this file
+// already relies on for `mlir::Block` immediately below and for f500.  ⛔ Do NOT
+// "fix" this by moving the `class WalkResult` definition up: it sits inside the
+// t1710 block deliberately, next to the reasoning that decided its four members.
+class WalkResult;
+
 // ⚠️ FORWARD DECLARATION ONLY, and it has to be here rather than reusing the
 // definition at line ~580: `mlir::Block` must precede `BlockArgument` because the
 // `llvm::simple_ilist<mlir::Block>` / `iplist<mlir::Block>` declarations above name
@@ -933,7 +944,26 @@ class OpResult {};
 // never-inserted handles -- PANICS in f2102 rather than returning the false `true`
 // a bare `==` would give.  Read f2102's note in tgt_unsafe.rs before touching it.
 // Every OTHER member of OpState remains unmapped and still aborts loudly.
-class OpState {};
+//
+// ⭐⭐ UPDATE 2026-09-29 (row g3037): `walk` IS NOW KEYED, AS f2500 AT THE TAIL,
+// and the declaration is merged in HERE rather than reopening the class -- the
+// f1300/f2100 lesson, which cost a merge today.  ⭐ THE RETURN TYPE IS
+// `WalkResult` AND NOT `void`, and that is a MEASURED split, not a choice: see
+// f2500's block at the tail.  Only ONE of the two can be declared per C++ class
+// (two member templates differing only in return type are a redeclaration
+// conflict, f1300's constraint), and every OpState site in the corpus returns a
+// `WalkResult` from its callback.
+// ⛔ Every OTHER member of OpState -- `getBody()`, `getBodyRegion()`,
+// `getSymName()`, `getOps<...>()`, `emitError()` -- remains UNDECLARED and its
+// calls are emitted textually (see the t61 block for that census and for why
+// `emitError` must never be keyed).
+class OpState {
+public:
+  // f2500 -- mlir/IR/Visitors.h:191 via OpDefinition.h.  ⚠️ `T1 &&callback` and
+  // NOT `T1 callback`: the ask ends ` &&)` and a `(T1 &)` key is DEAD.  See
+  // f2500's block at the tail for the full recipe and the corpus census.
+  template <typename T1> WalkResult walk(T1 &&callback);
+};
 
 // mlir/include/mlir/IR/Value.h:490 -- `mlir::BlockArgument`, a `Value` subclass
 // whose defining "op" is a block.  It IS an `mlir::Value` by inheritance, so it
@@ -10973,3 +11003,110 @@ f2411(mlir::ValueTypeRange<llvm::MutableArrayRef<mlir::BlockArgument>> a0,
 // sites are ALREADY loud on `mlir_WalkResult` as an undefined name (fresh39:
 // `return (unsafe { mlir_WalkResult::advance() })`), so nothing regresses by waiting.
 // ===========================================================================
+
+// ===========================================================================
+// f2500 -- `mlir::WalkResult mlir::OpState::walk((lambda at <path>:_:_) &&)`
+//          -> `fmt::OpInst::walk_any_r_mut` (fmt.rs:1446).
+// ROW g3037, 2026-09-29.  THE SIXTH KEY OF THE WALK FAMILY, and the one the
+// walkrest measurement block above (~:10800) specified as "an UNDONE ROW, not a
+// blocked one" once `31edbf97` landed `t1710`/`f1710`-`f1713`.
+//
+// ⭐⭐ THE RETURN-FORM SPLIT IS RE-VERIFIED AGAINST THE CORPUS, NOT INHERITED.
+// Read off the actual C++ at each of the five recorded `walk` sites, in dt_src:
+//   Liveness.cpp:75      Region   lambda has NO `return`              -> void      (f1800, landed)
+//   PipelineScope.cpp:35 Block    `return WalkResult::interrupt/skip` -> WalkResult (OUT OF SCOPE)
+//   Reuse.cpp:86         OpState  `return WalkResult::advance()`      -> WalkResult
+//   Collector.cpp:143    OpState  `return WalkResult::skip/advance`   -> WalkResult
+//   Collector.cpp:157    OpState  `return WalkResult::skip/advance`   -> WalkResult
+// ⭐ THE SPLIT HOLDS: Region asks ONLY `void` (confirmed empirically by f1800
+// having LANDED as `void`), and every OpState site asks ONLY `mlir::WalkResult`.
+// So one declaration per class suffices and f1300's redeclaration conflict never
+// arises.  It is corroborated a second, independent way by the t61 block's
+// `--verbose` read of PlacePrograms.cpp, which asks for
+// `mlir::WalkResult mlir::OpState::walk((lambda at <path>:_:_) &&)` -- 4 sites in
+// that one TU -- i.e. the WalkResult form is what the converter actually asks.
+//
+// ⚠️⚠️ A CORRECTION TO THE walkrest BLOCK'S OWN CENSUS, AND IT MATTERS FOR WHAT
+// THIS KEY BUYS.  That block's return-form table lists Reuse.cpp:86 as if it were
+// one of OpState's "two untyped sites".  ⛔ IT IS TYPED: the C++ is
+// `stage.walk([&](::DataTransferOp transfer) { ... })`, i.e. MLIR's FILTERED walk.
+// The block's OWN BLOCKER 2 paragraph says so 40 lines later ("fresh39 emits ...
+// Reuse.cpp:86's as `|transfer: mlir_ktdf_DataTransferOp|`"), so the block
+// contradicts itself and the BLOCKER 2 half is the correct half.
+// ⭐ THIS IS NOT A REASON TO REFUSE THE KEY, and the difference from `Block::walk`
+// is the whole point: `mlir::Block` has ONE site and it is typed, so a key there
+// could ONLY ever serve a filtered site with an unfiltered body -- nothing but a
+// wrong traversal.  `mlir::OpState` has TWO UNTYPED sites (Collector.cpp:143/157,
+// `[...](Operation *op)`) that an unfiltered body serves EXACTLY, plus the one
+// typed site, which stays LOUD: this key's bound is
+// `FnMut(*mut OpInst) -> LocWalkResult` and `|transfer: mlir_ktdf_DataTransferOp|`
+// cannot satisfy it, so Reuse.cpp:86 is a rustc type error and never a silent
+// unfiltered walk.  That is f1300's measured argument, applied unchanged.
+// ⛔ `mlir::Block::walk` IS DELIBERATELY NOT KEYED BY THIS ROW.  It is a separate
+// declaring class, so this key cannot reach it (f1300's "a key on `mlir::Operation`
+// cannot relocate `Region::walk`" argument, verbatim), and BLOCKER 2 STANDS.
+//
+// ⭐ AND THE FIVE-SITE CENSUS IS A FLOOR, NOT THE ROW'S SIZE.  It is fresh39's
+// 10-site bucket-A stratum.  The t61 block's independent census over 17 A-TUs
+// counts **14** emitted `.walk(` sites and states that EVERY one has an op-handle
+// receiver, i.e. is `mlir::OpState::walk` -- so the key's reach is at least 14+.
+// ⚠️ MOST OF THOSE 14 WILL NOT TYPE-CHECK EVEN NOW, and that is a DIFFERENT
+// defect, named here so it is not misread as this key's failure: their receiver is
+// `mlir::ModuleOp`, which `t61` maps to `()`.  A rule whose parameter 0 is
+// `mlir::OpState` (t25 -> `fmt::OpInst`) cannot take a `()` argument, so those
+// sites move from a SILENT textual `.walk(&mut _callback)` to a LOUD rustc error --
+// strictly better, and the t61 block's item 0 (`ModuleOp` -> `fmt::OpInst`, not
+// `()`) is the row that finishes them.
+//
+// ⭐ NO TYPE KEY IS ADDED AND NONE IS NEEDED, so the `std::hash<int>` bargain does
+// not arise in either direction: `mlir::OpState` is ALREADY t25 (-> `fmt::OpInst`,
+// tgt_unsafe.rs:419) and `mlir::WalkResult` is ALREADY t1710 (-> `ir::LocWalkResult`).
+// This row is the MEMBER half that t1710's block explicitly deferred, and it is the
+// last link: the callbacks' `WalkResult::advance()/skip()/interrupt()` are
+// f1710/f1711/f1712 and `wasInterrupted()` is f1713, all landed.
+//
+// ⚠️ THE `T1 &&a1` + `std::move(a1)` RECIPE IS LOAD-BEARING, f1300's and f1800's
+// measured finding copied without deviation: `T1 a1` + `static_cast<T1 &&>(a1)`
+// records `(T1 &)` -- an LVALUE reference -- and the key is DEAD, because after
+// `T1` `matchTemplate` hunts the literal ` &)`, which does not occur in ` &&)`.
+// ⛔ An EXPLICIT template argument (`a0.walk<T1>(...)`) makes
+// `cpp-rule-preprocessor` print `No viable function` and then SEGFAULT.
+// ⭐ The spelling is READ BACK OUT OF `ir_src.json` after the regen; nothing else
+// shows it, because the preprocessor reports success either way.
+//
+// ⭐ THE RECEIVER IS `mlir::OpState &`, f1800's PROVEN form and NOT a by-value one.
+// A by-value `mlir::OpState a0` would map to an OWNED `fmt::OpInst`, and f1300's
+// note states the consequence measured: "a by-VALUE `OpInst` adapter would have had
+// to deep-copy the subtree and discard every write".  `walk_any_r_mut` takes
+// `&mut self` and MLIR's `walk` is a non-const member reached through a dot call on
+// an lvalue handle, so `&` is both faithful and the only non-silently-lossy choice.
+// ⚠️ The receiver spelling is NOT in the recorded key (the key is
+// `mlir::WalkResult mlir::OpState::walk(T1 &&)`), so this choice affects only the
+// Rust parameter type -- which is exactly why it has to be argued rather than
+// guessed.
+//
+// ⚠️ SWALLOW-SAFETY.  The captured region is the SINGLE parameter `T1`, whose
+// following literal is ` &&)`.  There is NO comma at any depth in the spelling, so
+// `matchTemplate`'s same-depth-comma over-run cannot occur, and there is no
+// operator name, so the `operator>=` angle-depth desync does not apply.  The
+// `GetExprMapKey` bucket is `mlir::OpState::walk`; `grep -oF 'OpState::walk'` over
+// `rules/*/src.cpp` names it in NO module but this one, so the bucket holds exactly
+// one candidate.
+//
+// ⭐ THE EXPLICIT `walk<WalkOrder::PreOrder>` FORM NEEDS NOTHING EXTRA, and this is
+// measured rather than hoped: f1300's block proves an explicit template argument
+// list is NOT put in a member key (`ToString` calls `printQualifiedName`, which
+// prints none), and f1300 already serves Collector.cpp:167's
+// `op.walk<WalkOrder::PreOrder>(...)` on that basis.  `mlir::WalkOrder` therefore
+// needs NO model.
+//
+// ⛔ WHAT IS LEFT OUT, WITH ITS REASON.  The FILTERED `walk<OpT>` forms are
+// unkeyable from this or any `walk` key -- f1300 proves the op-type filter survives
+// only inside the closure type, which `T1` swallows -- so they are NOT served, and
+// they fail LOUDLY (undefined lambda parameter type) rather than silently.  No
+// `void`-returning `OpState::walk` is declared: no corpus site asks for one, and
+// declaring it would be a C++ redeclaration conflict with this one.
+// ===========================================================================
+template <typename T1> mlir::WalkResult f2500(mlir::OpState &a0, T1 &&a1) {
+  return a0.walk(std::move(a1));
+}
