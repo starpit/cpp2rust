@@ -471,3 +471,116 @@ T1 &f1910(llvm::cl::opt_storage<T1, false, true> &a0) {
 template <typename T1> T1 &f1911(llvm::cl::opt<T1> &a0, const T1 &a1) {
   return a0.operator=(a1);
 }
+
+
+// ===========================================================================
+// PASS 2026-09-29 (slot optenum).  t2410 / t2411 --
+// `llvm::cl::OptionEnumValue` and `llvm::cl::ValuesClass`.
+//
+// ⛔ THIS NARROWS THE REFUSAL RECORDED AT THE TOP OF THIS FILE; IT DOES NOT
+// DELETE IT.  That block refuses OptionEnumValue, ValuesClass *and* the variadic
+// `cl::values(...)` as one chain, on the ground that "the corpus only ever
+// CONSTRUCTS them and never reads a field, so a unit model would pass every site
+// -- but it would also be a model with no observer, i.e. unfalsifiable".  ⭐ The
+// first two are now keyed and `cl::values` is deliberately still NOT, for the
+// reasons below.  What changed is the cost, not the argument: `OptionEnumValue`
+// was 1 TU of the 76-TU census and is now the #1 first-abort gate of the 22-TU
+// recut cohort -- 10 of 22 TUs (g3022.after/logs, `-model=refcount`,
+// pin/cpp2rust md5 5bf5cd9f10fb93926d84d92ce875aa9d).
+//
+// ⭐ "NO OBSERVER" IS ITSELF A FALSIFIABLE CLAIM, AND IT WAS MEASURED, not
+// assumed.  Instruments, named:
+//   (a) a MULTI-LINE-AWARE python regex `\.\s*Description\b|->\s*Description\b`
+//       over every .cpp/.h/.hpp/.cc/.inc/.rs/.json under repos/dt_src AND
+//       rules/: 0 hits.  (The refusal's original single-line `grep` claim of 0
+//       is confirmed by the stronger instrument, not merely inherited -- two
+//       refusal comments were found FALSE today by exactly this re-measurement.)
+//   (b) the stronger test, because `.Name`/`.Value` are too common to grep:
+//       a python scan for a DECLARED OBJECT of either type,
+//       `(OptionEnumValue|ValuesClass)\s+[A-Za-z_]`, over the same corpus:
+//       0 hits, against 114 mentions of `clEnumVal*`/`OptionEnumValue`.
+//       ⭐ THERE IS NO NAMED RECEIVER OF EITHER TYPE ANYWHERE IN THE CORPUS.
+//       Every occurrence is a TEMPORARY inside a `cl::values(...)` argument
+//       list, e.g. dcc/tools/Options/dcc-pass-option.h:92-97:
+//           Option<DCC::ProgIRFormat> progir_format{
+//             *this, "progir-format", llvm::cl::desc("Set ProgIR format"),
+//             llvm::cl::values(
+//               clEnumValN(DCC::ProgIRFormat::kGeneral, "general", "general format"),
+//               ...),
+//             llvm::cl::init(DCC::ProgIRFormat::kGeneral)};
+//       and `clEnumValN` is a MACRO expanding to an aggregate-init
+//       `llvm::cl::OptionEnumValue { FLAGNAME, int(ENUMVAL), DESC }`
+//       (CommandLine.h:686), so not even a temporary is ever bound to a name.
+//       That is the "you can show the corpus never calls a method on it" bar,
+//       met by construction rather than by enumeration.
+//
+// ⛔⛔ THE ONE READER THAT DOES EXIST, AND WHY IT IS UNREACHABLE.  It is NOT in
+// the corpus -- it is in LLVM's own header, CommandLine.h:702-707:
+//     template <class Opt> void apply(Opt &O) const {
+//       for (const auto &Value : Values)
+//         O.getParser().addLiteralOption(Value.Name, Value.Value,
+//                                        Value.Description);
+//     }
+// i.e. `ValuesClass::apply` reads all three fields.  ⭐ So the top-of-file claim
+// "never reads a field" is true of the PROJECT and FALSE of the header on the
+// instantiation path, and that correction matters: `apply` is reached only by
+// descending through `cl::values` -> `ValuesClass(std::initializer_list<...>)`
+// -> `cl::opt`'s variadic ctor -> `applicator<ValuesClass>::opt` -> `apply`.
+// ⛔ `llvm::cl::values` HAS NO RULE AND IS DELIBERATELY LEFT WITHOUT ONE (see
+// below), so the converter emits it as the marked placeholder
+// `Cpp2RustUnmappedFn_values_<N>` and NEVER DESCENDS INTO ITS BODY -- verified
+// on the abort logs: `grep -n 'apply\|addLiteralOption' ` over
+// g3022.after/logs/dcc__src__Transform__Sentient__BurstSplitting.cpp.log finds
+// NEITHER name, while `values_525` is on line 64 and the abort on line 65.
+// The single reader is therefore behind a placeholder, and keying these two
+// types does not open a path to it.
+//
+// THE MODEL: `()`.  Both are pure construct-only carriers on this corpus, so the
+// honest Rust type is the unit -- the statement "this value is never observed",
+// which the two censuses above make falsifiable.  ⛔ `()` is written as `()`, not
+// as an empty body (an empty body panics at syntactic.rs:591).
+// ⛔ NO MEMBER IS DECLARED on either type -- not `Name`, not `Value`, not
+// `Description`, not `apply`.  A future read therefore emits textually against a
+// `()` and fails LOUDLY in rustc (E0609 / E0599) rather than answering with a
+// fabricated value.  This is the `std::hash<int>` lesson applied in the only
+// direction available for a fieldless model: there is no method to key, so the
+// loudness has to come from the target type having no such member, and `()` has
+// none.
+//
+// ⛔⛔ `llvm::cl::values(...)` IS STILL REFUSED, and this is the hard end of the
+// chain rather than an omission.  It is `template <typename... OptsTy>
+// ValuesClass values(OptsTy... Options)` (CommandLine.h:711) -- a VARIADIC, and a
+// rule `fN` signature cannot spell a pack; `Mapper::ToString` prints the PATTERN
+// rather than the instantiated signature, so a ctor model would have to carry a
+// variadic pack.  The abort log's ask is the INSTANTIATED 3-ary form
+// `ValuesClass (struct llvm::cl::OptionEnumValue, struct llvm::cl::OptionEnumValue,
+// struct llvm::cl::OptionEnumValue)`, and the corpus instantiates other arities
+// too, so even an arity-by-arity enumeration would be a guess about the set.
+// ⭐ LEAVING IT LOUD IS ALSO WHAT KEEPS `apply` UNREACHABLE (see above), so the
+// two decisions in this block are the same decision.
+// ⚠️ AND THE PAYLOAD PROBLEM IS UNCHANGED: the enum-to-flag-string MAPPING that
+// `cl::values` carries does not reach the constructed option in the Rust output.
+// That is the same g2964 variadic-ctor gap the t1900 block above records for
+// `cl::init`, it is not made better or worse here, and this row claims exactly
+// one thing: the two CARRIER TYPES have a model.
+//
+// SWALLOW-SAFETY.  Both keys are FULLY CONCRETE -- no placeholder, so
+// `matchTemplate`'s same-depth-comma capture bug cannot fire and there is nothing
+// for `SuppressDefaultTemplateArgs` to drop.  Neither name contains a `<` or a
+// `>`, so `GetTypeMapKey`'s truncation-at-first-`<` leaves the bucket equal to the
+// full name and the `operator>=` angle-depth desync class does not apply.
+// `grep -n 'OptionEnumValue\|ValuesClass' rules/*/src.cpp` finds both names only
+// in this module (in the top-of-file refusal and here), so each bucket holds
+// exactly one key.
+// ===========================================================================
+namespace llvm {
+namespace cl {
+// Restated from llvm/Support/CommandLine.h:679 and :693.  NO MEMBER IS DECLARED
+// on either, deliberately -- see above.
+struct OptionEnumValue;
+class ValuesClass;
+} // namespace cl
+} // namespace llvm
+
+using t2410 = llvm::cl::OptionEnumValue;
+using t2411 = llvm::cl::ValuesClass;
