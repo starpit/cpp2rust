@@ -851,7 +851,17 @@ class IfOp {};
 // `getArgument()`, `pm.addPass(...)`'s own body -- still ABORTS LOUDLY in the
 // mapper rather than emitting something that compiles and lies.  That is the
 // intended state.  This rule buys the TYPE and nothing else.
-class Pass {};
+//
+// PROBE 2026-09-29 (passopt slot): the nested `template <typename DataType> class
+// Option` exists ONLY so `mlir::Pass::Option<std::string>` can be SPELLED as a key
+// (Pass.h:93:10 -- a REAL derived struct, not an alias).  ONE parameter, the t66
+// discipline.  t40's key is the arity-0 concrete name `mlir::Pass`; a nested class
+// is not a member, so t40 is unaffected -- read back out of ir_src.json.
+class Pass {
+public:
+  template <typename DataType>
+  class Option {};
+};
 
 // mlir/include/mlir/IR/BuiltinTypeInterfaces.h -- `ShapedType`, a TYPE
 // INTERFACE (not a class hierarchy) over the shaped builtin types: vector,
@@ -9056,3 +9066,121 @@ template <typename ConcreteType, typename BaseT> class DialectInterfaceBase {};
 
 using t990 = mlir::detail::DialectInterfaceBase<
     mlir::ktdf_arch::FeatureDialectInterface, mlir::DialectInterface>;
+
+
+// ===========================================================================
+// t1200 / t1201 -- the `Pass::Option` FAMILY, the two unkeyed instantiations.
+// 12 gating TUs in the fresh40 sweep (binary 91aefc07, rules ir.v37):
+//   10  `mlir::detail::PassOptions::Option<bool>`  (dbo/src/Pipeline/{Pipeline,
+//       RunProgramPipelines,PrepareRuntimeCorrection}.cpp, dcc/src/Driver/dcc.cpp,
+//       dcc/src/Conversion/SentientToProgIR/{SentientToProgIR,ConstructProgIRHelper,
+//       LowerSentientHelper}.cpp, dcc/src/Transform/Dataflow/{CFGSimplification-
+//       DataflowLevel,FlatteningLocalRegions,LoopUnrollForShuffleOp}.cpp)
+//    2  `mlir::Pass::Option<std::string>` (dbo/src/Transforms/EmitSpyreCode.cpp,
+//       dataflow-scheduler/lib/Conversion/backend/ScheduleIRToDFIR/SplitDFIROutput/
+//       SplitDFIROutput.cpp)
+//
+// ⭐ TWO DECLARING CLASSES, NOT ONE, AND THAT IS WHY THERE ARE TWO KEYS.  In real
+// MLIR `mlir::Pass::Option` is NOT an alias of `detail::PassOptions::Option` -- it is
+// a REAL derived struct, Pass.h:93:10
+//     template <typename DataType, typename OptionParser = ...>
+//     struct Option : public detail::PassOptions::Option<DataType, OptionParser> {
+// while the base is PassOptions.h:192:9.  The converter reports the two spellings from
+// the two different header lines (recorded verbatim in the BEFORE legs below), so a
+// single key cannot cover both: the recorded key names the DECLARING class.
+// ⚠️ `mlir::Pass` therefore had to be given a NESTED `Option` template (see `class
+// Pass {` above) purely as a spelling vehicle.  A nested class is not a member, so
+// t40's arity-0 concrete key `mlir::Pass` is unchanged -- read back out of
+// ir_src.json alongside t1200/t1201.
+//
+// ⭐ THE MODEL IS t66's, NOT A NEW ONE.  `mlir::detail::PassOptions::Option<int>`
+// (t66), `ListOption<std::string>` (t67) and `ListOption<int>` (t68) are ALREADY
+// OPAQUE UNITS at HEAD, keyed off the SAME two template declarations, for the SAME
+// reason (the value comes from argv parsing inside `llvm::cl`, which this port does
+// not translate).  `<bool>` and `Pass::Option<std::string>` were simply never keyed.
+// Keying them is a COMPLETION of t66-t68, and the unit model makes exactly the claim
+// t66 already makes and no further one.
+//
+// ⛔⛔ THE STANDING REFUSAL IS AGAINST A *VALUE* MODEL, AND THIS IS NOT ONE.  The
+// recorded refusal is that `Option<T,P>`'s ctor is VARIADIC
+// (`Option(PassOptions &parent, StringRef arg, Args &&...args)`, PassOptions.h:192-204)
+// so a rule signature cannot spell it, and a keyed `bool`/`String` model would hand
+// back `Default::default()` -- flipping `dcc-pass-option.h:52`'s
+// `Option<bool> check_progir{..., llvm::cl::init(true)}` to `false`.  That argument is
+// CORRECT and is not contradicted here: A UNIT HAS NO VALUE TO DEFAULT.  There is no
+// `bool` in the model that could read `false`, and `getValue()` / `operator=` /
+// `operator DataType()` / `hasValue()` are all LEFT UNDECLARED, so every site that
+// touches the option is a rustc error rather than a wrong answer.
+//
+// ⭐⭐ AND THE REFUSAL'S *OTHER* PREMISE -- "the compiled-in `init(...)` CANNOT REACH
+// the Rust side" -- IS MEASURABLY FALSE, exactly as it was for `cl::initializer<bool>`
+// (t700/f600, where the value was STRANDED, not lost).  MEASURED, same binary, same IR,
+// t1200/t1201 the only delta, dbo/src/Transforms/EmitSpyreCode.cpp:
+//   BEFORE  LLVM ERROR: unsupported system type has no rule:
+//           `mlir::Pass::Option<std::string, llvm::cl::parser<std::string>>` ...
+//           searched as: mlir::Pass::Option<std::string>  at Pass.h:93:10
+//   AFTER   LLVM ERROR: unsupported system type has no rule:
+//           `llvm::cl::initializer<char[_]>` ... reached while converting
+//           `mlir::dbo::impl::EmitSpyreCodePassBase<mlir::dbo::(anonymous
+//           namespace)::EmitSpyreCodePass>::EmitSpyreCodePassBase`
+//           at CommandLine.h:430:28
+// The AFTER gate IS THE TYPE OF THE `init(...)` ARGUMENT, reached INSIDE the generated
+// pass-base CONSTRUCTOR that runs the `Option<std::string> exportDir{*this,
+// "export-dir", ..., ::llvm::cl::init("")}` initializer (dbo/src/Transforms/Passes.td:349).
+// So the converter DOES lower the `cl::init` argument of the variadic ctor; the missing
+// piece is a `char[_]` PAYLOAD model, which is the ALREADY-RECORDED rules/cl `t3`
+// refusal ("15 A-TUs instantiate `cl::initializer<char[N]>` ... `char[_]` has no model
+// anywhere in the tree"), NOT anything about `Option`.  ⛔ THAT GATE IS LEFT LOUD: this
+// row does not key `initializer<char[_]>` and does not guess a payload.
+//
+// ⛔ THE MEMBER SURFACE, CENSUSED, AND WHY THE UNIT IS STILL THE HONEST CHOICE TODAY.
+// An unmapped member does NOT abort -- it is emitted textually, rc=0, invisible to a
+// bucket census -- so the surface has to be stated.  Censused over the corpus:
+//   `detail::PassOptions::Option<bool>`  -- FIVE `operator=(bool)` sites, all in ONE
+//     file and all WRITES: dcc/src/Driver/dcc.cpp:141,142,152,154,155
+//     (`progIROpt.dump_progir = getDumpProgIR();` ...).  No `.getValue()` read exists
+//     on this instantiation anywhere in the corpus.
+//   `mlir::Pass::Option<std::string>` -- THREE, all in dbo/src/Transforms/EmitSpyreCode.cpp:
+//     :78 `this->exportDir = export_dir.str();`   (operator=)
+//     :85 `exportDir.empty()`                    (inherited std::string member via
+//                                                  the conversion operator)
+//     :99 `std::string(exportDir)`               (operator DataType)
+// ⛔ NONE OF THESE EIGHT SITES IS EMITTED TODAY, which is what makes the trade safe to
+// take now: with t1200/t1201 in, all 4 probed TUs STILL abort LOUDLY at a NEW type gate
+// (`initializer<char[_]>` for the string half, `PassOptions::Option<DCC::ProgIRFormat>`
+// for the bool half -- see below), so no `.rs` is produced and no silent `E0599`/`E0308`
+// can exist.  When those gates clear, the eight sites become loud rustc errors on a
+// unit, which is the state t66 has deliberately held for `<int>` since it landed.
+// ⚠️ NOT CLAIMED: that a value model is wrong forever.  `exportDir`'s and `outputDir`'s
+// compiled-in defaults are BOTH `""` (Passes.td:349 and ScheduleIRToDFIR/Passes.td:93),
+// i.e. equal to `String::default()`, so a `String` model would NOT flip either of the
+// two string sites -- but `<bool>`'s `check_progir` init(true) WOULD flip, and one model
+// per key that differs in safety is the kind of asymmetry this file does not guess at.
+// The unit is the choice that is uniform AND cannot lie.
+//
+// ⛔ THE THIRD INSTANTIATION IS DELIBERATELY LEFT OUT.  After t1200 the 10 bool TUs
+// abort on `searched as: mlir::detail::PassOptions::Option<DCC::ProgIRFormat>`
+// (dcc-pass-option.h `progir_format{..., llvm::cl::init(kGeneral)}`), a PROJECT ENUM
+// with no keyed model -- the same reason t700 left `initializer<DCC::ProgIRFormat>` out.
+// Keying it is a separate row with a separate payload decision.
+//
+// SWALLOW-SAFETY.  `GetTypeMapKey` truncates at the first `<`.
+//   * t1200's bucket is `mlir::detail::PassOptions::Option` and already holds t66; both
+//     are FULLY CONCRETE (`<bool>` vs `<int>`, distinct literals, no placeholder), so
+//     `matchTemplate`'s same-depth-comma capture cannot fire at all -- there is nothing
+//     to capture.
+//   * t1201's bucket is `mlir::Pass::Option`; `grep -n 'Pass::Option' rules/*/src.cpp`
+//     finds it in NO other module, so the bucket holds exactly t1201, again fully
+//     concrete.
+//   * ⚠️ BOTH templates are declared here with ONE parameter, not two -- the t66
+//     discipline.  Real MLIR defaults the second (`llvm::cl::parser<bool>` /
+//     `llvm::cl::parser<std::string>`), the converter's `from decl` form KEEPS it and
+//     the `searched as:` form -- the only one looked up -- ELIDES it.  One parameter
+//     makes it impossible for the recorded key to drift to the dead canonical spelling.
+//     Verified: read back out of ir_src.json as exactly
+//       "t1200": "mlir::detail::PassOptions::Option<bool>"
+//       "t1201": "mlir::Pass::Option<std::string>"
+//     and "t40": "mlir::Pass" is unchanged.
+// ===========================================================================
+using t1200 = mlir::detail::PassOptions::Option<bool>;
+using t1201 = mlir::Pass::Option<std::string>;

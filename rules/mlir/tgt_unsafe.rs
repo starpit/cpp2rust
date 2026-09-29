@@ -4271,3 +4271,38 @@ unsafe fn f1000<T1>(a0: &mut (), a1: Vec<T1>) -> Vec<T1> {
 fn t990() -> () {
     ()
 }
+
+// t1200 `mlir::detail::PassOptions::Option<bool>` -> AN OPAQUE UNIT.  10 gating TUs.
+//   The bool instantiation of MLIR's command-line-backed pass option
+//   (PassOptions.h:192:9): an `llvm::cl::opt<bool>` plus MLIR's `OptionBase`
+//   bookkeeping.  ⛔ NOT `bool`, and that is the WHOLE POINT of this row -- the value
+//   comes from argv parsing inside `llvm::cl`, which this port does not translate, so a
+//   `bool` model would hand back a DEFAULT-INITIALISED `false` and silently flip
+//   dcc-pass-option.h:52's `check_progir{..., llvm::cl::init(true)}`.  A unit has no
+//   value to default.  Same model, same argument, same header line as t66
+//   (`Option<int>`) / t67 / t68, which have held this shape since they landed.
+//   ⛔ COST, censused: `operator=(bool)` at dcc.cpp:141,142,152,154,155 -- five WRITES,
+//   no read anywhere in the corpus -- are left UNDECLARED and become loud rustc errors
+//   once the downstream `Option<DCC::ProgIRFormat>` gate clears.  None is emitted today.
+// ⚠️ IDENTICAL IN BOTH MODELS and spelled in BOTH overlays (the t72/t990 precedent).
+// ⚠️ The body is `()`, NOT empty -- an empty rule body panics at syntactic.rs:591.
+fn t1200() -> () {
+    ()
+}
+
+// t1201 `mlir::Pass::Option<std::string>` -> AN OPAQUE UNIT.  2 gating TUs.
+//   Pass.h:93:10 -- a REAL derived struct over `detail::PassOptions::Option`, not an
+//   alias, which is why it needs its own key (the recorded key names the DECLARING
+//   class).  Same model and same refusal as t1200/t66.
+//   ⛔ COST, censused: three sites, all in dbo/src/Transforms/EmitSpyreCode.cpp -- :78
+//   `this->exportDir = export_dir.str()` (operator=), :85 `exportDir.empty()`, :99
+//   `std::string(exportDir)` (operator DataType) -- left UNDECLARED.  None is emitted
+//   today: the TU still aborts LOUDLY one step later, on `llvm::cl::initializer<char[_]>`
+//   inside `EmitSpyreCodePassBase::EmitSpyreCodePassBase`, which is the type of the
+//   `cl::init("")` argument and therefore PROOF that the converter does lower the
+//   variadic ctor's init argument.  The `char[_]` payload is the standing rules/cl `t3`
+//   refusal and is NOT keyed here.
+// ⚠️ IDENTICAL IN BOTH MODELS and spelled in BOTH overlays.
+fn t1201() -> () {
+    ()
+}
