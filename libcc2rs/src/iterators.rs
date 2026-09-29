@@ -1203,6 +1203,42 @@ mod range_iter_tests {
         assert_eq!(RangeIter::range_from(first, last), vec![10]);
     }
 
+    // ⭐ THE FULL KTDFArch.h.inc:521/:526 ROUND TRIP, EXECUTED. Not an emitted-text
+    // argument: a container model has to be run. This reproduces both real call sites
+    // exactly as the header spells them, including the fact that each `getOperands()`
+    // is a SEPARATE call and so hands back a DISTINCT CLONE, and it advances with BOTH
+    // corpus forms -- `operator+` (the `iterator_facade_base` key) and the body
+    // `std::next` lowers to (`offset`) -- asserting the two agree.
+    #[test]
+    fn ktdfarch_getsources_gettargets_round_trip() {
+        // `getSources()`: OperandRange{getOperands().begin(), getOperands().begin() + 1}
+        let src = RangeIter::range_from(RangeIter::begin(seq()), RangeIter::begin(seq()) + 1);
+        assert_eq!(src, vec![10], "getSources must be operand 0 only");
+
+        // `getTargets()`: OperandRange{getOperands().begin() + 1, getOperands().end()}
+        let tgt = RangeIter::range_from(RangeIter::begin(seq()) + 1, RangeIter::end(seq()));
+        assert_eq!(tgt, vec![20, 30, 40, 50], "getTargets must be operands 1..n");
+
+        // The two halves must partition the original sequence, in order.
+        let mut whole = src.clone();
+        whole.extend(tgt.iter().copied());
+        assert_eq!(whole, seq(), "sources ++ targets must rebuild the operand list");
+
+        // BOTH advance forms the corpus uses must land on the same element.
+        let by_plus = RangeIter::begin(seq()) + 3; // llvm::iterator_facade_base::operator+
+        let by_next = RangeIter::begin(seq()).offset(3); // what std::next(it, 3) lowers to
+        assert_eq!(by_plus.index(), by_next.index());
+        assert_eq!(*by_plus.at(), 40);
+        assert_eq!(*by_next, 40); // Deref, i.e. `*it`
+        assert!(by_plus == by_next); // PartialEq; no Debug impl on RangeIter, so not assert_eq!
+
+        // `last - first` and the elements are the ORIGINALS, not invented ones.
+        let f = RangeIter::begin(seq());
+        let l = RangeIter::end(seq());
+        assert_eq!(l.distance(&f), 5);
+        assert_eq!(RangeIter::range_from(f, l), seq());
+    }
+
     #[test]
     fn range_from_interior_suffix() {
         let first = RangeIter::begin(seq()) + 1;
