@@ -5089,3 +5089,60 @@ unsafe fn f2500<
         a1(::core::ptr::from_mut(o))
     })
 }
+
+// ============================================================================================
+// ROW g3064 -- GAP FAMILY F1: the seven dialect-op direct type keys, t2610-t2616.  UNSAFE arm.
+//
+// Each maps to `fmt::OpInst` carrying THE OP'S OWN generated `DEF`, which is t161's body with the
+// concrete op substituted -- the same substitution the t167-t2xx `OneTypedResult` block already
+// performs for these very ops as trait arguments.  See src.cpp at t2610 for the DEF verification
+// (positive AND negative control, two independent instruments), for the position census that is
+// why there is NO `fN` default constructor on any of the seven, and for the MEMBER finding: no
+// member of any of the seven is mapped, and unlike t161 that is a NAMED residue rather than a
+// closed argument.
+//
+// The `init` is t25's/t27's/t152's/t157's/t158's/t159's/t160's/t161's, and for their reason: a
+// default-constructed ODS op handle is the NULL handle, `fmt::OpInst` has no null, and this
+// expression exists only to type-check the type key.
+//
+// ⛔ t25's PROHIBITION APPLIES UNCHANGED: no `operator==`, no `operator!=`, no identity test.
+// ⚠️ THIS ARM IS NOT THE OTHER ARM'S `sed`: it happens to come out byte-identical to the other,
+// for the reason t157's arms record -- `fmt::OpInst` is a plain generated value type, it is not
+// behind a `Value<T>`/`Ptr<T>` wrapper in either model, and NO `ptr_bindings_` is registered here
+// (registering one on the refcount arm is `E0614`).  Each body was reasoned for its own model and
+// the identity is the conclusion, not the method.
+fn t2610() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_AddIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+fn t2611() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_SubIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+fn t2612() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_CmpIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+fn t2613() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_SelectOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+fn t2614() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_affine_AffineIfOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+fn t2615() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_affine_AffineYieldOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+fn t2616() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_func_ReturnOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
