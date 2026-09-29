@@ -5,6 +5,7 @@
 
 #include <clang/AST/RecordLayout.h>
 #include <clang/Basic/OperatorKinds.h>
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/Support/ErrorHandling.h>
 
 #include <algorithm>
@@ -2191,49 +2192,126 @@ bool ConverterRefCount::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
   return false;
 }
 
-// Is any BindingDecl of `decomp` the operand of a `std::move` anywhere inside
-// `stmt`?
+// If `call` is `std::move(b)` / `std::forward<..>(b)` for some BindingDecl `b`
+// of `decomp`, return that binding; otherwise nullptr.
 //
-// ⛔ WHY THIS IS A REFUSAL AND NOT A LOWERING. `std::move(data)` out of a
-// structured binding is a MOVE OF THE ELEMENT in C++: the callee takes ownership
-// and the container element is left empty. In this model the binding is an `Rc`
-// clone of the element's own `RefCell`, so every candidate spelling is WRONG in a
-// different way:
-//   * emitting the handle (what the model does for `std::move` today) transfers
-//     NOTHING -- the callee and the container end up SHARING one cell, so a later
-//     read of the container sees the value C++ had moved out. Silent, at rc=0.
-//   * `RefCell::take()` / `replace(Default::default())` does empty the element,
-//     but it requires the element type to have a `Default` and it CHANGES OBJECT
-//     IDENTITY for every other alias of that cell -- and nothing here establishes
-//     that no other alias exists.
-// Neither is establishable from the AST at this point, so the sub-shape is
-// refused LOUDLY and BEFORE any emission. Measured site:
-// util/foldManager/foldInfrastructure.h:1265, `func(std::move(data), ..)` inside
-// `for (auto& [coord, data] : getDataAndFoldCoordinates(..))`.
-static bool IsBindingMovedFrom(const clang::Stmt *stmt,
-                               const clang::DecompositionDecl *decomp) {
+// ⚠️ The name test is deliberately namespace-blind and therefore OVER-broad: a
+// user function called `move` taking one argument matches too. Over-broad is the
+// safe direction here -- it can only route a site into the narrower, take-based
+// lowering below or into the refusal, never into the sharing lowering that is the
+// silent-wrong one.
+static const clang::BindingDecl *
+MovedBindingOfCall(const clang::CallExpr *call,
+                   const clang::DecompositionDecl *decomp) {
+  const auto *fn = call->getDirectCallee();
+  if (fn == nullptr || call->getNumArgs() != 1 ||
+      (fn->getNameAsString() != "move" &&
+       fn->getNameAsString() != "forward")) {
+    return nullptr;
+  }
+  const auto *arg = call->getArg(0)->IgnoreParenImpCasts();
+  const auto *ref = llvm::dyn_cast<clang::DeclRefExpr>(arg);
+  if (ref == nullptr) {
+    return nullptr;
+  }
+  for (const auto *binding : decomp->bindings()) {
+    if (ref->getDecl() == binding) {
+      return binding;
+    }
+  }
+  return nullptr;
+}
+
+// Every BindingDecl of `decomp` that is moved from anywhere inside `stmt`.
+static void
+CollectMovedBindings(const clang::Stmt *stmt,
+                     const clang::DecompositionDecl *decomp,
+                     llvm::SmallPtrSetImpl<const clang::BindingDecl *> &out) {
   if (stmt == nullptr) {
-    return false;
+    return;
   }
   if (const auto *call = llvm::dyn_cast<clang::CallExpr>(stmt)) {
-    const auto *fn = call->getDirectCallee();
-    if (fn != nullptr && call->getNumArgs() == 1 &&
-        (fn->getNameAsString() == "move" ||
-         fn->getNameAsString() == "forward")) {
-      const auto *arg = call->getArg(0)->IgnoreParenImpCasts();
-      if (const auto *ref = llvm::dyn_cast<clang::DeclRefExpr>(arg)) {
-        for (const auto *binding : decomp->bindings()) {
-          if (ref->getDecl() == binding) {
-            return true;
-          }
-        }
-      }
+    if (const auto *binding = MovedBindingOfCall(call, decomp)) {
+      out.insert(binding);
     }
   }
   for (const clang::Stmt *child : stmt->children()) {
-    if (IsBindingMovedFrom(child, decomp)) {
-      return true;
+    CollectMovedBindings(child, decomp, out);
+  }
+}
+
+// How many times does `stmt` mention `decl`?
+static unsigned CountDeclRefs(const clang::Stmt *stmt,
+                              const clang::ValueDecl *decl) {
+  if (stmt == nullptr) {
+    return 0;
+  }
+  unsigned count = 0;
+  if (const auto *ref = llvm::dyn_cast<clang::DeclRefExpr>(stmt)) {
+    if (ref->getDecl() == decl) {
+      ++count;
     }
+  }
+  for (const clang::Stmt *child : stmt->children()) {
+    count += CountDeclRefs(child, decl);
+  }
+  return count;
+}
+
+// Is the range of this loop a TEMPORARY -- i.e. did the loop's `auto&& __range`
+// bind a prvalue that nothing outside the loop can name?
+//
+// ⚠️ The prvalue-ness is NOT on the expression `getRangeInit()` returns: binding
+// `auto&& __range = f()` wraps the call in a MaterializeTemporaryExpr (itself
+// often inside an ExprWithCleanups), and the WRAPPER is an xvalue. So peel to the
+// materialized subexpression and ask there; asking the wrapper returns false for
+// every temporary range and the narrowing below would never fire.
+static bool IsTemporaryRangeInit(const clang::Expr *init) {
+  if (init == nullptr) {
+    return false;
+  }
+  const clang::Expr *expr = init->IgnoreParens();
+  while (true) {
+    if (const auto *cleanups = llvm::dyn_cast<clang::ExprWithCleanups>(expr)) {
+      expr = cleanups->getSubExpr()->IgnoreParens();
+      continue;
+    }
+    if (const auto *cast = llvm::dyn_cast<clang::ImplicitCastExpr>(expr)) {
+      if (cast->getCastKind() == clang::CK_NoOp) {
+        expr = cast->getSubExpr()->IgnoreParens();
+        continue;
+      }
+    }
+    break;
+  }
+  if (const auto *materialized =
+          llvm::dyn_cast<clang::MaterializeTemporaryExpr>(expr)) {
+    return materialized->getSubExpr()->IgnoreParenImpCasts()->isPRValue();
+  }
+  return expr->isPRValue();
+}
+
+// Can `RefCell::take()` stand for the C++ move-out of an object of this type?
+//
+// `take()` is `replace(Default::default())`, so it needs a Rust `Default`, and
+// the C++ side of that is a usable default constructor -- `std::deque<int64_t>`
+// and `std::vector<int64_t>` (both `Vec<i64>` here) have one. ⛔ Raw pointers and
+// fixed arrays are refused even though C++ default-initialises them: Rust has no
+// `Default` for `*const T`, and the array `Default` impls stop at 32 elements, so
+// emitting `take()` there would be a rustc error rather than a lowering. Anything
+// this returns false for keeps the LOUD refusal.
+static bool IsTakeableMovedOutType(clang::QualType type) {
+  const clang::QualType stripped =
+      type.getNonReferenceType().getUnqualifiedType();
+  if (stripped->isPointerType() || stripped->isMemberPointerType() ||
+      stripped->isArrayType() || stripped->isFunctionType()) {
+    return false;
+  }
+  if (stripped->isScalarType()) {
+    return true;
+  }
+  if (const auto *record = stripped->getAsCXXRecordDecl()) {
+    return record->getDefinition() != nullptr && record->hasDefaultConstructor();
   }
   return false;
 }
@@ -2345,10 +2423,56 @@ bool ConverterRefCount::VisitCXXForRangeStmtVectorDecomposition(
     ReportUnsupportedStructuredBinding(decomp);
     return false;
   }
-  // (4) `std::move` out of a binding: see IsBindingMovedFrom.
-  if (IsBindingMovedFrom(stmt->getBody(), decomp)) {
-    ReportUnsupportedStructuredBinding(decomp);
-    return false;
+  // (4) `std::move` OUT OF A BINDING. `std::move(data)` is a move of the
+  // CONTAINER ELEMENT in C++: the callee gets the value and the element is left
+  // in its moved-from state (empty, for every mapped container type here). The
+  // model's `.clone()` of the element's `Value<..>` transfers NOTHING -- callee
+  // and container share one cell -- so that spelling is silently wrong at rc=0
+  // and must never be reached for this sub-shape.
+  //
+  // ⭐ THE SOUND SPELLING IS `take()`, and the reason the original refusal gave
+  // for rejecting it ("it CHANGES OBJECT IDENTITY for every other alias of that
+  // cell") IS WRONG: `take()` leaves the SAME `RefCell` in place and only
+  // replaces its contents, so another `Rc` to that cell still names the same
+  // object and sees it emptied -- which is exactly what a C++ reference to a
+  // moved-from `vector`/`deque` sees. `take()` therefore MATCHES C++ rather than
+  // diverging from it, and what has to be established is not "no other alias"
+  // but the two things below.
+  //
+  // (4a) THE RANGE MUST BE A TEMPORARY. For a named container C++ `std::move`
+  // does not guarantee a move at all -- it only casts to an rvalue reference, and
+  // a callee taking `const T&` leaves the element INTACT. Whether the callee
+  // consumes is not decidable here (the measured site's callee is
+  // `std::forward<Func>(func)`, a template parameter), so emptying the element
+  // unconditionally could empty one C++ kept. Over a temporary range that
+  // divergence is unobservable: the container is unnamed, dies at the end of the
+  // loop, and -- measured in the emitted Rust, `Rc::new(RefCell::new(({ mk_1()
+  // })))...` -- its `Rc` is MINTED INLINE IN THE LOOP HEADER, so no other handle
+  // to it can exist, and Rust extends that temporary over the whole loop exactly
+  // as C++ does.
+  //
+  // (4b) THE MOVED BINDING MUST BE MENTIONED EXACTLY ONCE IN THE BODY, i.e. only
+  // as the move operand. That is what makes hoisting the `take()` to the top of
+  // the body (where the binding is emitted) equivalent to taking at the move
+  // site: no statement in between can read the cell, so WHEN it is emptied cannot
+  // be observed. A second mention would need the take at the move site itself.
+  //
+  // Anything else -- a named range, a binding read again after the move, or an
+  // element type with no usable default -- keeps the LOUD refusal.
+  llvm::SmallPtrSet<const clang::BindingDecl *, 2> moved_bindings;
+  CollectMovedBindings(stmt->getBody(), decomp, moved_bindings);
+  if (!moved_bindings.empty()) {
+    if (!IsTemporaryRangeInit(range_init)) {
+      ReportUnsupportedStructuredBinding(decomp);
+      return false;
+    }
+    for (const auto *binding : moved_bindings) {
+      if (CountDeclRefs(stmt->getBody(), binding) != 1 ||
+          !IsTakeableMovedOutType(binding->getType())) {
+        ReportUnsupportedStructuredBinding(decomp);
+        return false;
+      }
+    }
   }
   // ====================== COMMITTED TO EMITTING ======================
   // A DecompositionDecl has no name of its own, so the holder needs one.
@@ -2378,8 +2502,20 @@ bool ConverterRefCount::VisitCXXForRangeStmtVectorDecomposition(
     if (binding_name != "_") {
       StrCat("mut");
     }
+    // ⭐ A MOVED-FROM BINDING IS `take()`n OUT OF THE ELEMENT, NOT CLONED: the
+    // callee must get a cell of its own (so it owns the value, as the C++ move
+    // gives it) and the container element must be left empty (as the C++ move
+    // leaves it). `.clone()` here would do neither -- it shares one cell, which
+    // is the silent rc=0 wrong that gate (4) exists to prevent. Gate (4) has
+    // already established that the container is an inline temporary and that this
+    // binding is mentioned only as the move operand, which is what makes taking
+    // HERE rather than at the move site equivalent.
+    const std::string element =
+        std::format("(*{}{}).{}", holder, deref, index);
     StrCat(binding_name, token::kAssign,
-           std::format("(*{}{}).{}.clone()", holder, deref, index),
+           moved_bindings.contains(binding)
+               ? std::format("Rc::new(RefCell::new({}.take()))", element)
+               : std::format("{}.clone()", element),
            token::kSemiColon);
     ++index;
   }
