@@ -10223,3 +10223,150 @@ bool operator!=(OpState, OpState);
 bool f2102(mlir::OpState a0, mlir::OpState a1) { return operator==(a0, a1); }
 
 bool f2103(mlir::OpState a0, mlir::OpState a1) { return operator!=(a0, a1); }
+
+// ===========================================================================
+// REFUSED 2026-09-29 (slot irmap): `mlir::IRMapping` -- NO KEY, NOT THE TYPE AND
+// NOT ONE OF THE FIVE MEMBERS.  Appended at :10225 (after f2103); CONSUMES NO KEY
+// INDEX, so `t2400+`/`f2400+` remain free for the next slot.
+//
+// This is not "no counterpart".  The row is POPULATE-AND-DISCARD, the axis
+// `llvm::ToolOutputFile` and `llvm::cl::ValuesClass` were refused on, and it is
+// refused HERE ON THREE INDEPENDENT STRUCTURAL GROUNDS plus one measurement.
+//
+// ---------------------------------------------------------------------------
+// WHAT THE TYPE IS.  MLIR's IRMapping (mlir/IR/IRMapping.h) is three tables --
+// `Value`->`Value`, `Block`->`Block`, `Operation *`->`Operation *`.  A Vec-of-pairs
+// + linear scan would model it with only `PartialEq`, so the standing
+// `ir::Attr`/`ir::Value` Hash+Eq block does NOT gate this row: that is the
+// rules/smallset argument (57be59ee, `SmallSet.h:136-138` IS a SmallVector plus a
+// linear `vfind`).  ⛔ THE MODEL IS NOT THE PROBLEM.  THE POPULATOR IS.
+//
+// ---------------------------------------------------------------------------
+// ⛔⛔ THE POPULATOR IS `clone`, AND `clone` IS UNMAPPED AND UNKEYABLE.
+// Receiver-aware census over repos/dt_src @ 84caa9e (declarations `IRMapping x` /
+// `IRMapping& x` per file, then member calls on THOSE receiver names -- a
+// receiver-BLIND grep for `.map(`/`.lookup(` is worthless, those names belong to
+// many other types):
+//     WRITES  `.map(`  42 sites      READS  `.lookup(` 19  `.contains(` 13
+//     `.lookupOrDefault(` 10  `.lookupOrNull(` 8      ZERO `.erase(`/`.clear(`
+//     48 sites hand the receiver to a clone (`builder.clone(op, m)`,
+//     `Region::cloneInto(&r, m)`, or the `copyLoopBody(..., m, ...)` helper).
+//
+// ⭐ EVERY ONE OF THE 42 `.map(` WRITES IS FOLLOWED BY A CLONE HAND-OFF.  There is
+// no IRMapping in the corpus that is populated and then read WITHOUT a clone in
+// between.  The seed pairs exist solely to tell `clone` what to substitute.
+//
+// ⭐⭐ AND THE READS GO THE OTHER WAY: 48 of the 50 read sites read a key that ONLY
+// A CLONE CAN HAVE WRITTEN.  The two `.map(`-satisfiable reads are
+// `ComputeGroupExtraction.cpp:308` (`assert(mapper.contains(val))` on a block
+// argument seeded at :406) and part of the `ProgramUnitExpansion.cpp` `mapper_`
+// cluster (6 hand `.map(`s at :172/:208/:253/:259/:262/:303).  The clone-only ones:
+//   * `StageCoarsening/ScopeCorrection.cpp:181,197` -- ZERO `.map(` in the whole
+//     function; `value_map` is filled ONLY by `builder_.clone(*op, value_map)` at
+//     :154/:167.  `:181 value_map.lookup(op->getResult(i))` and
+//     `:197 value_map.lookupOrDefault(operand)`.
+//   * `StageCoarsening/BufferExpansion.cpp` -- TWENTY reads, ten
+//     `if (value_map.contains(v)) v = value_map.lookup(v);` pairs, over a
+//     `IRMapping& value_map` PARAMETER whose caller (`Materializer.cpp:101,189,526`)
+//     populates it with `builder_.clone`.  The source comment is literally
+//     "Map the size value IF IT'S BEEN CLONED".
+//   * `AgenToSentient/Helper.cpp:1018-1046` -- six `lookupOrDefault`, zero `.map(`,
+//     fed by `copyLoopBody`; comment at :1017 "so it will always be cloned".
+//   * `TransformPagedMemViewImpl.cpp:385,393,496,506,511`; `DuplicateReusedToggle.cpp:
+//     163,168,174`; `dataflow-scheduler/lib/Transforms/Utils/Utils.cpp:128,237`;
+//     `PathExpansion/Materializer.cpp:115,369`; `LoopSplittingAndUnrolling.cpp:274`
+//     (`.map(` covers only the IV and the iter-args, the read is of the ORIGINAL
+//     yield operands, i.e. results of cloned ops).
+//   * `TransformPagedMemViewImpl.cpp:506` and `BufferPhaseLowering.cpp:109` and
+//     `SPMDizer.cpp:588` read the `Operation *`->`Operation *` TABLE, and NO `.map(`
+//     anywhere in the corpus writes an Operation key.  That table is clone-exclusive
+//     by construction.
+//
+// ---------------------------------------------------------------------------
+// ⛔ WHY `clone` CANNOT BE KEYED -- THREE INDEPENDENT REASONS, ANY ONE FATAL.
+//
+// (1) IT NEEDS AN `OpHandle` AND t1 IS AN `OpInst`.  `dataflowir_gen::build`'s ONLY
+//     op-insertion primitive is `OpBuilder::insert_op(OpInst) -> Result<OpHandle,
+//     BuildError>` (build.rs:707) and `create_op` (:796), both returning `OpHandle`
+//     -- `{ blocks: Rc<..>, block, id: OpId }`, identity by stamped `OpId`, position
+//     LOOKED UP on demand (:369).  But t1 `mlir::Operation` ->
+//     `dataflowir_gen::fmt::OpInst` and t36 `mlir::Operation *` -> `*mut
+//     fmt::OpInst`, a DETACHED VALUE record.  There is no `OpInst*` -> `OpHandle`
+//     mapping available to a rule body.  THIS IS THE SAME RECORDED FACT that already
+//     refuses `eraseOp`/`replaceOp`/`modifyOpInPlace` at the RewriterBase block
+//     above -- `clone` is the fourth member of that family, not a new question.
+//
+// (2) THE `Operation *` IT RETURNS AND STORES IS DANGLING BY CONSTRUCTION.
+//     `fmt::Block::ops` is a plain `Vec<OpInst>` (the tgt_*.rs header says so
+//     explicitly: "no handle/arena indirection"), so a `*mut fmt::OpInst` into it is
+//     invalidated by the NEXT insertion into the same block.  The corpus clones in a
+//     LOOP (`for (auto &it : body->getOperations()) builder.clone(it, bv_map);` --
+//     Utils.cpp:364-366, Uniform/Utils.cpp:909-910, ScopeCorrection.cpp:153-154) and
+//     THEN reads the table.  build.rs:369 states the same hazard in its own words:
+//     a raw index "stamped at insertion would be WORSE THAN NO HANDLE AT ALL".
+//     So an Operation->Operation table populated by an in-loop clone holds stale
+//     pointers before the first read executes.
+//
+// (3) IT CANNOT COMPUTE THE `Value`->`Value` PAIRS AT ALL.  `ir::Value` is
+//     NAME-BASED (`ir.rs:21-25`, `pub name: String` INCLUDING the sigil), and
+//     `OpInst::results`/`result_groups` come from MLIR's `SSANameState::
+//     numberValuesInOp`.  A clone into a new block must allocate FRESH,
+//     function-unique SSA names for its results; the allocator is the enclosing
+//     function's naming state, which a rule body has no access to.  Reusing the
+//     source names would make the clone's results COMPARE EQUAL to the originals
+//     under the `PartialEq` the Vec model relies on, so `BufferExpansion`'s
+//     `contains`/`lookup` pairs would alias the pre-clone value -- the exact bug the
+//     table exists to prevent.
+//
+// ---------------------------------------------------------------------------
+// ⛔⛔ AND THIS IS WHY "LAND THE TYPE AND ALL FIVE MEMBERS TOGETHER" DOES NOT SAVE
+// THE ROW.  The standing rule -- a type key with no method key is strictly worse
+// than no key, because it turns loud aborts into silent `E0599` -- is satisfied by
+// landing six keys.  IT IS STILL WRONG HERE, because with `clone` unmapped the
+// table IS EMPTY AT EVERY READ, and each of the three absent-key behaviours then
+// fails DIFFERENTLY and SILENTLY:
+//     `lookup`           -> asserts/UB in MLIR, so a faithful body PANICS.  The C++
+//                           program does not panic: 19 sites turn into runtime aborts
+//                           (`ScopeCorrection.cpp:181`, `Utils.cpp:237`, ...).
+//     `lookupOrNull`     -> null.  8 sites, and THREE of them immediately
+//                           `assert`/`DT_CHECK_MSG` on the result being non-null
+//                           (`SPMDizer.cpp:589` "cloned op is not mapped",
+//                           `BufferPhaseLowering.cpp:110`), so those also abort.
+//     `lookupOrDefault`  -> ⭐ THE KEY ITSELF, not a default-constructed value.
+//                           10 sites SILENTLY use the PRE-CLONE value with no
+//                           diagnostic at all.
+//     `contains`         -> false.  13 sites take the "not cloned" branch;
+//                           `BufferExpansion`'s ten pairs then emit data transfers
+//                           against the ORIGINAL buffer instead of the expanded
+//                           clone, and `ComputeGroupExtraction.cpp:313,422`'s
+//                           "already cloned?" guards stop dedupliating and re-clone
+//                           every ancestor.
+// A translation that compiles, runs, and quietly rewrites the wrong values is
+// strictly worse than 3 loud aborts.  ⭐ LEFT LOUD, DELIBERATELY.
+//
+// ---------------------------------------------------------------------------
+// ⚠️ AND THE ROW IS SMALLER THAN THE QUEUE SAYS.  First-abort measurement, coord44
+// binary (md5 a1bc9015...) over a HEAD regen of this module (461 keys, byte-identical
+// to pin/ir.v41), on the 12 TUs holding the 9 enclosing functions: only THREE abort
+// on `mlir::IRMapping` FIRST --
+//     dcc/src/Utils/Utils.cpp                              (dcc::utils::copyLoopBody)
+//     dcc/src/Dialect/Uniform/Utils.cpp    (dcc::uniform::utils::flattenUniformRegion)
+//     dataflow-scheduler/lib/Transforms/PathExpansion/Materializer.cpp
+// The other nine gate EARLIER on something else: `mlir::memref::AllocOp` (x2),
+// `mlir::detail::PassOptions::Option<std::string>` (x2), `mlir::arith::SubIOp`,
+// `mlir::FlatLinearValueConstraints`, `llvm::SmallPtrSet<mlir::Operation *, _>`,
+// an `enumerator_result<unsigned long, mlir::OpResult>` structured binding, and
+// `operator<<(raw_ostream&, mlir::Operation)`.  So the queue's 29 rows over-attribute
+// in exactly the way the first-abort-ranking note warns about.
+//
+// ⚠️ FREE FINDING FOR WHOEVER OWNS `mlir::Pass::Option`: t1201 is spelled
+// `mlir::Pass::Option<std::string>`, but the abort's `searched as:` line is
+// `mlir::detail::PassOptions::Option<std::string>` -- t1200 covers the `<bool>`
+// arm under `detail::PassOptions` and the `<std::string>` arm is MISSING there.
+// Two of the twelve TUs above are gated on it.  NOT TOUCHED (not my row).
+//
+// ⭐ WHAT WOULD UNBLOCK THIS ROW: an `OpInst*` -> `OpHandle` resolution plus an SSA
+// name allocator reachable from a rule body.  Both are model decisions for t1/t36,
+// not member rules.  Until then IRMapping is unkeyable and a key here is a
+// silent-miscompile generator.
+// ===========================================================================
