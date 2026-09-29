@@ -189,3 +189,14 @@ fn f23<T1: Clone, T2: Clone>(a0: (Value<T1>, Value<T2>)) -> (Value<T1>, Value<T2
         Rc::new(RefCell::new(a0.1.borrow().clone())),
     )
 }
+
+// f24 -- `pair<T1,T2>::pair()`, the default constructor.  Body is t1's VERBATIM:
+// two FRESH cells, because a default-constructed std::pair value-initialises both
+// members and the refcount model's pair is two independently-shared cells.  See
+// rules/pair/src.cpp's f24 note.
+fn f24<T1: Default, T2: Default>() -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(T1::default())),
+        Rc::new(RefCell::new(T2::default())),
+    )
+}

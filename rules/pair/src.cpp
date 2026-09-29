@@ -274,3 +274,64 @@ template <class T1, class T2, class T3, class T4>
 std::pair<T1, T2> f23(const std::pair<T3, T4> &a0) {
   return std::pair<T1, T2>(a0);
 }
+
+// ---------------------------------------------------------------------------
+// f24 -- THE DEFAULT CONSTRUCTOR `pair<T1,T2>::pair()`.
+//
+// This was the one surviving fabricated `std_pair_*::new*` site in dxp/dxp.cpp after
+// f23 landed.  MEASURED 2026-09-29 on wt/cvbind.cpp2rust (md5 2229b6e153fb4e9abccb7b
+// bf0336992, = from-master 1b43e947 + f23) with rule tree ir/cvbind (98 modules),
+// `-verbose`, run to exit rc=0, on a 12-line probe (pairctorwk/p.cpp):
+//     search type std::pair<long, long>, result: (T1, T2)      <- t1 BINDS
+//     search expr void std::pair<long, long>::pair(), result:
+//     None                                                     <- THE ASK, unserved
+// Both a `callinit` VarDecl (`std::pair<long,long> a;`) and a CXXTemporaryObjectExpr
+// (`return std::pair<long,long>();`) issue that same ask, and both fabricated
+// `std_pair_long__long_::new()`.
+//
+// ⭐ BODY PROVENANCE: it is t1's body VERBATIM in BOTH models, not an invention.
+// t1 is already this module's zero/default form for the very same model, so the
+// default constructor and the default-initialised type rule agree by construction:
+//     unsafe   : `<(T1, T2)>::default()`
+//     refcount : `(Rc::new(RefCell::new(T1::default())),
+//                  Rc::new(RefCell::new(T2::default())))`
+// The refcount form MUST allocate two cells -- a default-constructed `std::pair`
+// value-initialises both members, and the refcount model's pair is
+// `(Value<T1>, Value<T2>)` = two independently-shared cells.  `Default::default()`
+// on a tuple of `Rc`s would be wrong in a different way (`Rc<RefCell<T>>` has no
+// `Default` unless `T` does, and even where it does the two cells must be FRESH,
+// never shared), which is exactly why t1's explicit two-cell form is the precedent
+// to copy.  The `T1: Default, T2: Default` bound is likewise t1's.
+//
+// ⚠️ BLAST RADIUS: NIL.  f24 is the module's only NILARY key, so the tie-break on
+// `src` length cannot reach it -- an ask with zero arguments can unify with no other
+// pair key, and f24 can displace none of them.  Contrast f23, which deliberately
+// displaces f2 (and is safe only because their emitted bodies are byte-identical).
+//
+// NOT ADDED, and why: nothing beyond the nilary shape.  MEASURED apportionment of the
+// fabricated `std_pair_*::new*` sites (multi-line-aware `grep -o | wc -l`, arity taken
+// from BALANCED call-site parens):
+//     fresh38/out (312 .rs, sweep 09-28 22:41): 300 sites / 82 TUs
+//         NILARY  163   ARITY-1  87   ARITY-3  32   ARITY-2  18
+//     fresh40/out ( 60 .rs, TRUNCATED at ~175/403): 107 sites / 18 TUs
+//         NILARY   62   ARITY-1  45
+// f24 addresses the NILARY column (the plurality, 54% of fresh38).  The other columns
+// are NOT this key's business and are each a separate row:
+//   * ARITY-1 -- a pair built from ONE pair.  f23's shape.  ⛔ BUT f23's BODY IS WRONG
+//     when the source pair's elements differ from the receiver's: 14 fresh38 sites are
+//     `pair<int,int>` built from a `pair<int,double>`, and f23 emits `a0.clone()`, i.e.
+//     `let mut q: (i32, i32) = k.clone();` -> error[E0308] expected `(i32, i32)`, found
+//     `(i32, f64)`.  Reproduced 2026-09-29 on pairctorwk/p3.cpp, BOTH models.  The fix
+//     is per-element conversion (f4's `(a0.0.into(), a0.1.into())` idiom), not a clone;
+//     that is an f23 correction, not a new key, so it is left to the row that owns f23.
+//   * ARITY-2 -- `pair(const char (&)[N], T2 &)`, which f15/f16/f20 ALREADY spell.  18
+//     sites still fabricate, so one of those keys is DEAD for `T1 = const std::string`;
+//     a dead-key row, not a missing-key row.
+//   * ARITY-3 -- `pair(piecewise_construct_t, tuple<..>, tuple<..>)`, 32 sites, all
+//     `map/unordered_map::emplace` with more than one argument per element.  A pack-arity
+//     key; NOT written here because its correct body needs tuple unpacking this module
+//     has no precedent for, and guessing it would be a placeholder by another name.
+// An unasked-for key is how a type key gets a method key it does not need.
+template <typename T1, typename T2> std::pair<T1, T2> f24() {
+  return std::pair<T1, T2>();
+}
