@@ -294,3 +294,77 @@ unsafe fn f17(a0: &mut libcc2rs::IStream, a1: &mut f32) -> *mut libcc2rs::IStrea
 unsafe fn f18(a0: &mut libcc2rs::IStream, a1: &mut f64) -> *mut libcc2rs::IStream {
     a0.shr_f64(a1)
 }
+
+// ============================================================================
+// f100 -- the free `operator>>(std::istream &, char &)`.  See src.cpp for the
+// verbatim recorded key, for why it is FREE rather than a member, and for the
+// `DT_CHECK` caller that asserts the extraction FAILS.
+//
+// ⛔ THE BODY USES NOTHING BUT A METHOD CALL ON `a0`, for the reason f8 records:
+// an `aN` for a `std::istream &` parameter re-expands to the BARE LVALUE, not to
+// `&mut lvalue`, so a `let __s: *mut IStream = a0;` emits `let __s = ss;` and
+// gives E0308 with rc=0 and no placeholder.  A method call is immune because Rust
+// auto-refs the receiver.
+//
+// ⛔ THE `if __stored` GUARD IS NOT COSMETIC, AND IT IS **NOT** LWG 2176 HERE.
+// `operator>>(char&)` is not a `num_get` extraction, so a FAILED read leaves the
+// argument strictly untouched rather than zeroing it.  The one corpus caller is
+// `!static_cast<bool>(iss >> remaining_char)` -- the failing path is the EXPECTED
+// path -- so an unconditional write-back would zero `remaining_char` on exactly
+// the read the program asserts must fail.
+//
+// `a1` IS A REFERENCE TO A PRIMITIVE, which the converter DOES emit as
+// `&mut lvalue` (rules/string f82 is the standing precedent).  It is bound to
+// `__p` once so the staging byte can be written back without naming `a1` twice --
+// an `aN` re-expands to the caller's expression verbatim, so a second mention
+// would re-evaluate it.
+unsafe fn f100(
+    a0: &mut libcc2rs::IStream,
+    a1: &mut libc::c_char,
+) -> *mut libcc2rs::IStream {
+    let __p = a1;
+    let mut __c: u8 = 0;
+    let (__r, __stored) = a0.extract_char_reporting(&mut __c);
+    if __stored {
+        *__p = __c as libc::c_char;
+    }
+    __r
+}
+
+// ============================================================================
+// ⛔⛔ THERE IS DELIBERATELY NO f101/f102/f103/f104 IN THIS FILE, AND THE WHOLE
+// POINT OF THIS BLOCK IS TO SAY SO IN THE PLACE A READER WILL LOOK FOR THEM.
+// The member `operator>>(std::ios_base &(*)(std::ios_base &))` (i.e.
+// `in >> std::hex`) and the three manipulators `std::hex`/`std::dec`/`std::oct`
+// are UNKEYED, so `in >> std::hex` still aborts LOUDLY at translate time.  The
+// four-part refusal, the verbatim aborts, and the measurement that keying the
+// operator alone only moves the abort one step onto `std::ios_base` (row g2894)
+// are all in src.cpp -- read that, not this.
+//
+// ⭐ WHAT *IS* LANDED IS THE MODEL UNDERNEATH THEM: `libcc2rs::IStream` now
+// carries a real `basefield` (10/16/8, defaulting to 10) that `extract_i64` /
+// `extract_u64` consume, verified against executed C++ ground truth.  It is
+// landed ahead of its keys on purpose, on this module's own f12/f15/f16
+// precedent, so that whoever lands g2894 has only the keys left to write.
+//
+// THE SHAPE THOSE FOUR KEYS SHOULD TAKE, recorded so it is not re-derived:
+//
+//   * `u32`, NOT A FUNCTION POINTER, for the manipulator parameter.  The C++
+//     parameter is `std::ios_base &(*)(std::ios_base &)`, but a rule body is
+//     INLINED and the only argument text that can ever appear at that position
+//     is one of the three `libcc2rs::IOS_BASEFIELD_*` constants.  Modelling it
+//     as an actual `fn(&mut …) -> &mut …` would require the `std::ios_base`
+//     type rule and would buy nothing: there is no `ios_base` VALUE anywhere in
+//     either model to pass to such a function.
+//   * `shr_basefield` returns the stream for the same reason `shr_i64` does, so
+//     `inFile >> std::hex >> lineno` would lower to
+//     `shr_i64(shr_basefield(inFile, HEX), &mut lineno)` and the read would see
+//     the base the manipulator set.  Each operand is named exactly once.
+//
+// ⭐ AND THE AUDIT THAT WOULD MAKE THE LANDED VERSION CHECKABLE: because bodies
+// are inlined, a correct `in >> std::hex` must emit
+// `inFile.shr_basefield(libcc2rs::IOS_BASEFIELD_HEX)`, so grepping the emitted
+// `.rs` for `IOS_BASEFIELD_HEX` proves the base was threaded through rather than
+// dropped.  An identity body would leave NO trace at all -- which is exactly what
+// would make that trade undetectable at every stage of this harness.
+// ============================================================================

@@ -45,16 +45,64 @@
 
 use crate::Ptr;
 
+/// `std::ios_base::basefield` values, i.e. the conversion base a numeric
+/// extraction uses.  These are the THREE bases C++ can select
+/// ([ios.fmtflags]: `dec`, `hex`, `oct`); `basefield == 0` -- "prefix decides"
+/// -- is deliberately NOT modelled, because no corpus site sets it and an
+/// unmodelled value must not be guessable as a silent 10.
+pub const IOS_BASEFIELD_DEC: u32 = 10;
+/// See [`IOS_BASEFIELD_DEC`].
+pub const IOS_BASEFIELD_HEX: u32 = 16;
+/// See [`IOS_BASEFIELD_DEC`].
+pub const IOS_BASEFIELD_OCT: u32 = 8;
+
 /// The `std::ios_base::iostate` bits this model carries.  `badbit` is present
 /// because `operator!()` is `fail() || bad()` and a model that dropped it would
 /// answer `!in` wrongly for a stream that only ever went bad.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+///
+/// ⭐ `basefield` IS FORMATTING STATE, NOT ERROR STATE, AND IT IS HERE FOR A
+/// MEASURED REASON.  `dcg/tools/mda/memDumpAnalyzer.h:244` is
+/// `inFile >> std::hex >> lineno;` and then `addr = lineno * 4 + bank;`.  Before
+/// this field existed there was no honest rule for `std::hex`: the only body
+/// writable against the model was the identity, which type-checks, translates
+/// `rc=0`, and then parses `"1f"` as DECIMAL -- `1` instead of `31` -- so a
+/// memory-dump analyzer computes a WRONG ADDRESS with no diagnostic at any
+/// stage.  That is the same silent-wrongness class `rules/iostream`'s
+/// `std::left`/`std::boolalpha` refusal is written about, and it is why the
+/// radix lives in the stream instead of being dropped.
+///
+/// ⛔ IT IS NOT RESET BY `clear()`.  `basic_ios::clear()` resets `iostate`; the
+/// FORMAT FLAGS are independent and survive it ([ios.base.locales],
+/// [basic.ios.members]).  A `clear()` that also reset the base would silently
+/// change what a later `>>` parsed.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IStream {
     buf: Vec<u8>,
     pos: usize,
     failbit: bool,
     eofbit: bool,
     badbit: bool,
+    basefield: u32,
+}
+
+/// ⛔ HAND-WRITTEN, NOT DERIVED, AND THAT IS THE WHOLE POINT OF THE DEFAULT-PATH
+/// GUARANTEE.  `#[derive(Default)]` would give `basefield == 0`, which is not a
+/// base at all, and every already-landed `f11`..`f18` extraction would then parse
+/// through `from_str_radix(_, 0)` -- a PANIC in `core`, on a path that is today
+/// `rc=0` and correct.  Defaulting to 10 is what makes this change a pure
+/// addition: a stream nobody applied a manipulator to behaves exactly as it did
+/// before the field existed.
+impl Default for IStream {
+    fn default() -> Self {
+        Self {
+            buf: Vec::new(),
+            pos: 0,
+            failbit: false,
+            eofbit: false,
+            badbit: false,
+            basefield: IOS_BASEFIELD_DEC,
+        }
+    }
 }
 
 impl IStream {
@@ -71,10 +119,7 @@ impl IStream {
     pub fn from_bytes(buf: Vec<u8>) -> Self {
         Self {
             buf,
-            pos: 0,
-            failbit: false,
-            eofbit: false,
-            badbit: false,
+            ..Self::default()
         }
     }
 
@@ -132,6 +177,37 @@ impl IStream {
         self.failbit = true;
     }
 
+    // -- basefield, i.e. `std::hex` / `std::dec` / `std::oct` -----------------
+
+    /// The conversion base a numeric extraction will use.  Exposed so a test --
+    /// and a reader auditing whether a manipulator was actually threaded through
+    /// -- can observe it; nothing in the rule bodies reads it.
+    pub fn basefield(&self) -> u32 {
+        self.basefield
+    }
+
+    /// `std::ios_base::setf(base, basefield)`, i.e. the whole observable effect
+    /// of `std::hex` / `std::dec` / `std::oct`.
+    ///
+    /// ⛔ THE ARGUMENT IS NOT VALIDATED HERE AND MUST NOT BE.  The only callers
+    /// are the three `rules/iostream` manipulator keys, each of which inlines one
+    /// of the three `IOS_BASEFIELD_*` constants LITERALLY into the emitted Rust,
+    /// so an out-of-range base cannot be constructed by translated code.  A
+    /// silent clamp would be the forbidden trade in miniature: it would turn a
+    /// future mis-keyed manipulator into a wrong parse instead of a panic.
+    pub fn set_basefield(&mut self, base: u32) {
+        self.basefield = base;
+    }
+
+    /// The RULE-ABI form of [`Self::set_basefield`]: hands the stream back so a
+    /// rule body can name each operand exactly once, exactly as `shr_i32` and
+    /// friends do.  This is what `std::istream::operator>>(ios_base &(*)(ios_base &))`
+    /// lowers to.
+    pub fn shr_basefield(&mut self, base: u32) -> *mut Self {
+        self.set_basefield(base);
+        self
+    }
+
     // -- the sentry -----------------------------------------------------------
 
     /// `basic_istream::sentry` with `noskipws == false`: returns false when the
@@ -184,6 +260,73 @@ impl IStream {
             .map(str::to_owned)
     }
 
+    /// Scan an integer field at `pos` in `base`, returned in the form
+    /// `from_str_radix` accepts (optional sign, then digits, no `0x`).
+    ///
+    /// ⛔ THIS IS A SEPARATE SCANNER FROM `take_field` BECAUSE IT NEEDS
+    /// LOOKAHEAD.  Base 16 accepts an OPTIONAL `0x`/`0X` prefix, but only when a
+    /// hex digit follows: `strtol("0x", &e, 16)` consumes just the `0` and leaves
+    /// the `x` behind, so a one-character-at-a-time predicate cannot make the
+    /// decision.  A predicate that accepted `x` unconditionally would turn `"0x"`
+    /// into a parse FAILURE where C++ reports 0 and success.
+    ///
+    /// ⭐ IT IS ONLY EVER CALLED FOR `base != 10`.  The base-10 path still runs
+    /// `signed_field`/`unsigned_field` verbatim, which is what makes the
+    /// already-landed `f11`..`f18` behaviour provably unchanged: it is literally
+    /// the same code as before this field existed, not a re-derivation that
+    /// happens to agree.
+    fn take_radix_field(&mut self, base: u32, signed: bool) -> Option<String> {
+        let mut i = self.pos;
+        let mut out = String::new();
+        if i < self.buf.len() && (self.buf[i] == b'+' || (signed && self.buf[i] == b'-')) {
+            out.push(self.buf[i] as char);
+            i += 1;
+        }
+        if base == 16
+            && i + 2 < self.buf.len()
+            && self.buf[i] == b'0'
+            && (self.buf[i + 1] | 0x20) == b'x'
+            && (self.buf[i + 2] as char).is_digit(16)
+        {
+            i += 2;
+        }
+        let dstart = i;
+        while i < self.buf.len() && (self.buf[i] as char).is_digit(base) {
+            i += 1;
+        }
+        if i == dstart {
+            // Nothing consumed -- and `pos` was never advanced, because the scan
+            // ran on a local cursor.  The caller turns this into failbit + 0.
+            return None;
+        }
+        out.push_str(std::str::from_utf8(&self.buf[dstart..i]).ok()?);
+        self.pos = i;
+        if self.pos >= self.buf.len() {
+            self.eofbit = true;
+        }
+        Some(out)
+    }
+
+    /// `signed_field` under the stream's current basefield.  See
+    /// [`Self::take_radix_field`] for why base 10 is routed to the ORIGINAL code
+    /// rather than through the new scanner.
+    fn signed_field_radix(&mut self) -> Option<String> {
+        if self.basefield == IOS_BASEFIELD_DEC {
+            self.signed_field()
+        } else {
+            self.take_radix_field(self.basefield, true)
+        }
+    }
+
+    /// `unsigned_field` under the stream's current basefield.
+    fn unsigned_field_radix(&mut self) -> Option<String> {
+        if self.basefield == IOS_BASEFIELD_DEC {
+            self.unsigned_field()
+        } else {
+            self.take_radix_field(self.basefield, false)
+        }
+    }
+
     fn float_field(&mut self) -> Option<String> {
         self.take_field(|i, c| {
             c.is_ascii_digit()
@@ -206,7 +349,16 @@ impl IStream {
         if !self.sentry() {
             return;
         }
-        match self.signed_field().and_then(|s| s.parse::<i64>().ok()) {
+        // ⭐ `from_str_radix(_, 10)` IS EXACTLY `parse::<i64>()` for the strings
+        // `signed_field` can produce (optional single `+`/`-`, then ASCII
+        // digits), which is why routing the default path through it is not a
+        // behaviour change.  With `std::hex` in effect the base is 16 and the
+        // digits came from `take_radix_field`.
+        let __base = self.basefield;
+        match self
+            .signed_field_radix()
+            .and_then(|s| i64::from_str_radix(&s, __base).ok())
+        {
             Some(v) => *out = v,
             None => {
                 self.failbit = true;
@@ -244,7 +396,13 @@ impl IStream {
         if !self.sentry() {
             return;
         }
-        match self.unsigned_field().and_then(|s| s.parse::<u64>().ok()) {
+        // See `extract_i64` for why base 10 through `from_str_radix` is
+        // byte-for-byte the previous `parse::<u64>()` behaviour.
+        let __base = self.basefield;
+        match self
+            .unsigned_field_radix()
+            .and_then(|s| u64::from_str_radix(&s, __base).ok())
+        {
             Some(v) => *out = v,
             None => {
                 self.failbit = true;
@@ -319,14 +477,39 @@ impl IStream {
     /// that fails leaves the argument alone -- `num_get` is not involved, so
     /// LWG 2176's zeroing does not apply here.
     pub fn extract_u8(&mut self, out: &mut u8) {
+        self.extract_char_reporting(out);
+    }
+
+    /// ⭐ `extract_u8` FOR A RULE BODY, and both return values exist for the
+    /// rule-ABI reason `extract_token_reporting` documents, not for elegance.
+    ///
+    /// The free `operator>>(std::istream &, char &)` key needs BOTH:
+    ///
+    /// 1. THE STREAM HANDLE BACK, because the corpus caller is
+    ///    `sys-arch-spec/progir/regvisitor.cpp:285`
+    ///    `DT_CHECK(success && regnum >= 0 && !static_cast<bool>(iss >> remaining_char));`
+    ///    -- the extraction's RESULT is the point and the character is not. The
+    ///    assertion is that the read FAILS, i.e. that no trailing garbage
+    ///    follows the number, so `static_cast<bool>` must observe the failbit the
+    ///    sentry sets on empty input.
+    /// 2. A "was it written" FLAG, because this tree's `char` is
+    ///    `libc::c_char` (unsafe model) / `u8` (refcount model) while this type
+    ///    reads raw bytes, so the rule body needs a STAGING byte and must convert
+    ///    on the way out -- and it MUST NOT write on the sticky/empty path.
+    ///    `operator>>(char&)` is not a `num_get` extraction, so LWG 2176's
+    ///    zero-on-failure does NOT apply: a failed char read leaves the
+    ///    caller's variable strictly alone. An unconditional write-back would
+    ///    zero `remaining_char` at the exact site that asserts the read failed.
+    pub fn extract_char_reporting(&mut self, out: &mut u8) -> (*mut Self, bool) {
         if !self.sentry() {
-            return;
+            return (self, false);
         }
         *out = self.buf[self.pos];
         self.pos += 1;
         if self.pos >= self.buf.len() {
             self.eofbit = true;
         }
+        (self, true)
     }
 
     // -- the numeric `operator>>` rule ABI ------------------------------------
@@ -1093,5 +1276,95 @@ mod tests {
         assert_eq!(b, 0, "LWG 2176: zero on the failing conversion");
         assert_eq!(c, -1, "sticky: the sentry fails, so nothing is written");
         assert!(st.fail());
+    }
+
+    // ⭐ EXECUTED AGAINST C++ GROUND TRUTH, not asserted from reasoning.
+    // /home/agent/work/g3084probe/hexrow.cpp was BUILT AND RUN through
+    // toolchain/shim4/clang++ and printed, verbatim:
+    //     hex[31,32,156]  decrestore[16,10]  oct[15]  dec[42,-7]
+    //     hexfail[0,0]    clean[1,12,1,Q]    dirty[1,12,0,x]
+    // Every number below is that program's output, copied over. (The brief says
+    // this pod has no linker so Rust tests cannot be run -- it DOES: rustc links
+    // with `-C linker=/home/agent/work/toolchain/shim4/clang++`, which is how these
+    // were actually executed rather than merely type-checked.)
+    #[test]
+    fn basefield_is_honoured_and_matches_cpp() {
+        let mk = |t: &str| IStream::from_bytes(t.as_bytes().to_vec());
+
+        // hex[31,32,156]: `in >> std::hex >> a >> b` -- the base is STICKY across
+        // both extractions, and 31*4+32 is the memDumpAnalyzer.h:244 address computation.
+        let mut st = mk("1f 20");
+        st.set_basefield(IOS_BASEFIELD_HEX);
+        let (mut a, mut b) = (0i64, 0i64);
+        st.extract_i64(&mut a);
+        st.extract_i64(&mut b);
+        assert_eq!((a, b, a * 4 + b), (31, 32, 156));
+
+        // decrestore[16,10]: `>> std::hex >> c >> std::dec >> d` on "10 10".
+        // THIS IS THE ASSERTION AN IDENTITY BODY FOR `std::hex` CANNOT PASS:
+        // with no basefield both reads give 10.
+        let mut st = mk("10 10");
+        st.set_basefield(IOS_BASEFIELD_HEX);
+        let mut c = 0i64;
+        st.extract_i64(&mut c);
+        st.set_basefield(IOS_BASEFIELD_DEC);
+        let mut d = 0i64;
+        st.extract_i64(&mut d);
+        assert_eq!((c, d), (16, 10));
+
+        // oct[15]
+        let mut st = mk("17");
+        st.set_basefield(IOS_BASEFIELD_OCT);
+        let mut e = 0i64;
+        st.extract_i64(&mut e);
+        assert_eq!(e, 15);
+
+        // dec[42,-7]: the DEFAULT path, which must route to the ORIGINAL
+        // signed_field() and be indistinguishable from pre-basefield behaviour.
+        let mut st = mk("42 -7");
+        assert_eq!(st.basefield(), IOS_BASEFIELD_DEC);
+        let (mut f, mut g) = (0i64, 0i64);
+        st.extract_i64(&mut f);
+        st.extract_i64(&mut g);
+        assert_eq!((f, g), (42, -7));
+
+        // hexfail[0,0]: 'z' is not a hex digit, so LWG 2176 zeroes the target and
+        // the stream converts to false. ⛔ And `pos` must NOT have advanced.
+        let mut st = mk("zz");
+        st.set_basefield(IOS_BASEFIELD_HEX);
+        let mut h = 5i64;
+        st.extract_i64(&mut h);
+        assert_eq!(h, 0);
+        assert!(st.fail());
+        assert!(!st.to_bool());
+    }
+
+    // ⭐ THE OTHER HALF OF ROW g3084: the f100 key's body. regvisitor.cpp:285 asserts
+    // the extraction FAILS, so what must hold is (a) `to_bool()` reports it and
+    // (b) ⛔ a FAILED read leaves the caller's `char` UNTOUCHED. `operator>>(char&)`
+    // is not a num_get extraction, so LWG 2176 zero-on-failure does NOT apply here --
+    // that is exactly why extract_char_reporting returns a `stored` flag.
+    #[test]
+    fn char_extraction_matches_cpp() {
+        let mk = |t: &str| IStream::from_bytes(t.as_bytes().to_vec());
+
+        // clean[1,12,1,Q]: trailing garbage IS present, so the read succeeds.
+        let mut st = mk("12 Q");
+        let mut r = 0i64;
+        st.extract_i64(&mut r);
+        let mut ch = b'?';
+        let (_p, stored) = st.extract_char_reporting(&mut ch);
+        assert_eq!((r, stored, ch), (12, true, b'Q'));
+
+        // dirty[1,12,0,x]: nothing left, so the sentry fails, `stored` is false and
+        // the initial b'x' SURVIVES -- the DT_CHECK at regvisitor.cpp:285 fires.
+        let mut st = mk("12");
+        let mut r = 0i64;
+        st.extract_i64(&mut r);
+        let mut ch = b'x';
+        let (_p, stored) = st.extract_char_reporting(&mut ch);
+        assert_eq!((r, stored, ch), (12, false, b'x'));
+        assert!(st.fail());
+        assert!(!st.to_bool());
     }
 }

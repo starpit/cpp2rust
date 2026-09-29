@@ -277,3 +277,44 @@ fn f18(a0: Ptr<libcc2rs::IStream>, a1: Ptr<f64>) -> Ptr<libcc2rs::IStream> {
     __s.with_mut_ref(|__st| __o.with_mut_ref(|__v| __st.extract_f64(__v)));
     __s
 }
+
+// f100 -- the free `operator>>(std::istream &, char &)`.  See src.cpp for the
+// recorded key and the `DT_CHECK` caller that asserts the extraction FAILS, and
+// tgt_unsafe.rs for why the `__stored` guard is required and is NOT LWG 2176.
+//
+// THIS OVERRIDE IS REQUIRED and not merely for pointer syntax: BOTH parameter
+// types are model-dependent.  `char` is `u8` here and `libc::c_char` in the
+// unsafe model (rules/string f9/f21 are the precedent), and an lvalue reference
+// is `Ptr<T>` here against `&mut T` there.  Inheriting the unsafe body would give
+// E0308 twice over.
+//
+// `Ptr` is a VALUE, so each `aN` is named exactly once through the `let` prelude.
+// The staging byte is still needed even though `char` is already `u8` here,
+// because the write-back must be CONDITIONAL.
+fn f100(a0: Ptr<libcc2rs::IStream>, a1: Ptr<u8>) -> Ptr<libcc2rs::IStream> {
+    let __s = a0;
+    let __o = a1;
+    let mut __c: u8 = 0;
+    let __stored = __s.with_mut_ref(|__st| __st.extract_char_reporting(&mut __c).1);
+    if __stored {
+        __o.with_mut_ref(|__v| *__v = __c);
+    }
+    __s
+}
+
+// ⛔⛔ THERE IS DELIBERATELY NO f101/f102/f103/f104 IN THIS FILE EITHER, and a
+// reader who greps for them should find this note rather than silence.  The
+// `std::ios_base` manipulator overload of `operator>>` and the three `basefield`
+// manipulators are UNKEYED in BOTH models, so `in >> std::hex` still aborts
+// LOUDLY at translate time.  The four-part refusal and its measurements are in
+// src.cpp; the shape those keys should take is recorded once, in tgt_unsafe.rs.
+//
+// ⛔ AND THE CONSTRAINT WHOEVER LANDS THEM MUST NOT MISS, because this module
+// HAS a tgt_refcount.rs: it must then carry EVERY key.  Omitting one here leaves
+// ir_refcount.json short of ir_src.json and the converter ABORTS AT LOAD TIME in
+// the refcount model, poisoning every translation -- the incident documented at
+// f5/f6 above.  f102-f104 would be model-INDEPENDENT constants, so they are
+// restated byte-identically rather than inherited.
+//
+// ⭐ What IS landed in both models is `libcc2rs::IStream::basefield` itself; only
+// the keys that would set it are missing.

@@ -374,3 +374,117 @@ std::istream &f16(std::istream &o, unsigned long long &v) {
 std::istream &f17(std::istream &o, float &v) { return o.operator>>(v); }
 
 std::istream &f18(std::istream &o, double &v) { return o.operator>>(v); }
+
+// ============================================================================
+// f100 -- THE FREE `operator>>` FOR `char`.  Recorded key, verbatim from the
+// converter's own refusal on the gate TU (pin a0b0a707, pin/ir.v45, 98 modules):
+//     LLVM ERROR: unsupported CXXOperatorCallExpr: >> on (std::istream, char)
+//     rule key: std::istream & operator shr(std::istream &, char &)
+//     at /home/agent/work/repos/dt_src/sys-arch-spec/progir/regvisitor.cpp:285:5
+//
+// ⭐ IT IS A FREE FUNCTION, NOT A MEMBER -- TWO parameters, the stream among
+// them -- which is f8's shape and NOT f11-f18's.  libcxx declares
+//     template<class C, class T> basic_istream<C,T>& operator>>(basic_istream<C,T>&, C&);
+// as a free template for the CHARACTER types while the arithmetic extractions are
+// members, so `iss >> some_char` resolves to the free overload.  That is why this
+// key must be written with a leading `std::istream &` parameter: a member-shaped
+// key (`operator shr(char &)`) would be a DIFFERENT SPELLING and would never be
+// asked for.  The `operator>>(a0, a1)` FUNCTION-call form below is what steers
+// overload resolution to the free overload rather than to a member.
+//
+// ⛔⛔ THE EXTRACTION'S RESULT IS THE POINT AND THE CHARACTER IS NOT -- read the
+// caller, because a body that "reads a char" and returns a truthy stream is the
+// silent-miscompile trade:
+//     // sys-arch-spec/progir/regvisitor.cpp:283-286
+//     bool success = static_cast<bool>(iss >> regnum);
+//     char remaining_char;
+//     DT_CHECK(success && regnum >= 0 &&
+//              !static_cast<bool>(iss >> remaining_char));
+// The code asserts the extraction FAILS: it is checking that the register name
+// held no trailing garbage after the number.  So the key is correct only if
+//   (a) an exhausted stream sets failbit (the sentry does: eofbit AND failbit,
+//       which is the same mechanism that terminates `while (in >> x)`), and
+//   (b) `static_cast<bool>` observes it (`IStream::to_bool()` is `!fail()`), and
+//   (c) a FAILED read leaves `remaining_char` UNTOUCHED.
+// (c) is not LWG 2176: `operator>>(char&)` is not a `num_get` extraction, so the
+// zero-on-failure rule does not apply to it and the argument must be left alone.
+// `IStream::extract_char_reporting` reports (a) so the rule body can honour (c).
+// An identity body would make every `DT_CHECK` in that function pass regardless
+// of the input -- an assertion that cannot fire is exactly as loud as no
+// assertion, and nothing short of a differential run would see it.
+// ============================================================================
+std::istream &f100(std::istream &a0, char &a1) { return operator>>(a0, a1); }
+
+// ============================================================================
+// ⛔ DELIBERATELY NOT KEYED, AND MEASURED RATHER THAN ARGUED: THE **MEMBER**
+// `operator>>` TAKING AN `std::ios_base` MANIPULATOR, i.e. `in >> std::hex`.
+// Recorded key, verbatim (verif/g3078M.gates.json, n=3, gate TU
+// dcg/tools/mda/SCVerifier.cpp):
+//     LLVM ERROR: unsupported CXXOperatorCallExpr:
+//     >> on (std::istream, std::ios_base &(*)(std::ios_base &))
+//     rule key: std::istream & operator shr(std::ios_base &(*)(std::ios_base &))
+//     at /home/agent/work/repos/dt_src/dcg/tools/mda/memDumpAnalyzer.h:244:18
+// and the three manipulators themselves record as
+//     std::ios_base & std::hex(std::ios_base &)      (also dec, oct)
+// -- the same shape rows g858/g861 record for `std::boolalpha`/`std::left`.
+// BOTH spellings were CONFIRMED by regenerating this module with the keys
+// present and reading them back out of `ir_src.json` character for character.
+//
+// 1. WHAT IS ABSENT FROM THE MODEL, AND IT IS **NOT** THE RADIX.  The radix was
+//    the obvious candidate and it is now PRESENT: `libcc2rs::IStream` carries a
+//    `basefield` (10/16/8, default 10), `set_basefield`/`shr_basefield` apply it,
+//    and `extract_i64`/`extract_u64` consume it through `from_str_radix`.  What
+//    is still absent is a TYPE RULE FOR `std::ios_base` (row g2894).  Measured on
+//    a standalone probe (`/home/agent/work/g3084probe/hexrow.cpp`) with the keys
+//    landed and the pin converter a0b0a707 against a 98-module tree:
+//        unsafe: LLVM ERROR: unsupported system type has no rule: `std::ios_base`
+//        (would be emitted as the undefined name `std_ios_base`), reached while
+//        converting `main` ... at /home/agent/work/toolchain/libcxx/ios:253:33
+//    i.e. keying the operator only moves the abort one step, onto the type of the
+//    manipulator the operator takes.  The manipulator key is ALSO not usable: in
+//    the refcount leg it translated and then emitted `libcc2rs::hex_refcount`, an
+//    undefined name (E0425), because the recorded key has ARITY 1 while the C++
+//    site merely REFERENCES `std::hex` with no argument, and a zero-argument
+//    declref form (`std::ios_base &(*f102())(std::ios_base &) { return std::hex; }`)
+//    is NOT RECORDED AS A KEY AT ALL by the rule preprocessor.
+//
+// 2. FAILURE MODE OF THE ALTERNATIVE -- shipping the operator key anyway.  It
+//    would REPLACE a translate-time CONVERTER-ABORT with a compile-time E0425 on
+//    an undefined manipulator name.  That is not silent, but it is strictly less
+//    loud, and it would make three TUs read as "gate cleared" in every
+//    first-abort census while nothing about them actually translates.  That is
+//    the false-closure pattern, and it is why the key is left out.
+//    ⛔⛔ AND THE OTHER ALTERNATIVE -- AN IDENTITY BODY FOR `std::hex` -- IS THE
+//    FORBIDDEN TRADE, NOT MERELY A WEAK ONE.  The C++ site is
+//        inFile >> std::hex >> lineno;   ...   addr = lineno * 4 + bank;
+//    so a body that returned the stream unchanged type-checks, translates rc=0,
+//    passes no-placeholders.sh, compiles, runs, and reads `"1f"` as DECIMAL `1`
+//    instead of `31` -- a WRONG MEMORY ADDRESS in a memory-dump analyzer,
+//    observable only by diffing the program's bytes.  Verified against C++ ground
+//    truth by the probe above, whose C++ leg prints `hex[31,32,156]`.
+//
+// 3. DISCRIMINATOR -- a landed key where the same body IS correct: f100 below.
+//    It is the OTHER half of this row, it is a FREE `operator>>` over `char`, and
+//    it lands precisely because its operand types (`std::istream &`, `char &`)
+//    both have models, while this one's operand is a pointer to a function over a
+//    type that has none.  So the blocker is the `std::ios_base` model and NOT
+//    manipulators being unkeyable -- which also narrows this module's
+//    `std::left`/`std::boolalpha` refusal above: that refusal gave TWO reasons,
+//    "no ostream formatting state" and "no `std::ios_base` type rule", and the
+//    SECOND one is the binding constraint on the input side too.
+//
+// 4. NAMED UNBLOCKER, IN THE RIGHT LAYER: row **g2894** -- a type rule for
+//    `std::ios_base` in this module.  With `IStream::basefield` now in place, the
+//    remaining work is exactly (a) g2894, and (b) a rule-preprocessor change so a
+//    zero-argument declref to a FUNCTION records a key, or a converter change so
+//    an arity-1 manipulator key inlines at an arity-0 declref site instead of
+//    emitting `libcc2rs::<name>_<model>`.  Neither is a rules-layer change, so
+//    neither is in this diff.
+//
+// ⭐ THE RADIX MODEL IS LANDED AHEAD OF ITS KEY ON PURPOSE, and this module's own
+// precedent is f12/f15/f16 ("not instantiated by the corpus today and written
+// because they are the same three lines").  `basefield` DEFAULTS TO 10 and the
+// base-10 field scanner is the ORIGINAL code, unmodified, so every already-landed
+// f11..f18 site behaves exactly as before -- proven as a byte-identical control
+// on dsc/dims.cpp and dxp/dxp.cpp.
+// ============================================================================
