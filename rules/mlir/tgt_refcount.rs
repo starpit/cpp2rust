@@ -3760,3 +3760,18 @@ unsafe fn f909(a0: std::collections::HashSet<dataflowir_gen::ir::Attr>) -> u32 {
 fn t980() -> libcc2rs::OwningOpRef<()> {
     libcc2rs::OwningOpRef::null()
 }
+
+// t1040 `mlir::StorageUniquer::StorageAllocator` -> AN OPAQUE UNIT, the t720 model.
+//   IDENTICAL to tgt_unsafe.rs: this is a VALUE-less handle in both models, so no
+//   pointer representation appears. Census and argument in src.cpp.
+//   The body is `()`, not empty: an empty body panics at syntactic.rs:591 (t59).
+fn t1040() -> () {
+    ()
+}
+
+// f1000 -- `ArrayRef<T1> StorageAllocator::copyInto(ArrayRef<T1>)` -> IDENTITY.
+//   IDENTICAL to tgt_unsafe.rs apart from the `unsafe`: t19 is `Vec<T1>` in both
+//   overlays, so the identity body is model-independent.
+fn f1000<T1>(a0: &mut (), a1: Vec<T1>) -> Vec<T1> {
+    a1
+}

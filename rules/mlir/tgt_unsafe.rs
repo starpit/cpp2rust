@@ -4162,3 +4162,24 @@ unsafe fn f880(a0: *mut dataflowir_gen::AsmParser, a1: &mut ::std::string::Strin
         )
     }
 }
+
+// t1040 `mlir::StorageUniquer::StorageAllocator` -> AN OPAQUE UNIT, the t720 model.
+//   7 gating TUs. The allocator is WRITE-ONLY at every site in the corpus: the only
+//   two members named anywhere are `allocate<T>()` (36 uses, all placement-new
+//   operands, which `VisitCXXNewExpr` never converts) and `copyInto` (2 uses, whose
+//   value is read back through the RETURNED ArrayRef). See src.cpp for the census
+//   and for why the standing "an arena cannot be `()`" refusal does not survive it.
+//   The body is `()`, not empty: an empty body panics at syntactic.rs:591 (t59).
+fn t1040() -> () {
+    ()
+}
+
+// f1000 -- `ArrayRef<T1> StorageAllocator::copyInto(ArrayRef<T1>)` -> IDENTITY.
+//   ⭐ THE HALF THAT MAKES t1040 LEGITIMATE. `llvm::ArrayRef<T1>` is t19 -> `Vec<T1>`,
+//   an OWNED vector, so handing the argument straight back is not a discard: the
+//   Rust value owns exactly the elements C++ copied into the arena, and outlives the
+//   arena rather than borrowing from it. `a0` is unused because the arena it names
+//   has no representation and needs none.
+unsafe fn f1000<T1>(a0: &mut (), a1: Vec<T1>) -> Vec<T1> {
+    a1
+}

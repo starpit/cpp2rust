@@ -8800,3 +8800,93 @@ llvm::ParseResult f880(mlir::OpAsmParser &a0, mlir::OpAsmParser::UnresolvedOpera
 //    `bool` collapses "absent" into one of the other two -- as `true` it accepts nothing
 //    where something was required, as `false` it rejects a legal absence.  Neither is
 //    admissible, so it stays loud until `mlir::OptionalParseResult` is keyed.
+
+// ===========================================================================
+// t1040 / f1000 -- `mlir::StorageUniquer::StorageAllocator`: THE ARENA, AND WHY
+// THE OPAQUE MODEL IS EXACT HERE.  7 TUs gate on it at HEAD 23971da3.
+//
+// ⛔ THIS TYPE CARRIED A STANDING REFUSAL: "a real arena -- StorageUniquer.h:172
+// does `new(allocator.allocate<Storage>())` and `copyInto()` copies into the arena,
+// so an opaque/`()` model is a silent lie."  That was written at 8 sites and never
+// re-measured.  The two halves of it are now MEASURED and both come out the other
+// way; what follows is the measurement, not an argument from convenience.
+//
+// ⭐ THE MEMBER CENSUS.  `(allocator|*Allocator)\.<member>` over ALL of
+// /home/agent/work/toolchain/gen-inc (every TableGen `.cpp.inc` the corpus
+// compiles) PLUS all of repos/dt_src:
+//       36 .allocate      2 .copyInto      NOTHING ELSE.
+// No `allocated`, no `allocateObjects`, no `getAllocator`, no `copyInto(StringRef)`.
+// ⚠️ The 7 gating .cpp files contain ZERO textual hits -- every site is in a
+// generated `.cpp.inc`, which is why a source grep alone reads as "no sites".
+//
+// ⭐ HALF ONE: `allocate<T>()` IS NEVER EMITTED AT ALL, so it cannot be a lie.
+// All 36 uses are the PLACEMENT OPERAND of a placement-new inside a TableGen
+// `construct`, e.g. KtdpOpsTypes.cpp.inc:71
+//     return new (allocator.allocate<AccessTileTypeStorage>())
+//                AccessTileTypeStorage(std::move(shape), std::move(elementType));
+// and `Converter::VisitCXXNewExpr` (converter.cpp:6813-6845) NEVER CONVERTS THE
+// PLACEMENT ARGUMENT.  The non-array arm emits exactly
+//     (Box::leak(Box::new(<initializer>)) as <type>)
+// from `expr->getInitializer()` and `expr->getAllocatedType()` only -- the
+// placement expression is not reachable from either, and the visitor returns
+// `false` so nothing recurses into it.  The storage therefore comes from Rust's
+// own allocator with the right contents; the arena is not modelled because it is
+// not USED.  The abort was on SPELLING THE PARAMETER TYPE in `construct`'s
+// signature, not on any member call -- the verbose line says so:
+//   `reached while converting mlir::ktdf::detail::FifoSlotTypeStorage::construct`.
+//
+// ⭐ HALF TWO: `copyInto` IS KEYED, AND IDENTITY IS ITS EXACT SEMANTICS.  Both
+// uses have the same shape (KtdpOpsTypes.cpp.inc:73, KTDFArchAttributes.cpp.inc:62):
+//     shape = allocator.copyInto(shape);        //  llvm::ArrayRef<int64_t>
+//     entries = allocator.copyInto(entries);    //  llvm::ArrayRef<pair<Attr,Attr>>
+// The value is read back THROUGH THE RETURNED ArrayRef, never through the
+// allocator -- the allocator is write-only at every site in the corpus.  And
+// `llvm::ArrayRef<T1>` is t19 -> `Vec<T1>`, an OWNED vector, so the returned
+// value already owns the elements it borrowed from the arena in C++.  C++
+// `copyInto` = "copy these elements somewhere that outlives me, hand back a view";
+// `Vec<T1> -> Vec<T1>` identity = "these elements, owned".  The Rust value is
+// STRICTLY longer-lived than the C++ one and carries the identical contents, so
+// nothing is discarded.  This is why f1000 is the half that makes t1040 legitimate:
+// without it the row would be the `OperationState -> ()` bargain -- a loud abort
+// traded for a silent E0599 on a method `()` does not have.
+//
+// ⛔ WHAT IS DELIBERATELY NOT KEYED, each with its census number:
+//  * `allocate<T>()` (36 uses) -- zero EMITTED sites, per HALF ONE.  A key would be
+//    dead by construction and would also silently absorb a future non-placement use
+//    that DOES need a real pointer.  Left unmapped so such a use stays visible.
+//  * `copyInto(StringRef)` (0 uses), `allocated(const void*)` (0), the
+//    `allocate(size,align)` byte overload (0), `getAllocator` (0).  The corpus never
+//    names them.
+//  * NO constructor: `StorageAllocator` is never constructed by ported code -- every
+//    site receives it as a `&` parameter of a generated `construct`.
+// ⛔ AND THE NESTING IS THE DECLARING CLASS, NOT A DERIVED ONE.  `copyInto` is
+// declared on `StorageUniquer::StorageAllocator` (StorageUniquer.h:98), and both
+// corpus spellings reach it through the typedefs `mlir::TypeStorageAllocator` /
+// `mlir::AttributeStorageAllocator`, which canonicalise to that same nested name --
+// so ONE key covers both, and the key names where the member is DECLARED.
+// ===========================================================================
+namespace mlir {
+class StorageUniquer {
+public:
+  class StorageAllocator {
+  public:
+    template <typename T> llvm::ArrayRef<T> copyInto(llvm::ArrayRef<T> elements);
+  };
+};
+} // namespace mlir
+using t1040 = mlir::StorageUniquer::StorageAllocator;
+
+// f1000 -- `ArrayRef<T1> StorageAllocator::copyInto(ArrayRef<T1>)` -> IDENTITY.
+// GENERIC for the f560 reason: the converter asks with the INSTANTIATED argument
+// (`llvm::ArrayRef<int64_t>`, `llvm::ArrayRef<std::pair<mlir::Attribute,
+// mlir::Attribute>>`), so no concrete spelling can match both and
+// `matchTemplate` binds `T1` textually at each site.
+// ⚠️ NO SWALLOW RISK (the matchTemplate same-depth-comma bug): the captured region
+// is the SINGLE template argument of `ArrayRef<...>`; the comma in
+// `std::pair<Attribute, Attribute>` sits one bracket DEEPER, not at the captured
+// depth.
+template <typename T1>
+llvm::ArrayRef<T1> f1000(mlir::StorageUniquer::StorageAllocator &a0,
+                         llvm::ArrayRef<T1> a1) {
+  return a0.copyInto(a1);
+}
