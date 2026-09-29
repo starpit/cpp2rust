@@ -4,6 +4,13 @@
 #include <map>
 #include <utility>
 
+// The arity-generic pack helper, copied verbatim from rules/unordered_map:31 and
+// rules/vector.  `Init<T, Args>` tells cpp-rule-preprocessor "this pack parameter
+// initialises a T"; the converter's ConvertInitFragment/BuildInitExpr then builds
+// the T from whatever the call site actually supplies, so ONE key serves EVERY
+// arity and no arity ever appears in the recorded key.
+template <typename T, typename A> using Init = A;
+
 template <typename T1, typename T2> using t1 = std::map<T1, T2>;
 
 template <typename T1, typename T2>
@@ -386,3 +393,78 @@ void f42(llvm::MapVector<T1, T2> &o) {
   return o.clear();
 }
 
+
+
+// ===========================================================================
+// g3091 -- `std::map::emplace`, ARITY-GENERIC.
+//
+// ⛔⛔ THIS KEY WAS A DELIBERATE, DOCUMENTED ABSENCE AND THE REFUSAL IS NOW
+// OBSOLETE.  `rules/unordered_map/src.cpp` (the block above its f57, ~line 620)
+// says verbatim: "`rules/map` AND `rules/set` HAVE NO `emplace` KEY AT ALL
+// (checked, both modules), AND THAT IS NOW A DELIBERATE ABSENCE, NOT AN
+// OVERSIGHT.  ...  DO NOT ADD ONE until the preprocessor change above has
+// landed."  ⭐ **THE NAMED UNBLOCKER HAS LANDED.**  That refusal's own text names
+// its unblocker -- `cpp_rule_preprocessor.cpp findTemplateArgument` recording the
+// init type through a NESTED template-argument path instead of a bare
+// (depth,index) pair -- and f57's OWN note, three hundred lines earlier in the
+// same file, records that it shipped: "The encoding now also carries a
+// NESTED-ARGUMENT PATH, so this type is named as 'template argument 0 of template
+// argument 4', and the converter replays that descent."  f57 is today spelled
+// `Init<std::pair<const T1, T2>, Args> &&...args`, i.e. exactly the
+// arity-GENERIC shape the refusal said was unavailable.  The refusal text was
+// simply never revisited after its own blocker was fixed.
+//
+// WHY ARITY-GENERIC IS THE ONLY CORRECT SHAPE HERE, and every one of these is
+// unordered_map's own measurement, transferred because the C++ declaration is
+// the same variadic `template<class... Args> pair<iterator,bool> emplace(Args&&...)`:
+//   * the recorded key is `...std::map<T1, T2>::emplace(&&...)` -- NO arity.
+//     `Mapper::HasFunctionParameterPack` resolves through getPrimaryTemplate(), so
+//     a specialisation still prints the pack marker, and `GetExprCallArity`
+//     returns nullopt on a top-level `...`, so no `#arity` bucket is formed on
+//     either the load or the ask side.  There is no string to narrow and no
+//     second key that could coexist (equal-length `src`, strict `>` tie-break at
+//     mapper.cpp:907 -> nondeterministic winner).
+//   * therefore a FIXED-ARITY body would be wrong in BOTH directions on this
+//     corpus: the 1 arity-1 site would abort the whole TU
+//     (converter.cpp:9748 "rule body references placeholder a2 but the call site
+//     supplies only 2 argument(s)"), and the 3 arity-3
+//     `emplace(std::piecewise_construct, forward_as_tuple(..), forward_as_tuple(..))`
+//     sites (dsm/dsm.cpp:3928, progtailor/progtailor.cpp:334 and :472 -- all three
+//     on `std::map<std::pair<int, SenComponents>, ...>`, i.e. all three reachable
+//     from THIS key) would SILENTLY DROP every argument past the second.  An
+//     Init<> pack has no aN placeholder count, so it takes neither branch: arity 1
+//     copy-initialises the pair from the single pair argument, and arity >= 3
+//     reaches `BuildInitExpr` -> null -> `report_fatal_error` naming type, arity
+//     and site.  ⭐ Silent-wrong becomes loud-wrong, which is RULE 2.
+//
+// SEMANTICS (the C++/Rust difference the brief warned about, and it is NOT fatal
+// here): C++ `emplace` is *insert if absent, and report whether it inserted*;
+// `BTreeMap::insert` OVERWRITES and returns the OLD VALUE.  Those are different
+// functions, so the body does NOT use bare `insert`: it tests membership first and
+// only inserts on a miss, so an already-present key keeps its existing value and
+// reports `false`.  The ITERATOR half is `find_key` on the LIVE map -- an
+// identity, not a copy -- so `.first->second = x` writes into the container's own
+// node.  Both halves are load-bearing on this corpus: of the 143 associative
+// `emplace` sites unordered_map's census funnelled, 15 read `.second`, 8 read
+// `.first`, 3 read both.
+template <typename T1, typename T2, typename... Args>
+std::pair<typename std::map<T1, T2>::iterator, bool>
+f43(std::map<T1, T2> &o, Init<std::pair<const T1, T2>, Args> &&...args) {
+  return o.emplace(std::forward<Args>(args)...);
+}
+
+// g3091 -- `std::map::count(const T1 &) const`.
+// FAITHFUL, not an approximation: std::map is a UNIQUE-key container, so
+// `count(k)` is exactly `contains_key(k) as usize` and its range is {0, 1}.
+// (On `multimap` it would not be -- and this key cannot reach a multimap: the
+// receiver spelling is `std::map<T1, T2>` and `GetTypeMapKey` truncates at the
+// first `<`, putting `std::multimap` in a different bucket.  No multimap receiver
+// appears anywhere in the corpus in any case.)
+// RECEIVER SHAPE mirrors f2 (`size() const`), the closest landed analogue: a
+// const member whose return is a scalar, not a place, on the same receiver
+// spelling.  f7/f15 (`at`) take `&mut` instead because they return a pointer
+// INTO the map and so need a place; `count` does not.
+template <typename T1, typename T2>
+std::size_t f44(const std::map<T1, T2> &o, const T1 &key) {
+  return o.count(key);
+}

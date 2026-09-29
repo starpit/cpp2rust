@@ -323,3 +323,64 @@ fn f41<T1, T2>(a0: &Vec<(T1, Value<T2>)>) -> bool {
 fn f42<T1, T2>(a0: &mut Vec<(T1, Value<T2>)>) {
     a0.clear();
 }
+
+// g3091 -- std::map::emplace, ARITY-GENERIC via src.cpp's `Init<>` pack.
+// Written independently for this arm (the two arms are not each other's `sed`):
+// the receiver is `Ptr<BTreeMap<..>>` exactly as this module's own f10/f14 take it,
+// the value is boxed into a FRESH cell, and the iterator comes from
+// `RefcountMapIter::find_key` on the live map.
+// ⛔ NOT `insert` alone -- see tgt_unsafe.rs's f43 note: insert overwrites and
+// returns the old value; C++ emplace preserves the existing value and reports
+// `false`.  The membership test and the mutation are in SEPARATE `with_ref` /
+// `with_mut` closures on purpose: a `contains_key` read inside the same
+// `with_mut` guard as the `insert` is the RefCell double-borrow panic this
+// module's f37/f38 notes already record measuring.
+// ⭐⭐ `init` IS `(Value<T1>, Value<T2>)` ON THIS ARM, NOT `(T1, T2)` -- MEASURED,
+// not copied.  I first wrote `(T1, T2)` (the shape rules/unordered_map's f57
+// refcount arm declares) and the emission for
+// dcc/src/Transform/Sentient/RegisterPacking.cpp type-checked to 36 fresh E0308s,
+// four per site, saying verbatim `expected \`&i32\`, found \`&Rc<RefCell<_>>\`` on
+// `contains_key(&__k)` and `expected \`Isa\`, found \`Rc<RefCell<_>>\`` on the
+// insert.  The converter builds the pair through **rules/pair's OWN refcount
+// model** (`t1 = (Value<T1>, Value<T2>)`), so BOTH elements arrive already boxed
+// -- exactly what this module's own f38 note records for MapVector::insert and
+// what f35 does with its initializer-list pairs.  ⚠️ That makes
+// `rules/unordered_map`'s f57 refcount arm suspect in the same way; it is a
+// separate module and a named follow-on, not silently fixed here.
+// The VALUE CELL IS PASSED THROUGH UNCHANGED rather than re-wrapped in a fresh
+// `Rc::new(RefCell::new(..))`: the incoming `Value<T2>` already IS the cell the
+// call site constructed, so forwarding it shares that cell (correct for
+// `emplace`, which takes ownership of the argument) where a fresh cell would
+// silently detach any alias the call site still holds.
+fn f43<T1: Ord + Clone + 'static, T2: 'static>(
+    a0: Ptr<BTreeMap<T1, Value<T2>>>,
+    init: (Value<T1>, Value<T2>),
+) -> (RefcountMapIter<T1, T2>, bool) {
+    {
+        let __p = a0;
+        // ANNOTATED, exactly as this module's f38 already documents: the call
+        // site's pair construction is `Rc::new(RefCell::new(x.try_into()...))`
+        // and a bare destructuring pattern gives rustc no target for that
+        // `try_into`, so it fails E0282 "cannot infer type of the type parameter
+        // T declared on the struct RefCell". MEASURED here too: without this
+        // line the RegisterPacking.cpp emission kept 1 residual E0282 (2 spans)
+        // after the 9 E0599s went away; with it the residual is 0.
+        let __kv: (Value<T1>, Value<T2>) = init;
+        let (__kc, __v) = __kv;
+        let __k = __kc.borrow().clone();
+        let __inserted =
+            !Ptr::with_ref(&__p, |__m: &BTreeMap<T1, Value<T2>>| __m.contains_key(&__k));
+        if __inserted {
+            Ptr::with_mut(&__p, |__m: &mut BTreeMap<T1, Value<T2>>| {
+                __m.insert(__k.clone(), __v);
+            });
+        }
+        (RefcountMapIter::find_key(__p, &__k), __inserted)
+    }
+}
+
+// g3091 -- std::map::count(const T1&) const -> contains_key as usize.
+// Exact for a unique-key container: the C++ result is in {0, 1}.
+fn f44<T1: Ord, T2>(a0: BTreeMap<T1, Value<T2>>, a1: T1) -> usize {
+    a0.contains_key(&a1) as usize
+}

@@ -252,3 +252,34 @@ unsafe fn f41<T1, T2>(a0: &Vec<(T1, Box<T2>)>) -> bool {
 unsafe fn f42<T1, T2>(a0: &mut Vec<(T1, Box<T2>)>) {
     a0.clear();
 }
+
+// g3091 -- std::map::emplace, ARITY-GENERIC via src.cpp's `Init<>` pack.
+// `init: (T1, T2)` is the pair the converter BUILDS from the call site's actual
+// arguments (1 pair, or k and v), so this body is arity-independent.
+// ⛔ NOT `a0.insert(k, v)`: BTreeMap::insert OVERWRITES and returns the old value,
+// while C++ emplace leaves an existing value alone and reports `false`.  Membership
+// is therefore tested FIRST and the insert only happens on a miss.
+// The iterator half is `find_key` on the LIVE map (an identity, not a copy), so
+// `.first->second = x` at the call site writes into the container's own node.
+unsafe fn f43<T1: Ord + Clone, T2>(
+    a0: &mut BTreeMap<T1, Box<T2>>,
+    init: (T1, T2),
+) -> (UnsafeMapIterator<T1, T2>, bool) {
+    {
+        let (__k, __v) = init;
+        let __inserted = !a0.contains_key(&__k);
+        if __inserted {
+            a0.insert(__k.clone(), Box::new(__v));
+        }
+        (
+            UnsafeMapIterator::find_key(&*a0 as *const BTreeMap<T1, Box<T2>>, &__k),
+            __inserted,
+        )
+    }
+}
+
+// g3091 -- std::map::count(const T1&) const -> contains_key as usize.
+// Exact for a unique-key container: the C++ result is in {0, 1}.
+unsafe fn f44<T1: Ord, T2>(a0: BTreeMap<T1, Box<T2>>, a1: T1) -> usize {
+    a0.contains_key(&a1) as usize
+}
