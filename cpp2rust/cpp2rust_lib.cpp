@@ -199,7 +199,31 @@ std::string TranspileSrc(std::string_view cc_code, Model model,
 
   std::string rs_code;
   FrontendActionFactory factory(rs_code, model, rules_dir);
-  RunOneTU(factory, cc_code, std::move(tool_args), filename);
+  // MEASUREMENT INTEGRITY -- the --file= twin of the check in TranspileDir.
+  // A TU whose compilation emitted an error or fatal diagnostic (an #include
+  // that never resolved, say) has NOT been translated: what the converter saw
+  // was a truncated AST, and whatever Rust it emitted from it is a fabrication.
+  // Before this, --file= discarded RunOneTU's bool and returned that Rust, so
+  // the caller wrote it out, ran rustfmt over it and exited 0 -- which made
+  // every translate-rate number taken through --file= (i.e. the whole census)
+  // untrustworthy.  --file= translates exactly one TU, so "drop the TU" and
+  // "produce nothing" are the same thing: throw the partial Rust away and
+  // return empty, which cpp2rust.cpp turns into EXIT_FAILURE.  The stderr line
+  // is what makes it loud: an empty return on its own would read as a clean
+  // 0-line translation.
+  //
+  // NOT ARMING tu_guard HERE IS DELIBERATE, not an omission: the guard needs a
+  // live sigsetjmp recovery point (tu_guard::g_recover, set only in
+  // TranspileDir's loop) and InstallHandlers() is likewise only called there.
+  // Arming it on this path would make BailOut siglongjmp into a jmp_buf that
+  // was never set. tu_guard.h states the contract: "The guard is ARMED ONLY on
+  // the --dir path. On the --file path Armed() is false and BailOut behaves
+  // exactly as the bare exit(1) it replaced."
+  if (!RunOneTU(factory, cc_code, std::move(tool_args), filename)) {
+    llvm::errs() << "cpp2rust: FATAL DIAGNOSTIC in TU " << filename
+                 << " -- not translated\n";
+    return {};
+  }
   Converter::EmitOpaqueRecords(rs_code);
   Converter::EmitVirtualMethods(rs_code);
   if (model == Model::kRefCount) {
