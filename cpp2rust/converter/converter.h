@@ -1082,6 +1082,12 @@ protected:
   // and we must remember which bindings are pointers ourselves.
   std::unordered_set<const clang::BindingDecl *> ptr_bindings_;
 
+  // Lambda-initialised variables whose body is CURRENTLY being inlined at a
+  // reference site (VisitDeclRefExpr). Needed only to detect self-recursion --
+  // see the abort there for why an unguarded re-entry is a stack-exhaustion
+  // SIGSEGV with no diagnostic rather than a hang.
+  std::unordered_set<const clang::VarDecl *> inlining_lambda_vars_;
+
   // Local variables hoisted outside a goto_block so that all labels can see and
   // use the variables.
   std::unordered_set<const clang::VarDecl *> hoisted_decls_;

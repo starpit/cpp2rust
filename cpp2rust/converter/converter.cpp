@@ -3138,16 +3138,84 @@ static bool IsReEvaluationFreeLValue(const clang::Expr *init) {
 // non-reference `tuple_element_t` types, so the aliasing is invisible in the
 // binding types and any by-value lowering would SILENTLY DROP WRITES.
 // ScopedPtrBindings + the per-use deref in VisitDeclRefExpr restore it.
+// ⛔ THE PERMANENT SUBSET: a holder that itself HOLDS A REFERENCE.
+// `llvm::detail::enumerator_result<size_t, mlir::Value &>` and
+// `DscPcfgTranslator::PcfgInfo` (dsc/dsc2Pcfg.h:102, member `SenPcfg &pcfg`) are
+// the measured members. Such a holder COPIES ITS ALIAS: in C++ a by-value copy
+// of it still names the original object through the reference member, so writes
+// through the bindings DO propagate -- and a Rust by-value lowering would
+// silently drop them. Clang is no help at the binding level: it hands plain
+// NON-REFERENCE binding types even for an aliasing holder, so the aliasing is
+// invisible there and has to be read off the HOLDER type instead. Both spellings
+// are covered: a reference TEMPLATE ARGUMENT (`tuple<Value, BlockArgument &>`,
+// `pair<A, B &>`, `enumerator_result<size_t, X &>`) and a reference DATA MEMBER
+// (`PcfgInfo`). Refuse both; the loud abort is the correct answer for them.
+static bool HolderHoldsReference(clang::QualType holder_type) {
+  auto value_type = holder_type.getNonReferenceType();
+  const clang::CXXRecordDecl *record = value_type->getAsCXXRecordDecl();
+  if (record == nullptr) {
+    return false;
+  }
+  if (const auto *spec =
+          clang::dyn_cast<clang::ClassTemplateSpecializationDecl>(record)) {
+    for (const auto &arg : spec->getTemplateArgs().asArray()) {
+      if (arg.getKind() == clang::TemplateArgument::Type &&
+          arg.getAsType()->isReferenceType()) {
+        return true;
+      }
+    }
+  }
+  const clang::CXXRecordDecl *def = record->getDefinition();
+  if (def == nullptr) {
+    // No definition means the members cannot be inspected, so the reference
+    // question cannot be answered -- treat that as "holds one" and refuse.
+    return true;
+  }
+  for (const auto *field : def->fields()) {
+    if (field->getType()->isReferenceType()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool Converter::EmitVectorDecompositionBindings(
     const clang::DecompositionDecl *decl, const std::string &holder_name) {
   auto bindings = decl->bindings();
   if (bindings.empty()) {
     return false;
   }
-  // Only a `pair &` holder is lowered: the pointer-to-field form below is only
-  // sound when the holder aliases the container's storage.
-  if (!decl->getType()->isReferenceType()) {
-    return false;
+  // ⭐ THE BY-VALUE LOOP VARIABLE, measured as the shape that now dominates this
+  // row. `for (auto [node, refcount] : an->allocUsers_)` (dsc/dsc2.cpp:936,
+  // ddc/ddcv1.cpp:52, ddc/ddc_fold.cpp:902, dsc/pcfg.cpp:2341) gives a
+  // NON-reference DecompositionDecl, and this emitter used to refuse it outright
+  // -- which is where all four of those TUs aborted at HEAD.
+  //
+  // ⭐ FOR A BY-VALUE HOLDER THE POINTER FORM WOULD BE WRONG, not merely
+  // unnecessary: `ConvertLoopVariable`'s non-reference branch emits
+  // `range[i].clone()`, i.e. the holder is a FRESH LOCAL COPY, exactly as the C++
+  // by-value loop variable is a fresh copy of the element. So the sound spelling
+  // is a plain `holder.N` / `holder.field` read of that local -- no `(*h)`, no
+  // `&raw`, and NO ALIASING AT ALL, which is precisely what the C++ means: a
+  // write through one of these bindings must NOT reach the container, and does
+  // not. Nothing is copied twice and nothing is cloned here: reading a field out
+  // of a local is a partial MOVE, which Rust allows for a local (unlike the
+  // move-out-of-raw-pointer-deref E0507 that forces the pointer form on an
+  // aliasing holder).
+  const bool by_value = !decl->getType()->isReferenceType();
+  if (by_value) {
+    // A reference BINDING would alias observably and is refused on this
+    // construct everywhere else for the same reason.
+    for (const auto *binding : bindings) {
+      if (binding->getType()->isReferenceType()) {
+        return false;
+      }
+    }
+    // ⛔ And the permanent subset -- an aliasing holder whose alias survives the
+    // copy. See HolderHoldsReference above.
+    if (HolderHoldsReference(decl->getType())) {
+      return false;
+    }
   }
   // ⭐ MORE THAN TWO BINDINGS. The two-binding case is left EXACTLY as it was --
   // no new gate, so the existing corpus is byte-identical -- because its callers
@@ -3168,8 +3236,15 @@ bool Converter::EmitVectorDecompositionBindings(
   // INTO the container element, so there is no holder copy to lose a write
   // through, no object identity to change, and no clone for a class-typed field
   // (a `std::string` field is pointed at, never moved -- so no E0507).
+  // ⭐ THE ARITY EXEMPTION DOES NOT EXTEND TO THE BY-VALUE HOLDER. The
+  // two-binding case skips the spelling check only to keep the pre-existing
+  // corpus byte-identical -- and for a by-value holder there is no pre-existing
+  // output to preserve, because it used to abort. So a by-value holder is always
+  // spelling-checked, at every arity: without it a two-binding member-wise
+  // struct (dsc/pcfg.cpp:2341, `ComputeLoc`) would be spelled `.0`, which is
+  // E0609.
   std::vector<const clang::FieldDecl *> fields;
-  if (bindings.size() != 2) {
+  if (by_value || bindings.size() != 2) {
     fields = GetMemberwiseBindingFields(decl);
     if (fields.empty()) {
       auto value_type =
@@ -3189,21 +3264,42 @@ bool Converter::EmitVectorDecompositionBindings(
       }
     }
   }
-  const bool is_const = decl->getType()->getPointeeType().isConstQualified();
+  // `getPointeeType()` is only meaningful for the reference holder; a by-value
+  // holder never spells `&raw` at all.
+  const bool is_const =
+      by_value || decl->getType()->getPointeeType().isConstQualified();
   unsigned index = 0;
   for (const auto *binding : bindings) {
     const std::string element =
         fields.empty() ? std::to_string(index)
                        : GetNamedDeclAsString(fields[index]);
     StrCat(keyword::kLet);
-    StrCat(GetNamedDeclAsString(binding));
+    // ⛔ `let mut _ = ..` is not legal Rust (`_` is a wildcard PATTERN, not an
+    // identifier), which is why `mut` is conditional on the name. A by-value
+    // binding is a fresh local the body may assign to, so it gets `mut`; the
+    // pointer form is a const alias that is never reassigned and keeps the plain
+    // `let` it has always emitted, so no existing byte moves.
+    const std::string binding_name = GetNamedDeclAsString(binding);
+    if (by_value && binding_name != "_") {
+      StrCat(keyword_mut_);
+    }
+    StrCat(binding_name);
     StrCat(token::kAssign);
-    StrCat(std::format("&raw {} (*{}).{}", is_const ? "const" : "mut",
-                       holder_name, element));
+    if (by_value) {
+      StrCat(std::format("{}.{}", holder_name, element));
+    } else {
+      StrCat(std::format("&raw {} (*{}).{}", is_const ? "const" : "mut",
+                         holder_name, element));
+    }
     StrCat(token::kSemiColon);
     ++index;
   }
-  return true;
+  // ⭐ NO `ptr_bindings_` REGISTRATION FOR THE BY-VALUE ARM, deliberately: the
+  // caller registers the whole DecompositionDecl's bindings via
+  // ScopedPtrBindings, which would make `VisitDeclRefExpr` deref a binding that
+  // is a VALUE, not a pointer. The caller is responsible for skipping that when
+  // this returns on the by-value arm; see VisitCXXForRangeStmtIndexBased.
+  return !by_value || true;
 }
 
 void Converter::ConvertForRangeBody(clang::CXXForRangeStmt *stmt,
@@ -5773,8 +5869,63 @@ bool Converter::VisitDeclRefExpr(clang::DeclRefExpr *expr) {
       if (auto init = var_decl->getInit()) {
         if (auto lambda = clang::dyn_cast<clang::LambdaExpr>(
                 init->IgnoreUnlessSpelledInSource())) {
+          // A reference to a lambda-initialised variable is lowered by INLINING
+          // the lambda body right here. A lambda that calls ITSELF through that
+          // variable --
+          //   std::function<void(const T *, unsigned)> f =
+          //       [&](const T *n, unsigned d) { ... f(child, d + 1); ... };
+          // -- therefore re-enters this site on the SAME VarDecl and inlines
+          // forever. Unbounded recursion, not a hang: it exhausts the 8 MB stack
+          // and SIGSEGVs at whichever frame happens to touch the guard page,
+          // with no diagnostic at all. That is why this one construct read as a
+          // "genuine NULL clang::Expr" for two days and appeared to MOVE between
+          // unrelated commits: the reported crash site was
+          //   ConvertMemberExpr -> ConvertDeref -> Convert(Expr*)        (pin)
+          //   VisitDeclRefExpr  -> ConvertDeclRefExpr -> GetMappedAsString
+          //                     -> Mapper::search -> IsUserDefinedDecl
+          //                     -> SourceManager::getFileCharacteristic (907226d5)
+          // i.e. it tracked frame sizes, not a bug at any of those places. The
+          // repeating cycle is visible in the dump itself:
+          //   ConvertFunctionBody -> Convert(Stmt*) -> ... -> VisitDeclRefExpr
+          //   -> VisitLambdaExpr -> ConvertFunctionBody -> ...
+          // MEASURED on dataflow-scheduler/lib/Analysis/PipelineTree.cpp:251
+          // (`findDeepestLoop`): one MemberExpr re-converted 4088 times before
+          // the fault, 40797 mapper searches for a TU that emits nothing.
+          //
+          // A CORRECT lowering needs the lambda emitted ONCE as a named Rust
+          // item (or a fix-point wrapper) so that the self-reference lowers to a
+          // CALL instead of an inline; the inline-at-every-reference strategy
+          // cannot express it at all. Until that exists this refuses LOUDLY and
+          // names the variable: simply not inlining on re-entry would drop the
+          // recursive call and emit a silently wrong lowering, which is strictly
+          // worse than the crash it replaces.
+          if (!inlining_lambda_vars_.insert(var_decl).second) {
+            const std::string detail =
+                "self-recursive lambda `" + var_decl->getNameAsString() +
+                "`: the lambda assigned to it refers to itself, so there is no "
+                "finite inline expansion of its body (a correct lowering must "
+                "emit the lambda as a named item and call it)";
+            const std::string loc =
+                var_decl->getLocation().printToString(ctx_.getSourceManager());
+            if (survey::Enabled()) {
+              survey::Record(survey::GapKind::kUnsupportedConstruct, detail,
+                             loc);
+              // Do NOT recurse: the survey is a work list, so record the gap and
+              // emit the name, which is what a non-recursive reference emits.
+              // Deliberately NOT erasing here -- the entry belongs to the OUTER
+              // expansion that is still on the stack, and dropping it would let
+              // the next self-reference in the same body start the recursion over.
+              StrCat(str);
+              SetValueFreshness(expr->getType());
+              return false;
+            }
+            llvm::report_fatal_error(llvm::Twine("unsupported ") + detail +
+                                         " at " + loc,
+                                     /*gen_crash_diag=*/false);
+          }
           PushParen paren(*this);
           VisitLambdaExpr(lambda);
+          inlining_lambda_vars_.erase(var_decl);
           computed_expr_type_ = ComputedExprType::FreshValue;
           return false;
         }
