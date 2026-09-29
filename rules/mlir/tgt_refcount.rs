@@ -1,6 +1,10 @@
 // Copyright (c) 2022-present INESC-ID.
 // Distributed under the MIT license that can be found in the LICENSE file.
 
+// t2601/t2602's f2509 needs `prefix_inc` on `Ptr<T>`, brought in here rather
+// than fully-qualified at each call site.
+use libcc2rs::PrefixInc;
+
 // REFCOUNT half.  Byte-for-byte the same bodies as tgt_unsafe.rs -- see that
 // file for every argument.  The six MLIR types -> the .td-generated model in `dataflowir-gen`.  src.cpp
 // says why the port maps MLIR instead of translating it; this file is only about
@@ -2807,6 +2811,80 @@ fn f460(a0: &mut dataflowir_gen::fmt::Region) -> &mut Vec<dataflowir_gen::fmt::B
 // `Ptr::alloc(..clone())` would fabricate a copy; neither is admissible.
 fn f461(a0: libcc2rs::Ptr<dataflowir_gen::fmt::Block>) -> libcc2rs::Ptr<dataflowir_gen::fmt::Block> {
     a0
+}
+
+// t2601 / t2602 / f2501-f2511 -- the `llvm::iplist<mlir::Operation>` row, one
+// template argument over from t560/t561/f460/f461 above.  See src.cpp for the
+// member census and tgt_unsafe.rs for the parallel unsafe-model bodies.
+// ⛔ f2504 (empty) / f2507 (size) have NO refcount body here, matching
+// rules/vector's OWN f2/f3 (size/empty): measured absent from
+// `pin/ir.v45/vector/ir_refcount.json` while present in `ir_unsafe.json` --
+// the refcount model resolves size()/empty() on a Vec-mapped receiver
+// natively, without a custom key, so this is the landed asymmetry, not a gap.
+fn t2601() -> Vec<dataflowir_gen::fmt::OpInst> {
+    Vec::new()
+}
+fn t2602() -> Vec<dataflowir_gen::fmt::OpInst> {
+    Vec::new()
+}
+
+// f2501 -- `mlir::Block::getOperations()` -> `fmt::Block::get_operations_mut()`
+// (fmt.rs:497).  f460's pattern verbatim.
+fn f2501(
+    a0: &mut dataflowir_gen::fmt::Block,
+) -> &mut Vec<dataflowir_gen::fmt::OpInst> {
+    a0.get_operations_mut()
+}
+
+// f2502/f2503 -- begin()/end(), rules/vector f13/f17 verbatim: the receiver
+// decays to a borrow-provenance `Ptr` into the owner's `Value<Vec<T>>`
+// (`PtrKind::StackVec`), so `a0` unchanged / `a0.to_end()` alias, never copy.
+fn f2502(
+    a0: libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>,
+) -> libcc2rs::Ptr<dataflowir_gen::fmt::OpInst> {
+    a0
+}
+fn f2503(
+    a0: libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>,
+) -> libcc2rs::Ptr<dataflowir_gen::fmt::OpInst> {
+    a0.to_end()
+}
+
+// f2505/f2506 -- front/back, rules/vector f9/f10 verbatim.
+fn f2505(
+    a0: libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>,
+) -> libcc2rs::Ptr<dataflowir_gen::fmt::OpInst> {
+    a0
+}
+fn f2506(
+    a0: libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>,
+) -> libcc2rs::Ptr<dataflowir_gen::fmt::OpInst> {
+    a0.to_last()
+}
+
+// f2508-f2511 -- the range-for iterator protocol, rules/vector f22/f34/f26/f27
+// verbatim.
+fn f2508(
+    a0: libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>,
+) -> libcc2rs::Ptr<dataflowir_gen::fmt::OpInst> {
+    a0
+}
+fn f2509(
+    a0: &mut libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>,
+) -> libcc2rs::Ptr<dataflowir_gen::fmt::OpInst> {
+    a0.prefix_inc()
+}
+fn f2510(
+    a0: libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>,
+    a1: libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>,
+) -> bool {
+    a0 != a1
+}
+fn f2511(
+    a0: libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>,
+    a1: libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>,
+) -> bool {
+    a0 == a1
 }
 
 // ===========================================================================
