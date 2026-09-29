@@ -465,9 +465,45 @@ std::string GetTypeMapKey(const std::string &str) {
   return key;
 }
 
+// Is there ALREADY a type rule whose `src` is this EXACT spelling? Not
+// `types_.contains(GetTypeMapKey(src))`: the bucket is the text before the first
+// `<`, so `mlir::ArrayAttr` and `mlir::ArrayAttr` share a bucket with nothing
+// else, but `std::vector` shares one with every `std::vector<...>` rule. Only an
+// exact-src hit means "this very spelling is already modelled".
+bool HasExactTypeRule(const std::string &src) {
+  auto [it, end] = types_.equal_range(GetTypeMapKey(src));
+  for (; it != end; ++it) {
+    if (it->second.src == src) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void AddTypeRule(std::string src, TranslationRule::TypeRule &&rule) {
   auto key = GetTypeMapKey(src);
   rule.src = std::move(src);
+  // SHADOW TRIPWIRE. `types_` is a MULTImap and `search` breaks a same-length
+  // `src` tie by iteration order, so a second rule under the same exact spelling
+  // does not "lose" -- it SILENTLY REPLACES the answer from the moment it is
+  // inserted, and never changes back. addRulesFromDirectory (:~1160) already
+  // treats that as a fatal defect for two LOADED rules; this catches the same
+  // defect arriving from a RUNTIME AddTypeRule, which bypasses that check.
+  // Loud rather than fatal: a runtime registration happens mid-traversal, where
+  // exiting would lose the whole TU. Must never fire -- see
+  // AddRuleForUserDefinedType.
+  {
+    auto [b, e] = types_.equal_range(key);
+    for (auto it = b; it != e; ++it) {
+      if (it->second.src == rule.src &&
+          it->second.type_info.type != rule.type_info.type) {
+        llvm::errs() << "[[SHADOW]] " << rule.src << " | held: "
+                     << it->second.type_info.type << " | added: "
+                     << rule.type_info.type << '\n';
+        break;
+      }
+    }
+  }
   types_.emplace(std::move(key), std::move(rule));
 }
 
@@ -2692,7 +2728,32 @@ void AddRuleForUserDefinedType(clang::NamedDecl *decl) {
   auto cpp_name = ToString(GetTypeForDecl(decl));
   auto rs_name = ToRustName(cpp_name);
 
-  AddTypeRule(cpp_name, TranslationRule::TypeRule::Plain(rs_name));
+  // ⛔ A SPELLING THAT IS ALREADY MODELLED MUST NOT BE GIVEN A MANGLED IDENTITY
+  // RULE. Converter::VisitCXXRecordDecl (converter.cpp:~2173) calls this for
+  // EVERY CXXRecordDecl the traversal reaches, with no IsUserDefinedDecl filter
+  // -- so a SYSTEM class that a rule module already models got a second rule
+  // `mlir::MLIRContext -> mlir_MLIRContext` inserted beside the live
+  // `mlir::MLIRContext -> ()`. `types_` is a multimap and `search` (:~868)
+  // breaks the same-length-`src` tie by bucket iteration order, so from the
+  // moment the record decl is visited the mangled name WINS and the model is
+  // silently dead for the rest of the TU -- and never comes back. That is the
+  // whole "bistable lookup": in one emitted file, byte-identical RHS came out as
+  // `*mut ()` at every line <= 5433 and `*mut mlir_MLIRContext` at every line
+  // >= 8640 (fresh38/out/dcc__src__Transform__Sentient__Analyses__Liveness.cpp.rs).
+  // MEASURED corpus-wide over fresh38/out: 62 distinct modelled spellings, 228
+  // of 312 TUs, 25,522 emitted sites naming a struct that is never defined.
+  //
+  // The POINTER form is blocked by the SAME condition rather than by asking
+  // whether `<name> *` itself is modelled: a module that models `mlir::MLIRContext`
+  // as `()` deliberately does NOT restate the pointer form -- VisitPointerType
+  // composes `*mut` with the mapped pointee -- so testing the pointer spelling
+  // would find nothing and re-introduce `*mut mlir_MLIRContext`.
+  //
+  // Nested structs are still visited: the guard is about THIS spelling only.
+  const bool already_modelled = HasExactTypeRule(cpp_name);
+  if (!already_modelled) {
+    AddTypeRule(cpp_name, TranslationRule::TypeRule::Plain(rs_name));
+  }
 
   if (auto record_decl = llvm::dyn_cast<clang::RecordDecl>(decl)) {
     // Forward declaration
@@ -2701,7 +2762,9 @@ void AddRuleForUserDefinedType(clang::NamedDecl *decl) {
     }
 
     if (auto cxx_decl = llvm::dyn_cast<clang::CXXRecordDecl>(record_decl)) {
-      if (cxx_decl->isAbstract()) {
+      if (already_modelled) {
+        // Nothing for THIS spelling; nested types are unaffected.
+      } else if (cxx_decl->isAbstract()) {
         // The trait is `<Name>__Virtual`; `<Name>` itself is the struct.
         switch (model_) {
         case Model::kUnsafe:
