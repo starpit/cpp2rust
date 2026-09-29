@@ -4313,14 +4313,27 @@ fn f2103(
     __x != __y
 }
 
-// t2300 -- `mlir::detail::PassOptions::Option<std::string>` -> a PLAIN `String`.
+// t2300 -- `mlir::detail::PassOptions::Option<std::string>` -> THE `std::string`
+// MODEL ITSELF, i.e. `rules/string` t1 = a NUL-TERMINATED `Vec<u8>`.
 // ⭐ NOT a new `libcc2rs` type.  The Rust stage type-checks rule targets against the
 // PREBUILT `liblibcc2rs-*.rmeta` in pin/target_preprocessor, so a
 // `libcc2rs::PassOptionString` added in a worktree is INVISIBLE (E0425, then a core
-// dump with no OK line).  `String` needs no libcc2rs change at all and carries
-// exactly the same information -- one field, an owned string.
-fn t2300() -> String {
-    String::new()
+// dump with no OK line).
+// ⛔⛔ AND IT IS NOT `String` EITHER, WHICH IS WHAT THIS KEY SHIPPED AS ON THE
+// slot-optstr2 BRANCH.  MEASURED.  `Option<std::string>` IS-A `std::string` by
+// inheritance (`opt_storage : public DataType`, CommandLine.h:1354) and the real
+// PassOptions.h:208 re-exposes the base assignment with `using llvm::cl::opt<...>::
+// operator=`, so the two member keys that serve it -- `rules/cl` f1910 `getValue()`
+// and f1911 `operator=`, the PAIRED HALF of this block -- are generic on `T1` and
+// instantiate with `T1 = std::string`, which the converter resolves through
+// `rules/string` t1 to `Vec<u8>`.  A `String` target makes every one of those
+// sites a `Vec<u8>` <-> `String` mismatch, `error[E0308]` on both the `getValue()`
+// read and the `operator=` write; see the unsafe target for the measured emission.
+// ⭐ The two keys are only consistent when this one spells the SAME value model as
+// `rules/string` t1, which is also the only spelling the header's own IS-A statement
+// supports.
+fn t2300() -> Vec<u8> {
+    Vec::new()
 }
 
 // t2301 -- `mlir::detail::PassOptions` -> an opaque unit; see the src note.
@@ -4331,11 +4344,20 @@ fn t2301() -> () {
 // f2300 -- the constructor.  a0 (the parent `PassOptions`) and a2 (`cl::desc`, help
 // text) are DISCARDED; a1 is the option NAME, which the value model does not carry.
 // a3 is `cl::init("...")` -- THE COMPILED-IN DEFAULT -- and it is the only argument
-// that becomes the payload.  `trim_end_matches('\0')` drops the NUL that
-// `char[N]` carries as its last element.
-unsafe fn f2300(a0: &mut (), a1: Vec<u8>, a2: Vec<u8>, a3: Vec<u8>) -> String {
+// that becomes the payload.
+// ⭐ a3 IS ALREADY THE PAYLOAD AND THE NUL IS KEPT.  `rules/cl` t1900 models
+// `cl::initializer<char[N]>` as the `char[N]` itself (`Vec<u8>`), and a `char[N]`
+// built from a string literal carries its terminator as element N-1 -- exactly the
+// NUL-TERMINATED invariant `rules/string` t1 requires.  In THIS model t1 is `Vec<u8>`
+// too, so the body is the IDENTITY on a3: nothing is converted, added or stripped.
+// ⛔ THE OLD BODY WAS `String::from_utf8_lossy(&a3).trim_end_matches('\0').to_owned()`,
+// which both produced the wrong type AND dropped the terminator.
+// ⚠️ a3 IS MENTIONED EXACTLY ONCE; the converter substitutes argument TEXT, so a
+// second mention would duplicate the unresolved `Cpp2RustUnmappedFn_init_1(...)`
+// placeholder and report its `E0425` twice.  See the unsafe target for the full note.
+unsafe fn f2300(a0: &mut (), a1: Vec<u8>, a2: Vec<u8>, a3: Vec<u8>) -> Vec<u8> {
     let _ = a0;
     let _ = a1;
     let _ = a2;
-    String::from_utf8_lossy(&a3).trim_end_matches('\0').to_owned()
+    a3
 }

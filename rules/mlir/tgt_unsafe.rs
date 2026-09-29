@@ -4801,14 +4801,29 @@ fn f2103(
     __x != __y
 }
 
-// t2300 -- `mlir::detail::PassOptions::Option<std::string>` -> a PLAIN `String`.
+// t2300 -- `mlir::detail::PassOptions::Option<std::string>` -> THE `std::string`
+// MODEL ITSELF, i.e. `rules/string` t1 = a NUL-TERMINATED `Vec<libc::c_char>`.
 // ⭐ NOT a new `libcc2rs` type.  The Rust stage type-checks rule targets against the
 // PREBUILT `liblibcc2rs-*.rmeta` in pin/target_preprocessor, so a
 // `libcc2rs::PassOptionString` added in a worktree is INVISIBLE (E0425, then a core
-// dump with no OK line).  `String` needs no libcc2rs change at all and carries
-// exactly the same information -- one field, an owned string.
-fn t2300() -> String {
-    String::new()
+// dump with no OK line).
+// ⛔⛔ AND IT IS NOT `String` EITHER, WHICH IS WHAT THIS KEY SHIPPED AS ON THE
+// slot-optstr2 BRANCH.  MEASURED.  `Option<std::string>` IS-A `std::string` by
+// inheritance (`opt_storage : public DataType`, CommandLine.h:1354) and the real
+// PassOptions.h:208 re-exposes the base assignment with `using llvm::cl::opt<...>::
+// operator=`, so the two member keys that serve it -- `rules/cl` f1910 `getValue()`
+// and f1911 `operator=`, the PAIRED HALF of this block -- are generic on `T1` and
+// instantiate with `T1 = std::string`, which the converter resolves through
+// `rules/string` t1 to `Vec<libc::c_char>`.  A `String` target makes every one of those
+// sites a `Vec<libc::c_char>` <-> `String` mismatch: `opts.outputPath.getValue()`
+// yields `&mut String` where a `std::string` is wanted and
+// `progIROpt.artifacts_outfile = s` passes a `Vec<libc::c_char>` into a `&mut String`
+// -- `error[E0308]` on BOTH, measured on ir/escrowfix.probe.cpp.
+// ⭐ The two keys are only consistent when this one spells the SAME value model as
+// `rules/string` t1, which is also the only spelling the header's own IS-A statement
+// supports.
+fn t2300() -> Vec<libc::c_char> {
+    Vec::new()
 }
 
 // t2301 -- `mlir::detail::PassOptions` -> an opaque unit; see the src note.
@@ -4819,11 +4834,30 @@ fn t2301() -> () {
 // f2300 -- the constructor.  a0 (the parent `PassOptions`) and a2 (`cl::desc`, help
 // text) are DISCARDED; a1 is the option NAME, which the value model does not carry.
 // a3 is `cl::init("...")` -- THE COMPILED-IN DEFAULT -- and it is the only argument
-// that becomes the payload.  `trim_end_matches('\0')` drops the NUL that
-// `char[N]` carries as its last element.
-unsafe fn f2300(a0: &mut (), a1: Vec<libc::c_char>, a2: Vec<libc::c_char>, a3: Vec<u8>) -> String {
+// that becomes the payload.
+// ⭐ a3 IS ALREADY THE PAYLOAD, RE-TYPED, AND THE NUL IS KEPT.  `rules/cl` t1900
+// models `cl::initializer<char[N]>` as the `char[N]` itself (`Vec<u8>`), and a
+// `char[N]` built from a string literal carries its terminator as element N-1 --
+// which is exactly the NUL-TERMINATED invariant `rules/string` t1 requires and that
+// `f2` (`len() - 1`) and `f46..f48` there read off.  So the body is an elementwise
+// `u8 -> libc::c_char` re-type and nothing else: no NUL is added (it is already
+// there) and none is stripped.  ⛔ THE OLD BODY WAS `String::from_utf8_lossy(&a3)
+// .trim_end_matches('\0').to_owned()`, which both produced the wrong type AND dropped
+// the terminator, so even a `String` consumer would have been handed a value one
+// element short of the `std::string` model.
+// ⚠️ a3 IS MENTIONED EXACTLY ONCE.  The converter substitutes a parameter name with
+// the argument TEXT, so a second mention duplicates that expression -- here the
+// unresolved `unsafe { Cpp2RustUnmappedFn_init_1(&[0 as libc::c_char; 1]) }` -- and
+// would report its `E0425` twice.  A NUL-termination `assert!` was written and
+// dropped for that reason; the invariant is a property of `char[N]`, not of the site.
+unsafe fn f2300(
+    a0: &mut (),
+    a1: Vec<libc::c_char>,
+    a2: Vec<libc::c_char>,
+    a3: Vec<u8>,
+) -> Vec<libc::c_char> {
     let _ = a0;
     let _ = a1;
     let _ = a2;
-    String::from_utf8_lossy(&a3).trim_end_matches('\0').to_owned()
+    a3.into_iter().map(|__b| __b as libc::c_char).collect()
 }

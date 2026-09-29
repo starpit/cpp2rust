@@ -10231,6 +10231,16 @@ bool f2103(mlir::OpState a0, mlir::OpState a1) { return operator!=(a0, a1); }
 // MATCH (`Matching:` in -verbose), and both models translate rc=0 on a probe
 // that reproduces the corpus abort verbatim.
 //
+// ⭐⭐ ESCROW RESOLVED 2026-09-29 (slot escrowfix).  This block and `rules/cl`'s
+// t1910/f1910/f1911 (branch slot-clopt) landed TOGETHER, and the target of t2300 was
+// CHANGED in the process: it shipped as `String` on slot-optstr2 and is now
+// `Vec<libc::c_char>` / `Vec<u8>`, i.e. `rules/string` t1, because the paired member
+// keys are generic on `T1 = std::string` and resolve THROUGH t1.  `String` made every
+// `getValue()` read and every `operator=` write an `E0308`.  The full argument, and
+// the matching change to f2300's body, are in the two tgt_*.rs files at t2300.
+// ⛔ THE "DO NOT MERGE ALONE" WARNING BELOW STILL STANDS AS WRITTEN, for the record
+// of why it was in escrow -- read it as history, not as a live instruction.
+//
 // ⛔⛔ DO NOT MERGE THIS BLOCK ON ITS OWN.  It clears the LOUD abort and leaves
 // TWO loud rustc errors in its place, and the standing rule ("a type key with no
 // method key is strictly worse than no key at all, because it bypasses the loud
@@ -10258,7 +10268,8 @@ bool f2103(mlir::OpState a0, mlir::OpState a1) { return operator!=(a0, a1); }
 // serves every `Option<std::string>` declaration in the corpus whatever its arity,
 // and the `char[N]` bound never enters the key at all.
 //
-// (2) ⭐ THE VALUE REACHES RUST.  Emitted for `cl::init("")`, verbatim:
+// (2) ⭐ THE VALUE REACHES RUST.  Emitted for `cl::init("")` on the ORIGINAL (`String`)
+// target, verbatim:
 //     String::from_utf8_lossy(&(unsafe {
 //         Cpp2RustUnmappedFn_init_0(&[0 as libc::c_char; 1]) }))
 //       .trim_end_matches('\0').to_owned()
