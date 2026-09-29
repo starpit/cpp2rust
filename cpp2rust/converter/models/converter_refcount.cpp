@@ -2873,6 +2873,14 @@ void ConverterRefCount::ConvertGenericBinaryOperator(
        sides_contain_ptr_or_deref);
 
   if (may_cause_borrow_mut_err) {
+    // ⛔ `_lhs` is a plain local, never a cast, so the operand that can end in a
+    // type here is the one spliced after the opcode? No -- it is `_lhs`'s
+    // INITIALISER that is safe (it is followed by `;`), and the operand left of
+    // `opcode` is `_lhs` itself. The RHS text is the one that can carry a
+    // trailing `as T`, and a trailing type is harmless because nothing follows
+    // it. So only the base-`Convert` path below can produce the defect, and the
+    // guard here is kept for the shape where a future edit puts an expression
+    // rather than `_lhs` on the left.
     StrCat(std::format(
         "{{ let _lhs = {}; _lhs {} {} }}",
         ConvertFreshRValue(lhs,
@@ -2885,7 +2893,20 @@ void ConverterRefCount::ConvertGenericBinaryOperator(
   }
 
   PushParen outer(*this);
+  // ⭐ THIS IS THE g3019 SITE. The BASE Converter::ConvertGenericBinaryOperator
+  // wraps each operand in its OWN `PushParen` (converter.cpp), which is why the
+  // unsafe model never shows the defect. This refcount override dropped the
+  // per-operand parens and keeps only the outer one -- and an outer paren does
+  // NOT help, because `( x as usize << 1 )` is still a parse error: the parser
+  // is inside the type `usize` when it meets `<<`.
+  //
+  // ⛔ The fix is NOT to restore the per-operand `PushParen`: that would add two
+  // parentheses to EVERY binary operator the refcount model emits and churn
+  // every emitted file. It is to parenthesise only the operand that actually
+  // ends in a type, only before a `<`-family operator.
+  const size_t lhs_start = rs_code_ != nullptr ? rs_code_->size() : 0;
   Convert(lhs, GetOperandImplicitConversionTarget(expr, lhs, rhs));
+  ParenthesizeAngleCastOperand(lhs_start, opcode);
   StrCat(opcode);
   Convert(rhs, GetOperandImplicitConversionTarget(expr, rhs, lhs));
   computed_expr_type_ = ComputedExprType::FreshValue;

@@ -867,6 +867,45 @@ protected:
   // parse error because nothing downstream reports it.
   void ParenthesizeBlockCastOperand(size_t operand_start);
 
+  // ⛔ A SECOND, INDEPENDENT WAY AN `as`-CAST OPERAND BREAKS THE PARSER, and it
+  // is NOT the block case above. Rust parses `x as usize << 1` by continuing to
+  // read the TYPE `usize`, so the `<<` becomes the start of a generic argument
+  // list: `error: `<<` is interpreted as a start of generic arguments for
+  // `usize`, not a shift`. The same for `<` (`... not a comparison`) and `<=`.
+  // Measured 2026-09-29 (row g3019) on pin/cpp2rust 5bf5cd9f + pin/ir.v43,
+  // -model=refcount: 5 of 76 sampled census-A TUs emit a FULL `.rs` and then
+  // fail only on rustfmt for exactly this, e.g.
+  // sys-arch-spec/initpacket/initpacketstat.cpp.rs:1426:289
+  //   `... as usize  << 1 ) )`.
+  //
+  // ⭐ ONLY the `<`-family operators are affected. `x as usize >= y`,
+  // `x as usize > y` and `x as usize >> y` all parse (measured: rustfmt 1.9.0
+  // accepts them, and util/foldManager/fold_test_standalone.cpp emits four
+  // `as usize >=` and is rc=0), because a `>` can only close a generic list
+  // that a `<` opened. So this deliberately does NOT fire on them -- widening
+  // it would churn emitted text for no parse benefit.
+  //
+  // `operand_start` is where the LEFT operand's text begins in `rs_code_`;
+  // `opcode` is the operator about to be appended. Fires only when both the
+  // opcode is `<`-family AND the operand's text has a top-level `as`.
+  void ParenthesizeAngleCastOperand(size_t operand_start,
+                                    std::string_view opcode);
+
+  // The same test/fix for an operand the caller holds as a STRING rather than
+  // having emitted into `rs_code_` (the `let _lhs = ...` borrow-splitting path
+  // in ConverterRefCount::ConvertGenericBinaryOperator). Returns the operand
+  // text, parenthesised if and only if it needs it.
+  std::string ParenthesizeAngleCastOperandText(std::string operand_text,
+                                               std::string_view opcode);
+
+  // True when appending `opcode` directly after `operand_text` would make the
+  // operator read as the start of a generic argument list. Aborts loudly on an
+  // operand whose brackets do not balance, because then the top-level scan
+  // cannot be trusted and silently guessing would emit unparseable Rust --
+  // which is the very thing this function exists to prevent.
+  bool AngleCastOperandNeedsParens(std::string_view operand_text,
+                                   std::string_view opcode);
+
   // `hoisted_range_name`, when non-empty, names a local the caller has already
   // bound the range init to; the range init is then NOT re-emitted here. See
   // the hoist comment on VisitCXXForRangeStmtIndexBased.
