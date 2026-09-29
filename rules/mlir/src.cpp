@@ -11337,3 +11337,107 @@ f2411(mlir::ValueTypeRange<llvm::MutableArrayRef<mlir::BlockArgument>> a0,
 template <typename T1> mlir::WalkResult f2500(mlir::OpState &a0, T1 &&a1) {
   return a0.walk(std::move(a1));
 }
+
+// ============================================================================================
+// ROW g3064 -- GAP FAMILY F1: the seven DIALECT-OP direct type keys, t2610-t2616.
+//
+// t161's shape, applied to its siblings.  Each of these is an ODS-generated op class: one
+// `Operation *` through its `OpState` base (t25 -> `fmt::OpInst`), so each maps to
+// `fmt::OpInst::new(<ops::mlir_<dialect>_<Op> as MlirOp>::DEF)` -- exactly t161/t162 and the
+// t167-t2xx `OneTypedResult` block, which already spells four of these seven ops as the
+// TEMPLATE ARGUMENT of a trait base.  ⭐ NO NEW MODEL CLAIM IS MADE: the trait base of an op IS
+// that op, and the op's own key is the same widening the trait key already performs.
+//
+// ⭐ EVERY `DEF` WAS VERIFIED PRESENT, WITH A CONTROL, AGAINST THE rmeta THIS TREE ACTUALLY
+// TYPE-CHECKS AGAINST -- `pin/target_preprocessor/release/build/dataflowir-gen/48cebb0c20af925b/
+// out/libdataflowir_gen-48cebb0c20af925b.rmeta` (the artifact `rule-preprocessor/src/semantic.rs`
+// find_artifact resolves; md5 f4ac1f4295ae).  `grep -aoF | wc -l`, with the known-good
+// `mlir_arith_ConstantOp` (t161's own DEF) as an IN-BAND POSITIVE control and a fabricated name as
+// a NEGATIVE control:
+//     mlir_arith_ConstantOp                      2   <-- POSITIVE CONTROL
+//     mlir_arith_AddIOp     2   mlir_affine_AffineIfOp     2
+//     mlir_arith_SubIOp     2   mlir_affine_AffineYieldOp  2
+//     mlir_arith_CmpIOp     2   mlir_func_ReturnOp         2
+//     mlir_arith_SelectOp   2
+//     mlir_arith_ConstantOp_NEGATIVE_CONTROL_XYZ 0   <-- NEGATIVE CONTROL
+// ⚠️ AND THE rmeta GREP ALONE IS NOT SUFFICIENT, which is a correction worth recording: the same
+// grep reads **3** for `mlir_LLVM_UndefOp`, a name the `OneTypedResult` block above refuses on the
+// measured ground that `mlir::LLVM` has NO generated DEF.  A name can sit in an rmeta string table
+// without being an exported type, so each of the seven was confirmed a SECOND way, by the
+// instrument that refusal uses -- `grep -oE "struct <name>\b"` against the generated
+// `dataflow_ods.rs` -- which reads **1** for all seven.  Both instruments agree here; they
+// DISAGREE on `mlir_LLVM_UndefOp` (0 in the debug ods, 1 in the release ods), so that refusal is
+// now in doubt and is NOT touched by this row.
+//
+// ⛔⛔ THE MEMBER QUESTION, MEASURED AND NOT INHERITED -- t161's RATIONALE DOES NOT FULLY COVER
+// THESE SEVEN, AND THAT IS THIS ROW'S MAIN FINDING.  t161 refuses member keys because all 147 of
+// its corpus sites are either `ConstantOp::create` (an op-creating SINK) or `dyn_cast<ConstantOp>`
+// (a cast target).  Censused over 1,596 `repos/dt_src` sources for these seven, that holds for the
+// POSITIONS (271 sites: 194 `::create` sinks, 62 cast/template-argument, 5 function parameters, 0
+// default-constructions -- hence NO `fN` ctor key for any of the seven, t161's grep repeated) but
+// NOT for the MEMBERS: the corpus does call ODS accessors on bound handles, e.g.
+//   AddIOp   `.getLhs()` `.getRhs()`               (StandardToSentient.cpp:82-83)
+//   SubIOp   `.getLhs()` `.getRhs()` `.getResult()`
+//   CmpIOp   `.getLhs()` `.getRhs()` `.getPredicate()` `.getOperation()`
+//   SelectOp `.getCondition()` `.getTrueValue()` `.getFalseValue()`
+//   AffineIfOp        `.getIntegerSet()`
+//   func::ReturnOp    `.getOperands()` `.getOperandsMutable()`
+//   affine::AffineYieldOp  -- NONE; it is the one op t161's rationale covers exactly.
+// ⛔ NO MEMBER OF ANY OF THE SEVEN IS KEYED HERE.  Writing one would require a per-op operand
+// model this crate does not have, and RULE 2 forbids a placeholder.  ⚠️ THE CONSEQUENCE IS NAMED
+// RATHER THAN HIDDEN: an unmapped member does NOT abort (`converter.cpp` `VisitCallExpr` gates on
+// `Mapper::Contains` and falls through to `ConvertCallExpr`), so those accessors will be emitted
+// TEXTUALLY and fail at rustc, not at translate time.  That is the `g3067` capability gap, not a
+// property of these keys: the SAME bargain is already struck by every landed op key here -- t25
+// `OpState`, t61 `ModuleOp`, t157 `func::FuncOp`, t158 `affine::AffineForOp`, t161/t162 -- and the
+// corpus calls members on those too.  ⭐ MEASURED, not assumed: the AFTER leg of this row greps the
+// emitted `.rs` of all seven gate TUs for each accessor name above; see the row report for which
+// TUs leak and which do not.
+//
+// ⛔ t25's PROHIBITION APPLIES UNCHANGED TO ALL SEVEN: no `operator==`, no `operator!=`, no
+// identity test.  A C++ op handle compares `Operation *`; an `OpInst` is an op's printed CONTENT.
+// (`f2102` compares `op_id()` only and is the one sanctioned identity test; it lives on t25.)
+//
+// ⚠️ SWALLOW / DEAD-KEY SAFETY.  All seven spellings have arity 0 -- no `<`, no comma at any
+// depth, no operator name -- so neither `matchTemplate`'s same-depth-comma over-run nor the
+// `operator>=` angle-bracket-depth desync can apply.  `CmpIOp` is a COMPARISON op but the key
+// spells the TYPE, not `operator>=`, so the desync class is not in its path; the keys are read
+// back out of `ir_src.json` with `value == spelling` after the regen rather than assumed.
+//
+// The four `arith` classes are ALREADY DECLARED in the `OneTypedResult` block above (a second
+// definition would be a redefinition error), so only the three new ones are declared here.
+namespace mlir {
+// mlir/Dialect/Affine/IR/AffineOps.h.inc:4591 `class AffineIfOp` / :4591 `class AffineYieldOp`
+// -- ODS-generated, each one `Operation *` through its OpState base.  Declared here ONLY so the
+// keys below can be SPELLED, for the t161 reason and nothing more.  No member is mapped.
+namespace affine {
+class AffineIfOp {};
+class AffineYieldOp {};
+} // namespace affine
+// mlir/Dialect/Func/IR/FuncOps.h.inc:1556 `class ReturnOp` -- same shape, same reason.
+// ⚠️ `mlir::func::CallOp` (t152) and `mlir::func::FuncOp` (t157) are declared far above at
+// :3628-3664; this reopens the namespace, which is legal, and adds no second declaration of
+// either.
+namespace func {
+class ReturnOp {};
+} // namespace func
+} // namespace mlir
+
+// t2610 -- `mlir::arith::AddIOp`.  Gate TU dcc/src/Conversion/AgenToSentient/Helper.cpp.
+using t2610 = mlir::arith::AddIOp;
+// t2611 -- `mlir::arith::SubIOp`.  Gate TU dcc/src/Transform/Dataflow/DuplicateReusedToggle.cpp.
+using t2611 = mlir::arith::SubIOp;
+// t2612 -- `mlir::arith::CmpIOp`.  Gate TU
+// dcc/src/Conversion/StandardToSentient/StandardToSentient.cpp.
+using t2612 = mlir::arith::CmpIOp;
+// t2613 -- `mlir::arith::SelectOp`.  Gate TU
+// dcc/src/Transform/Dataflow/MutableAddrSplitting.cpp.
+using t2613 = mlir::arith::SelectOp;
+// t2614 -- `mlir::affine::AffineIfOp`.  Gate TU dcc/src/Analysis/ConditionalTree.cpp.
+using t2614 = mlir::affine::AffineIfOp;
+// t2615 -- `mlir::affine::AffineYieldOp`.  Gate TU
+// dcc/src/Conversion/AffineToStandard/AffineToStandard.cpp.
+using t2615 = mlir::affine::AffineYieldOp;
+// t2616 -- `mlir::func::ReturnOp`.  Gate TU
+// dsc-based-utils/DSC2ToDataflowIR/DSC2ToDataflowIR.cpp.
+using t2616 = mlir::func::ReturnOp;
