@@ -402,6 +402,22 @@ struct EmptyProperties {};
 // `mlir::Value` is already COMPLETE above (~:187), which is the other reason the
 // block lands at exactly this line and not earlier.
 class OpOperand;
+// ⭐ 2026-09-29, the RESULT half of the same family (t1700/t1701, f1700-f1706).
+// `mlir::OpResult` and `mlir::detail::OpResultImpl` are the `T`/`PointerT`/
+// `ReferenceT` and `BaseT` arguments of `indexed_accessor_range_base<ResultRange,
+// ...>` (t38's spelling, unchanged), so both names must be VISIBLE here -- above
+// `class ResultRange`, which now derives from that base exactly as `OperandRange`
+// does.  Each is DEFINED at its own site below (`OpResult` ~:800, `OpResultImpl`
+// ~:902); a forward declaration followed by a definition is well-formed, which is
+// the same "declared again, harmlessly" note `OpOperand` carries one line up.
+// ⚠️ Incomplete is ENOUGH and that is not luck: instantiating the base declares
+// `OpResult operator*() const;` and `iterator begin() const;`, and a function
+// DECLARATION returning an incomplete class type is legal.  Nothing in this rule
+// source ever calls those through an incomplete `OpResult`.
+class OpResult;
+namespace detail {
+class OpResultImpl;
+} // namespace detail
 } // namespace mlir
 
 namespace llvm {
@@ -510,12 +526,38 @@ public:
                                                 mlir::Value>;
   using Base::Base;
 };
-// ⛔ `ResultRange` stays an EMPTY STUB.  Its base is already keyed (t38) and the
+// ⭐⭐ `ResultRange` NOW DERIVES, 2026-09-29.  The note that stood here said the
 // parallel iterator family (`Operation::result_begin()`, `std::next` on its
-// iterator, its two-iterator constructor) is REAL in the log but is NOT landed
-// here: it is a separate row, and half-landing it is the `rc=0`-then-`E0433`
-// failure this slot exists to avoid.
-class ResultRange {};
+// iterator, its two-iterator constructor) was "REAL in the log but NOT landed --
+// it is a separate row".  THAT ROW IS THIS ONE (queue g2958, `next`), and it is
+// landed WHOLE (t1700/t1701, f1700-f1706 at the tail) precisely so the
+// `rc=0`-then-`E0599` half-landing that note warned about does not happen:
+// keying ONLY `std::next` would have left `result_begin()` an unmapped textual
+// member call on `OpInst`.
+// ⚠️ THE MEASURED REASON THIS ROW IS TWO FAMILIES AND NOT 69.  The census's 69
+// distinct `next_<N>` suffixes are a PER-TU index, not 69 signatures.  Classifying
+// all 29,629 `next_<N>` sites in `fresh38/out` by receiver text gives:
+//     14,810  201 TU  38 _N   std::next(getOperation()->operand_begin(), n)
+//     14,810  201 TU  40 _N   std::next(getOperation()->result_begin(),  n)
+//          9    7 TU   7 _N   raw-pointer / ilist `std::next`, unrelated
+// The operand half is f1103, already landed in e9937a50 -- fresh38 was swept at
+// 09-28 22:41 and e9937a50 landed 09-29 01:14, so the census row was measured
+// against a rule set WITHOUT it.  This block closes the other half.
+// ⛔ `mlir::ResultRange` keeps NO DEFAULT CONSTRUCTOR for the same reason
+// `OperandRange` has none: declaring the two-iterator constructor in the base
+// suppresses the base's implicit default constructor.  Nothing in this rule source
+// default-constructs a `ResultRange` (its only other use is t15, a type key, which
+// never constructs).
+class ResultRange
+    : public llvm::detail::indexed_accessor_range_base<
+          ResultRange, mlir::detail::OpResultImpl *, mlir::OpResult,
+          mlir::OpResult, mlir::OpResult> {
+public:
+  using Base = llvm::detail::indexed_accessor_range_base<
+      ResultRange, mlir::detail::OpResultImpl *, mlir::OpResult, mlir::OpResult,
+      mlir::OpResult>;
+  using Base::Base;
+};
 // ===========================================================================
 // ⭐ THE THREE CONSTRUCTORS ARE DECLARED HERE, not just keyed at f143-f145: this
 // is a STUB class, so an undeclared constructor is a compile error in the rule
@@ -9385,6 +9427,15 @@ public:
       mlir::OperandRange, mlir::OpOperand *, mlir::Value, mlir::Value,
       mlir::Value>::iterator
   operand_begin();
+  // f1706, merged in here for the SAME reason `walk` was: a C++ class cannot be
+  // reopened, and this block is already this module's first and only definition of
+  // `mlir::Operation`.  `result_end()` is NOT declared -- it has zero log lines,
+  // exactly like `operand_end()`, and an invented member is worse than a missing
+  // one.
+  llvm::detail::indexed_accessor_range_base<
+      mlir::ResultRange, mlir::detail::OpResultImpl *, mlir::OpResult,
+      mlir::OpResult, mlir::OpResult>::iterator
+  result_begin();
   // f1300, merged in here rather than reopening the class: a C++ class cannot be
   // reopened, and e9937a50 had already made this the module's first and only
   // definition of `mlir::Operation` for `operand_begin()`.  See f1300's block at
@@ -9707,3 +9758,182 @@ public:
 };
 
 using t1500 = mlir::detail::PassOptions::Option<DCC::ProgIRFormat>;
+// ⭐⭐ THE RESULT HALF OF THE RANGE-ITERATOR FAMILY -- queue row g2958 (`next`)
+// ===========================================================================
+// THE ROW.  `next` is the third-largest name in the undefined-name census (30,934
+// sites / 211 TUs / 69 distinct `_N`).  ⛔ THE 69 SUFFIXES ARE NOT 69 SIGNATURES:
+// `_N` is a per-TU disambiguation index.  Classifying every one of the 29,629
+// `next_<N>` call sites in `fresh38/out` BY RECEIVER TEXT collapses the row to TWO
+// families plus noise:
+//     14,810 sites  201 TU  38 _N   std::next(getOperation()->operand_begin(), n)
+//     14,810 sites  201 TU  40 _N   std::next(getOperation()->result_begin(),  n)
+//          9 sites    7 TU   7 _N   raw-pointer / `ilist::getIterator()` next
+// Both large families come from ODS's generated `getODSOperands` / `getODSResults`:
+//     return {std::next(getOperation()->result_begin(), valueRange.first),
+//             std::next(getOperation()->result_begin(),
+//                       valueRange.first + valueRange.second)};
+// ⭐ THE OPERAND HALF IS ALREADY CLOSED (f1100-f1106, e9937a50).  The census row
+// still counts it only because fresh38 was swept 09-28 22:41 and e9937a50 landed
+// 09-29 01:14 -- a STALE-RULE-IR over-count, the exact failure ir.v37's provenance
+// records for `OwningOpRef`.  So this block is the OTHER HALF, and the row is one
+// generic-free family of seven keys, not sixty-nine.
+//
+// ⛔ THE OPERAND-ORDER TRAP DOES NOT APPLY HERE AND THE REASON IS STRUCTURAL.
+// `OpInst::operands` is a `BTreeMap` keyed by NAME, so `.values()` yields
+// ALPHABETICAL order while `ordered_operands()` yields ODS declaration order -- a
+// silent wrong-operand bug.  NONE of these seven bodies touches either: the
+// sequence is produced ONCE, by f1706 (`result_begin()`), which goes through the
+// crate's own results accessor, and every other body is pure cursor arithmetic on
+// the `RangeIter` that f1706 returned.  There is no second path by which an order
+// could be chosen, correctly or otherwise.
+//
+// ⛔ SWALLOW-SAFETY IS VACUOUS FOR THIS BLOCK: all seven keys are CONCRETE.  Not
+// one has a template parameter, so there is no `T1` for `matchTemplate` to capture
+// and no placeholder that could over-run a same-depth comma.  For the same reason
+// the `T1 &` / `T1 &&` hazard and the `operator>=` angle-depth desync are both
+// inapplicable -- the only operator names here are `operator+` and `operator*`,
+// neither of which contains a `>`.
+//
+// THE FOUR STRUCTURAL PRECONDITIONS, all of them already-established shapes:
+//   * `mlir::ResultRange` now DERIVES from its real base (~:520), the `OperandRange`
+//     shape verbatim, so `::iterator` and the inherited two-iterator constructor
+//     exist to be named.  t38's SPELLING is unchanged, so t38 cannot vanish.
+//   * `mlir::OpResult` / `mlir::detail::OpResultImpl` are forward-declared above the
+//     structural-move block (~:404) because they are the base's template arguments.
+//   * `result_begin()` is declared INSIDE the existing `class Operation` block
+//     (~:9392), never in a second one -- a C++ class cannot be reopened.
+//   * `llvm::iterator_facade_base` and `indexed_accessor_range_base` are reused
+//     UNCHANGED at different template arguments; no new member is declared on
+//     either, so the operand family's keys are untouched.
+//
+// THE KEY SPELLINGS (RITER below is `llvm::detail::indexed_accessor_range_base<
+// mlir::ResultRange, mlir::detail::OpResultImpl *, mlir::OpResult, mlir::OpResult,
+// mlir::OpResult>::iterator`), each the DECLARING-class form, mirroring
+// f1100-f1106 one for one:
+//   f1700  RITER <base>::begin() const
+//   f1701  RITER <base>::end() const
+//   f1702  RITER llvm::iterator_facade_base<RITER, std::random_access_iterator_tag,
+//              mlir::OpResult, long, mlir::OpResult, mlir::OpResult>::operator+(long) const
+//   f1703  RITER std::next(RITER, long)              <- THE ROW
+//   f1704  mlir::OpResult RITER::operator*() const
+//   f1705  void mlir::ResultRange::indexed_accessor_range_base(RITER, RITER)
+//   f1706  RITER mlir::Operation::result_begin()
+// ⭐ All seven are READ BACK OUT OF `ir_src.json` after the regen; the preprocessor
+// reports success either way, so nothing else shows the recorded spelling.
+// ===========================================================================
+
+// ---- t1700 / t1701: the two TYPES of the result family ---------------------
+// BOTH map to `libcc2rs::RangeIter<ir::Value>`, one claim and not two, for the
+// t1100/t1101 reason verbatim: `iterator_facade_base` is the CRTP BASE of the
+// iterator, so the base IS the iterator.  The ELEMENT model is `ir::Value` because
+// that is where t15 (`mlir::ResultRange` -> `Vec<ir::Value>`), t38 (its base, same)
+// and t24 (`mlir::OpResult` -> `ir::Value`) already map; nothing new is claimed
+// about the elements.
+// ⛔ CONCRETE, NOT GENERIC, for the t37-t39 reason: a generic rule would force the
+// converter to map the template ARGUMENTS, and `mlir::detail::OpResultImpl`
+// deliberately has no model, which turns a countable mangled name into a hard
+// mapper.cpp:722 abort.
+using t1700 = llvm::detail::indexed_accessor_range_base<
+    mlir::ResultRange, mlir::detail::OpResultImpl *, mlir::OpResult,
+    mlir::OpResult, mlir::OpResult>::iterator;
+
+using t1701 = llvm::iterator_facade_base<
+    llvm::detail::indexed_accessor_range_base<
+        mlir::ResultRange, mlir::detail::OpResultImpl *, mlir::OpResult,
+        mlir::OpResult, mlir::OpResult>::iterator,
+    std::random_access_iterator_tag, mlir::OpResult, long, mlir::OpResult,
+    mlir::OpResult>;
+
+// ---- f1700 / f1701: `begin()` / `end()`, DECLARED IN THE BASE ---------------
+// The receiver is written `mlir::ResultRange` because that is what the corpus calls
+// it on, but the RECORDED key names `indexed_accessor_range_base` -- the DECLARING
+// class.  A key written on the derived class would be DEAD (f1100's paragraph).
+llvm::detail::indexed_accessor_range_base<
+    mlir::ResultRange, mlir::detail::OpResultImpl *, mlir::OpResult,
+    mlir::OpResult, mlir::OpResult>::iterator
+f1700(mlir::ResultRange a0) {
+  return a0.begin();
+}
+
+llvm::detail::indexed_accessor_range_base<
+    mlir::ResultRange, mlir::detail::OpResultImpl *, mlir::OpResult,
+    mlir::OpResult, mlir::OpResult>::iterator
+f1701(mlir::ResultRange a0) {
+  return a0.end();
+}
+
+// ---- f1702: `it + n` -------------------------------------------------------
+// Written `a0.operator+(a1)` rather than `a0 + a1`, this file's f1 / f1102
+// convention: the explicit member form cannot be re-resolved to some free operator
+// by ADL, so the recorded key cannot drift.
+llvm::detail::indexed_accessor_range_base<
+    mlir::ResultRange, mlir::detail::OpResultImpl *, mlir::OpResult,
+    mlir::OpResult, mlir::OpResult>::iterator
+f1702(llvm::detail::indexed_accessor_range_base<
+          mlir::ResultRange, mlir::detail::OpResultImpl *, mlir::OpResult,
+          mlir::OpResult, mlir::OpResult>::iterator a0,
+      long a1) {
+  return a0.operator+(a1);
+}
+
+// ---- f1703: `std::next(it, n)` -- THE ROW ----------------------------------
+// The SAME target body as f1702 (`offset`), for f1103's reason: `std::next(i, n)`
+// is specified as `advance(i, n); return i;` and for a random-access category
+// `advance` is `i += n`.  Two keys because the corpus spells both and a recorded
+// key is a spelling, not a meaning.
+// ⚠️ `std::next`'s SECOND parameter is
+// `typename iterator_traits<_It>::difference_type`, which is why the five iterator
+// typedefs on `iterator_facade_base` (~:425) are load-bearing: without
+// `difference_type` visible libc++'s `iterator_traits<RITER>` is empty, the second
+// argument's type cannot be formed, and the RULE SOURCE fails to compile -- which
+// reads as a bad key rather than a missing typedef.  The result family reuses that
+// same base, so the typedefs are already there.
+llvm::detail::indexed_accessor_range_base<
+    mlir::ResultRange, mlir::detail::OpResultImpl *, mlir::OpResult,
+    mlir::OpResult, mlir::OpResult>::iterator
+f1703(llvm::detail::indexed_accessor_range_base<
+          mlir::ResultRange, mlir::detail::OpResultImpl *, mlir::OpResult,
+          mlir::OpResult, mlir::OpResult>::iterator a0,
+      long a1) {
+  return std::next(a0, a1);
+}
+
+// ---- f1704: `*it` ----------------------------------------------------------
+// Returns `mlir::OpResult` BY VALUE, not a reference: this family's `ReferenceT` IS
+// `mlir::OpResult` (t38's fifth argument), because an MLIR `OpResult` is itself a
+// handle.  So the target body CLONES rather than borrowing, which is exact -- t24
+// already maps `mlir::OpResult` to `ir::Value`, a `{name, ty}` value compared
+// structurally.
+mlir::OpResult
+f1704(llvm::detail::indexed_accessor_range_base<
+      mlir::ResultRange, mlir::detail::OpResultImpl *, mlir::OpResult,
+      mlir::OpResult, mlir::OpResult>::iterator a0) {
+  return a0.operator*();
+}
+
+// ---- f1705: `ResultRange{first, last}` -------------------------------------
+// The f1105 shape exactly: DERIVED receiver, BASE function name
+// (`void mlir::ResultRange::indexed_accessor_range_base(RITER, RITER)`), which is
+// what `using Base::Base;` produces.  The CONSTRUCTOR is inherited, so the
+// constructed type is the derived one while the function is still the base's.
+mlir::ResultRange
+f1705(llvm::detail::indexed_accessor_range_base<
+          mlir::ResultRange, mlir::detail::OpResultImpl *, mlir::OpResult,
+          mlir::OpResult, mlir::OpResult>::iterator a0,
+      llvm::detail::indexed_accessor_range_base<
+          mlir::ResultRange, mlir::detail::OpResultImpl *, mlir::OpResult,
+          mlir::OpResult, mlir::OpResult>::iterator a1) {
+  return mlir::ResultRange(a0, a1);
+}
+
+// ---- f1706: `Operation::result_begin()` ------------------------------------
+// The bottom of the chain and the ONLY body in this block that produces a sequence:
+// `getResults()` inlines down to this, exactly as `getOperands()` inlines to
+// `operand_begin()` (f1106).  Everything else here is cursor arithmetic over what
+// this returns, which is why no body in this block can pick an operand order.
+llvm::detail::indexed_accessor_range_base<
+    mlir::ResultRange, mlir::detail::OpResultImpl *, mlir::OpResult,
+    mlir::OpResult, mlir::OpResult>::iterator
+f1706(mlir::Operation *a0) {
+  return a0->result_begin();
+}

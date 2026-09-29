@@ -3992,4 +3992,97 @@ fn f1300<T1: FnMut(&mut dataflowir_gen::fmt::OpInst)>(
 // syntactic.rs:591.
 fn t1500() -> () {
     ()
+// ===========================================================================
+// ⭐⭐ THE RESULT HALF OF THE RANGE-ITERATOR FAMILY -- queue row g2958 (`next`)
+// t1700/t1701 + f1700-f1706, the one-for-one mirror of t1100/t1101 + f1100-f1106.
+// See src.cpp for the row census (the 69 `_N` suffixes are TWO families: 14,810
+// operand sites = f1103, already landed; 14,810 result sites = f1703, here) and for
+// the seven recorded key spellings.
+// ===========================================================================
+
+// t1700 / t1701 -- the iterator and its CRTP base, BOTH `RangeIter<ir::Value>`.
+// One claim, not two: `iterator_facade_base` IS the iterator's base, so the base is
+// the iterator.  The element is `ir::Value` because t15 (`mlir::ResultRange`), t38
+// (its `indexed_accessor_range_base`) and t24 (`mlir::OpResult`) already map there.
+fn t1700() -> libcc2rs::RangeIter<dataflowir_gen::ir::Value> {
+    Default::default()
+}
+
+fn t1701() -> libcc2rs::RangeIter<dataflowir_gen::ir::Value> {
+    Default::default()
+}
+
+// f1700 / f1701 -- `begin()` / `end()`, recorded on the DECLARING base class.  The
+// receiver arrives as the already-mapped `Vec<ir::Value>` (t15 / t38) and is MOVED
+// into the cursor, which is what makes the cursor own its sequence.
+unsafe fn f1700(
+    a0: Vec<dataflowir_gen::ir::Value>,
+) -> libcc2rs::RangeIter<dataflowir_gen::ir::Value> {
+    libcc2rs::RangeIter::begin(a0)
+}
+
+unsafe fn f1701(
+    a0: Vec<dataflowir_gen::ir::Value>,
+) -> libcc2rs::RangeIter<dataflowir_gen::ir::Value> {
+    libcc2rs::RangeIter::end(a0)
+}
+
+// f1702 -- `it + n` (`llvm::iterator_facade_base::operator+`) -- and f1703,
+// `std::next(it, n)`.  SAME BODY, deliberately, the f1102/f1103 reason verbatim:
+// `next` is specified as `advance(i, n); return i;` and `advance` on a
+// random-access category is `i += n`.  Two keys because the corpus spells both and
+// a recorded key is a spelling; one body because they are one operation.
+// `RangeIter::offset` bounds-checks both directions and panics on the C++ UB cases
+// (advance past end, move before begin) rather than fabricating a position.
+unsafe fn f1702(
+    a0: libcc2rs::RangeIter<dataflowir_gen::ir::Value>,
+    a1: i64,
+) -> libcc2rs::RangeIter<dataflowir_gen::ir::Value> {
+    a0.offset(a1)
+}
+
+unsafe fn f1703(
+    a0: libcc2rs::RangeIter<dataflowir_gen::ir::Value>,
+    a1: i64,
+) -> libcc2rs::RangeIter<dataflowir_gen::ir::Value> {
+    a0.offset(a1)
+}
+
+// f1704 -- `*it`.  This family's `ReferenceT` is `mlir::OpResult` BY VALUE (t38's
+// fifth template argument), because an MLIR `OpResult` is itself a handle, so the
+// faithful body CLONES the element rather than borrowing it.  `at()` panics on an
+// end iterator, which is the C++ UB, instead of returning a fabricated element.
+unsafe fn f1704(
+    a0: libcc2rs::RangeIter<dataflowir_gen::ir::Value>,
+) -> dataflowir_gen::ir::Value {
+    a0.at().clone()
+}
+
+// f1705 -- `mlir::ResultRange{first, last}`, the inherited two-iterator
+// constructor.  Returns the CONSTRUCTED type's model (`Vec<ir::Value>` = t15), the
+// f1105 / f142 precedent.  `range_from` takes `first` as the authoritative owner of
+// the sequence and slices `[first.idx .. last.idx]`; it asserts the pair is ordered
+// and in range.
+unsafe fn f1705(
+    a0: libcc2rs::RangeIter<dataflowir_gen::ir::Value>,
+    a1: libcc2rs::RangeIter<dataflowir_gen::ir::Value>,
+) -> Vec<dataflowir_gen::ir::Value> {
+    libcc2rs::RangeIter::range_from(a0, a1)
+}
+
+// f1706 -- `mlir::Operation::result_begin()`, the bottom of the chain and the ONLY
+// body in this block that produces a sequence: `getResults()` inlines down to it,
+// exactly as `getOperands()` inlines to `operand_begin()` (f1106).
+// ⭐ THE ALPHABETICAL-ORDER HAZARD DOES NOT EXIST ON THIS SIDE, and that is a
+//   property of the crate, not an assumption.  f1106 had to use
+//   `ordered_operands()` because `fmt::OpInst::operands` is a `BTreeMap` keyed by
+//   operand NAME, so `.values()` is alphabetical.  `fmt::OpInst::results`
+//   (fmt.rs:436, dataflowir-gen f32f967) is a plain `pub Vec<Value>` -- an ordered
+//   sequence with no key and therefore no second order to get wrong.  It is cloned
+//   because the C++ returns a borrowed view over results the operation still owns,
+//   and the cursor here owns its sequence.
+unsafe fn f1706(
+    a0: *mut dataflowir_gen::fmt::OpInst,
+) -> libcc2rs::RangeIter<dataflowir_gen::ir::Value> {
+    libcc2rs::RangeIter::begin((*a0).results.clone())
 }
