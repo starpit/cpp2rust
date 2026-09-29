@@ -3826,3 +3826,119 @@ fn t1200() -> () {
 fn t1201() -> () {
     ()
 }
+
+// ===========================================================================
+// PASS 2026-09-29: THE `mlir::OperandRange` ITERATOR FAMILY.
+// t1100/t1101 (the two TYPES) and f1100-f1106 (the SEVEN expressions), landed as
+// ONE SET.  See src.cpp for the row, the five TUs, the verbatim abort and the three
+// measured corrections (`getOperands()` needs no key; `end()` does; `operand_end()`
+// has zero log lines and is NOT invented).
+//
+// THE MODEL: `libcc2rs::RangeIter<T>` (libcc2rs/src/iterators.rs:929) -- a
+// `{Vec<T>, usize}` OWNING cursor.  C++'s iterator is a borrowed
+// `{BaseT base, ptrdiff_t index}` pair; this owns its sequence instead.
+//
+// ⚠️ WHAT OWNING COSTS, stated rather than assumed.  `:521` and `:526` make TWO
+// SEPARATE `getOperands()` calls, so the two iterators of each pair own DISTINCT
+// CLONES of the operand list.  Under t14's settled snapshot semantics
+// (`mlir::OperandRange` -> `Vec<ir::Value>`, and `ir::Value` equality is
+// STRUCTURAL) that is correct: the pair still denotes the same subrange.  It does
+// mean a genuinely mismatched iterator pair -- UB in C++ -- yields a plausible wrong
+// value here instead of trapping, so `RangeIter::range_from` carries a
+// `debug_assert_eq!` on the two sequences.  It is a debug assert because the scan is
+// O(n) on a hot printing path and because under owning semantics a mismatch is a
+// wrong VALUE, not memory unsafety.
+// ===========================================================================
+
+// t1100 -- `<base>::iterator`, and t1101 -- its CRTP base
+// `llvm::iterator_facade_base<...>`.  ⭐ BOTH map to the SAME Rust type and that is
+// ONE claim, not two: the facade base IS the iterator (CRTP), exactly as
+// `indexed_accessor_range_base` IS the range for t37-t39 / t166 / t251.  Element
+// model is `ir::Value`, matching t14, so nothing new is claimed about elements.
+// ⚠️ Plain `fn`, not `unsafe fn`: the t37-t39 / t166 convention for a TYPE rule.
+// ⚠️ Spelled in BOTH overlays (the t72 `mlir::TypeID` / t990 precedent) rather than
+// relying on the unsafe-layer union, which is the guess that reads as a dead key.
+fn t1100() -> libcc2rs::RangeIter<dataflowir_gen::ir::Value> {
+    Default::default()
+}
+
+fn t1101() -> libcc2rs::RangeIter<dataflowir_gen::ir::Value> {
+    Default::default()
+}
+
+// f1100 / f1101 -- `begin()` / `end()`, recorded on the DECLARING base class.
+// The receiver arrives as the already-mapped `Vec<ir::Value>` (t14 / t37) and is
+// MOVED into the cursor, which is what makes the cursor own its sequence.
+unsafe fn f1100(
+    a0: Vec<dataflowir_gen::ir::Value>,
+) -> libcc2rs::RangeIter<dataflowir_gen::ir::Value> {
+    libcc2rs::RangeIter::begin(a0)
+}
+
+unsafe fn f1101(
+    a0: Vec<dataflowir_gen::ir::Value>,
+) -> libcc2rs::RangeIter<dataflowir_gen::ir::Value> {
+    libcc2rs::RangeIter::end(a0)
+}
+
+// f1102 -- `it + n` (`llvm::iterator_facade_base::operator+`), the operator the five
+// TUs aborted on -- and f1103, `std::next(it, n)`.  SAME BODY, deliberately: `next`
+// is specified as `advance(i, n); return i;` and `advance` on a random-access
+// category is `i += n`.  Two keys because the corpus spells both and a recorded key
+// is a spelling; one body because they are one operation.
+// `RangeIter::offset` bounds-checks both directions and panics on the C++ UB cases
+// (advance past end, move before begin) rather than fabricating a position.
+unsafe fn f1102(
+    a0: libcc2rs::RangeIter<dataflowir_gen::ir::Value>,
+    a1: i64,
+) -> libcc2rs::RangeIter<dataflowir_gen::ir::Value> {
+    a0.offset(a1)
+}
+
+unsafe fn f1103(
+    a0: libcc2rs::RangeIter<dataflowir_gen::ir::Value>,
+    a1: i64,
+) -> libcc2rs::RangeIter<dataflowir_gen::ir::Value> {
+    a0.offset(a1)
+}
+
+// f1104 -- `*it`.  This family's `ReferenceT` is `mlir::Value` BY VALUE (t37's fifth
+// template argument), because an MLIR `Value` is itself a handle, so the faithful
+// body CLONES the element rather than borrowing it.  `at()` panics on an end
+// iterator, which is the C++ UB, instead of returning a fabricated element.
+unsafe fn f1104(
+    a0: libcc2rs::RangeIter<dataflowir_gen::ir::Value>,
+) -> dataflowir_gen::ir::Value {
+    a0.at().clone()
+}
+
+// f1105 -- `mlir::OperandRange{first, last}`, the inherited two-iterator
+// constructor.  Returns the CONSTRUCTED type's model (`Vec<ir::Value>` = t14), the
+// f142 `RegionRange` constructor precedent.  `range_from` takes `first` as the
+// authoritative owner of the sequence and slices `[first.idx .. last.idx]`; it
+// asserts the pair is ordered and in range.
+unsafe fn f1105(
+    a0: libcc2rs::RangeIter<dataflowir_gen::ir::Value>,
+    a1: libcc2rs::RangeIter<dataflowir_gen::ir::Value>,
+) -> Vec<dataflowir_gen::ir::Value> {
+    libcc2rs::RangeIter::range_from(a0, a1)
+}
+
+// f1106 -- `mlir::Operation::operand_begin()`, the bottom of the chain: this is where
+// the operand sequence is actually produced, because `getOperands()` inlines down to
+// it.  FIRST member of `mlir::Operation` ever keyed in this module.
+//
+// ⛔⛔ `ordered_operands()`, NEVER `operands.values()`.  `fmt::OpInst::operands` is a
+// `BTreeMap` keyed by operand NAME, so iterating it is ALPHABETICAL: fmt.rs:925
+// records that for `(ins Index:$z, Variadic<Index>:$a)` the map yields `a` first
+// while ODS position 0 is `z`.  A `operands.values().flatten()` body would make the
+// generated `getSources()` / `getTargets()` partition of `{begin(), begin()+1}` /
+// `{begin()+1, end()}` pick the WRONG OPERAND, silently, at rc=0 -- strictly worse
+// than the abort this row removes.  `OpInst::ordered_operands() -> Vec<&Value>`
+// (fmt.rs:873) is public and yields ODS DECLARATION order, which is the order
+// `operand_begin()` must agree with.
+unsafe fn f1106(
+    a0: *mut dataflowir_gen::fmt::OpInst,
+) -> libcc2rs::RangeIter<dataflowir_gen::ir::Value> {
+    libcc2rs::RangeIter::begin((*a0).ordered_operands().into_iter().cloned().collect())
+}
