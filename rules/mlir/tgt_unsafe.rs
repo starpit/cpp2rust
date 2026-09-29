@@ -1,6 +1,10 @@
 // Copyright (c) 2022-present INESC-ID.
 // Distributed under the MIT license that can be found in the LICENSE file.
 
+// t2601/t2602's f2509 needs `prefix_inc` on a raw pointer, brought in here
+// rather than fully-qualified at each call site.
+use libcc2rs::UnsafePrefixInc;
+
 // The six MLIR types -> the .td-generated model in `dataflowir-gen`.  src.cpp
 // says why the port maps MLIR instead of translating it; this file is only about
 // the two things a type rule records: the REPRESENTATION and the `init` that a
@@ -3004,6 +3008,85 @@ unsafe fn f460(a0: &mut dataflowir_gen::fmt::Region) -> &mut Vec<dataflowir_gen:
 // have its own body.
 unsafe fn f461(a0: &mut Vec<dataflowir_gen::fmt::Block>) -> *mut dataflowir_gen::fmt::Block {
     a0.as_mut_ptr()
+}
+
+// t2601 / t2602 / f2501-f2511 -- the `llvm::iplist<mlir::Operation>` row, one
+// template argument over from t560/t561/f460/f461 above.  See src.cpp for the
+// member census (39 range-for sites drove the extra end()/!=/++/* keys that
+// f461 alone never needed) and the splice()/iterator-ctor sites left loud on
+// purpose.  `fmt::Block { pub ops: Vec<OpInst> }` (fmt.rs:480) is the direct
+// analogue of `fmt::Region { pub blocks: Vec<Block> }` t560/t561 alias into.
+unsafe fn t2601() -> Vec<dataflowir_gen::fmt::OpInst> {
+    Vec::new()
+}
+unsafe fn t2602() -> Vec<dataflowir_gen::fmt::OpInst> {
+    Vec::new()
+}
+
+// f2501 -- `mlir::Block::getOperations()` -> `fmt::Block::get_operations_mut()`
+// (fmt.rs:497).  f460's pattern verbatim: snake_case target on purpose, `a0`
+// named exactly once.
+unsafe fn f2501(
+    a0: &mut dataflowir_gen::fmt::Block,
+) -> &mut Vec<dataflowir_gen::fmt::OpInst> {
+    a0.get_operations_mut()
+}
+
+// f2502/f2503 -- begin()/end(), rules/vector f13/f17 verbatim (an interior
+// pointer into the live buffer, not a copy).
+unsafe fn f2502(
+    a0: &mut Vec<dataflowir_gen::fmt::OpInst>,
+) -> *mut dataflowir_gen::fmt::OpInst {
+    a0.as_mut_ptr()
+}
+unsafe fn f2503(
+    a0: &mut Vec<dataflowir_gen::fmt::OpInst>,
+) -> *mut dataflowir_gen::fmt::OpInst {
+    a0.as_mut_ptr().add(a0.len())
+}
+
+// f2504-f2507 -- empty/front/back/size, rules/vector f3/f9/f10/f2 verbatim.
+unsafe fn f2504(a0: Vec<dataflowir_gen::fmt::OpInst>) -> bool {
+    a0.is_empty()
+}
+unsafe fn f2505(
+    a0: &mut Vec<dataflowir_gen::fmt::OpInst>,
+) -> *mut dataflowir_gen::fmt::OpInst {
+    (a0.first_mut().unwrap())
+}
+unsafe fn f2506(
+    a0: &mut Vec<dataflowir_gen::fmt::OpInst>,
+) -> *mut dataflowir_gen::fmt::OpInst {
+    (a0.last_mut().unwrap())
+}
+unsafe fn f2507(a0: Vec<dataflowir_gen::fmt::OpInst>) -> usize {
+    a0.len()
+}
+
+// f2508-f2511 -- the range-for iterator protocol, rules/vector f22/f34/f26/f27
+// verbatim: a reference/`bool` in C++ is a raw pointer/`bool` here, same as
+// the iterator itself is a bare `*mut OpInst`.
+unsafe fn f2508(
+    a0: *mut dataflowir_gen::fmt::OpInst,
+) -> *mut dataflowir_gen::fmt::OpInst {
+    a0
+}
+unsafe fn f2509(
+    a0: &mut *mut dataflowir_gen::fmt::OpInst,
+) -> *mut dataflowir_gen::fmt::OpInst {
+    a0.prefix_inc()
+}
+unsafe fn f2510(
+    a0: *const dataflowir_gen::fmt::OpInst,
+    a1: *const dataflowir_gen::fmt::OpInst,
+) -> bool {
+    a0 != a1
+}
+unsafe fn f2511(
+    a0: *const dataflowir_gen::fmt::OpInst,
+    a1: *const dataflowir_gen::fmt::OpInst,
+) -> bool {
+    a0 == a1
 }
 
 // ===========================================================================

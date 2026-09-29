@@ -200,10 +200,17 @@ template <typename ValueRangeT> class ValueTypeRange;
 // f500's own note (see the bottom of this file) already measured exactly that:
 // "4 of those are `getArgumentTypes`, a DIFFERENT unmapped member that this key
 // deliberately does not touch".  See t2410's paragraph at the tail.
+// ⚠️ `getOperations()` IS DECLARED HERE AND NOT LATER, the f460/getBlocks()
+// discipline repeated: a C++ class cannot be reopened, so f2501's receiver
+// method must live inside this one declaration of `class Block`.
+// mlir/IR/Block.h `OpListType &getOperations() { return operations; }` with
+// `using OpListType = llvm::iplist<Operation>;` -- no const overload, so this
+// is the entire surface and the corpus's non-const asks resolve only to it.
 class Block {
 public:
   BlockArgument getArgument(unsigned i);
   ValueTypeRange<llvm::MutableArrayRef<BlockArgument>> getArgumentTypes();
+  llvm::iplist<Operation> &getOperations();
 };
 
 // ⚠️ `getBlocks()` IS DECLARED HERE AND NOT LATER, because a C++ class cannot be
@@ -6104,6 +6111,26 @@ using t244 = llvm::ilist_iterator<
     llvm::ilist_detail::node_options<mlir::Operation, false, false, void, false,
                                      void>,
     true, false>;
+
+namespace llvm {
+// ⭐ EXPLICIT SPECIALISATION of t243 ONLY (IsReverse=false), added for f2508-
+// f2511 below.  The primary template stays the empty shell (comment above):
+// t244/t245/t246 are UNCHANGED and still keep every other member loud.  This
+// is required because the corpus's dominant `getOperations()` usage is a
+// genuine range-for loop (39 sites, see t2601/t2602's census), which the
+// Block-side's one-shot `begin()+deref` (f461) never needed.
+template <>
+class ilist_iterator<
+    ilist_detail::node_options<mlir::Operation, false, false, void, false,
+                               void>,
+    false, false> {
+public:
+  mlir::Operation &operator*() const;
+  ilist_iterator &operator++();
+  bool operator!=(const ilist_iterator &) const;
+  bool operator==(const ilist_iterator &) const;
+};
+} // namespace llvm
 // t245 -- mlir::Block, IsReverse=false, 4 rows.
 using t245 = llvm::ilist_iterator<
     llvm::ilist_detail::node_options<mlir::Block, false, false, void, false,
@@ -7120,6 +7147,124 @@ using t560 = llvm::simple_ilist<mlir::Block>;
 // NOT optional: it is the RETURN type f460 is spelled with, so without it f460
 // cannot resolve at all.  Same body as t560 -- the same container.
 using t561 = llvm::iplist<mlir::Block>;
+
+// ===========================================================================
+// t2601 / t2602 / f2501-f2511 -- `llvm::iplist<mlir::Operation>` ROW.  The
+// `mlir::Operation` twin of t560/t561/f460/f461, one template argument over,
+// closing g3051's n=3 gate (queue g095/g1466-g1469, plus the adjacent
+// simple_ilist/iplist_impl rows g108/g1470/g1481, NOT touched here).
+//
+// MEMBER CENSUS (`grep -o ... | wc -l` over the full dt_src corpus), the
+// Block-side `f`-key each mirrors:
+//   getOperations() call sites total ......... 134  (mirrors f460)
+//   range-for over getOperations() ............ 39  (needs begin/end/!=/++/*  --
+//                                                     f460's sibling never needed this:
+//                                                     its 16 sites are ONE-SHOT begin()+deref)
+//   explicit .begin()/.end() on the result ..... 13  (mirrors f461 / its end() twin)
+//   .front() .................................... 7  (mirrors rules/vector f9)
+//   .size() ..................................... 14  (mirrors rules/vector f2)
+//   .back() ...................................... 3  (mirrors rules/vector f10)
+//   .empty() ...................................... 2  (mirrors rules/vector f3)
+//   .splice( ..................................... 18  DELIBERATELY UNKEYED, stays loud.
+//   `Block::iterator(` converting-ctor sites ..... 13  DELIBERATELY UNKEYED, stays loud.
+// (splice/iterator-ctor TUs were checked against the current stamped
+// `verif/g3048.gate-table.txt` census and none of them reach this construct
+// today -- they gate earlier, on `llvm::cl::initializer<DCC::ProgIRFormat>` or
+// `llvm::iterator_range<mlir::ValueUseIterator<mlir::OpOperand>>` -- so this
+// key does not newly expose them; it is a documented, not a hidden, risk.)
+//
+// REPRESENTATION: the SAME one t560/t561 already chose, not a new one --
+// `fmt::Block { pub ops: Vec<OpInst> }` (dataflowir-gen fmt.rs:480) is the
+// direct analogue of `fmt::Region { pub blocks: Vec<Block> }` (fmt.rs:513)
+// that t560/t561 alias into, and the intrusive-list-is-not-a-vector concern
+// is already settled for this exact aliasing scheme by t560/t561 landing.
+// `llvm::iterator_range`'s begin/end pair is not reused: the corpus's
+// dominant shape here is a genuine range-for loop, so end()/operator!=/
+// operator++/operator* are keyed too, mirroring rules/vector's iterator
+// protocol (f17/f26/f34/f22) rather than stopping at f461's one-shot begin().
+// t243/t244 (the `mlir::Operation` `ilist_iterator`, already keyed) are the
+// RECEIVER of the new operator keys below -- no new iterator TYPE is added,
+// only its operator members, kept to exactly the protocol range-for needs.
+// Order semantics: `erase()` order is observable (Transformer.cpp:57,
+// `for (Operation *op : ops_to_erase_) op->erase();`) but that walks a
+// SmallVector<Operation *>, not this list, so it is not this key's concern;
+// the intrusive list itself has a defined insertion order like any ilist.
+
+// f2501 -- `llvm::iplist<mlir::Operation> & mlir::Block::getOperations()`.
+// Mirrors f460 exactly: receiver `mlir::Block` is already mapped (t2), target
+// is `get_operations_mut` (fmt.rs:497), snake_case on purpose so no other
+// unmapped `mlir::Block` member resolves by accident.
+llvm::iplist<mlir::Operation> &f2501(mlir::Block &b) { return b.getOperations(); }
+
+namespace llvm {
+// Explicit specialisation, f461's discipline: `begin()`/`end()`'s return type
+// must be WRITTEN OUT so it matches t243's already-recorded spelling exactly.
+// Only the non-const half is declared -- every corpus receiver is a mutable
+// lvalue -- so a const ask fails loudly instead of silently binding wrong.
+template <> class simple_ilist<mlir::Operation> {
+public:
+  ilist_iterator<ilist_detail::node_options<mlir::Operation, false, false,
+                                            void, false, void>,
+                 false, false>
+  begin();
+  ilist_iterator<ilist_detail::node_options<mlir::Operation, false, false,
+                                            void, false, void>,
+                 false, false>
+  end();
+  bool empty() const;
+  mlir::Operation &front();
+  mlir::Operation &back();
+  unsigned long size() const;
+};
+} // namespace llvm
+
+// f2502 -- `llvm::simple_ilist<mlir::Operation>::begin()`, returning t243.
+// Mirrors f461: the aliasing Ptr-into-Vec model (rules/vector f13's
+// `PtrKind::StackVec`), NOT an allocating Ptr -- mutation through the
+// iterator must land in the owning `fmt::Block.ops`.
+llvm::ilist_iterator<
+    llvm::ilist_detail::node_options<mlir::Operation, false, false, void,
+                                     false, void>,
+    false, false>
+f2502(llvm::simple_ilist<mlir::Operation> &l) {
+  return l.begin();
+}
+
+// f2503 -- `end()`, same model as f2502.  f461 did not need this; the
+// Block-side's 16 sites never loop.  The Operation-side's 39 range-for sites
+// do, so this key exists specifically because the member census differs.
+llvm::ilist_iterator<
+    llvm::ilist_detail::node_options<mlir::Operation, false, false, void,
+                                     false, void>,
+    false, false>
+f2503(llvm::simple_ilist<mlir::Operation> &l) {
+  return l.end();
+}
+
+// f2504-f2507 -- empty/front/back/size, mirroring rules/vector f3/f9/f10/f2
+// verbatim (same pass-through-accessor shape, same receiver kind).
+bool f2504(llvm::simple_ilist<mlir::Operation> &l) { return l.empty(); }
+mlir::Operation &f2505(llvm::simple_ilist<mlir::Operation> &l) {
+  return l.front();
+}
+mlir::Operation &f2506(llvm::simple_ilist<mlir::Operation> &l) {
+  return l.back();
+}
+unsigned long f2507(llvm::simple_ilist<mlir::Operation> &l) {
+  return l.size();
+}
+
+// f2508-f2511 -- the range-for iterator protocol on t243 (already-keyed
+// receiver), mirroring rules/vector f22/f34/f26/f27 verbatim.  operator++ is
+// prefix only (f34's shape): range-for never needs the postfix form.
+// ⛔ NO OTHER MEMBER of t243/t244 is keyed here -- unchanged discipline.
+mlir::Operation &f2508(t243 it) { return it.operator*(); }
+t243 &f2509(t243 &it) { return it.operator++(); }
+bool f2510(const t243 &it1, const t243 &it2) { return it1.operator!=(it2); }
+bool f2511(const t243 &it1, const t243 &it2) { return it1.operator==(it2); }
+
+using t2601 = llvm::simple_ilist<mlir::Operation>;
+using t2602 = llvm::iplist<mlir::Operation>;
 // ===========================================================================
 // t580/t581 + f480-f487 -- THE BYTECODE STREAM, 60 placeholder sites hiding
 // 200 member calls.  `dataflowir-gen` commit a235c65 (`src/bytecode.rs`) built
