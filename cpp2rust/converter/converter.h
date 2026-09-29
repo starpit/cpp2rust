@@ -1451,6 +1451,23 @@ protected:
 
   virtual const char *GetPointerDerefPrefix(clang::QualType pointee_type);
 
+  // ⭐ MODEL HOOKS FOR THE REFERENCE-HOLDER ARM OF
+  // `ConvertTupleDecompositionDecl` (:1196). A `const auto &[a, b] = expr;`
+  // holder is lowered as a POINTER TO the tuple value plus one read per
+  // binding, and BOTH halves of that spelling are model-specific:
+  //   unsafe   : `let h: *const (A, B) = ..;  let a = (*h).0;`
+  //   refcount : `let h: Ptr<(Value<A>, Value<B>)> = ..;`
+  //              `let a = (*h.upgrade().deref()).0.clone();`
+  // so they are hooks rather than literal text. The base implementations are
+  // byte-for-byte the text that was inlined at those two sites before, so the
+  // unsafe model's emission cannot move.
+  virtual void EmitDecompositionHolderAnnotation(clang::QualType value_type,
+                                                bool is_mut);
+  virtual std::string
+  DecompositionHolderElement(const std::string &holder,
+                             const std::string &element,
+                             clang::QualType value_type);
+
   TempMaterializationCtx CollectRefBindingTempArgs(clang::CallExpr *expr);
 
   bool IsCastRedundantInRust(clang::Expr *expr, clang::QualType target_type);
