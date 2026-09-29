@@ -9790,6 +9790,37 @@ std::string Converter::ConvertIRFragment(
   std::string result;
   for (auto &frag : fragments) {
     if (auto *t = std::get_if<TextFragment>(&frag)) {
+      // A rule body's text fragment that OPENS A NEW LINE closes the previous
+      // one, and rustfmt REFUSES a file with `error[internal]: left behind
+      // trailing whitespace` -- an internal error, not a parse error, so the
+      // Rust is otherwise fine and the whole file simply goes unformatted.
+      //
+      // The whitespace is not in the rule source. `rules/support`'s
+      // `llvm_unreachable` body ends a line with the bare placeholder `a2`, and
+      // the converter's expression emitter renders an integer literal with a
+      // TRAILING SPACE (`66_u32 `), so the substitution lands a space at
+      // end-of-line. Measured on
+      // `dcc/.../TransformPagedMemViewManager.cpp` (line 14365, `66_u32 `) and
+      // `dsc-based-utils/.../SNStickMaskLowering.cpp` (line 43581, `6073_u32 `)
+      // -- the only two trailing-whitespace refusals in the 312-TU corpus.
+      //
+      // ⭐ TRIMMED HERE AND NOT AT THE LITERAL EMITTER, AND NOT AS A WHOLE-FILE
+      // POST-PASS. Dropping the literal emitter's trailing space would change
+      // interior spacing in every emitted file for no correctness gain, and a
+      // whole-file trim would edit the INTERIOR of a multi-line string literal
+      // (rule bodies are inlined verbatim, string literals included). Trimming
+      // only the bytes that sit immediately before a rule-body newline touches
+      // nothing rustc can observe: the one way it could reach inside a literal
+      // is a rule body whose multi-line string literal has a PLACEHOLDER as the
+      // last thing on one of its lines, which no rule body does -- a rule's
+      // format string uses `{}`, not `a0`.
+      if (!t->text.empty() && t->text.front() == '\n') {
+        auto end = result.size();
+        while (end > 0 && (result[end - 1] == ' ' || result[end - 1] == '\t')) {
+          --end;
+        }
+        result.resize(end);
+      }
       result += t->text;
     } else if (auto *g = std::get_if<GenericFragment>(&frag)) {
       result += Mapper::InstantiateTemplate(GetCalleeOrExpr(expr), g->n);
