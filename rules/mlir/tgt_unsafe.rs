@@ -4861,3 +4861,30 @@ unsafe fn f2300(
     let _ = a2;
     a3.into_iter().map(|__b| __b as libc::c_char).collect()
 }
+
+// t2400 `mlir::AttributeStorage` -> AN OPAQUE UNIT, the representation t23
+//   (MLIRContext), t40 (Pass), t43 (OpOperand), t58 (InterfaceMap) and t59
+//   (Builder) already use.  MLIR's attribute storage base (AttributeSupport.h:169).
+//   First abort of 12 TUs on the matched pair; `grep -rnoF AttributeStorage
+//   repos/dt_src` = 0, and the reaching site is the `return nullptr` of
+//   Uniform.td:102 `getRegIndicesIfExist`, i.e. the type appears only in the
+//   `Attribute(const AttributeStorage *)` conversion-ctor signature.
+//   ⛔ NO MEMBER IS MAPPED (`getType`, `getAbstractAttribute`, the StorageUniquer
+//   hooks), so any real dereference still aborts loudly.  The body is `()`, not
+//   empty: `fn t2400() -> () {}` panics at syntactic.rs:591.
+fn t2400() -> () {
+    ()
+}
+
+// t2401 `mlir::detail::ValueImpl` -> AN OPAQUE UNIT, same representation and same
+//   licence.  The base behind every `mlir::Value` (Value.h:40); t4 already models
+//   `Value` itself, and this is only its private `impl` pointee.  First abort of 3
+//   TUs; `mlir::detail::ValueImpl` in repos/dt_src = 0 occurrences (a bare
+//   `ValueImpl` grep returns 11 and all eleven are substring noise:
+//   `IsGenericValueImpl`, `evaluateValueImpl`, `getValueImpl`).  Reached through
+//   `dcc::CondNode::CondNode` (dcc/src/Analysis/ConditionalTree.hpp:32).
+//   ⛔ NO MEMBER IS MAPPED (`getKind`, `getType`, `setType`, use-list traversal),
+//   so any real dereference still aborts loudly.
+fn t2401() -> () {
+    ()
+}
