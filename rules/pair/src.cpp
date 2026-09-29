@@ -104,8 +104,28 @@ std::pair<T1, T2> &f14(std::pair<T1, T2> &dst, std::pair<T1, T2> &&src) {
 // answer wrongly for e.g. an int array.  MEASURED: the array extent normalises
 // to `[_]`, so `[4]` and `[3]` share this one key -- harmless, the extent is
 // unused in the body.
-template <typename T1, typename T2, std::size_t T3>
-std::pair<T1, T2> f15(char const (&a0)[T3], T2 &a1) {
+// ⭐⭐ THE SECOND PARAMETER IS A FREE GENERIC `T4`, NOT THE RECEIVER'S OWN `T2`, and
+// that is a FIX (row g3004), not cosmetics.  Spelled `T2 &a1` this key recorded as
+// `pair(const char (&)[_], T2 &)`, which only unifies when the argument's type IS the
+// receiver's second element type.  MEASURED 2026-09-29: `dcg/unit_tests/datadsc_gen.cpp`
+// has `std::vector<int> dimSize` feeding a `std::map<std::string, double>`:
+//     std::map<std::string, double> DimSize = {{"A_oDim1", dimSize[0]}, ...,
+//                                              {"A_iDim2", 64 * 4}, {"gDim", 1024}};
+// so T2 = double while the second argument is `int &` (or `int &&` for the literals),
+// and all 18 of that TU's sites emitted a fabricated
+// `std_pair_const_std_string__double_::new_1/new_2` even though the SPELLING existed.
+// ⭐ This is the SAME dead-key class as f23 itself: a key written with the receiver's own
+// template parameter where the ask has a different one.  f19 already does the right thing
+// on its non-literal side (`T3 &&a0`), so the convention was already here.
+// ⛔ Deliberately NOT fixed by ADDING a key: `pair(.., T4 &)` and `pair(.., T2 &)` are the
+// same LENGTH, and search()'s tie-break on equal-length `src` falls to unordered_multimap
+// bucket order -- that is exactly the shadow-rule defect fixed in 0525e24b.  Generalising
+// IN PLACE keeps one key per shape.
+// ⚠️ The TARGETS need no change: tgt_unsafe/tgt_refcount already take a free generic for
+// a1 and already convert it (`a1.into()` / `try_into`), and `From<i32> for f64` exists, so
+// the int -> double element conversion these 18 sites need does compile.
+template <typename T1, typename T2, std::size_t T3, typename T4>
+std::pair<T1, T2> f15(char const (&a0)[T3], T4 &a1) {
   return std::pair<T1, T2>(a0, a1);
 }
 
@@ -113,8 +133,9 @@ std::pair<T1, T2> f15(char const (&a0)[T3], T2 &a1) {
 // 240-entry NSDMI actually uses: `{"nin", &N_.in_}` passes a PRVALUE `double *`,
 // so the forwarding ctor deduces `_U2 = double *` and the declared signature ends
 // in `&&`, not `&`.  MEASURED: f15 alone still left `{"nout", &b}` falling back.
-template <typename T1, typename T2, std::size_t T3>
-std::pair<T1, T2> f16(char const (&a0)[T3], T2 &&a1) {
+// Second parameter generalised to a free `T4` for the same measured reason as f15.
+template <typename T1, typename T2, std::size_t T3, typename T4>
+std::pair<T1, T2> f16(char const (&a0)[T3], T4 &&a1) {
   return std::pair<T1, T2>(a0, std::move(a1));
 }
 
@@ -183,8 +204,9 @@ std::pair<T1, T2> f19(T3 &&a0, char const (&a1)[T4]) {
 // `T2 &&` are distinct literal tails at the same position.
 // Body is f15's verbatim; the `const` is a C++-side qualifier only and has no
 // Rust representation here (a1 arrives by value, as in f15/f16).
-template <typename T1, typename T2, std::size_t T3>
-std::pair<T1, T2> f20(char const (&a0)[T3], const T2 &a1) {
+// Second parameter generalised to a free `T4` for the same measured reason as f15.
+template <typename T1, typename T2, std::size_t T3, typename T4>
+std::pair<T1, T2> f20(char const (&a0)[T3], const T4 &a1) {
   return std::pair<T1, T2>(a0, a1);
 }
 
@@ -255,11 +277,50 @@ template <class T1, class T2> auto f22(T1 &a0, T2 &&a1) {
 //
 // ⚠️ BLAST RADIUS.  `search()`'s tie-break prefers the LONGER `src`, and f23's src is
 // longer than f2's, so f23 DISPLACES f2 on the same-arguments case too (T3=T1, T4=T2).
-// That is deliberate and safe because the emitted body is f2's VERBATIM: both inline to
-// `<arg>.clone()` over the `(T1, T2)` model, so the displacement is byte-identical
-// emission, not a behaviour change.  This is the one thing that makes widening the match
-// here safe -- cf. the shadow-rule defect (0525e24b), where the two rules under one
-// spelling emitted DIFFERENT targets and iteration order decided which won.
+//
+// ⛔⛔ THE ORIGINAL LANDING'S BODY WAS WRONG, AND THIS IS THE CORRECTION (row g3004).
+// It emitted f2's body VERBATIM -- `a0.clone()` (unsafe) / the two-cell
+// `Rc::new(RefCell::new(a0.N.borrow().clone()))` (refcount) -- on the claim that "both
+// pairs share the `(T1, T2)` model".  ⭐ THAT HOLDS ONLY WHEN T3=T1 AND T4=T2.  When the
+// element types differ the clone yields the SOURCE tuple type and rustc rejects it:
+//   let mut q: (i32, i32) = k.clone();   // k: (i32, f64)
+//   error[E0308]: expected `(i32, i32)`, found `(i32, f64)`
+// Measured 2026-09-29 on pairctorwk/p3.cpp in BOTH models, wt/cvbind.cpp2rust
+// (md5 2229b6e153fb4e9abccb7bfbc0336992) + ir/f23fix.  14 of fresh38's 87 arity-1 pair
+// sites are this shape, e.g. dcg/dcg_fe/pcfg_gen/inputNeighFetchOp.cpp:1735, where
+// `make_pair(coreId, coord_A.at("i"))` builds a `pair<int, Dtype>` and the receiver is
+// `map<pair<int,int>, int>::count`'s key type.  It was never SILENT -- f23 still removes
+// the fabricated `::new_N` name -- but the failure only moved from a loud fabricated name
+// to a loud E0308.
+//
+// The body is now f4's PER-ELEMENT idiom: `.into()` in the unsafe model and
+// `.try_into().expect(..)` through the cell in refcount.  That is correct for the
+// identical case (identity `Into`) and for any element pair with a `From`/`TryFrom` impl
+// (int -> double, `const long`/`long`).
+//
+// ⛔⛔ AND IT STILL DOES NOT COVER A NARROWING NUMERIC CONVERSION, WHICH IS WHAT THOSE 14
+// SITES ACTUALLY NEED.  `Dtype` is instantiated `double` there, so the per-element
+// conversion is `f64 -> i32`, and std has NEITHER `From<f64> for i32` NOR
+// `TryFrom<f64> for i32`.  Measured on p3.cpp after this change:
+//   unsafe  : error[E0277]: the trait bound `i32: From<f64>` is not satisfied
+//   refcount: error[E0277]: the trait bound `i32: TryFrom<f64>` is not satisfied
+// so the failure moves E0308 -> E0277 and stays loud.  ⭐ THE PIPELINE'S CONVENTION FOR AN
+// ORDINARY C++ IMPLICIT NARROWING CONVERSION IS A CONVERTER-EMITTED RUST `as` CAST --
+// measured on a 8-line probe (`int i = someDouble;`): unsafe emits `let mut i: i32 =
+// (d as i32);`, refcount emits `Rc::new(RefCell::new(((*d.borrow()) as i32)))`.  ⛔ A RULE
+// BODY CANNOT EXPRESS THAT: writing `(a0.0 as T1, a0.1 as T2)` is rejected by the rule
+// preprocessor's own rustc pass with
+//   error[E0605]: an `as` expression can only be used to convert between primitive types
+//                 or to coerce to a specific trait object
+// (measured; the regen then aborts at semantic.rs:260).  So closing the narrowing case
+// needs EITHER a libcc2rs conversion trait with `as`-semantics impls over the primitive
+// pairs, callable from a rule body, OR the converter inserting the per-element cast when
+// it inlines this rule -- it already knows both concrete element types.  Neither is a rule
+// change, so neither is done here; this commit makes the body CORRECT for everything a
+// trait impl exists for and leaves the narrowing case loud.
+//
+// cf. the shadow-rule defect (0525e24b), where two rules under one spelling emitted
+// DIFFERENT targets and iteration order decided which won.
 //
 // ⚠️ CONST IS NOT HANDED OUT MUTABLY.  `pair<const long, long>` and `pair<long, long>`
 // have the SAME model `(i64, i64)` -- `const` has no Rust representation on a tuple

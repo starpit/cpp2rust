@@ -147,7 +147,7 @@ unsafe fn f22<T1, T2>(a0: T1, a1: T2) -> (T1, T2) {
 // pairs share the `(T1, T2)` model, so the converting copy is a plain clone.  See
 // rules/pair/src.cpp's f23 note for the blast-radius argument.
 unsafe fn f23<T1: Clone, T2: Clone>(a0: (T1, T2)) -> (T1, T2) {
-    a0.clone()
+    (a0.0.clone().into(), a0.1.clone().into())
 }
 
 // f24 -- `pair<T1,T2>::pair()`, the default constructor.  Body is t1's VERBATIM:

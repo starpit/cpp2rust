@@ -185,8 +185,12 @@ fn f22<T1, T2>(a0: T1, a1: T2) -> (Value<T1>, Value<T2>) {
 // rules/pair/src.cpp's f23 note for the blast-radius argument.
 fn f23<T1: Clone, T2: Clone>(a0: (Value<T1>, Value<T2>)) -> (Value<T1>, Value<T2>) {
     (
-        Rc::new(RefCell::new(a0.0.borrow().clone())),
-        Rc::new(RefCell::new(a0.1.borrow().clone())),
+        Rc::new(RefCell::new(
+            a0.0.borrow().clone().try_into().expect("failed conversion"),
+        )),
+        Rc::new(RefCell::new(
+            a0.1.borrow().clone().try_into().expect("failed conversion"),
+        )),
     )
 }
 
