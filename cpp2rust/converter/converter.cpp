@@ -1856,7 +1856,51 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
   if (ptr_form_cleared) {
     ptr_form.clear();
   }
-  if (refcount_model && !(ref_holder && memberwise_fields.empty())) {
+  // ⭐⭐ ROW g3086 OPENS THE **BY-VALUE** HOLDER TO REFCOUNT, and the blanket
+  // refusal above (kept verbatim for every other arm) named the right error for
+  // the wrong reason. Its text was: "that model wraps a named local in
+  // `Rc<RefCell<..>>`, so `let h = <tuple init>;` comes out as
+  // `Rc<RefCell<(Rc<RefCell<i32>>, Rc<RefCell<bool>>)>>` and `h.0` is `E0609:
+  // no field `0``."
+  //
+  // MEASURED, `pin/cpp2rust a0b0a707` + `pin/ir.v45`, on the hand-written
+  // equivalent (`verif/g3086/pv.cpp`, refcount leg):
+  //     std::pair<long, bool> p = std::make_pair(7L, true);
+  //   ->  let p: Value<(Value<i64>, Value<bool>)> = Rc::new(RefCell::new((..)));
+  //       let a: Value<i64> = Rc::new(RefCell::new((*(*p.borrow()).0.borrow())));
+  // so the boxing is REAL -- but it is not the obstacle, because this function
+  // writes the holder's annotation ITSELF and reads each element itself. The
+  // only thing that was missing is that the annotation was written as
+  // `Convert(type)` (the UNBOXED tuple model) while `ConvertVarInit` on this
+  // model emits `BoxValue(..)` (converter_refcount.cpp:3185) -- an `E0308`
+  // mismatch, not an `E0609`. Both halves now go through a hook, so the model
+  // spells its own `Value<..>` annotation and its own element read.
+  //
+  // ⭐ WHY A DEEP COPY IS THE CORRECT ELEMENT READ HERE, and why that is NOT the
+  // argument the reference-holder arm uses. `auto [a, b] = expr;` COPIES `expr`
+  // into a holder that C++ gives no name to, and the bindings name that
+  // holder's members. Nothing else in the program can reach the holder, so
+  // there is no aliasing to preserve and no write to lose: a fresh cell holding
+  // a clone is observationally identical to sharing the (unreachable) holder's
+  // cell. That is the opposite of the reference-holder arm, where `.clone()` of
+  // the element's `Rc` must SHARE the cell because the holder names live
+  // storage. `ConverterRefCount::VisitCXXForRangeStmtVectorDecomposition`
+  // (converter_refcount.cpp:2634ff) draws exactly this line for the by-value
+  // loop variable of a decomposing vector for-range, with the same reasoning
+  // and the same emitted spelling.
+  //
+  // ⛔ EVERY OTHER ARM STAYS LOUD, still gated before any emission: the
+  // TEMPORARY-holder arm (`temp_holder` clears `ref_holder`, so it must be
+  // excluded explicitly -- its holder is a prvalue bound to a `const &`, a
+  // combination with no measured refcount witness), and the MEMBER-WISE arm
+  // (`(*h).field_` reaches an `Rc<RefCell<..>>` FIELD, a third spelling again).
+  const bool refcount_by_value =
+      refcount_model && !ref_holder && !temp_holder &&
+      memberwise_fields.empty() &&
+      DecompositionValueHolderSupported(type.getUnqualifiedType(),
+                                        bindings.size());
+  if (refcount_model && !(ref_holder && memberwise_fields.empty()) &&
+      !refcount_by_value) {
     return false;
   }
 
@@ -1896,8 +1940,13 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
   // `let x = (*h.upgrade().deref()).0.clone();` against a holder annotation
   // containing `Cpp2RustUnmapped` -- rc=0 and dead at rustc, the one outcome
   // that is worse than the abort.
+  // ⭐ `refcount_by_value` is in this test for the same reason `ptr_form_cleared`
+  // is: the element read this arm emits is a `.clone()` of a place whose type is
+  // the element's own model, so an element with NO model would trade a loud
+  // abort for a `let` of a type that does not exist. It is refcount-only, so no
+  // unsafe byte moves.
   if (temp_holder || !memberwise_fields.empty() || !ptr_form.empty() ||
-      ptr_form_cleared) {
+      ptr_form_cleared || refcount_by_value) {
     std::string annotation;
     {
       Buffer buf(*this);
@@ -1940,7 +1989,11 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
     // be inlined here, so the unsafe emission is unchanged byte for byte.
     EmitDecompositionHolderAnnotation(type, mut_holder);
   } else {
-    Convert(type);
+    // Through the hook, so the refcount model can spell its own boxed
+    // `Value<..>` annotation and match what its `ConvertVarInit` emits for the
+    // init below. The base implementation is the `Convert(type)` that used to be
+    // inlined here, so the unsafe emission is unchanged byte for byte.
+    EmitDecompositionValueHolderAnnotation(type);
   }
   StrCat(token::kAssign);
   // Hand the ORIGINAL reference QualType to ConvertVarInit so its
@@ -1972,7 +2025,8 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
       // how this model already spells its own locals
       // (`let r: Value<i32> = Rc::new(RefCell::new(0));`, measured on the
       // hand-written equivalent of the target shape).
-    } else if (ptr_form.contains(binding) || (ref_holder && refcount_model)) {
+    } else if (ptr_form.contains(binding) ||
+               (ref_holder && refcount_model) || refcount_by_value) {
       // A pointer-form binding is a const alias that is never reassigned, so
       // `mut` would only be an `unused_mut` warning -- and this is the same
       // plain `let` that `EmitVectorDecompositionBindings` already emits for the
@@ -2011,9 +2065,15 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
       // `.upgrade().deref()` and the `.clone()` that shares the element's
       // `Rc`; the base implementation is the `(*h).N` that used to be inlined
       // here, so the unsafe emission is unchanged byte for byte.
+      // Both arms go through a hook now: the reference-holder one so refcount
+      // can add `.upgrade().deref()` + the sharing `.clone()`, and the
+      // BY-VALUE one so it can mint a FRESH cell holding a deep copy (see the
+      // `refcount_by_value` block above for why a copy -- not a shared `Rc` --
+      // is what `auto [a, b] = expr;` means). Both base implementations are the
+      // text that was inlined here, so the unsafe emission is unchanged.
       StrCat(ref_holder
                  ? DecompositionHolderElement(holder, element, type)
-                 : std::format("{}.{}", holder, element));
+                 : DecompositionValueHolderElement(holder, element, type));
     }
     StrCat(token::kSemiColon);
     ++index;
@@ -10965,6 +11025,32 @@ std::string Converter::DecompositionHolderElement(const std::string &holder,
                                                   const std::string &element,
                                                   clang::QualType value_type) {
   return std::format("(*{}).{}", holder, element);
+}
+
+bool Converter::DecompositionValueHolderSupported(clang::QualType value_type,
+                                                  std::size_t arity) {
+  // The unsafe model has shipped this shape since before these became hooks
+  // and it is MEASURED to run correctly (`verif/g3086/bv.cpp`: `MATCH`), so
+  // there is nothing left to gate here -- the arity/model checks in
+  // `ConvertTupleDecompositionDecl` are the whole precondition.
+  return true;
+}
+
+void Converter::EmitDecompositionValueHolderAnnotation(
+    clang::QualType value_type) {
+  // Verbatim the `Convert(type)` that was inlined at
+  // ConvertTupleDecompositionDecl's by-value holder annotation before this
+  // became a hook, so the unsafe emission is unchanged byte for byte.
+  Convert(value_type);
+}
+
+std::string Converter::DecompositionValueHolderElement(
+    const std::string &holder, const std::string &element,
+    clang::QualType value_type) {
+  // Verbatim the `std::format("{}.{}", holder, element)` that was inlined at
+  // ConvertTupleDecompositionDecl's by-value element read before this became a
+  // hook, so the unsafe emission is unchanged byte for byte.
+  return std::format("{}.{}", holder, element);
 }
 
 } // namespace cpp2rust

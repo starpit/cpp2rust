@@ -1580,6 +1580,32 @@ protected:
                              const std::string &element,
                              clang::QualType value_type);
 
+  // ⭐⭐ THE THREE HOOKS FOR THE **BY-VALUE** HOLDER (`auto [a, b] = expr;`),
+  // row g3086. MEASURED on `pin/cpp2rust a0b0a707` with
+  // `verif/g3086/bv.cpp` (`auto [value, resolved] = mk();` over
+  // `std::pair<long, bool>`, plus a 3-element `std::tuple`):
+  //   unsafe   : MATCH against the linked C++ (`let __decomp: (i64, bool) =
+  //              (unsafe { mk_0() }); let mut value = __decomp.0;`)
+  //   refcount : `LLVM ERROR: unsupported structured binding / DecompositionDecl
+  //              with 2 bindings [value, resolved] of type
+  //              `std::pair<long, bool>` is not implemented`
+  // i.e. the by-value holder is a REFCOUNT-ONLY gap, and the census runs
+  // `-model=refcount`, so the whole family reads as open. The base
+  // implementations below are byte-for-byte the text that was inlined at the
+  // two by-value sites in `ConvertTupleDecompositionDecl` before they became
+  // hooks, so the unsafe emission cannot move.
+  //
+  // `DecompositionValueHolderSupported` is a PRE-EMISSION gate: it is asked
+  // before a single byte is written, so a model that cannot spell the shape
+  // leaves the loud `ReportUnsupportedStructuredBinding` diagnostic in place.
+  virtual bool DecompositionValueHolderSupported(clang::QualType value_type,
+                                                std::size_t arity);
+  virtual void EmitDecompositionValueHolderAnnotation(clang::QualType value_type);
+  virtual std::string
+  DecompositionValueHolderElement(const std::string &holder,
+                                  const std::string &element,
+                                  clang::QualType value_type);
+
   TempMaterializationCtx CollectRefBindingTempArgs(clang::CallExpr *expr);
 
   bool IsCastRedundantInRust(clang::Expr *expr, clang::QualType target_type);

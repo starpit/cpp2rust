@@ -9,6 +9,7 @@
 #include <llvm/Support/ErrorHandling.h>
 
 #include <algorithm>
+#include <charconv>
 #include <format>
 #include <ranges>
 
@@ -3726,6 +3727,145 @@ std::string ConverterRefCount::DecompositionHolderElement(
   // handle, so there is no write to drop.
   return std::format("(*{}{}).{}.clone()", holder,
                      GetPointerDerefSuffix(value_type), element);
+}
+
+// The UNBOXED model text of a by-value decomposition holder, i.e. what
+// `Convert(QualType)` answers for it outside `ConversionKind::FullRefCount`.
+// That is the text whose top-level components ARE the C++ elements, which is
+// what both hooks below have to reason about.
+std::string ConverterRefCount::DecompositionValueHolderModel(
+    clang::QualType value_type) {
+  // ⛔ NOT a bare `Convert(value_type)`. MEASURED: at the point
+  // `ConvertTupleDecompositionDecl` reaches these hooks this model's ambient
+  // `ConversionKind` already answers the BOXED form, so a bare `Convert` returns
+  // `Value<(Value<i64>, Value<bool>)>` -- which does not start with `(`, so the
+  // arity gate refused every shape and the whole arm was VACUOUS. (First build
+  // of row g3086 did exactly that: `bv.cpp` still aborted, byte-identically, on
+  // a binary that contained the fix.) Derive the text as the INNER text of the
+  // annotation `EmitDecompositionValueHolderAnnotation` actually emits, so the
+  // gate and the emission cannot disagree by construction.
+  std::string text;
+  {
+    PushConversionKind push(*this, ConversionKind::FullRefCount);
+    Buffer buf(*this);
+    Convert(value_type);
+    text = std::move(buf).str();
+  }
+  // ⛔⛔ TRIM, AND THE TRAILING HALF IS THE ONE THAT MATTERS. MEASURED: this
+  // model's `Convert(QualType)` emits a type followed by ONE SPACE (it writes
+  // into a stream whose next token is an identifier), so the raw text here is
+  //     `(Value<i64>, Value<bool>) `
+  // and the `model.back() == ')'` shape test in the gate below saw ' '. That
+  // single trailing byte made the whole arm VACUOUS -- the second build of row
+  // g3086 refused `bv.cpp` byte-identically to the unpatched binary, and the
+  // only thing that distinguished "hook never called" from "hook called and
+  // returned false" was an env-gated trace, because the abort text is the same
+  // either way. Trim before the `Unwrap` too: with a trailing space the
+  // suffix `>` is not the last character, so the unwrap is not guaranteed.
+  auto trim = [](std::string &s) {
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\n')) {
+      s.pop_back();
+    }
+    while (!s.empty() && (s.front() == ' ' || s.front() == '\n')) {
+      s.erase(s.begin());
+    }
+  };
+  trim(text);
+  Unwrap(text, "Value<", ">");
+  trim(text);
+  return text;
+}
+
+bool ConverterRefCount::DecompositionValueHolderSupported(
+    clang::QualType value_type, std::size_t arity) {
+  // ⛔ GATE, ASKED BEFORE A SINGLE BYTE IS EMITTED. The element read below is
+  // spelled `(*h.borrow()).N`, so `.N` must mean the C++ element: the model has
+  // to be a Rust TUPLE of exactly this arity. `RustTupleModelArity`
+  // (converter.cpp) already answered that for the caller against
+  // `Mapper::Map`, but `Mapper::Map` returns the UNSUBSTITUTED template text
+  // (`(T1, T2)`) -- see the element-model gate in
+  // `ConvertTupleDecompositionDecl` -- while what is emitted is
+  // `Convert(QualType)`, which substitutes. So re-derive it here on the text
+  // that will actually be emitted; the two agreeing is the point, and a
+  // disagreement is a refusal, not a guess.
+  const std::string model = DecompositionValueHolderModel(value_type);
+  if (model.size() < 2 || model.front() != '(' || model.back() != ')') {
+    return false;
+  }
+  const auto components = SplitTopLevelCommas(
+      std::string_view(model).substr(1, model.size() - 2));
+  return components.size() == arity;
+}
+
+void ConverterRefCount::EmitDecompositionValueHolderAnnotation(
+    clang::QualType value_type) {
+  // A by-value decomposition holder is an ORDINARY LOCAL of this model, and
+  // `ConvertVarInit` (:3185) boxes its init unconditionally, so the annotation
+  // must be the BOXED form or the `let` is `E0308`. `ConversionKind::FullRefCount`
+  // is exactly how `ConverterRefCount::ConvertVarDeclSkipInit` (:744) spells a
+  // named local's annotation, and it is what produced the MEASURED
+  //     let p: Value<(Value<i64>, Value<bool>)> = Rc::new(RefCell::new((..)));
+  // for the hand-written equivalent (`verif/g3086/pv.cpp`). Deliberately the
+  // same one line rather than a call to that function, which needs a `VarDecl`
+  // this arm does not have.
+  PushConversionKind push(*this, ConversionKind::FullRefCount);
+  Convert(value_type);
+}
+
+std::string ConverterRefCount::DecompositionValueHolderElement(
+    const std::string &holder, const std::string &element,
+    clang::QualType value_type) {
+  // ⭐ A FRESH CELL HOLDING A DEEP COPY -- NOT an `Rc` clone that shares. The
+  // holder of `auto [a, b] = expr;` is a COPY of `expr` that C++ gives no name
+  // to, so nothing else in the program can reach it: there is no aliasing to
+  // preserve and no write to lose, and a genuine copy is observationally
+  // identical to sharing the unreachable holder's cell. (The reference-holder
+  // hook above must do the opposite, and does.)
+  //
+  // ⭐ THIS IS THE MODEL'S ESTABLISHED BY-VALUE SPELLING, REUSED, NOT A NEW
+  // INVENTION: `Rc::new(RefCell::new(x.borrow().clone()))` is what
+  // `VisitCXXForRangeStmtVectorDecomposition` (:2634) emits for the by-value
+  // loop variable of a decomposing vector for-range, for this same reason, and
+  // it is literally `rules/pair`'s refcount `f2` (the pair copy constructor).
+  //
+  // ⛔ AND THE ONE PLACE THE TWO CONTAINER MODELS DISAGREE, which is why the
+  // component text is inspected instead of assumed. MEASURED on
+  // `verif/g3086/pv.cpp`, refcount leg, same binary, same run:
+  //     std::pair<long, bool>                       -> (Value<i64>, Value<bool>)
+  //     std::tuple<std::string, std::string, long>  -> (Vec<u8>, Vec<u8>, i64)
+  // `rules/pair`'s `tgt_refcount` wraps every component in `Value<..>`;
+  // `rules/tuple`'s does NOT. So `(*h.borrow()).N` is already an
+  // `Rc<RefCell<T>>` for a pair and a BARE `T` for a tuple, and one extra
+  // `.borrow()` is needed in the first case and would be `E0599` in the second.
+  // A single spelling for both would have been silently wrong on one of them --
+  // exactly the class of rc=0-but-dead-at-rustc failure this construct is
+  // policed for -- and neither rule may be touched from the converter layer.
+  const std::string model = DecompositionValueHolderModel(value_type);
+  bool boxed_component = false;
+  if (model.size() >= 2 && model.front() == '(' && model.back() == ')') {
+    const auto components = SplitTopLevelCommas(
+        std::string_view(model).substr(1, model.size() - 2));
+    // `element` is a decimal tuple index on this arm (the member-wise arm is
+    // refused for this model before it can get here), so it indexes
+    // `components` directly. An out-of-range index cannot occur --
+    // `DecompositionValueHolderSupported` has already required
+    // `components.size() == bindings.size()` -- but it is checked rather than
+    // assumed, and the conservative fallback is the UNBOXED read, which is the
+    // spelling that fails loudly at rustc rather than compiling to the wrong
+    // aliasing.
+    std::size_t index = 0;
+    const auto parsed =
+        std::from_chars(element.data(), element.data() + element.size(), index);
+    if (parsed.ec == std::errc{} && index < components.size()) {
+      boxed_component = components[index].starts_with("Value<");
+    }
+  }
+  std::string read = std::format("(*{}.borrow()).{}", holder, element);
+  if (boxed_component) {
+    read += ".borrow()";
+  }
+  read += ".clone()";
+  return BoxValue(std::move(read));
 }
 
 const char *

@@ -292,6 +292,23 @@ private:
                                          const std::string &element,
                                          clang::QualType value_type) override;
 
+  // The three model hooks for the BY-VALUE holder arm (row g3086). See the base
+  // declarations (converter.h) for the measurement that the by-value holder is
+  // a REFCOUNT-ONLY gap, and the definitions for why the element read is a
+  // FRESH cell holding a deep copy while the reference-holder hook above shares
+  // the element's `Rc`.
+  bool DecompositionValueHolderSupported(clang::QualType value_type,
+                                         std::size_t arity) override;
+  void EmitDecompositionValueHolderAnnotation(
+      clang::QualType value_type) override;
+  std::string
+  DecompositionValueHolderElement(const std::string &holder,
+                                  const std::string &element,
+                                  clang::QualType value_type) override;
+  // The UNBOXED model text of the holder, shared by the gate and the element
+  // read so the two cannot drift apart.
+  std::string DecompositionValueHolderModel(clang::QualType value_type);
+
   // The model hook for the MAP-ITERATOR arm of
   // `ConvertTupleDecompositionDecl` (row g3036). See the definition for the
   // measured reason the receiver is `(*<it>.borrow())` here and a bare `<it>`
