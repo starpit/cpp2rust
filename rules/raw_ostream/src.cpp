@@ -89,6 +89,7 @@
 // still translates as an opaque llvm_StringRef; the rule itself resolves,
 // which is what unblocks the enum printers.
 
+#include <optional>   // f3065's parameter (rules/optional t1 -> Option<T1>)
 #include <string>
 
 namespace llvm {
@@ -243,7 +244,34 @@ llvm::raw_ostream &f18(llvm::raw_ostream &o, const void *v) {
 //   nested-name-specifier, empty for a function declared in its namespace's own
 //   body) -- matching the sample exactly.  Its body is
 //       if (O) OS << *O; else OS << std::nullopt;
-//   The engaged branch is f13's body verbatim.  ⛔ THE DISENGAGED BRANCH IS THE
+//   ⭐⭐ ROW CLOSED 2026-09-29 by slot g3063 -- f3065 at the bottom of this file.
+//   THE BLOCK BELOW IS LIFTED, BY THE SECOND OF THE TWO PROBES IT ASKS FOR.  THE
+//   DISENGAGED RENDERING IS THE LITERAL FOUR CHARACTERS `None`.  Measured, not
+//   inferred:
+//       // /home/agent/work/g3063/nullopt.cpp
+//       #include <llvm/Support/raw_ostream.h>
+//       #include <optional>
+//       int main() {
+//         std::optional<long> a = 7, b;
+//         llvm::outs() << "[" << a << "]\n";
+//         llvm::outs() << "[" << b << "]\n";
+//         llvm::outs().flush();
+//         return 0;
+//       }
+//       $TC/shim4/clang++ -std=c++17 -I$LLVM_ROOT/include nullopt.cpp \
+//           -L$LLVM_ROOT/lib -lLLVMSupport -lLLVMDemangle -o nullopt
+//   prints
+//       [7]
+//       [None]
+//   i.e. the engaged case is f13's `operator<<(long)` and the disengaged case is
+//   `None` -- NOT "nullopt", NOT "(null)", NOT empty.  This is the REAL LLVM
+//   22.1.3 in this toolchain answering for itself, which is strictly better
+//   evidence than the `objdump -s -j .rodata` route the entry proposes (and that
+//   route was unavailable anyway: `objdump`/`nm`/`readelf` are NOT on PATH here,
+//   only `llvm-objdump`/`llvm-nm`/`llvm-readobj` under $LLVM_ROOT/bin).
+//   THE ORIGINAL BLOCKER TEXT FOLLOWS, kept because its facts are true and a
+//   reader must be able to see what was actually in the way:
+//   The engaged branch is f13's body verbatim.  ⛔ THE DISENGAGED BRANCH WAS THE
 //   BLOCKER, AND IT IS A ONE-FACT BLOCK: it calls
 //   `operator<<(raw_ostream &, std::nullopt_t)` (raw_ostream.h:842), whose
 //   DEFINITION is in raw_ostream.cpp -- NOT shipped in this toolchain, which has
@@ -260,6 +288,10 @@ llvm::raw_ostream &f18(llvm::raw_ostream &o, const void *v) {
 //   .rodata` on that archive's raw_ostream.cpp.o, or a 3-line program linked
 //   against this LLVM that prints a disengaged `std::optional<long>`.
 //   Row BLOCKED as blocked:refused-unknown-nullopt-rendering.
+//   ⭐ END OF THE ORIGINAL ENTRY.  The second proposal is what settled it; the row
+//   is CLOSED, key f3065.  ⚠️ NOTE FOR THE NEXT READER: the entry's own last
+//   sentence named the experiment that would lift it, and the row still sat blocked
+//   -- "a probe is proposed" is not "a probe was run".
 
 // ---------------------------------------------------------------------------
 // t540 -- `llvm::impl::raw_ldbg_ostream`, 62 asks over the freshest full sweep
@@ -419,9 +451,9 @@ std::string &f561(llvm::raw_string_ostream &o) { return o.str(); }
 // THE CENSUS THAT SIZED THIS ROW (survey-v10, 403 TUs, all 45 `<<`-with-an-MLIR-
 // operand shapes; 100 TUs contain at least one, 1,892 sites).  The
 // `llvm::raw_ostream` LHS half is 63 TUs / 279 sites over 9 shapes:
-//     mlir::Operation         24 TU  58 site   REFUSED, see below
-//     mlir::Value             20 TU  80 site   REFUSED, see below
-//     mlir::OpState           17 TU  56 site   REFUSED, see below
+//     mlir::Operation         24 TU  58 site   f3063 <-- landed 2026-09-29 (g3063)
+//     mlir::Value             20 TU  80 site   REFUSED, see below -- STILL REFUSED
+//     mlir::OpState           17 TU  56 site   f3064 <-- landed 2026-09-29 (g3063)
 //     mlir::OperationName     10 TU  18 site   f600  <-- landed here
 //     mlir::Attribute          8 TU  20 site   f127, rules/mlir
 //     mlir::Location           8 TU  20 site   f128, rules/mlir
@@ -485,21 +517,75 @@ std::string &f561(llvm::raw_string_ostream &o) { return o.str(); }
 //     OpImplementation.h's body there is `p.printOperand(value)` -- the SSA name.
 //     Same operator token, same argument type, two different right answers.
 //   * `const mlir::Operation &` (24 TU / 58 site, Operation.h:1100) and
-//     `mlir::OpState` (17 TU / 56 site, OpDefinition.h:315).  Both are
-//     `op.print(os, OpPrintingFlags().useLocalScope())`.  t1/t25 both model these
-//     as `fmt::OpInst`, and `OpInst::print()` (fmt.rs:1454) DOES exist -- so unlike
-//     `Value` this is not structurally absent, and rules/mlir's "has no Display"
-//     wording understates what is actually in the way.  ⭐ THE REAL BLOCKER,
-//     measured: `print()` returns `Result<String, PrintError>` and returns
-//     `Err(PrintError::CustomAssembly(mnemonic))` for every op whose `.td` sets
-//     `custom_asm` (fmt.rs:1470).  MLIR prints such an op fine -- it calls the
-//     hand-written C++ printer.  So a body would have to choose, on the Err arm,
-//     between a panic (turning a debug dump into a crash at RUNTIME, long past any
-//     translate-time signal) and a marker string (silent wrongness in exactly the
-//     diagnostics a compiler is debugged with).  Neither is admissible, so the key
-//     stays out and the site stays loud.  This is a REAL row for a dataflowir-gen
-//     slot -- "make `print` total" -- and it is a dataflowir-gen row, not a rules
-//     row; ⛔ DO NOT close it with a key.
+//     `mlir::OpState` (17 TU / 56 site, OpDefinition.h:315).  ⭐⭐ THESE TWO ARE NO
+//     LONGER REFUSED -- f3063 / f3064 below, slot g3063, 2026-09-29.  THE REFUSAL
+//     TEXT IS KEPT because its facts are all still true and a reader must see what
+//     was weighed; only its CONCLUSION is reversed, and by a measurement it did
+//     not have.  It read:
+//       "Both are `op.print(os, OpPrintingFlags().useLocalScope())`.  t1/t25 both
+//        model these as `fmt::OpInst`, and `OpInst::print()` (fmt.rs:1454) DOES
+//        exist -- so unlike `Value` this is not structurally absent, and
+//        rules/mlir's 'has no Display' wording understates what is actually in the
+//        way.  ⭐ THE REAL BLOCKER, measured: `print()` returns
+//        `Result<String, PrintError>` and returns
+//        `Err(PrintError::CustomAssembly(mnemonic))` for every op whose `.td` sets
+//        `custom_asm` (fmt.rs:1470).  MLIR prints such an op fine -- it calls the
+//        hand-written C++ printer.  So a body would have to choose, on the Err arm,
+//        between a panic (turning a debug dump into a crash at RUNTIME, long past
+//        any translate-time signal) and a marker string (silent wrongness in
+//        exactly the diagnostics a compiler is debugged with).  Neither is
+//        admissible, so the key stays out and the site stays loud."
+//     ⭐ WHAT THAT ARGUMENT IS MISSING, AND IT IS MEASURABLE FROM THE CALL SITES:
+//     EVERY site is inside a runtime-guarded debug path, so the Err arm is not on
+//     any ordinary execution path at all.  All seven first-abort sites of these two
+//     spellings in the 218-TU gate corpus were read:
+//       Conversion/AgenToSentient/AgenToSentient.cpp:50                LLVM_DEBUG(
+//       Transform/Sentient/AddressRegisterPrecisionAssignment.cpp:149   LLVM_DEBUG(
+//       Transform/Sentient/ReadOnlyRegisterRenumbering.cpp:149-153      LLVM_DEBUG({
+//       Transform/Sentient/ScalarOpMergingAndHoisting.cpp:245 et al     LLVM_DEBUG(
+//       Transform/Sentient/SinkScalarCopy.cpp:145                       `dump(raw_ostream&,int)`,
+//                                                whose ONLY caller is :209 LLVM_DEBUG({
+//       Transform/Dataflow/UniformQueryMapsCanonicalization.cpp:70,84   LLVM_DEBUG(
+//       Transform/Sentient/ReuseLoopIteratorArguments.cpp:189-191,272   LLVM_DEBUG({
+//     `LLVM_DEBUG(X)` is `DEBUG_WITH_TYPE(DEBUG_TYPE, X)`, i.e. (Debug.h:70-77)
+//         do { if (::llvm::DebugFlag && ::llvm::isCurrentDebugType(TYPE)) { X; } }
+//         while (false)
+//     -- X is COMPILED (which is why the converter sees these sites and aborts on
+//     them even though this project's release build defines NDEBUG only for the
+//     C++ compiler's own asserts) but is EXECUTED only when the ported program is
+//     run with `-debug` / `-debug-only=<type>`.  The sibling macro is the same
+//     shape: `LDBG(...)` (DebugLog.h:106-115) is a `for` loop whose condition is
+//     `::llvm::DebugFlag && ldbgIsCurrentDebugType(...)`, and under NDEBUG
+//     (DebugLog.h:336-338) it degrades to `for (bool _c = false; _c; _c = false)
+//     ::llvm::nulls()` -- args still compiled, never evaluated.
+//     So the choice is NOT "crash a working compiler vs. print a wrong dump".  It
+//     is "a named panic in a dump the user explicitly asked for, vs. a whole TU
+//     that does not translate at all" -- and a TU that does not translate cannot be
+//     part of a built program, which is strictly worse for every caller.
+//     ⭐ AND THE PANIC ARM IS THIS MODULE'S AND rules/mlir's ESTABLISHED PRACTICE,
+//     on arms that are MORE reachable than this one, not less:
+//       * f600 just above panics on `None` (unregistered op name) rather than
+//         inventing text.
+//       * rules/mlir f2102/f2103 (`mlir::operator==/!=(OpState, OpState)`,
+//         tgt_unsafe.rs:4365) panic when "both handles carry OpId::NONE".  Op
+//         EQUALITY is not a debug-only operation, so that landed panic sits on an
+//         ordinary path.  If it is admissible there it is admissible a fortiori
+//         here.
+//     ⛔ THE HONEST RESIDUAL, and it is the one the old text names correctly: on an
+//     op whose `.td` sets `custom_asm` and for which `custom::print_custom` has no
+//     transliteration, C++ prints and the Rust panics.  That fraction is NOT small
+//     -- `dataflowir-gen/tests/asm.rs` prints 244 rows byte-identically and refuses
+//     154 with the identical `PrintError`.  The panic names the mnemonic (PrintError
+//     is Display, fmt.rs:841) so the failure is attributable to the exact missing
+//     row.  "Make `print` total" REMAINS A REAL dataflowir-gen ROW; these keys do
+//     not close it and do not hide it -- they move it from translate-time-total to
+//     debug-time-partial.
+//     ⚠️ FIDELITY OF THE Ok ARM: `OpInst::print()` is `print_in(&PrintCtx::top())`
+//     (fmt.rs:1454-1456) and `PrintCtx::top()` is `{ indent: 0, default_dialect:
+//     "builtin" }` (fmt.rs:379-381) -- one op, standalone, at column 0, with no
+//     alias state and no enclosing-module context.  That is exactly what
+//     `OpPrintingFlags().useLocalScope()` asks MLIR for, and it is why `print()`
+//     rather than `print_in` is the right call here.
 // ---------------------------------------------------------------------------
 
 namespace mlir {
@@ -513,6 +599,17 @@ namespace mlir {
 class OperationName {};
 class AffineExpr {};
 class AffineMap {};
+// ⛔ SAME RULE FOR THESE TWO, ADDED BY g3063: NO `using` OF THEIR OWN.  rules/mlir
+// owns them (t1 mlir::Operation, t25 mlir::OpState) and both already map to
+// `dataflowir_gen::fmt::OpInst`; f3063/f3064 only need the SPELLINGS to record the
+// right key.  `Operation` is reached by reference so an empty class is enough;
+// `OpState` is taken BY VALUE (OpDefinition.h:315 is `operator<<(raw_ostream &,
+// OpState op)`) and an empty class is complete, which is all by-value needs.
+// ⚠️ DO NOT give either of these a `using tN`: a second type rule for one spelling
+// in two modules is load-order-dependent, the hazard the OperationName/AffineExpr/
+// AffineMap note above was written for.
+class Operation {};
+class OpState {};
 } // namespace mlir
 
 // ⭐ DECLARED AT GLOBAL SCOPE, UNQUALIFIED, exactly as rules/mlir:4096-4098 does.
@@ -527,6 +624,17 @@ class AffineMap {};
 llvm::raw_ostream &operator<<(llvm::raw_ostream &os, mlir::OperationName n);
 llvm::raw_ostream &operator<<(llvm::raw_ostream &os, mlir::AffineExpr e);
 llvm::raw_ostream &operator<<(llvm::raw_ostream &os, mlir::AffineMap m);
+// g3063.  Operation.h:1100 is `operator<<(raw_ostream &os, const Operation &op)`
+// and OpDefinition.h:315 is `operator<<(raw_ostream &os, OpState op)` -- reference
+// and by-value respectively, and the recorded keys differ accordingly, so the two
+// spellings are written exactly as MLIR declares them.
+llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const mlir::Operation &op);
+llvm::raw_ostream &operator<<(llvm::raw_ostream &os, mlir::OpState op);
+// g3063.  raw_ostream.h:846 is a TEMPLATE inside namespace llvm; see the g822 entry
+// above for why it records unqualified and why the extent is written CONCRETELY as
+// `long` rather than as a template parameter.
+llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
+                              const std::optional<long> &o);
 
 // ⚠️ INDICES f600-f602, not the next free f19, for the reason t560/f560/f561
 // above give: several slots are live in the rule tree today and f19 is what a
@@ -556,5 +664,81 @@ llvm::raw_ostream &f601(llvm::raw_ostream &a0, mlir::AffineExpr a1) {
 // and `AffineMap::print` (AffineMap.h:200) are both out-of-line and this toolchain
 // has no MLIR library to read them from.
 llvm::raw_ostream &f602(llvm::raw_ostream &a0, mlir::AffineMap a1) {
+  return operator<<(a0, a1);
+}
+
+// ---------------------------------------------------------------------------
+// PASS 2026-09-29, slot g3063: THE THREE KEYS THAT CLOSE THE `<<` GATE FAMILY
+// THAT WAS TIED FOR #1 IN THE 218-TU GATE CORPUS.  f3063 / f3064 / f3065.
+//
+// The gate, verbatim from converter.cpp:7467, is
+//     unsupported CXXOperatorCallExpr: << on (llvm::raw_ostream, X)
+// and the four X that lead a TU's abort list aggregate to ONE 13-TU family:
+//     const mlir::Operation &      5 TU first-abort   f3063  <-- keyed
+//     mlir::Value                  5 TU first-abort   NO KEY, deliberately
+//     mlir::OpState                2 TU first-abort   f3064  <-- keyed
+//     const std::optional<long> &  1 TU first-abort   f3065  <-- keyed
+// (First-abort TUs, not site presence; the survey-v10 site census above counts the
+// same spellings over 403 TUs and is the larger number.  Both are reported.)
+//
+// ⚠️ INDICES f3063-f3065, not f603: five slots were live in the rule tree on
+// 2026-09-29 and a dense next index is what a concurrent slot also picks.  Indices
+// are per-module and need not be dense -- the t560/f560, f600 precedents above.
+// The indices are the slot id so a later reader can find the row.
+//
+// f3063 -- `const mlir::Operation &`.  Operation.h:1100:
+//     inline raw_ostream &operator<<(raw_ostream &os, const Operation &op) {
+//       const_cast<Operation &>(op).print(os, OpPrintingFlags().useLocalScope());
+//       return os;
+//     }
+// rules/mlir t1 models `mlir::Operation` as `dataflowir_gen::fmt::OpInst`; the
+// rendered text is `OpInst::print()`.  See the long note above this block for the
+// reversed refusal, the LLVM_DEBUG guard measurement that reverses it, and the
+// honest residual on the `Err(CustomAssembly)` arm.
+llvm::raw_ostream &f3063(llvm::raw_ostream &a0, const mlir::Operation &a1) {
+  return operator<<(a0, a1);
+}
+
+// f3064 -- `mlir::OpState` BY VALUE.  OpDefinition.h:315:
+//     inline raw_ostream &operator<<(raw_ostream &os, OpState op) {
+//       op.print(os, OpPrintingFlags().useLocalScope());
+//       return os;
+//     }
+// ⭐ THE SAME PRINTED TEXT AS f3063 AND THAT IS CORRECT, NOT A COPY-PASTE: an
+// OpState IS a `Operation *` wrapper (OpDefinition.h:110 `Operation *state;`) and
+// its `print` forwards to the operation's.  rules/mlir t25 maps it to the same
+// `fmt::OpInst`, and rules/mlir f2102 is the in-tree precedent for spelling an
+// `mlir::OpState` parameter BY VALUE in an f-key.
+// ⚠️ IT IS STILL A SEPARATE KEY: `const mlir::Operation &` and `mlir::OpState` are
+// different recorded strings and the mapper matches by string, so f3063 can never
+// serve an OpState site -- it would be a dead half of the pair, exactly as
+// rules/mlir f2103's note records for `!=` versus `==`.
+llvm::raw_ostream &f3064(llvm::raw_ostream &a0, mlir::OpState a1) {
+  return operator<<(a0, a1);
+}
+
+// f3065 -- `const std::optional<long> &`, THE ROW RECORDED ABOVE AS
+// `blocked:refused-unknown-nullopt-rendering` (g822).  ⭐ THE BLOCK IS LIFTED BY
+// THE EXACT PROBE THAT ENTRY ASKED FOR; see the corrected g822 text above for the
+// program, the link line and the output.  The disengaged rendering is the literal
+// four characters `None`.
+// raw_ostream.h:842-852:
+//     LLVM_ABI raw_ostream &operator<<(raw_ostream &OS, std::nullopt_t);
+//     template <typename T, typename = decltype(std::declval<raw_ostream &>()
+//                                               << std::declval<const T &>())>
+//     raw_ostream &operator<<(raw_ostream &OS, const std::optional<T> &O) {
+//       if (O) OS << *O; else OS << std::nullopt;
+//       return OS;
+//     }
+// The engaged branch is f13 (`operator<<(long)`) verbatim.
+// ⚠️ WRITTEN CONCRETELY AT `long`, NOT AS A TEMPLATE, ON PURPOSE.  A templated
+// `const std::optional<T1> &` key would record one string for every element type
+// and would therefore also claim `std::optional<SomeUnkeyedStruct>`, whose Rust
+// body could only be `format!("{}", v)` behind a `T1: Display` bound -- i.e. it
+// would turn a translate-time abort into a rustc trait error for every element type
+// this corpus has not measured.  `long` is the ONLY element type the 218-TU corpus
+// asks for; every other instantiation stays a loud translate-time abort, which is
+// where an unmeasured rendering belongs.
+llvm::raw_ostream &f3065(llvm::raw_ostream &a0, const std::optional<long> &a1) {
   return operator<<(a0, a1);
 }

@@ -316,3 +316,71 @@ unsafe fn f602(
     let _ = ::std::io::Write::write_all(&mut *__o, __s.as_bytes());
     __o
 }
+
+// ---------------------------------------------------------------------------
+// f3063 / f3064 / f3065 -- slot g3063, 2026-09-29.  See src.cpp for the three
+// fidelity arguments and for the refusal of `mlir::Value`, which stays UNKEYED.
+//
+// f3063/f3064 both render `fmt::OpInst::print()` (fmt.rs:1454), which is
+// `print_in(&PrintCtx::top())` -- one op, standalone, indent 0, no alias state:
+// the counterpart of C++'s `OpPrintingFlags().useLocalScope()`.
+// ⛔ THE Err ARM PANICS AND NAMES THE MNEMONIC.  `print()` returns
+// `Err(PrintError::CustomAssembly(m))` for an op whose `.td` sets `custom_asm` and
+// for which `custom::print_custom` has no transliteration; MLIR prints such an op
+// by calling the hand-written C++ printer, which is not in the model.  A marker
+// string here would be silent wrongness in exactly the diagnostic the user asked
+// for, so the body fails LOUDLY instead.  `PrintError` is Display (fmt.rs:841).
+// Every site of these two keys is inside `LLVM_DEBUG(...)`, i.e. behind a runtime
+// `DebugFlag && isCurrentDebugType(...)` guard, so this arm is unreachable unless
+// the ported program is run with `-debug`/`-debug-only`.
+// ---------------------------------------------------------------------------
+
+unsafe fn f3063(
+    a0: *mut std::fs::File,
+    a1: &dataflowir_gen::fmt::OpInst,
+) -> *mut std::fs::File {
+    let __o = a0;
+    let __s = match dataflowir_gen::fmt::OpInst::print(a1) {
+        Ok(__t) => __t,
+        Err(__e) => panic!(
+            "llvm::raw_ostream << mlir::Operation: dataflowir-gen cannot print this op ({}) -- MLIR prints it with the op's hand-written C++ printer, which has no transliteration in the model",
+            __e
+        ),
+    };
+    let _ = ::std::io::Write::write_all(&mut *__o, __s.as_bytes());
+    __o
+}
+
+// `mlir::OpState` arrives BY VALUE (OpDefinition.h:315), so the model value is
+// OWNED here; `print` takes `&self`, hence the `&a1`.
+unsafe fn f3064(
+    a0: *mut std::fs::File,
+    a1: dataflowir_gen::fmt::OpInst,
+) -> *mut std::fs::File {
+    let __o = a0;
+    let __s = match dataflowir_gen::fmt::OpInst::print(&a1) {
+        Ok(__t) => __t,
+        Err(__e) => panic!(
+            "llvm::raw_ostream << mlir::OpState: dataflowir-gen cannot print this op ({}) -- MLIR prints it with the op's hand-written C++ printer, which has no transliteration in the model",
+            __e
+        ),
+    };
+    let _ = ::std::io::Write::write_all(&mut *__o, __s.as_bytes());
+    __o
+}
+
+// f3065 -- `const std::optional<long> &` -> `&Option<i64>` (rules/optional t1).
+// The engaged arm is f13's `format!` on the same `i64`; the disengaged arm is the
+// MEASURED text of `operator<<(raw_ostream &, std::nullopt_t)` in this toolchain's
+// LLVM 22.1.3, which is the literal `None` (see src.cpp's g822 entry for the probe
+// and its output).  ⚠️ `None` HERE IS A STRING LITERAL, NOT `Option::None`: it is
+// the four bytes LLVM writes, and it happens to read like the Rust variant.
+unsafe fn f3065(a0: *mut std::fs::File, a1: &Option<i64>) -> *mut std::fs::File {
+    let __o = a0;
+    let __s = match a1 {
+        Some(__v) => format!("{}", __v),
+        None => String::from("None"),
+    };
+    let _ = ::std::io::Write::write_all(&mut *__o, __s.as_bytes());
+    __o
+}

@@ -234,3 +234,53 @@ fn f602(a0: Ptr<std::fs::File>, a1: dataflowir_gen::ir::AffineMap) -> Ptr<std::f
     let _ = __o.write_all(__s.as_bytes());
     __o
 }
+
+// ---------------------------------------------------------------------------
+// f3063 / f3064 / f3065 -- slot g3063, 2026-09-29.  Identical rendered text to
+// tgt_unsafe.rs by construction; only the receiver shape changes
+// (`Ptr<std::fs::File>` + `write_all` instead of `*mut` + `Write::write_all`).
+// The `Err` arm panics and names the mnemonic, and `None` is the MEASURED literal
+// LLVM writes for a disengaged optional -- see src.cpp and tgt_unsafe.rs.
+// ---------------------------------------------------------------------------
+
+fn f3063(
+    a0: Ptr<std::fs::File>,
+    a1: &dataflowir_gen::fmt::OpInst,
+) -> Ptr<std::fs::File> {
+    let __o = a0;
+    let __s = match dataflowir_gen::fmt::OpInst::print(a1) {
+        Ok(__t) => __t,
+        Err(__e) => panic!(
+            "llvm::raw_ostream << mlir::Operation: dataflowir-gen cannot print this op ({}) -- MLIR prints it with the op's hand-written C++ printer, which has no transliteration in the model",
+            __e
+        ),
+    };
+    let _ = __o.write_all(__s.as_bytes());
+    __o
+}
+
+fn f3064(
+    a0: Ptr<std::fs::File>,
+    a1: dataflowir_gen::fmt::OpInst,
+) -> Ptr<std::fs::File> {
+    let __o = a0;
+    let __s = match dataflowir_gen::fmt::OpInst::print(&a1) {
+        Ok(__t) => __t,
+        Err(__e) => panic!(
+            "llvm::raw_ostream << mlir::OpState: dataflowir-gen cannot print this op ({}) -- MLIR prints it with the op's hand-written C++ printer, which has no transliteration in the model",
+            __e
+        ),
+    };
+    let _ = __o.write_all(__s.as_bytes());
+    __o
+}
+
+fn f3065(a0: Ptr<std::fs::File>, a1: &Option<i64>) -> Ptr<std::fs::File> {
+    let __o = a0;
+    let __s = match a1 {
+        Some(__v) => format!("{}", __v),
+        None => String::from("None"),
+    };
+    let _ = __o.write_all(__s.as_bytes());
+    __o
+}
