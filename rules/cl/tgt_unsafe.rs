@@ -127,3 +127,25 @@ unsafe fn f1911<'a, T1: Clone>(a0: &'a mut T1, a1: &T1) -> &'a mut T1 {
     __cl_assign(a0, a1);
     a0
 }
+
+// t2410 `llvm::cl::OptionEnumValue` -> `()`, and
+// t2411 `llvm::cl::ValuesClass`     -> `()`.
+//   Both are CONSTRUCT-ONLY carriers on this corpus: a python scan for a DECLARED
+//   OBJECT of either type over repos/dt_src + rules/ finds 0, against 114 mentions
+//   of `clEnumVal*`/`OptionEnumValue`, so there is no named receiver anywhere and
+//   every occurrence is a temporary inside a `cl::values(...)` argument list.
+//   A multi-line-aware scan for `.Description` / `->Description` likewise finds 0.
+//   The unit is therefore the statement "this value is never observed".
+//   ⛔ The one real reader, `ValuesClass::apply` (CommandLine.h:702, which reads
+//   all three fields), lives in the LLVM header and is reachable only by
+//   descending into `cl::values` -- which has NO rule and stays a marked
+//   placeholder, so keying these two does not open a path to it.  See src.cpp.
+//   ⛔ No member is declared on either type, so a future field read emits
+//   textually against a `()` and fails LOUDLY in rustc rather than answering.
+fn t2410() -> () {
+    ()
+}
+
+fn t2411() -> () {
+    ()
+}
