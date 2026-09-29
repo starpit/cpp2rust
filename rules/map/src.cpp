@@ -468,3 +468,32 @@ template <typename T1, typename T2>
 std::size_t f44(const std::map<T1, T2> &o, const T1 &key) {
   return o.count(key);
 }
+
+// g3094 -- `std::map::empty() const`.
+// MEASURED BEFORE WRITING, which is the gate this key had to clear.  Instrument:
+// the 125 corpus-wide PROJECT-rustc type-check JSONs from g3089
+// (`verif/g3089/tc/*.json`, refcount leg), mined for
+// `no method named `X` found for ... `BTreeMap<..>`` and grouped by method with
+// the primary span as the unit (`verif/g3094/mine.py`, `mine2.py`).  BTreeMap is
+// the refcount model of exactly two rule modules (`rules/map` and `rules/mlir`),
+// and the 2,720 `to_bool`/`getContext` hits are the mlir ones, so the receiver
+// here is attributable:
+//     method     occurrences   distinct emitted lines   distinct TUs
+//     empty              22                       22              7
+// rustc reports the receiver as the bare ADT `BTreeMap<K, V, A>` for all 22,
+// i.e. a plain map, and the emitted text is the untranslated C++ call --
+// `if !({ (*targetCoresNCorelets.borrow()).empty() })`,
+// `if ({ (*psi.upgrade().deref()).empty() })`, and six more.
+// ⚠️ That census predates f43/f44, so it is a SITE instrument, not an error
+// count for today's tree; `emplace` appears in it at 414/49, which is exactly the
+// key g3091 landed, and that is this instrument's positive control.
+// RECEIVER SHAPE IS f2's (`size() const`), VERBATIM AND ON PURPOSE: a const
+// member returning a scalar, on the same receiver spelling.  A rule body is
+// INLINED, so the by-value `a0` is textually the receiver PLACE expression and
+// `is_empty()` autorefs it -- which is why f2 shows ZERO `size`-on-BTreeMap
+// errors anywhere in the same 125 JSONs while `empty` shows 22.
+// ⛔ NOT f41's `&Vec<..>` shape -- that one is `llvm::MapVector`, whose model is
+// a Vec, not a BTreeMap.  The two are different containers in this module.
+template <typename T1, typename T2> bool f45(const std::map<T1, T2> &o) {
+  return o.empty();
+}

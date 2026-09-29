@@ -345,21 +345,80 @@ fn f56<T1: Eq + Hash + Clone, T2>(a0: Vec<(Value<T1>, Value<T2>)>) -> HashMap<T1
         .collect::<HashMap<T1, Value<T2>>>()
 }
 
+// g3094 -- ⭐⭐ THE `init` PACK AND THE RETURN TUPLE BOTH HAD TO BE WRITTEN IN
+// `rules/pair`'s REFCOUNT MODEL, AND BOTH WERE MEASURED, NOT COPIED FROM
+// rules/map's f43.
+//
+// MEASURED 2026-09-29 on snap/g3078/cpp2rust md5 086c2ff4363bfda3647a8eb5b5d6500f
+// + ir/g3078 (99 modules), `-model=refcount`, on the ONLY TU in the 75-file
+// emitted census that reaches this key: `sys-arch-spec/isa/isa.cpp`, 2 sites
+// (grep -oF '|__m: &HashMap<' = 2, in 1 of 75 files).  The C++ is
+// `util/utils.h:150`, `flipMap`'s `DT_CHECK_MSG(out.emplace(v, k).second, ...)`
+// -- so this site READS `.second`, which is what made the second half of this
+// fix visible at all.  Type-checked with the PROJECT rustc 1.98.0 (88d9e12ae)
+// via verif/g3089/tc.sh, counted by PARSING the JSON (unique primary spans).
+//
+// (1) `init` IS `(Value<T1>, Value<T2>)`, NOT `(T1, T2)`.  The converter builds
+//     the pair argument through rules/pair's OWN refcount model (`pair` t1 =
+//     `(Value<T1>, Value<T2>)`), so BOTH elements arrive already boxed.  The
+//     emitted argument, verbatim from the BEFORE leg, is
+//         let (__k, __v) = (
+//             Rc::new(RefCell::new((*v.borrow()).clone().try_into()...)),
+//             Rc::new(RefCell::new((*k.borrow()).try_into()...)),
+//         );
+//     Against the old `(T1, T2)` that produced, PER SITE: 1 E0277
+//     `the trait bound `RefCell<_>: Hash` is not satisfied` on
+//     `contains_key(&__k)`, and 3 E0308 (the `insert` key, the `insert` value,
+//     and `find_key`'s `&__k`).
+//     ⚠️ The init_type path recorded in ir_src.json DIFFERS from rules/map's --
+//     `{depth:0, index:4, path:[0]}` here vs `{depth:0, index:3, path:[0]}` for
+//     map -- but that is only the allocator's position in the template
+//     (`unordered_map<K,V,Hash,Eq,Alloc>` vs `map<K,V,Compare,Alloc>`); both
+//     resolve to `std::pair<const T1, T2>` and so to the SAME refcount shape.
+//     Checked, because the differing index is exactly the thing that could have
+//     made the rules/map analogy false.
+// (2) THE VALUE CELL IS FORWARDED UNCHANGED -- no `Rc::new(RefCell::new(__v))`.
+//     The incoming `Value<T2>` already IS the cell the call site constructed;
+//     forwarding it shares that cell, which is what `emplace` (which takes
+//     ownership of its argument) means.  A fresh cell silently DETACHES any
+//     alias the call site still holds -- a semantic bug a type-check cannot see.
+// (3) `let __kv: (Value<T1>, Value<T2>) = init;` is LOAD-BEARING, per rules/map
+//     f43's measured note: the call site's `Rc::new(RefCell::new(x.try_into()))`
+//     has no inference target without it and leaves a residual E0282.
+// (4) ⛔⛔ THE RETURN IS `(Value<RefcountHashMapIter<..>>, Value<bool>)`, NOT A
+//     PLAIN TUPLE -- AND THIS IS A BUG rules/map's f43 AND THIS MODULE'S OWN
+//     f41/f42 STILL HAVE.  `std::pair<iterator, bool>` is modelled by
+//     rules/pair, so under refcount the converter emits `.borrow()` on `.1`;
+//     with a plain `bool` in there the emission gets
+//     `error[E0599]: no method named `borrow` found for type `bool``, measured
+//     twice here (one per site).  ⭐ This is the SAME failure already documented
+//     in `rules/smallptrset/tgt_refcount.rs:43-58`, whose f1 returns
+//     `(Value<*const T1>, Value<bool>)` for exactly this reason; that note also
+//     records why it stays invisible -- a site that DISCARDS the pair reports a
+//     clean pass.  Both elements are boxed because rules/pair's model boxes both
+//     uniformly; `.first` is not read on this TU, so the `.0` half is
+//     precedent-and-model-driven rather than error-driven, and is called out as
+//     such.
 fn f57<T1: Eq + Hash + Clone + 'static, T2: 'static>(
     a0: Ptr<HashMap<T1, Value<T2>>>,
-    init: (T1, T2),
-) -> (RefcountHashMapIter<T1, T2>, bool) {
+    init: (Value<T1>, Value<T2>),
+) -> (Value<RefcountHashMapIter<T1, T2>>, Value<bool>) {
     {
         let __p = a0;
-        let (__k, __v) = init;
+        let __kv: (Value<T1>, Value<T2>) = init;
+        let (__kc, __v) = __kv;
+        let __k = __kc.borrow().clone();
         let __inserted = !Ptr::with_ref(&__p, |__m: &HashMap<T1, Value<T2>>| {
             __m.contains_key(&__k)
         });
         if __inserted {
             Ptr::with_mut(&__p, |__m: &mut HashMap<T1, Value<T2>>| {
-                __m.insert(__k.clone(), Rc::new(RefCell::new(__v)));
+                __m.insert(__k.clone(), __v);
             });
         }
-        (RefcountHashMapIter::find_key(__p, &__k), __inserted)
+        (
+            Rc::new(RefCell::new(RefcountHashMapIter::find_key(__p, &__k))),
+            Rc::new(RefCell::new(__inserted)),
+        )
     }
 }

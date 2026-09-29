@@ -384,3 +384,11 @@ fn f43<T1: Ord + Clone + 'static, T2: 'static>(
 fn f44<T1: Ord, T2>(a0: BTreeMap<T1, Value<T2>>, a1: T1) -> usize {
     a0.contains_key(&a1) as usize
 }
+
+// g3094 -- std::map::empty() const.  Mirrors f2 (size) exactly; see src.cpp's
+// f45 note for the measured site count (22 occurrences / 22 distinct emitted
+// lines / 7 TUs) and for why the by-value receiver is correct for an autorefing
+// method in an inlined body.
+fn f45<T1, T2>(a0: BTreeMap<T1, Value<T2>>) -> bool {
+    a0.is_empty()
+}

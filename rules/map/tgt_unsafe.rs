@@ -283,3 +283,8 @@ unsafe fn f43<T1: Ord + Clone, T2>(
 unsafe fn f44<T1: Ord, T2>(a0: BTreeMap<T1, Box<T2>>, a1: T1) -> usize {
     a0.contains_key(&a1) as usize
 }
+
+// g3094 -- std::map::empty() const.  Mirrors f2 (size) exactly.
+unsafe fn f45<T1, T2>(a0: BTreeMap<T1, Box<T2>>) -> bool {
+    a0.is_empty()
+}
