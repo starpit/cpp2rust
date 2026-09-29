@@ -5099,6 +5099,33 @@ bool Converter::VisitCallExpr(clang::CallExpr *expr) {
     return false;
   }
 
+  // ⭐⭐ THE THIRD STATE OF `Mapper::Contains(expr->getCallee()) == false`, and
+  // the reason it has to exist: on false this function does NOT abort, it falls
+  // through to generic `ConvertCallExpr` and prints the literal C++ method name.
+  // That is rc=0, a plausible `.rs`, and a rustc E0599 one stage later that no
+  // census in this project can see -- which makes RULE 2's "leave the key out
+  // and make it FAIL LOUDLY at translate time" UNACHIEVABLE for a member.
+  //
+  // ⛔ OPT-IN ONLY. `GetRefusedRule` is non-null only for a key a rule module
+  // explicitly marked `refused`; an unmapped member that no rule mentions is
+  // untouched and still falls through exactly as before. With nothing refused
+  // anywhere in the tree `refused_exprs_` is empty and this is a null check on
+  // an empty container.
+  //
+  // ⭐ PLACED FIRST among the `Contains`-false arms on purpose. The
+  // `IsImplicitAssignmentCall` arm immediately below and the
+  // `ConvertCXXOperatorCallExpr` arm further down are both reached on a
+  // `Contains` miss and both emit text; a refusal checked after them would be
+  // silently swallowed for those two constructs, which is the same
+  // level-too-low mistake the refusal exists to fix.
+  //
+  // ⛔⛔ AND THIS ARM ALONE IS NOT ENOUGH: this function is `virtual` and
+  // `ConverterRefCount::VisitCallExpr` overrides it, so every override needs the
+  // same guard at the same structural position. See `RefuseIfRefusedMember`.
+  if (RefuseIfRefusedMember(expr)) {
+    return false;
+  }
+
   if (IsImplicitAssignmentCall(expr) && !Mapper::Contains(expr->getCallee())) {
     auto *call = clang::cast<clang::CXXMemberCallExpr>(expr);
     ConvertAssignment(call->getImplicitObjectArgument(), call->getArg(0), "=");
@@ -5882,6 +5909,65 @@ void Converter::ReportNonCallableCallee(clang::CXXOperatorCallExpr *expr) {
     survey::Record(survey::GapKind::kUnsupportedExpr, detail, loc);
     // Keep peeling, exactly as ReportUnsupportedOperatorCall does, so gaps
     // *behind* this one are found in the same run instead of one per sweep.
+    for (auto *arg : expr->arguments()) {
+      Convert(arg);
+    }
+    computed_expr_type_ = ComputedExprType::FreshValue;
+    return;
+  }
+
+  llvm::report_fatal_error(llvm::Twine("unsupported ") + detail + " at " + loc,
+                           /*gen_crash_diag=*/false);
+}
+
+// ⭐⭐ THE LOUD HALF OF RULE 2, FOR A MEMBER. Same shape, same wording skeleton
+// and the same `reached while converting` half as ReportNonCallableCallee above
+// and as the type-level `ReportUnmappedSystemType`, so the census harness
+// classifies the TU as bucket B with NO harness change: the line begins
+// `LLVM ERROR: unsupported ` and ends ` at <file:line:col>`.
+//
+// WHAT IT REPLACES, and this is the whole point of the row: without it the only
+// two states a rule author could express for a member were
+//   (1) no key   -> silent fall-through, literal C++ method name, rc=0, E0599
+//                   one stage later, invisible to every census here;
+//   (2) a key    -> a body the author has just decided cannot be written
+//                   correctly.
+// Both are wrong for a member whose semantics are not portable today. This is
+// the third state: the key is DECLARED so the miss is attributable, and NO
+// translation is invented.
+//
+// ⛔ Survey mode is handled exactly as the other reporters handle it -- record
+// and keep peeling -- so a survey sweep still finds the gaps BEHIND this one
+// instead of one per run. A refusal is a gap report, not a crash.
+bool Converter::RefuseIfRefusedMember(clang::CallExpr *expr) {
+  if (const auto *refused = Mapper::GetRefusedRule(expr->getCallee())) {
+    ReportRefusedMember(expr, *refused);
+    return true;
+  }
+  return false;
+}
+
+void Converter::ReportRefusedMember(
+    clang::CallExpr *expr, const TranslationRule::RefusedRule &refused) {
+  const auto *callee = expr->getDirectCallee();
+  const std::string key =
+      callee != nullptr ? Mapper::ToString(callee) : Mapper::ToString(expr);
+  const std::string loc =
+      expr->getExprLoc().printToString(ctx_.getSourceManager());
+
+  std::string detail =
+      "member is DELIBERATELY REFUSED: `" + key + "` (rule `" + refused.origin +
+      "`, refused src `" + refused.src +
+      "`); the rule tree declares this member unportable rather than emitting "
+      "the literal C++ name, which would be rc=0 here and rustc E0599 one "
+      "stage later";
+  if (curr_function_ != nullptr) {
+    detail += ", reached while converting `" +
+              curr_function_->getQualifiedNameAsString() + "`";
+  }
+
+  if (survey::Enabled()) {
+    survey::Record(survey::GapKind::kUnsupportedExpr, detail, loc);
     for (auto *arg : expr->arguments()) {
       Convert(arg);
     }

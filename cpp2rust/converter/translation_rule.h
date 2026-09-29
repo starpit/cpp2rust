@@ -186,9 +186,40 @@ struct TypeRule {
   }
 };
 
+// ⭐⭐ A DELIBERATELY REFUSED MEMBER -- the third state RULE 2 asks for and that
+// the converter could not previously express.
+//
+// RULE 2 says: "if a thing cannot be written correctly, leave the key out and
+// make it FAIL LOUDLY at translate time." ⛔ For a MEMBER those two halves were
+// UNREACHABLE AT THE SAME TIME. `Mapper::Contains(expr->getCallee())` returning
+// false does not abort: VisitCallExpr falls through to generic
+// `ConvertCallExpr`, which prints the literal C++ method name, so an absent
+// member key yields rc=0, a plausible `.rs`, and a rustc E0599 one stage later
+// that no census in this project can observe. Measured four independent times
+// (`std::hash<int>` -> `0(v)`, 427 sites / 190 TUs; the fabricated `::new_N`
+// ctor class, 31,369 sites; g3055's `.getNumDims()`; and t85 IntegerSet's own
+// comment claiming it "aborts loudly", which is FALSE).
+//
+// A RefusedRule is a key that exists in `ir_src.json` with `"refused": true`
+// and has NO target body in any model. It is NOT loaded into `exprs_`, so
+// `Mapper::Contains` stays false and every existing dispatch decision is
+// unchanged; it is loaded into a separate bucket that `Mapper::GetRefusedRule`
+// consults, and VisitCallExpr aborts loudly when a call site matches one.
+//
+// ⛔ OPT-IN ONLY, and that is the whole safety argument: an unmapped member that
+// no rule mentions is not refused, it is simply absent, and behaves exactly as
+// before. With no rule marked refused this container is empty and the converter
+// cannot behave differently from one built without it.
+struct RefusedRule {
+  std::string src;    // the C++ key spelling, same form as ExprRule::src
+  std::string origin; // "<module>/<key name>", quoted in the abort message
+};
+
 using ExprRules = std::unordered_map<std::string, ExprRule>;
 using TypeRules = std::unordered_map<std::string, TypeRule>;
+using RefusedRules = std::vector<RefusedRule>;
 
 std::pair<ExprRules, TypeRules> Load(const std::filesystem::path &dir,
-                                     Model model);
+                                     Model model,
+                                     RefusedRules *refused = nullptr);
 } // namespace cpp2rust::TranslationRule

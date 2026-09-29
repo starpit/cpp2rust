@@ -1228,6 +1228,23 @@ bool ConverterRefCount::VisitCallExpr(clang::CallExpr *expr) {
     return false;
   }
 
+  // ⛔⛔ THE REFUSAL GUARD HAS TO BE REPEATED HERE, AND THIS IS WHY: the base
+  // `Converter::VisitCallExpr` carries the same arm, but this override reaches
+  // the base ONLY through the `IsTransparentStdCall` arm below -- every other
+  // path falls through to `Converter::ConvertCallExpr` directly. Measured
+  // before this arm existed, same tree, same binary, 96s apart: with
+  // `rules/string f2` (`std::basic_string<char>::size()`) refused,
+  // `-model=unsafe` aborted `unsupported member is DELIBERATELY REFUSED` while
+  // `-model=refcount` emitted `({ (*s.borrow()).size() })` at rc=0 -- the exact
+  // silent class the refusal exists to eliminate, in the model the census runs.
+  //
+  // ⭐ Placed after the destructor no-ops (a `~T()` on a refused type is still a
+  // no-op, and reporting there would abort on scope exit rather than on use) and
+  // before every `Contains`-false arm, matching the base's placement.
+  if (RefuseIfRefusedMember(expr)) {
+    return false;
+  }
+
   if (IsImplicitAssignmentCall(expr) && !Mapper::Contains(expr->getCallee())) {
     auto *call = clang::cast<clang::CXXMemberCallExpr>(expr);
     ConvertAssignment(call->getImplicitObjectArgument(), call->getArg(0), "=");

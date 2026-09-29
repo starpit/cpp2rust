@@ -38,6 +38,17 @@ std::unordered_multimap<std::string, TranslationRule::ExprRule>
 std::unordered_multimap<std::string, TranslationRule::TypeRule>
     types_; // src -> TypeRule
 
+// ⭐⭐ DELIBERATELY REFUSED MEMBERS, bucketed exactly like `exprs_` (same
+// `GetExprMapBucket`, so the same two-bucket `refusedSearch` below finds them
+// under the same matching rules -- including `matchTemplate` generic
+// substitution). SEPARATE from `exprs_` on purpose: a refused key must NOT make
+// `Contains` true, or the converter would emit an empty mapped body.
+// ⛔ EMPTY unless some rule module opted in, and everything that reads it is
+// reached only after a `Contains` miss, so an empty bucket is observationally
+// identical to this feature not existing.
+std::unordered_multimap<std::string, TranslationRule::RefusedRule>
+    refused_exprs_; // src -> RefusedRule
+
 // The spelling(s) the last `search(clang::QualType)` actually looked up. See
 // Mapper::DescribeLastTypeSearch in mapper.h for why the diagnostics must quote
 // these and not a spelling rebuilt from the RecordDecl.
@@ -950,6 +961,29 @@ bool exprsContain(const std::string &txt) {
   return false;
 }
 
+// The refusal twin of `searchExpr`: SAME two buckets (bare + arity), SAME
+// `matchTemplate` matching, so a refused key matches exactly the call sites a
+// keyed rule with the identical `src` would have matched. Writing this as a
+// plain `refused_exprs_.contains(spelling)` would have made every templated
+// refusal DEAD -- the bucket key is not the spelling.
+const TranslationRule::RefusedRule *refusedSearch(const std::string &txt) {
+  if (refused_exprs_.empty()) {
+    return nullptr;
+  }
+  const std::string base = GetExprMapKey(txt);
+  auto best = search(refused_exprs_, txt, base);
+  if (auto arity = GetExprCallArity(txt)) {
+    auto exact =
+        search(refused_exprs_, txt, base + '#' + std::to_string(*arity));
+    if (exact.first != nullptr &&
+        (best.first == nullptr ||
+         exact.first->src.size() > best.first->src.size())) {
+      best = std::move(exact);
+    }
+  }
+  return best.first;
+}
+
 TranslationRule::ExprRule *search(const clang::Expr *expr) {
   if (RefersToUserDefinedDecl(expr)) {
     return nullptr;
@@ -1173,7 +1207,12 @@ void addRulesFromDirectory(const std::filesystem::path &dir, Model model) {
     assert(fs::exists(path / "ir_src.json") &&
            (fs::exists(path / "ir_unsafe.json") ||
             fs::exists(path / "ir_refcount.json")));
-    auto [expr_rules, type_rules] = TranslationRule::Load(path, model);
+    TranslationRule::RefusedRules refused_rules;
+    auto [expr_rules, type_rules] =
+        TranslationRule::Load(path, model, &refused_rules);
+    for (auto &rule : refused_rules) {
+      refused_exprs_.emplace(GetExprMapBucket(rule.src), std::move(rule));
+    }
     if (expr_rules.empty() && type_rules.empty()) {
       log() << "No rules found in " << path << '\n';
       continue;
@@ -2588,6 +2627,20 @@ bool Contains(const clang::Expr *expr) { return search(expr) != nullptr; }
 
 const TranslationRule::ExprRule *GetExprRule(const clang::Expr *expr) {
   return search(expr);
+}
+
+const TranslationRule::RefusedRule *GetRefusedRule(const clang::Expr *expr) {
+  // Cheap exit before any string is built. The corpus-wide invariant this
+  // preserves: with no refusals authored, not one byte of work happens here.
+  if (refused_exprs_.empty()) {
+    return nullptr;
+  }
+  // Same guard as `search(const clang::Expr *)`: a PROJECT decl is ported by the
+  // converter itself and is never the subject of a library rule, refused or not.
+  if (RefersToUserDefinedDecl(expr)) {
+    return nullptr;
+  }
+  return refusedSearch(ToString(expr));
 }
 
 bool IsLibcPassthrough(const clang::Expr *expr) {

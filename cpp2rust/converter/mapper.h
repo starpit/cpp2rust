@@ -27,6 +27,15 @@ private:
 bool Contains(clang::QualType qual_type);
 bool Contains(const clang::Expr *expr);
 
+// ⭐⭐ THE THIRD STATE OF `Contains(const clang::Expr *) == false`. Non-null when
+// a rule module DELIBERATELY REFUSED this callee -- see TranslationRule's
+// RefusedRule. Consulted only on the miss path; with nothing refused anywhere in
+// the tree the bucket is empty and this is always null, so the fall-through
+// behaviour of every existing call site is bit-for-bit unchanged.
+// ⛔ A refused key is NOT in `exprs_`, so `Contains` stays false and no dispatch
+// decision before the abort is altered.
+const TranslationRule::RefusedRule *GetRefusedRule(const clang::Expr *expr);
+
 std::string Map(clang::QualType qual_type);
 std::string MapInitializer(clang::QualType qual_type);
 const TranslationRule::ExprRule *GetExprRule(const clang::Expr *expr);

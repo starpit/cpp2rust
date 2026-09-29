@@ -956,6 +956,21 @@ protected:
   // mapped VALUE would be emitted in callee position (`0(v)`). See EmitCall.
   void ReportNonCallableCallee(clang::CXXOperatorCallExpr *expr);
 
+  // The loud half of RULE 2 for a MEMBER: a key the rule tree declared
+  // `refused`, reached at a real call site. See the definition in converter.cpp
+  // and TranslationRule::RefusedRule.
+  void ReportRefusedMember(clang::CallExpr *expr,
+                           const TranslationRule::RefusedRule &refused);
+
+  // ⛔⛔ EVERY `VisitCallExpr` OVERRIDE MUST CALL THIS. `VisitCallExpr` is
+  // `virtual` and `ConverterRefCount` overrides it; that override reaches the
+  // base only for `IsTransparentStdCall` (converter_refcount.cpp), so a refusal
+  // checked in the base alone is DEAD in the refcount model -- measured: with
+  // `rules/string f2` refused, `s.size()` emitted as `({ (*s.borrow()).size() })`
+  // at rc=0 on the same binary that aborted correctly under `-model=unsafe`.
+  // Returns true when it has reported (and therefore not returned at all).
+  bool RefuseIfRefusedMember(clang::CallExpr *expr);
+
   // Loud, actionable report for a SYSTEM record type with no types_ rule, which
   // would otherwise be mangled into an identifier nothing ever defines.
   void ReportUnmappedSystemType(const clang::RecordDecl *decl);

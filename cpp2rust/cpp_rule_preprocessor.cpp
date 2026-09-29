@@ -92,6 +92,19 @@ struct LookupInfo {
   }
 };
 
+// True when a rule declaration carries the deliberate-refusal marker. The
+// annotation string is matched WHOLE, not by prefix: an `annotate` attribute is
+// also how unrelated tooling marks declarations, and a prefix match would make a
+// future `cpp2rust::refused_something_else` silently refuse a whole key.
+static bool IsRefusedRule(const clang::FunctionDecl *func) {
+  for (const auto *attr : func->specific_attrs<clang::AnnotateAttr>()) {
+    if (attr->getAnnotation() == "cpp2rust::refused") {
+      return true;
+    }
+  }
+  return false;
+}
+
 class Callback : public clang::ast_matchers::MatchFinder::MatchCallback {
 public:
   explicit Callback(llvm::json::Object &out) : out_(out) {}
@@ -139,6 +152,24 @@ public:
 
     if (auto func = R.Nodes.getNodeAs<clang::FunctionDecl>("func")) {
       auto add = [&](std::string &&src) {
+        // ⭐⭐ THE OPT-IN DELIBERATE REFUSAL. A rule marked
+        // `[[clang::annotate("cpp2rust::refused")]]` is written EXACTLY like any
+        // other `fN` -- same signature, same one-return body -- so the key text
+        // it produces is byte-identical to the key a real rule would produce.
+        // The only difference is that it must have NO target function in any
+        // `tgt_*.rs`, and the converter aborts loudly instead of falling through
+        // to the literal C++ method name. See TranslationRule::RefusedRule.
+        //
+        // ⛔ AN ATTRIBUTE, NOT A NAMING CONVENTION AND NOT A MAGIC BODY: a rule
+        // author cannot write it by accident, it sits on the declaration they
+        // are already editing, and it is invisible to every existing instrument
+        // that greps rule sources for key names.
+        if (IsRefusedRule(func)) {
+          out_.try_emplace(func->getQualifiedNameAsString(),
+                           llvm::json::Object{{"key", std::move(src)},
+                                              {"refused", true}});
+          return;
+        }
         out_.try_emplace(func->getQualifiedNameAsString(), std::move(src));
       };
 

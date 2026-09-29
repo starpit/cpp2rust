@@ -211,7 +211,7 @@ void LoadTgtFromIR(ExprRules &exprs, TypeRules &types,
   }
 }
 
-void LoadIrSrc(ExprRules &exprs, TypeRules &types,
+void LoadIrSrc(ExprRules &exprs, TypeRules &types, RefusedRules *refused,
                const std::filesystem::path &json_path) {
   auto buf = llvm::MemoryBuffer::getFile(json_path.string());
   if (!buf) {
@@ -245,6 +245,47 @@ void LoadIrSrc(ExprRules &exprs, TypeRules &types,
     auto name = entry_name.str();
     auto val = entry_val.getAsString();
     if (name[0] == 'f') {
+      // ⭐⭐ THE DELIBERATE-REFUSAL ENTRY, and it must be handled BEFORE the
+      // "in no IR target" check below, because having no IR target is exactly
+      // what a refusal IS. See RefusedRule in translation_rule.h.
+      //
+      // ⛔ It is also handled before `init_type` is read: a refusal entry
+      // carries `key` + `refused` and NO `init_type`, and the assert below is a
+      // no-op on the shipped -DNDEBUG binary, so falling through would
+      // dereference null.
+      if (auto *obj = entry_val.getAsObject();
+          obj != nullptr && obj->getBoolean("refused").value_or(false)) {
+        if (exprs.find(name) != exprs.end()) {
+          // A refusal with a target body is a contradiction: the author both
+          // wrote the translation and declared it impossible. Never silently
+          // pick one.
+          llvm::report_fatal_error(
+              llvm::Twine("cpp2rust: rule module '") + ModuleOf(json_path) +
+                  "': expr key '" + name +
+                  "' is marked `refused` in ir_src.json but ALSO has an IR "
+                  "target body; a refused member must have no target -- remove "
+                  "one of the two and re-run cpp-rule-preprocessor",
+              /*gen_crash_diag=*/false);
+        }
+        auto key = obj->getString("key");
+        if (!key || key->empty()) {
+          // An empty src would match the empty expression string and refuse
+          // every call site in the corpus. Same argument as the empty-type-src
+          // refusal below.
+          llvm::report_fatal_error(
+              llvm::Twine("cpp2rust: rule module '") + ModuleOf(json_path) +
+                  "': expr key '" + name +
+                  "' is marked `refused` but carries no `key`; an empty src "
+                  "would refuse every call site -- re-run "
+                  "cpp-rule-preprocessor for this module",
+              /*gen_crash_diag=*/false);
+        }
+        if (refused != nullptr) {
+          refused->push_back(
+              RefusedRule{key->str(), ModuleOf(json_path) + "/" + name});
+        }
+        continue;
+      }
       auto it = exprs.find(name);
       if (it == exprs.end()) {
         // Writing through the end iterator below is UNDEFINED BEHAVIOUR; this
@@ -481,7 +522,7 @@ void TypeRule::dump() const {
 }
 
 std::pair<ExprRules, TypeRules> Load(const std::filesystem::path &dir,
-                                     Model model) {
+                                     Model model, RefusedRules *refused) {
   ExprRules exprs;
   TypeRules types;
   LoadTgtFromIR(exprs, types, dir / "ir_unsafe.json");
@@ -493,7 +534,7 @@ std::pair<ExprRules, TypeRules> Load(const std::filesystem::path &dir,
     }
   }
 
-  LoadIrSrc(exprs, types, dir / "ir_src.json");
+  LoadIrSrc(exprs, types, refused, dir / "ir_src.json");
 
   for (auto &[name, rule] : exprs) {
     rule.validate(name);
