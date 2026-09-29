@@ -880,6 +880,11 @@ protected:
   // Callable (not a `default:` body) so the OO_LessLess arm can reach it.
   void ReportUnsupportedOperatorCall(clang::CXXOperatorCallExpr *expr);
 
+  // Refusal for EmitCall's non-callable-callee guard: an `operator()` invocation
+  // that reached the generic callee-expression emission, where the receiver's
+  // mapped VALUE would be emitted in callee position (`0(v)`). See EmitCall.
+  void ReportNonCallableCallee(clang::CXXOperatorCallExpr *expr);
+
   // Loud, actionable report for a SYSTEM record type with no types_ rule, which
   // would otherwise be mangled into an identifier nothing ever defines.
   void ReportUnmappedSystemType(const clang::RecordDecl *decl);

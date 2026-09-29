@@ -5102,11 +5102,130 @@ void Converter::EmitCall(CallInfo &&info) {
     assert(direct_callee);
     StrCat("libc::", direct_callee->getName());
   } else {
+    // ⛔ NON-CALLABLE CALLEE GUARD.  Reaching here emits the callee EXPRESSION in
+    // callee position.  That is correct for a function/function-pointer callee,
+    // but for an `operator()` invocation the callee expression is the RECEIVER
+    // OBJECT, and the method must instead be spelled UFCS -- which is exactly what
+    // ConvertUserOperatorCall does for a project functor
+    // (`MyCmp::operator_call(&<MyCmp>::default(), a, b)`).  So an OO_Call whose
+    // resolved callee is a CXXMethodDecl that gets this far has LOST the method,
+    // and the receiver's MAPPED VALUE lands in callee position.
+    //
+    // MEASURED, 2026-09-29: for a system functor whose rule models the type as a
+    // scalar -- rules/hash keys `t2 :: std::hash<T1>` as `usize` with no
+    // `operator()` key -- the receiver's mapped value is `usize`'s default, so
+    // `std::hash<T>()(v)` emitted the literal callee `0(v)`:
+    //     return ((unsafe { 0((*x).storage_) }) ^ ((unsafe { 0((*x).unit_) }) << 1))
+    // 427 such sites across 190 of 312 emitted TUs.  ⛔ THE CLASS IS INVISIBLE TO
+    // EVERY EXISTING DETECTOR: rc=0, rustfmt-clean, no placeholder token, and not
+    // even an undefined name -- `0` is an ordinary integer literal.  It surfaces
+    // only as rustc E0618 "expected function, found {integer}", i.e. only behind a
+    // TU that type-checks, and no corpus TU did.
+    //
+    // ⛔ THE ASYMMETRY THIS CLOSES: `std::less<int>` has NO type key, so it aborts
+    // loudly via ReportUnmappedSystemType.  `std::hash<int>` HAS one, so it was
+    // silently wrong.  Having a type key but no `operator()` key was therefore
+    // STRICTLY WORSE than having no key at all, because it bypassed the loud path.
+    // Under this project's fail-loudly rule the missing key must abort, not emit.
+    //
+    // WHY THE PREDICATE IS STRUCTURAL and not "is the mapped type a scalar".  A
+    // scalar-typed receiver is only the shape this class happened to take; a
+    // functor modelled as `()` (rules/plus) or as an opaque handle is just as
+    // non-callable.  The load-bearing fact is that an OO_Call on a CXXMethodDecl
+    // has NO correct generic emission at all, whatever the receiver maps to.
+    //
+    // NEGATIVE CONTROLS, and they hold BY CONSTRUCTION, not by luck: every working
+    // project-functor form (`MyCmp()(a,b)`, `MyHash()(v)`, `MyCmp c; c(a,b)`) is
+    // routed to ConvertUserOperatorCall by ConvertCallExpr (:4988), and a functor
+    // with an `operator()` RULE KEY is routed to the `Mapper::Contains` arm
+    // (:4985).  Neither reaches EmitCall, so neither can trip this.
+    // ⛔ LAMBDAS ARE EXCLUDED, AND THE EXCLUSION IS LOAD-BEARING, NOT A SOFTENING.
+    // A lambda call `f(a, b)` is ALSO an OO_Call whose callee decl is the closure
+    // type's `operator()`, so the structural test above matches it -- but for a
+    // lambda the generic emission is CORRECT, because a C++ closure is modelled as
+    // a RUST CLOSURE and a Rust closure IS callable in callee position.  Converting
+    // the closure object and calling it is exactly right there.
+    //
+    // MEASURED, 2026-09-29, and this is why the exclusion exists: without it the
+    // guard's FIRST abort on dsc/dims.cpp was not the hash class at all but
+    //     unsupported call operator has no rule:
+    //       `void operator()(std::map<std::string, BaseFuncType> &,
+    //                        const std::map<BaseFuncType, std::string> &) const`
+    //       on receiver `auto operator()(type-parameter-_-_ &, ...) const`
+    // i.e. a lambda invocation -- a FALSE POSITIVE that would have flipped every
+    // lambda-calling TU to an abort.  The receiver type printing as
+    // `auto operator()(type-parameter-_-_ &, ...) const` is the tell: that is a
+    // closure type, which has no name to print.
+    //
+    // The discriminator is `CXXRecordDecl::isLambda()` on the method's PARENT --
+    // the closure record itself -- not any property of the call site, so it cannot
+    // be confused by a lambda stored in a variable, passed through a template
+    // parameter, or invoked via an explicit `.operator()(...)`.
+    auto *opcall = clang::dyn_cast<clang::CXXOperatorCallExpr>(info.expr);
+    const auto *call_op =
+        opcall != nullptr
+            ? clang::dyn_cast_or_null<clang::CXXMethodDecl>(
+                  opcall->getDirectCallee())
+            : nullptr;
+    if (call_op != nullptr && opcall->getOperator() == clang::OO_Call &&
+        call_op->getParent() != nullptr && !call_op->getParent()->isLambda()) {
+      // In survey mode ReportNonCallableCallee RECORDS and peels the operands
+      // itself, so bail here rather than falling through and converting both the
+      // callee and the argument list a second time.
+      ReportNonCallableCallee(opcall);
+      return;
+    }
     PushExprKind push(*this, ExprKind::Callee);
     Convert(GetCallee(info.expr));
   }
 
   EmitArgList(info);
+}
+
+// The refusal for the guard in EmitCall above.  Shape and `gen_crash_diag=false`
+// copied from ReportUnsupportedOperatorCall (:6346) for the reason recorded
+// there: the default abort()s into a ~36-frame backtrace and rc=134, i.e. a
+// deliberate refusal that reads as a crash.
+//
+// The message names the RULE KEY TO WRITE, because the fix for every instance of
+// this class is an `operator()` key on the receiver's type.  It is printed with
+// `Mapper::ToString(callee)` -- the same printer the rule matcher searches with --
+// so the spelling can be pasted into a rule source; and the receiver TYPE is
+// printed with ScalarSugar::kPreserve so a scalar-modelled functor is visible as
+// what it is.
+void Converter::ReportNonCallableCallee(clang::CXXOperatorCallExpr *expr) {
+  const auto *callee = expr->getDirectCallee();
+  const std::string key = callee ? Mapper::ToString(callee) : "<unresolved>";
+  const std::string recv =
+      expr->getNumArgs() > 0 && expr->getArg(0) != nullptr
+          ? Mapper::ToString(expr->getArg(0)->getType(),
+                             Mapper::ScalarSugar::kPreserve)
+          : "<none>";
+  const std::string loc =
+      expr->getExprLoc().printToString(ctx_.getSourceManager());
+
+  std::string detail = "call operator has no rule: `" + key +
+                       "` on receiver `" + recv +
+                       "` (the receiver's mapped VALUE would be emitted in "
+                       "callee position, e.g. `0(v)`)";
+  if (curr_function_ != nullptr) {
+    detail += ", reached while converting `" +
+              curr_function_->getQualifiedNameAsString() + "`";
+  }
+
+  if (survey::Enabled()) {
+    survey::Record(survey::GapKind::kUnsupportedExpr, detail, loc);
+    // Keep peeling, exactly as ReportUnsupportedOperatorCall does, so gaps
+    // *behind* this one are found in the same run instead of one per sweep.
+    for (auto *arg : expr->arguments()) {
+      Convert(arg);
+    }
+    computed_expr_type_ = ComputedExprType::FreshValue;
+    return;
+  }
+
+  llvm::report_fatal_error(llvm::Twine("unsupported ") + detail + " at " + loc,
+                           /*gen_crash_diag=*/false);
 }
 
 void Converter::ConvertGenericCallExpr(clang::CallExpr *expr) {
