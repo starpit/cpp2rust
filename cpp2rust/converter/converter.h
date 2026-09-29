@@ -763,9 +763,27 @@ protected:
 
   virtual void ConvertAbstractClass(clang::CXXRecordDecl *decl);
 
-  void ConvertCXXMethodDecls(const clang::CXXRecordDecl *decl,
-                             const std::string_view signature,
-                             bool (*predicate)(clang::CXXMethodDecl *));
+  void ConvertCXXMethodDecls(
+      const clang::CXXRecordDecl *decl, const std::string_view signature,
+      bool (*predicate)(clang::CXXMethodDecl *),
+      llvm::ArrayRef<clang::CXXMethodDecl *> inherited = {});
+
+  // Vtable slots `decl` inherits from its base chain and does not fill: pure
+  // virtuals no nearer declaration overrides. See the definition for why the
+  // walk crosses the port boundary and why that is safe.
+  std::vector<clang::CXXMethodDecl *>
+  InheritedUnfilledVirtuals(const clang::CXXRecordDecl *decl);
+
+  // Rust method names that `<decl>__Virtual` declares, computed from the AST so
+  // it does not depend on emission order.
+  std::unordered_set<std::string>
+  VirtualTraitMethodNames(const clang::CXXRecordDecl *decl);
+
+  bool VirtualMethodHasTraitSlot(const clang::CXXRecordDecl *decl,
+                                 clang::CXXMethodDecl *method);
+
+  void AddVirtualMethodBody(const clang::CXXRecordDecl *decl,
+                            clang::CXXMethodDecl *method, std::string body);
 
   void ConvertVirtualMethods(clang::CXXRecordDecl *decl);
 
@@ -1249,6 +1267,9 @@ protected:
                             std::string_view base_target) const;
 
   DeferredBlock &VirtualMethodsFor(const clang::CXXRecordDecl *decl);
+
+  // The `impl <T> { ... }` block that carries virtuals with no trait slot.
+  DeferredBlock &InherentVirtualMethodsFor(const clang::CXXRecordDecl *decl);
 
   std::string hoisted_records_;
 

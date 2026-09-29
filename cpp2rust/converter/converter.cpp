@@ -457,6 +457,9 @@ std::string Converter::ConvertFreshRValue(
   return str;
 }
 
+// Defined below, next to `GetLifetimeBinders`'s shared scanner.
+static std::string ElideNamedLifetimes(const std::string &spelling);
+
 std::pair<std::string, std::string>
 Converter::MaterializeTemp(const std::string &binding_name,
                            clang::QualType param_type, clang::Expr *expr) {
@@ -464,6 +467,14 @@ Converter::MaterializeTemp(const std::string &binding_name,
   auto value = ConvertRValue(expr, pointee);
   auto type_str = ToStringBase(pointee);
   const auto *decl = in_const_initializer_ ? keyword::kStatic : keyword::kLet;
+  // Same defect as `EmitHoistedArgs` (:4941): a PARAMETER type annotating a
+  // function-body `let`. ⛔ Only the `let` arm -- a `static` is a declaration
+  // and `'_` there is E0637, so a named lifetime reaching the const-initializer
+  // arm is left exactly as it is and stays loud (E0261) rather than being
+  // silently rewritten into something that is not the same type.
+  if (decl == keyword::kLet) {
+    type_str = ElideNamedLifetimes(type_str);
+  }
 
   auto binding =
       std::format("{} mut {} : {} = {};", decl, binding_name, type_str, value);
@@ -749,6 +760,125 @@ bool Converter::NeedsMut(const clang::VarDecl *decl, clang::QualType type,
           !virtual_method_parm && !IsGlobalVar(decl) && name != "_");
 }
 
+// Scans a RENDERED Rust type spelling for lifetime names, order-stably and
+// deduped. `'static` is pre-declared in every scope and `'_` is the inferred
+// placeholder, so neither is ever a binder and both are skipped.
+//
+// Shared by the two consumers of the same question: `GetLifetimeBinders`
+// (:8196), which DECLARES what it finds on a function signature, and
+// `ElideNamedLifetimes` below, which REWRITES what it finds because the site it
+// guards cannot declare anything.
+static std::vector<std::string> ScanLifetimeNames(const std::string &spelling) {
+  auto is_ident_char = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+  };
+  std::vector<std::string> names;
+  for (size_t i = 0; i + 1 < spelling.size(); ++i) {
+    if (spelling[i] != '\'') {
+      continue;
+    }
+    size_t j = i + 1;
+    // A lifetime name is `'` followed by an identifier; anything else is not
+    // one (a Rust type spelling carries no character literals, but do not rely
+    // on that).
+    if (std::isdigit(static_cast<unsigned char>(spelling[j])) != 0 ||
+        !is_ident_char(spelling[j])) {
+      continue;
+    }
+    while (j < spelling.size() && is_ident_char(spelling[j])) {
+      ++j;
+    }
+    std::string name = spelling.substr(i, j - i);
+    i = j - 1;
+    if (name == "'static" || name == "'_") {
+      continue;
+    }
+    if (std::ranges::find(names, name) == names.end()) {
+      names.push_back(std::move(name));
+    }
+  }
+  return names;
+}
+
+// ⛔ A FUNCTION-BODY `let` TYPE ANNOTATION HAS NO BINDER SLOT. `63546ba2` added
+// the `<'a>` slot to SIGNATURE emission (VisitFunctionDecl, ConvertCXXMethodDecl,
+// VisitCXXConstructorDecl) so a lifetime out of a rule TARGET is declared there.
+// A local `let` has nowhere to put one: Rust grammar admits no generics on a
+// `let`, and the enclosing function is NOT the binder's source here -- MEASURED
+// on dataflow-scheduler/.../Dialect/KTDF/KTDFTypes.cpp:580, whose emitted
+// enclosing signature is
+//     pub unsafe fn parse(parser: *mut mlir_AsmParser) -> ...::ir::Ty {
+// with no `'a` in it at all, because the `function_ref` is a LOCAL variable in
+// the C++ body, not a parameter. So the binder genuinely does not exist in
+// scope and declaring one on `parse` would be a fabrication.
+//
+// The region is INFERRED from the initialiser, so the annotation must simply
+// STOP NAMING IT -- which for a borrowed trait object means FULL ELISION, not
+// the `'_` placeholder:
+//     let _action: Option<&'a (dyn Fn(*mut dyn V) -> *mut dyn V + 'a)>
+//     let _action: Option<& (dyn Fn(*mut dyn V) -> *mut dyn V)>
+// This is the SAME TYPE, not a weaker one: behind a reference the default
+// object lifetime bound IS the reference's lifetime, so `&(dyn Fn..)` means
+// exactly `&'x (dyn Fn.. + 'x)`.
+//
+// ⛔ `'_` IS NOT A SUBSTITUTE AND THAT IS MEASURED, not assumed. Rewriting to
+// `'_` in place clears the E0261s and then trades in `E0106: missing lifetime
+// specifier` -- one error for two, which by this project's standard is not
+// progress. rustc's own note gives the reason and it is not about elision at
+// all: `-> *mut dyn V + '_` is `error: ambiguous `+` in a type`, because the
+// trailing bound binds to the RETURN type `dyn V`, not to the outer `dyn Fn`.
+// That ambiguity is in the rule TARGET's spelling and predates this change; the
+// undeclared `'a` was masking it. Dropping the bound removes both.
+//
+// ⛔ NOT `'static` EITHER. `'static` on a borrow of a local is a silent
+// lifetime lie: it compiles and then forces either a leak or unsoundness, and
+// "it compiled" is precisely the evidence this port must not accept. rustc
+// suggests exactly that here ("consider using the `'static` lifetime") and the
+// suggestion is refused. Full elision asserts nothing -- it asks the borrow
+// checker, which still rejects a genuinely too-short borrow.
+static std::string ElideNamedLifetimes(const std::string &spelling) {
+  if (ScanLifetimeNames(spelling).empty()) {
+    return spelling;
+  }
+  auto is_ident_char = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+  };
+  std::string out;
+  out.reserve(spelling.size());
+  for (size_t i = 0; i < spelling.size(); ++i) {
+    if (spelling[i] != '\'' || i + 1 >= spelling.size()) {
+      out += spelling[i];
+      continue;
+    }
+    size_t j = i + 1;
+    if (std::isdigit(static_cast<unsigned char>(spelling[j])) != 0 ||
+        !is_ident_char(spelling[j])) {
+      out += spelling[i];
+      continue;
+    }
+    while (j < spelling.size() && is_ident_char(spelling[j])) {
+      ++j;
+    }
+    std::string name = spelling.substr(i, j - i);
+    i = j - 1;
+    if (name == "'static" || name == "'_") {
+      out += name;
+      continue;
+    }
+    // A named lifetime that is an OBJECT BOUND (`dyn Trait + 'a`) takes its `+`
+    // with it: leaving a dangling `+` is a syntax error, and the bound is what
+    // the default object lifetime bound will now supply.
+    size_t k = out.size();
+    while (k > 0 && std::isspace(static_cast<unsigned char>(out[k - 1])) != 0) {
+      --k;
+    }
+    if (k > 0 && out[k - 1] == '+') {
+      out.resize(k - 1);
+    }
+  }
+  return out;
+}
+
 bool Converter::ConvertVarDeclSkipInit(clang::VarDecl *decl) {
   auto qual_type = decl->getType();
   if (IsVaListType(qual_type) && decl->isLocalVarDecl()) {
@@ -768,10 +898,19 @@ bool Converter::ConvertVarDeclSkipInit(clang::VarDecl *decl) {
            keyword_mut_);
     ENSURE(decl_ids_.insert(GetID(decl)).second);
     global_inits_.push_back(ForceGlobalInit(decl));
+  }
+  // Only a `let` binding may carry `'_`: a `static`/`static mut` item, like a
+  // signature, is a DECLARATION whose type must name real regions, and `'_`
+  // there is E0637 ("`'_` cannot be used here"). So the elision below is gated
+  // on having emitted `let`, not merely on being local.
+  bool emitted_let = false;
+  if (decl->isFileVarDecl()) {
+    // handled above
   } else if (decl->isStaticLocal()) {
     StrCat(keyword::kStatic, keyword_mut_);
   } else if (decl->isLocalVarDecl()) {
     StrCat(keyword::kLet);
+    emitted_let = true;
   }
 
   if (NeedsMut(decl, qual_type, name)) {
@@ -790,7 +929,27 @@ bool Converter::ConvertVarDeclSkipInit(clang::VarDecl *decl) {
   }
   {
     PushLazyType lazy(*this, IsGlobalVar(decl) && LazyStaticInit());
-    Convert(qual_type);
+    // Rendered through the virtual `ToString`, so this observes exactly the
+    // text `Convert(qual_type)` is about to emit and contributes none of it --
+    // the same redirect `GetLifetimeBinders` uses.
+    //
+    // ⭐ THE PROBE IS ONLY A PROBE. If no named lifetime is present -- which is
+    // the case for all but a handful of spellings in the whole corpus -- fall
+    // through to `Convert(qual_type)` so the emitted bytes are UNCHANGED.
+    // Re-emitting the rendered string instead would have retokenised every
+    // `let` in the corpus: measured on dsc/dims.cpp as 90 whitespace-only
+    // changed lines (`: T = x` -> `: T  = x`), a diff with no defect in it that
+    // would have buried the two lines that matter.
+    if (emitted_let) {
+      auto spelling = ToString(qual_type);
+      if (ScanLifetimeNames(spelling).empty()) {
+        Convert(qual_type);
+      } else {
+        StrCat(ElideNamedLifetimes(spelling));
+      }
+    } else {
+      Convert(qual_type);
+    }
   }
   if (is_parm_with_default_value) {
     StrCat('>');
@@ -4822,8 +4981,20 @@ void Converter::EmitHoistedArgs(CallInfo &info) {
   for (auto &ca : info.args) {
     switch (ca.kind) {
     case Kind::Hoisted:
-      StrCat(
-          std::format("let {}: {} =", ca.param_name, ToString(ca.param_type)));
+      // ⭐ THE MEASURED #3 COMPILE GATE LIVES HERE, not on a C++ local. The
+      // annotation is a PARAMETER type pasted into a function-body `let`, so
+      // `llvm::function_ref`'s faithful borrow model
+      // `Option<&'a (dyn Fn() -> T + 'a)>` arrives with a `'a` that has no
+      // binder in scope: `63546ba2` declares binders on the signature of the
+      // function BEING EMITTED, and this `let` is inside the signature of the
+      // function doing the CALLING, which mentions no `'a` at all. MEASURED on
+      // dataflow-scheduler/.../Utils/PipelineTreeLegalizer.cpp:312, emitted
+      // inside `unsafe fn collectViolations(&mut self, tree: *mut ...)`:
+      //     let _action: Option<&'a (dyn Fn(...) -> ... + 'a)> = ...
+      // Nothing here CAN declare a binder, and the region is inferred from the
+      // initialiser -- which is what `'_` means. See `ElideNamedLifetimes`.
+      StrCat(std::format("let {}: {} =", ca.param_name,
+                         ElideNamedLifetimes(ToString(ca.param_type))));
       ConvertParamTy(ca.param_type, ca.expr);
       StrCat(";");
       break;
@@ -8194,31 +8365,12 @@ void Converter::ConvertAssignment(clang::Expr *lhs, clang::Expr *rhs,
 // `'static` is pre-declared in every scope and `'_` is the inferred placeholder;
 // declaring either as a generic parameter is an error, so both are skipped.
 std::string Converter::GetLifetimeBinders(clang::FunctionDecl *decl) {
-  auto is_ident_char = [](char c) {
-    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
-  };
   std::vector<std::string> binders;
+  // ⭐ ONE scanner, two consumers: `ScanLifetimeNames` (:849) is also what the
+  // local-`let` path uses to decide whether it must elide. A second copy of the
+  // scan would have been a second answer to the same question.
   auto scan = [&](const std::string &spelling) {
-    for (size_t i = 0; i + 1 < spelling.size(); ++i) {
-      if (spelling[i] != '\'') {
-        continue;
-      }
-      size_t j = i + 1;
-      // A lifetime name is `'` followed by an identifier; anything else is not
-      // one (a Rust type spelling carries no character literals, but do not
-      // rely on that).
-      if (std::isdigit(static_cast<unsigned char>(spelling[j])) != 0 ||
-          !is_ident_char(spelling[j])) {
-        continue;
-      }
-      while (j < spelling.size() && is_ident_char(spelling[j])) {
-        ++j;
-      }
-      std::string name = spelling.substr(i, j - i);
-      i = j - 1;
-      if (name == "'static" || name == "'_") {
-        continue;
-      }
+    for (auto &name : ScanLifetimeNames(spelling)) {
       if (std::ranges::find(binders, name) == binders.end()) {
         binders.push_back(std::move(name));
       }
@@ -8316,19 +8468,150 @@ void Converter::ConvertAbstractClass(clang::CXXRecordDecl *decl) {
            !clang::isa<clang::CXXConstructorDecl>(method);
   };
   PushInTraitBody push_trait(*this, true);
-  ConvertCXXMethodDecls(decl, signature, predicate);
+  // A C++ vtable slot is INHERITED: `runOnOperation` is declared pure virtual on
+  // `mlir::Pass`, several levels above the tablegen `...PassBase` whose trait
+  // this is, and `getNodeName` is declared pure virtual on `OperationTreeNode`,
+  // one level above `PipelineTreeNode`. `decl->methods()` returns only the
+  // methods declared IN `decl`, so the trait used to omit both while the derived
+  // class's `impl` carried them -- error[E0407], 96 sites / 75 TUs of the
+  // compile-level corpus, and the #2 first-abort gate. The trait must therefore
+  // declare the UNFILLED slots of the whole base chain as well.
+  ConvertCXXMethodDecls(decl, signature, predicate,
+                        InheritedUnfilledVirtuals(decl));
+}
+
+// Every vtable slot `decl` inherits and does NOT fill: a pure virtual declared
+// in some base of `decl` that no nearer declaration overrides. Walked
+// breadth-first from `decl` itself so that a nearer declaration always wins.
+//
+// The walk crosses the port boundary deliberately -- `mlir::Pass` is not ported
+// and never will be, but the ported class's vtable still HAS its slots, and the
+// derived class's `override` still has to land somewhere. It is safe because
+// only PURE slots are emitted while EVERY virtual shadows: `mlir::Pass` declares
+// `canScheduleOn` pure and `mlir::OperationPass<T>` overrides it non-pure, so
+// the non-pure override shadows the pure declaration and nothing is emitted for
+// it. Emitting it would have been error[E0046] on every pass, since no ported
+// class implements it. `runOnOperation` has no such override anywhere in the
+// chain, which is exactly why it is the one slot that must be declared.
+std::vector<clang::CXXMethodDecl *>
+Converter::InheritedUnfilledVirtuals(const clang::CXXRecordDecl *decl) {
+  std::vector<clang::CXXMethodDecl *> out;
+  // Slots a NEARER declaration already fills, keyed on the C++ canonical decl
+  // via `overridden_methods()`.
+  //
+  // ⛔ NOT keyed on the emitted Rust name, which was the first attempt and was
+  // MEASURED WRONG: `mlir::Pass::canScheduleOn` emits as
+  // `canScheduleOn_Optiondataflowir_genTdOpDef_const` (IsOverloadedMethod is true
+  // in that class) while `mlir::OperationPass<T>`'s `final` override of the very
+  // same signature emits as plain `canScheduleOn`. The names did not match, the
+  // pure declaration was not shadowed, and the trait grew an unimplementable item
+  // -- error[E0046] on every pass TU, i.e. exactly the error-for-error trade this
+  // row is not allowed to make. The override EDGE is the ground truth; the name
+  // is a rendering of it.
+  std::unordered_set<const clang::CXXMethodDecl *> filled;
+  auto mark_filled = [&filled](const clang::CXXMethodDecl *method) {
+    std::vector<const clang::CXXMethodDecl *> work{method};
+    while (!work.empty()) {
+      const auto *current = work.back();
+      work.pop_back();
+      for (const auto *base_method : current->overridden_methods()) {
+        if (filled.insert(base_method->getCanonicalDecl()).second) {
+          work.push_back(base_method);
+        }
+      }
+    }
+  };
+  // Second guard, independent of the first: two DIFFERENT slots must never emit
+  // the same Rust name into one trait body (that is error[E0428]).
+  std::unordered_set<std::string> emitted_names;
+  for (auto *method : decl->methods()) {
+    if (method->isVirtual() && !clang::isa<clang::CXXConstructorDecl>(method)) {
+      emitted_names.insert(GetMethodName(method));
+    }
+  }
+  std::unordered_set<const clang::CXXRecordDecl *> seen;
+  std::vector<const clang::CXXRecordDecl *> frontier{decl};
+  bool is_own = true;
+  while (!frontier.empty()) {
+    std::vector<const clang::CXXRecordDecl *> next;
+    for (const auto *record : frontier) {
+      if (record == nullptr ||
+          !seen.insert(record->getCanonicalDecl()).second) {
+        continue;
+      }
+      const auto *definition = record->getDefinition();
+      if (definition == nullptr) {
+        continue;
+      }
+      for (auto *method : definition->methods()) {
+        if (!method->isVirtual() ||
+            clang::isa<clang::CXXConstructorDecl>(method)) {
+          continue;
+        }
+        const bool owned = filled.contains(method->getCanonicalDecl());
+        // Even a method that is skipped below still fills what it overrides.
+        mark_filled(method);
+        if (owned || is_own || !method->isPureVirtual()) {
+          continue;
+        }
+        if (!emitted_names.insert(GetMethodName(method)).second) {
+          continue;
+        }
+        out.push_back(method);
+      }
+      for (const auto &base : definition->bases()) {
+        next.push_back(base.getType()->getAsCXXRecordDecl());
+      }
+    }
+    is_own = false;
+    frontier = std::move(next);
+  }
+  return out;
+}
+
+// The set of Rust method names `<decl>__Virtual` declares, computed from the AST
+// so that it DOES NOT DEPEND ON EMISSION ORDER (the derived class's `impl` body
+// is built eagerly during traversal, the base's trait when the base record is
+// visited). It mirrors ConvertAbstractClass exactly: `decl`'s own emittable
+// virtuals plus InheritedUnfilledVirtuals. A method with neither a body nor a
+// pure-virtual marker is NOT emitted by VisitCXXMethodDecl and so is NOT in the
+// set -- routing an override of it to the trait impl would be E0407 again.
+std::unordered_set<std::string>
+Converter::VirtualTraitMethodNames(const clang::CXXRecordDecl *decl) {
+  std::unordered_set<std::string> names;
+  auto add = [&](clang::CXXMethodDecl *method) {
+    if (!method->isVirtual() ||
+        clang::isa<clang::CXXConstructorDecl>(method) ||
+        !IsConvertibleCXXMethodDecl(method) ||
+        (!method->isPureVirtual() && !method->hasBody())) {
+      return;
+    }
+    names.insert(GetMethodName(method));
+  };
+  for (auto *method : decl->methods()) {
+    add(method);
+  }
+  ForEachTemplateInstantiatedMethod(decl, add);
+  for (auto *method : InheritedUnfilledVirtuals(decl)) {
+    names.insert(GetMethodName(method));
+  }
+  return names;
 }
 
 void Converter::ConvertCXXMethodDecls(
     const clang::CXXRecordDecl *decl, const std::string_view signature,
-    bool (*predicate)(clang::CXXMethodDecl *)) {
+    bool (*predicate)(clang::CXXMethodDecl *),
+    llvm::ArrayRef<clang::CXXMethodDecl *> inherited) {
   bool first = true;
+  auto open = [&] {
+    if (first) {
+      StrCat(signature, token::kOpenCurlyBracket);
+      first = false;
+    }
+  };
   auto convert_method = [&](clang::CXXMethodDecl *method) {
     if (predicate(method)) {
-      if (first) {
-        StrCat(signature, token::kOpenCurlyBracket);
-        first = false;
-      }
+      open();
       VisitCXXMethodDecl(method);
     }
   };
@@ -8336,6 +8619,20 @@ void Converter::ConvertCXXMethodDecls(
     convert_method(method);
   }
   ForEachTemplateInstantiatedMethod(decl, convert_method);
+  for (auto *method : inherited) {
+    if (!IsConvertibleCXXMethodDecl(method)) {
+      continue;
+    }
+    open();
+    // Deliberately NOT VisitCXXMethodDecl: `decl_ids_` is keyed on the
+    // declaration, and the SAME base declaration legitimately appears in the
+    // trait of every class that inherits the slot. Going through Visit would
+    // silently drop it from all but the first, which is the failure mode this
+    // whole change exists to remove. A pure virtual emits a signature and a
+    // semicolon, never a body, so no definition is duplicated either.
+    PushCurrFunction push_fn(*this, method);
+    ConvertCXXMethodDecl(method);
+  }
   if (!first) {
     StrCat(token::kCloseCurlyBracket);
   }
@@ -8413,23 +8710,77 @@ Converter::VirtualMethodsFor(const clang::CXXRecordDecl *decl) {
   return it->second;
 }
 
+Converter::DeferredBlock &
+Converter::InherentVirtualMethodsFor(const clang::CXXRecordDecl *decl) {
+  auto name = GetRecordName(decl);
+  // A DISTINCT key from VirtualMethodsFor's, so a class can have both blocks.
+  // Two inherent `impl <T> { ... }` blocks for one type are legal Rust.
+  auto [it, inserted] = virtual_methods_.try_emplace(name + " __inherent");
+  if (inserted) {
+    it->second.header = std::format("{} {}", keyword::kImpl, name);
+  }
+  return it->second;
+}
+
+// True if `method`, an override on `decl`, has a slot in the trait of `decl`'s
+// first base. False means the slot's declaration lives outside what this
+// converter lowers -- `SplitDFIROutputPass::runOnOperation` overrides a pure
+// virtual of `mlir::Pass`, whose class is NOT ported and therefore has no trait,
+// and no amount of walking can invent one. Such a method becomes an INHERENT
+// method of the derived struct: the body is kept verbatim and stays callable,
+// only dispatch through a base reference is lost -- and the only thing that ever
+// dispatches `runOnOperation` is MLIR's own PassManager, on the far side of the
+// rule boundary. This is the same lowering, and the same reasoning, that
+// BaseTargetNamesTrait already applies to a rule-mapped base.
+bool Converter::VirtualMethodHasTraitSlot(const clang::CXXRecordDecl *decl,
+                                         clang::CXXMethodDecl *method) {
+  const auto *base = decl->bases_begin()->getType()->getAsCXXRecordDecl();
+  if (base == nullptr || base->getDefinition() == nullptr) {
+    return true;
+  }
+  if (VirtualTraitMethodNames(base->getDefinition())
+          .contains(GetMethodName(method))) {
+    return true;
+  }
+  if (survey::Enabled()) {
+    survey::Record(
+        survey::GapKind::kInfo,
+        "virtual `" + method->getQualifiedNameAsString() +
+            "` fills a vtable slot declared outside the ported base chain of `" +
+            base->getQualifiedNameAsString() +
+            "`; lowered as an inherent method (was error[E0407])",
+        method->getLocation().printToString(ctx_.getSourceManager()));
+  }
+  return false;
+}
+
+void Converter::AddVirtualMethodBody(const clang::CXXRecordDecl *decl,
+                                     clang::CXXMethodDecl *method,
+                                     std::string body) {
+  if (body.empty()) {
+    return;
+  }
+  if (VirtualMethodHasTraitSlot(decl, method)) {
+    VirtualMethodsFor(decl).body += std::move(body);
+  } else {
+    InherentVirtualMethodsFor(decl).body += std::move(body);
+  }
+}
+
 void Converter::ConvertVirtualMethods(clang::CXXRecordDecl *decl) {
   if (decl->bases_begin() == decl->bases_end()) {
     return;
   }
-  bool any = false;
-  Buffer buf(*this);
+  // PER METHOD, not per class: an override whose slot the base's trait declares
+  // and one whose slot it cannot must land in DIFFERENT blocks.
   for (auto *method : decl->methods()) {
-    if (!method->isImplicit() && method->isVirtual()) {
-      any = true;
-      VisitCXXMethodDecl(method);
+    if (method->isImplicit() || !method->isVirtual()) {
+      continue;
     }
+    Buffer buf(*this);
+    VisitCXXMethodDecl(method);
+    AddVirtualMethodBody(decl, method, std::move(buf).str());
   }
-  auto body = std::move(buf).str();
-  if (!any) {
-    return;
-  }
-  VirtualMethodsFor(decl).body += body;
 }
 
 bool Converter::ConvertOutOfLineVirtualMethod(clang::CXXMethodDecl *decl) {
@@ -8439,7 +8790,7 @@ bool Converter::ConvertOutOfLineVirtualMethod(clang::CXXMethodDecl *decl) {
   }
   Buffer buf(*this);
   auto emitted = ConvertCXXMethodDecl(decl);
-  VirtualMethodsFor(record).body += std::move(buf).str();
+  AddVirtualMethodBody(record, decl, std::move(buf).str());
   return emitted;
 }
 
