@@ -126,6 +126,28 @@ fn f16<'a, T1, T2: Fn() -> T1 + 'a>(a0: &'a mut T2, a1: AnyPtr, a2: AnyPtr) -> O
     Some(&*a0)
 }
 
+// PER-ARITY SIBLINGS OF f16, arities 1..5 -- see src.cpp for why these were missing and
+// what corpus TU proved it.
+fn f23<'a, T1, T2, T3: Fn(T2) -> T1 + 'a>(a0: &'a mut T3, a1: AnyPtr, a2: AnyPtr) -> Option<&'a (dyn Fn(T2) -> T1)> {
+    Some(&*a0)
+}
+
+fn f24<'a, T1, T2, T3, T4: Fn(T2, T3) -> T1 + 'a>(a0: &'a mut T4, a1: AnyPtr, a2: AnyPtr) -> Option<&'a (dyn Fn(T2, T3) -> T1)> {
+    Some(&*a0)
+}
+
+fn f25<'a, T1, T2, T3, T4, T5: Fn(T2, T3, T4) -> T1 + 'a>(a0: &'a mut T5, a1: AnyPtr, a2: AnyPtr) -> Option<&'a (dyn Fn(T2, T3, T4) -> T1)> {
+    Some(&*a0)
+}
+
+fn f26<'a, T1, T2, T3, T4, T5, T6: Fn(T2, T3, T4, T5) -> T1 + 'a>(a0: &'a mut T6, a1: AnyPtr, a2: AnyPtr) -> Option<&'a (dyn Fn(T2, T3, T4, T5) -> T1)> {
+    Some(&*a0)
+}
+
+fn f27<'a, T1, T2, T3, T4, T5, T6, T7: Fn(T2, T3, T4, T5, T6) -> T1 + 'a>(a0: &'a mut T7, a1: AnyPtr, a2: AnyPtr) -> Option<&'a (dyn Fn(T2, T3, T4, T5, T6) -> T1)> {
+    Some(&*a0)
+}
+
 // `T1 llvm::function_ref<T1 (..)>::operator()(..) const`, arities 0..5 -- the
 // t8..t13 twins of f4/f6/f8/f10/f12/f14.  See src.cpp for the arity census, the
 // swallow-tie argument, and why `unwrap` is the faithful rendering of calling an
