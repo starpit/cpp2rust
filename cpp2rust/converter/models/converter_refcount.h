@@ -299,6 +299,11 @@ private:
   std::string
   DecompositionMapIterReceiver(clang::DeclRefExpr *iter_ref) override;
 
+  std::string
+  ForRangeSetRefElementBinding(const std::string &loop_var_name,
+                               const std::string &elem_name,
+                               clang::QualType loop_var_type) override;
+
   // Converts `expr` for use where a `qual_type` function pointer is
   // expected, inserting a `.cast()` if `expr`'s own fn pointer type differs
   // from `qual_type` -- e.g. because the two describe the same C function

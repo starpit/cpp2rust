@@ -4107,6 +4107,21 @@ bool Converter::VisitCXXForRangeStmtSet(clang::CXXForRangeStmt *stmt) {
   {
     PushBrace body(*this);
     auto loop_var_type = loop_var->getType();
+    // ⛔ MODEL HOOK, and it must come BEFORE the `let` below: the refcount
+    // representation of a reference-to-element needs a second statement in front
+    // of the binding (the owning `Value<T>` the `Ptr<T>` points into), so it
+    // cannot be expressed as a replacement for just the initialiser. An empty
+    // return declines and leaves the unsafe emission below byte-for-byte as it
+    // was -- verified on `dsc/dims.cpp`, whose unsafe output is unchanged.
+    if (loop_var_type->isReferenceType()) {
+      auto model_binding =
+          ForRangeSetRefElementBinding(loop_var_name, elem_name, loop_var_type);
+      if (!model_binding.empty()) {
+        StrCat(model_binding);
+        ConvertForRangeBody(stmt);
+        return false;
+      }
+    }
     StrCat(keyword::kLet);
     if (!loop_var_type.isConstQualified()) {
       StrCat(keyword_mut_);
@@ -4181,6 +4196,17 @@ std::string Converter::DecompositionMapIterReceiver(
   Buffer buf(*this);
   Convert(iter_ref);
   return std::move(buf).str();
+}
+
+// The UNSAFE model declines: its own `std::ptr::from_ref(elem)` binding two
+// screens up IS the correct representation for this model, and the comment there
+// spells out why (a C++ reference is a raw pointer everywhere in it). Declining
+// here rather than returning that text keeps the unsafe path on exactly the code
+// that shipped before the hook, so the hook cannot move the unsafe emission.
+std::string Converter::ForRangeSetRefElementBinding(const std::string &,
+                                                    const std::string &,
+                                                    clang::QualType) {
+  return {};
 }
 
 // The range classes whose MODELLED iterator exposes a key accessor and a value
@@ -10335,6 +10361,39 @@ std::string Converter::GetMappedAsString(clang::Expr *expr, clang::Expr **args,
   return result;
 }
 
+// THE RULE `needs_explicit_mut_borrow` IMPLEMENTS: a rule parameter declared
+// `&mut T` must receive an actual Rust `&mut`, and a `kBorrowMut` placeholder's
+// emission is a PLACE (`ConvertLValue` -- `mySymDims`, `(*data)`), never a
+// reference. So the converter supplies the `&mut`.
+//
+// THE ONE CASE WHERE IT MUST NOT: the rule body's own text already wrote it.
+// `rules/set`'s `f13` is `let __set = &mut *a0;` -- correct Rust for a
+// `&mut std::set<T1>` parameter -- and the preprocessor records it as the text
+// `"...let __set = &mut "` followed by a `kBorrowMut` placeholder for `a0`,
+// i.e. it consumed the `*` and left the `&mut` in the text on purpose: text
+// `&mut ` + place IS `&mut *a0` with `a0` substituted. Adding a second one
+// yields `&mut &mut mySymDims`, and `&mut &mut BTreeSet<T> as *const
+// BTreeSet<T>` is rustc E0606 (an `as` cast does NOT deref-coerce, unlike the
+// `BTreeSet::insert(__set, ..)` on the line above it, which is why the defect
+// survived to rc=0).
+//
+// NOT VACUOUS, measured over all 98 modules of `pin/ir.v45` x both models:
+// of 694 `kBorrowMut` placeholders, 669 keep the converter-supplied borrow
+// (403 open their fragment list, 266 follow text that ends in something other
+// than a borrow -- e.g. `rules/algorithm`'s
+// `::std::slice::from_raw_parts_mut(`), and exactly 25 are preceded by `&mut`
+// and are the class this suppresses (`algorithm` f9, `bitset` f4/f8,
+// `mlir` f1300/f1800, `set` f6/f13/f23, ...). Zero are preceded by a bare `&`.
+static bool RuleTextAlreadyBorrowsMut(std::string_view text) {
+  while (!text.empty() && (text.back() == ' ' || text.back() == '\t' ||
+                           text.back() == '\n' || text.back() == '\r')) {
+    text.remove_suffix(1);
+  }
+  // `&` cannot be part of a Rust identifier, so `ends_with("&mut")` is already
+  // a token test -- there is no `foo&mut` to be confused by.
+  return text.ends_with("&mut");
+}
+
 std::string Converter::ConvertIRFragment(
     const std::vector<TranslationRule::BodyFragment> &fragments,
     clang::Expr *expr, clang::Expr **args, unsigned num_args,
@@ -10421,7 +10480,8 @@ std::string Converter::ConvertIRFragment(
           .is_index_base = ph->is_index_base,
           .needs_explicit_mut_borrow =
               !is_method_call_receiver &&
-              Mapper::ParamIsMutRef(GetCalleeOrExpr(expr), arg_idx),
+              Mapper::ParamIsMutRef(GetCalleeOrExpr(expr), arg_idx) &&
+              !RuleTextAlreadyBorrowsMut(result),
           // Same gate as the `&mut` case, for the same reason: on a method-call
           // receiver Rust's autoref supplies the borrow, and adding one would
           // perturb every existing reference-declared iterator rule.
