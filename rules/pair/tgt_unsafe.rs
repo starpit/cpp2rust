@@ -149,3 +149,10 @@ unsafe fn f22<T1, T2>(a0: T1, a1: T2) -> (T1, T2) {
 unsafe fn f23<T1: Clone, T2: Clone>(a0: (T1, T2)) -> (T1, T2) {
     a0.clone()
 }
+
+// f24 -- `pair<T1,T2>::pair()`, the default constructor.  Body is t1's VERBATIM:
+// the default-initialised type rule and the default constructor must agree, and
+// t1 already fixes this model's zero form.  See rules/pair/src.cpp's f24 note.
+unsafe fn f24<T1: Default, T2: Default>() -> (T1, T2) {
+    <(T1, T2)>::default()
+}
