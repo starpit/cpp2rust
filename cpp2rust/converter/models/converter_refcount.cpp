@@ -1433,10 +1433,22 @@ bool ConverterRefCount::VisitImplicitCastExpr(clang::ImplicitCastExpr *expr) {
   }
 
   if (expr->getCastKind() == clang::CastKind::CK_DerivedToBase) {
-    if (expr->getType()->isPointerType()) {
-      auto ptype = clang::dyn_cast<clang::PointerType>(expr->getType());
+    // g3088/g3092: `QualType::isPointerType()` tests the CANONICAL type, while
+    // `clang::dyn_cast<clang::PointerType>(QualType)` tests the WRITTEN node and does
+    // not desugar. A `CK_DerivedToBase` whose destination pointer type is written
+    // through sugar therefore entered this arm with a NULL `ptype` (measured g3092:
+    // 160 of 160 formerly-fatal sites, all of them `value_type` / `mapped_type` /
+    // `key_type` container member typedefs, `auto`, or a substituted template
+    // parameter -- never a hand-written `typedef Base *BP;`, which is why the first
+    // repro attempts were negative), and the next line dereferenced it -- SIGSEGV,
+    // no `LLVM ERROR`, three census TUs dark
+    // (dsc/designSpaceConfig.cpp, dcg/dcg_fe/scheduler/L3DlOpsScheduler.cpp,
+    // dcg/dcg_fe/pcfg_gen/stcdpOp.cpp). `getAs<>` is the DESUGARING form and is the
+    // only form whose result may be dereferenced under an `isPointerType()` guard.
+    // Using it as the condition also removes the two-predicate skew entirely, rather
+    // than adding a null check that could silently drop the `.to_dyn` wrap.
+    if (const auto *ptype = expr->getType()->getAs<clang::PointerType>()) {
       auto pointee_type = ptype->getPointeeType()->getAsCXXRecordDecl();
-
       // Same floor + direct ask as `VisitPointerType` above, and for a reason
       // that is NOT cosmetic: this predicate decides whether the cast is wrapped
       // in `.to_dyn`, while the TARGET TYPE SPELLING comes from
