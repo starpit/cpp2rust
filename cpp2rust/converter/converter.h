@@ -241,6 +241,13 @@ public:
   // the refcount model's stream is a `libcc2rs::Ptr<File>`, which is not
   // itself a `Write` and does not autoderef to one.
   virtual std::string FlushStream(const std::string &stream);
+  // The VALUE of an ostream `<<` chain, i.e. what C++ `os << x` evaluates to
+  // (`std::ostream&`). Model-specific for the same reason FlushStream is: the
+  // refcount model's stream expression is a `libcc2rs::Ptr<File>` (an owning
+  // handle that must be cloned to alias), the unsafe model's is the *place*
+  // `(*os)` behind a `*mut File`.
+  virtual std::string StreamValue(const std::string &stream);
+  bool OstreamChainValueIsUsed(clang::Expr *expr);
 
   struct TempMaterializationCtx {
     std::vector<std::optional<clang::QualType>> materialized_args;

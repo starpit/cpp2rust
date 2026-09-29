@@ -166,6 +166,7 @@ public:
 
   std::string ConvertStream(clang::Expr *expr) override;
   std::string FlushStream(const std::string &stream) override;
+  std::string StreamValue(const std::string &stream) override;
 
   bool VisitCXXConstructExpr(clang::CXXConstructExpr *expr) override;
 
