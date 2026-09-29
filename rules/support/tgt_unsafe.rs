@@ -170,3 +170,19 @@ unsafe fn f27<T1: Clone>(a0: &T1) -> T1 {
 unsafe fn f28<T1: Clone>(a0: &T1) -> T1 {
     a0.clone()
 }
+
+// f29/f30/f31 -- the SAME `To == From` slice reached through the NON-CONST
+// lvalue overload (Casting.h:565/:571/:577).  A separate overload set in C++, so
+// a separate key; `return a0` is exact for the identical reason.  See src.cpp
+// for the measured refutation of the ByteRepr objection that kept this unkeyed.
+unsafe fn f29<T1: Clone>(a0: &T1) -> T1 {
+    a0.clone()
+}
+
+unsafe fn f30<T1: Clone>(a0: &T1) -> T1 {
+    a0.clone()
+}
+
+unsafe fn f31<T1: Clone>(a0: &T1) -> T1 {
+    a0.clone()
+}

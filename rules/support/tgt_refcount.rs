@@ -176,3 +176,21 @@ fn f27<T1: Clone>(a0: &T1) -> T1 {
 fn f28<T1: Clone>(a0: &T1) -> T1 {
     a0.clone()
 }
+
+// f29/f30/f31 -- the SAME `To == From` slice reached through the NON-CONST
+// lvalue overload (Casting.h:565/:571/:577).  ⭐ A non-const `T1 &` parameter
+// does NOT force `Ptr<T1>`: the target parameter type is declared here and the
+// key string comes from the resolved C++ overload in src.cpp, independently.
+// `&T1` is what this needs and it is what both models get, so the two overlays
+// are byte-identical, exactly as for f26/f27/f28.
+fn f29<T1: Clone>(a0: &T1) -> T1 {
+    a0.clone()
+}
+
+fn f30<T1: Clone>(a0: &T1) -> T1 {
+    a0.clone()
+}
+
+fn f31<T1: Clone>(a0: &T1) -> T1 {
+    a0.clone()
+}

@@ -579,14 +579,55 @@ llvm::SMLoc f25() { return llvm::SMLoc(); }
 //     `is_a`, never as a returned op value.  Refused until the op wrappers have
 //     a model.
 //
-// ⭐ ALSO NOT KEYED, once the preprocessor is fixed: the NON-CONST lvalue
-// overload `T1 llvm::cast(T1 &)` (~1/3 of identity sites).  A non-const `T1 &`
-// parameter lowers to `&mut T1` in the unsafe model but to `Ptr<T1>` in refcount
-// (rules/algorithm f9), and reading a value back out of a `Ptr<T1>` needs a
-// `ByteRepr` bound the MLIR handle types are not known to satisfy -- that would
-// trade this row's E0425 for an E0277 at every site.  Start with the const
-// overload, which carries the majority of the mass and is identical in both
-// models.
+// ⭐⭐ THE NON-CONST LVALUE OVERLOAD `T1 llvm::cast(T1 &)` IS NOW KEYED -- f29,
+// f30, f31 below.  The refusal that used to stand here said a non-const `T1 &`
+// "lowers to `Ptr<T1>` in refcount (rules/algorithm f9), and reading a value
+// back out of a `Ptr<T1>` needs a `ByteRepr` bound the MLIR handle types are not
+// known to satisfy".  g3093 measured it and it is wrong in THREE independent
+// ways; keep all three, because each kills a different class of future refusal:
+//
+//   1. THE PREMISE IS A CATEGORY ERROR.  `src.cpp` fixes the recorded KEY
+//      STRING; `tgt_unsafe.rs`/`tgt_refcount.rs` fix the TARGET PARAMETER TYPE.
+//      They are INDEPENDENT.  A non-const `T1 &` in src.cpp does not force any
+//      particular Rust parameter type -- rules/algorithm f9 chose `Ptr<T1>`, and
+//      that is one available choice, not a lowering.  Landed counter-examples
+//      already in the tree: rules/pair f21 takes `std::make_pair(T1 &, T2 &)` to
+//      `a0: T1` BY VALUE in both models, and rules/variant f3-f7 do the same.
+//      Measured directly: the regen for `T1 llvm::cast(T1 &)` recorded
+//      `a0: {"type": "&T1"}` in ir_unsafe.json AND ir_refcount.json, so the two
+//      overlays are byte-identical here exactly as they are for f26-f28.
+//   2. EVEN ON A `Ptr<T1>` SHAPE THE BOUND IS NOT REQUIRED.  libcc2rs
+//      `Ptr::read` (rc.rs:717) is `T: Clone + ByteRepr`, but `Ptr::with_ref`
+//      (rc.rs:593) and `with_mut_ref` (rc.rs:625) have NO bound at all and their
+//      doc comment says the `ByteRepr` requirement on `read` is a whole-method
+//      requirement imposed by a single arm and is spurious for the Stack*/Heap*
+//      arms.  So "reading a value out of a Ptr<T1> needs ByteRepr" is false for
+//      the bound-free path that exists precisely for pointees like these.
+//   3. THE BOUND IS SATISFIED ANYWAY, MEASURED, NOT ARGUED.  Probe
+//      verif/g3093/rustc/probe_byterepr2.rs, compiled with the PROJECT rustc
+//      1.98.0 (88d9e12ae) against uptr-target/release/deps, asserts
+//      `fn needs_byterepr<T: ByteRepr>()` for u64 (positive control), a local
+//      struct with no impl (negative control) and five real corpus receivers.
+//      Output was exactly ONE error: `E0277 the trait bound
+//      `LocalNotByteRepr: libcc2rs::ByteRepr` is not satisfied`.  So
+//      `dataflowir_gen::ir::Attr`, `ir::AttrDict` (mlir::DictionaryAttr),
+//      `ir::Value`, `ir::Ty` and `fmt::OpInst` ALL satisfy `libcc2rs::ByteRepr`
+//      -- rustc even listed "() (A, B) *const T *mut T Addrinfo AnyPtr
+//      AsmPrinter Atomic<bool> and 87 others".
+//
+// ⛔ "NOT KNOWN TO SATISFY" WAS AN ABSENCE OF A MEASUREMENT, AND IT COST ~5,300
+// SITES.  Do not write that phrase into this tree again; run the probe.
+//
+// SIZING, measured on the 75 emitted .rs of verif/recut3078 with
+// `grep -ohE 'Cpp2RustUnmappedFn_<n>_[0-9]+' | wc -l` (note `[0-9]+`, NOT
+// `[0-9]*` -- the latter matches an empty digit run inside
+// `..._dyn_cast_or_null_5` and inflated `dyn_cast` 16x, 209 -> 3,395):
+// the non-const identity slice is 5,314 sites over 39 TUs, i.e. 68.0% of the
+// 7,811 family sites that survived f26-f28, over 30 distinct T1, every one an
+// MLIR `*Attr` handle type.  By note count: `cast` 1,545 / 21 T,
+// `dyn_cast_or_null` 1,391 / 16, `dyn_cast` ZERO.  Relative to IDENTITY sites
+// alone the old "~1/3" estimate is confirmed: on
+// dcc/.../InstructionEstimation.cpp it is 222 non-const against 397 const.
 
 // --- llvm::cast / dyn_cast / dyn_cast_or_null -- THE IDENTITY SLICE ---------
 //
@@ -608,6 +649,15 @@ namespace llvm {
 template <typename To, typename From> To cast(const From &Val);
 template <typename To, typename From> To dyn_cast(const From &Val);
 template <typename To, typename From> To dyn_cast_or_null(const From &Val);
+// ⭐ THE NON-CONST LVALUE OVERLOADS.  These are the real Casting.h:565/:571/:577
+// signatures and they are a SEPARATE overload set, not a convenience: 2,936 of
+// the 4,328 corpus miss notes resolve to `Casting.h:565` and not to `:559`.
+// Declaring both here is what lets ONE rule body bind each: for `const T1 &a0`
+// partial ordering prefers `const From &` (more specialised), for `T1 &a0` the
+// non-const overload is the exact match.
+template <typename To, typename From> To cast(From &Val);
+template <typename To, typename From> To dyn_cast(From &Val);
+template <typename To, typename From> To dyn_cast_or_null(From &Val);
 } // namespace llvm
 
 template <typename T1> T1 f26(const T1 &a0) { return llvm::cast<T1>(a0); }
@@ -615,6 +665,14 @@ template <typename T1> T1 f26(const T1 &a0) { return llvm::cast<T1>(a0); }
 template <typename T1> T1 f27(const T1 &a0) { return llvm::dyn_cast<T1>(a0); }
 
 template <typename T1> T1 f28(const T1 &a0) {
+  return llvm::dyn_cast_or_null<T1>(a0);
+}
+
+template <typename T1> T1 f29(T1 &a0) { return llvm::cast<T1>(a0); }
+
+template <typename T1> T1 f30(T1 &a0) { return llvm::dyn_cast<T1>(a0); }
+
+template <typename T1> T1 f31(T1 &a0) {
   return llvm::dyn_cast_or_null<T1>(a0);
 }
 
@@ -658,7 +716,15 @@ template <typename T1> T1 f28(const T1 &a0) {
 // observed at these sites (ir::Attr, ir::Ty, ir::Value, ir::AffineMap) derives
 // Clone.
 //
-// ⛔ THREE THINGS DELIBERATELY NOT KEYED HERE.
+// ⛔ TWO THINGS DELIBERATELY NOT KEYED HERE.  (It was three; g3093 keyed the
+// third -- the non-const lvalue overload -- as f29/f30/f31, and the measured
+// refutation of the `ByteRepr` reason that kept it out is in the block above f26.
+// Measured effect on an 11-TU sample, same binary 086c2ff4, refcount:
+// IDENT-NONCONST-LVREF sites 1,692 -> 0, with NON-IDENTITY 789 -> 789 and isa
+// 58 -> 58 unchanged and three zero-site TUs byte-identical.  The UNSAFE arm was
+// witnessed separately at emission level on InstructionEstimation.cpp --
+// -model=unsafe, unsafe tell present / refcount tell absent, 222 -> 0 with the
+// same two classes frozen -- so this is not a refcount-only close.)
 //   * `isa` -- `isa<To>(x)` returns bool, so `To` is NOWHERE in its key and all
 //     1,428 sites over 170 TUs collapse onto TWO key strings.  One body would
 //     have to answer `isa<ForOp>` and `isa<WhileOp>` identically.  Closing it
@@ -671,10 +737,15 @@ template <typename T1> T1 f28(const T1 &a0) {
 //     discriminator in `OpInst::is_a::<T>()` but no value for the `true` branch
 //     to yield: the generated MlirOp markers are ZSTs, usable only as that type
 //     argument.
-//   * The NON-CONST lvalue overload `T1 llvm::cast(T1 &)` (~1/3 of identity
-//     sites).  A non-const `T1 &` lowers to `&mut T1` in the unsafe model but to
-//     `Ptr<T1>` in refcount (cf. rules/algorithm f9), and reading a value back
-//     out of a `Ptr<T1>` needs a `ByteRepr` bound the MLIR handle types are not
-//     known to satisfy -- it would trade this row's E0425 for an E0277 at every
-//     site.  The const overload carries the majority of the mass and is
-//     identical in both models, so it goes first.
+//
+// ⚠ RESIDUAL AFTER f26-f31, measured on
+// dcc/src/Transform/Sentient/Analyses/InstructionEstimation.cpp (binary
+// 086c2ff4 + ir/g3093AFTER, refcount): 144 dark family sites remain, and they
+// are EXACTLY the two out-of-scope classes above -- 111 NON-IDENTITY and 33
+// `isa`, with 0 identity sites of either constness.  Discriminator for the
+// non-identity class, i.e. a shape where the same lowering WOULD be correct:
+// `T1 llvm::cast(const T1 &)` and `T1 llvm::cast(T1 &)` are keyable precisely
+// because To == From makes `return a0.clone()` the whole semantics; the moment
+// To != From the body owes a value of a type it was never handed, which is why
+// f26-f31 constrain both type parameters to the SAME `T1` and no key here is
+// written over two independent parameters.
