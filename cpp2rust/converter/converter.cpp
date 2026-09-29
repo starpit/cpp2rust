@@ -2445,10 +2445,16 @@ void Converter::EmitInPlaceConstructor(clang::CXXConstructorDecl *decl,
   }
   {
     PushBrace brace(*this);
+    // ⛔ `this` here is a `&mut Self`, NOT the `let mut this = Self { .. }` VALUE
+    // that ConvertCXXConstructorBody emits, so VisitCXXThisExpr's `&raw mut this`
+    // is a `*mut &mut Self` -- one indirection too many.  Measured: a BARE `*this`
+    // in a this-bearing NSDMI (`CElem c{*this, 3}`) came out as
+    // `&mut (*&raw mut this)`, i.e. `&mut &mut Self` where a `*mut Self` is
+    // wanted, = E0308.  ConvertMemberExpr was unaffected because its base_is_this
+    // arm spells the receiver `this` itself and `this.field` is right either way,
+    // which is why 68dbf8c6's MemberExpr witness did not expose it.
+    PushThisIsMutRef push_this(*this, true);
     EmitFunctionPreamble(decl);
-    // `this` is a real reference to the final storage, established before any
-    // initializer is converted.  ConvertMemberExpr/VisitCXXThisExpr already spell
-    // a constructor's receiver `this`, so nothing else has to change.
     StrCat(keyword::kLet, "this", token::kColon, "&mut Self", token::kAssign,
            "&mut *__cc2_this", token::kSemiColon);
     StrCat("::std::ptr::write");
@@ -6731,7 +6737,10 @@ bool Converter::VisitCXXThisExpr(clang::CXXThisExpr *expr) {
     return false;
   }
   if (clang::isa<clang::CXXConstructorDecl>(curr_function_)) {
-    StrCat("&raw mut this");
+    // `this` is a `&mut Self` in the in-place `impl Default` arm and a `Self`
+    // VALUE in ConvertCXXConstructorBody; `&raw mut this` is only right for the
+    // second, so reborrow through the reference in the first.
+    StrCat(this_is_mut_ref_ ? "&raw mut *this" : "&raw mut this");
   } else {
     PushParen paren(*this);
     StrCat(keyword::kSelfValue, keyword::kAs, ToString(expr->getType()));
@@ -8554,6 +8563,29 @@ GetUserProvidedDefaultConstructorDecl(const clang::CXXRecordDecl *decl) {
 // expression that PRODUCES the object, so no object and no binding exist yet,
 // and ConvertMemberExpr / VisitCXXThisExpr reach ReportThisWithoutEnclosingFunction.
 // Detecting `CXXThisExpr` anywhere in the initializer covers both entry points.
+// ANY default constructor of `decl`, INCLUDING the implicit one.  This is the
+// gap 68dbf8c6 left open: GetUserProvidedDefaultConstructorDecl above demands
+// `isUserProvided()`, so a class that declares NO constructor at all -- e.g.
+// `dcc/tools/Options/dcc-pass-option.h`'s
+// `struct EmitSentientIROptions : mlir::PassPipelineOptions<...> { Option<int>
+// OptLevel{*this, "opt-level", ..}; .. }` -- had nothing to delegate to and kept
+// its placeholder: 6 `Cpp2RustUnmappedExpr_CXXThisExpr` per including TU.
+// An implicit default constructor is NOT emitted as Rust (VisitCXXConstructorDecl
+// :2362 returns early for `isImplicit()` unless IsConvertibleImplicitMember), so
+// it must NOT be delegated to by name -- that would trade E0425 on the
+// placeholder for E0425 on a fabricated `T::new()`.  It is used only as the
+// `curr_function_` token that tells ConvertMemberExpr / VisitCXXThisExpr to spell
+// the CONSTRUCTOR receiver, while AddDefaultTrait emits the body itself.
+static clang::CXXConstructorDecl *
+GetAnyDefaultConstructorDecl(const clang::CXXRecordDecl *decl) {
+  for (auto *ctor : decl->ctors()) {
+    if (ctor->isDefaultConstructor()) {
+      return ctor;
+    }
+  }
+  return nullptr;
+}
+
 static bool HasThisBearingFieldInit(const clang::RecordDecl *decl) {
   for (const auto *field : decl->fields()) {
     if (const auto *init = field->getInClassInitializer();
@@ -8594,6 +8626,46 @@ void Converter::AddDefaultTrait(const clang::RecordDecl *decl) {
       Convert(MakeConstructExpr(ctx_, ctx_.getCanonicalTagType(decl),
                                 default_ctor, {}));
       return;
+    }
+    // ⭐ IN-PLACE ARM, for the class that has NO user-provided constructor at
+    // all.  Same shape and the same justification as EmitInPlaceConstructor
+    // (:2430): the object's ADDRESS must exist before any initializer runs, so
+    // the literal is built through one `ptr::write` into a `MaybeUninit` slot
+    // whose pointer is what the initializers capture.  A field-by-field
+    // two-phase assignment is not an option -- it needs a `Default` for every
+    // aliased field (`Option<int>` has none) and would drop a garbage value.
+    // ⚠️ Returning by value MOVES the finished object out of the slot, so for a
+    // self-referential class this is the same fidelity compromise the
+    // `-> Self` wrapper at :2471 already makes; it is not a soundness fix.  It
+    // is taken because `fn default() -> Self` is the signature the trait
+    // dictates and every measured call site is an expression, so no caller owns
+    // a place.  What it DOES buy over the placeholder: the captured pointer is a
+    // real pointer to a real object of the right type, and the file type-checks.
+    if (HasThisBearingFieldInit(decl)) {
+      if (auto *implicit_ctor = GetAnyDefaultConstructorDecl(cxx)) {
+        PushCurrFunction push_fn(*this, implicit_ctor);
+        PushThisIsMutRef push_this(*this, true);
+        StrCat(keyword_unsafe_);
+        PushBrace unsafe_brace(*this);
+        StrCat("let mut __cc2_slot = ::std::mem::MaybeUninit::<Self>::uninit()",
+               token::kSemiColon);
+        StrCat("let __cc2_this: *mut Self = __cc2_slot.as_mut_ptr()",
+               token::kSemiColon);
+        StrCat(keyword::kLet, "this", token::kColon, "&mut Self",
+               token::kAssign, "&mut *__cc2_this", token::kSemiColon);
+        StrCat("::std::ptr::write");
+        {
+          PushParen write_paren(*this);
+          StrCat("__cc2_this", token::kComma);
+          EmitDefaultStructLiteral(decl);
+        }
+        StrCat(token::kSemiColon);
+        StrCat("__cc2_slot.assume_init()");
+        return;
+      }
+      // No default constructor at all (e.g. every constructor takes arguments):
+      // there is no `impl Default` this class can honestly have, and the
+      // placeholder's E0425 stays as the loud marker.
     }
   }
 

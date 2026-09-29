@@ -947,6 +947,24 @@ protected:
   // answer this question in the unsafe model, which never pushes TraitDecl.
   bool in_trait_body_ = false;
 
+  // True while emitting the IN-PLACE `impl Default` arm added for a class whose
+  // only default constructor is IMPLICIT (AddDefaultTrait). There the receiver
+  // local `this` is a `&mut Self` aimed at a `MaybeUninit` slot, NOT the
+  // `let mut this = Self { .. }` VALUE that ConvertCXXConstructorBody emits, so
+  // `&raw mut this` would be a `*mut &mut Self` -- one indirection too many.
+  // Only VisitCXXThisExpr cares; ConvertMemberExpr spells the receiver `this`
+  // and `this.field` is correct for either shape.
+  bool this_is_mut_ref_ = false;
+
+  struct PushThisIsMutRef {
+    Converter &c;
+    bool prev;
+    PushThisIsMutRef(Converter &c, bool v) : c(c), prev(c.this_is_mut_ref_) {
+      c.this_is_mut_ref_ = v;
+    }
+    ~PushThisIsMutRef() { c.this_is_mut_ref_ = prev; }
+  };
+
   struct PushInTraitBody {
     Converter &c;
     bool prev;
