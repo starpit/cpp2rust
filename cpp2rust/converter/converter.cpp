@@ -4695,7 +4695,65 @@ bool Converter::OstreamChainValueIsUsed(clang::Expr *expr) {
     }
     return true;
   }
-  return false;
+  // ⭐ NO Expr PARENT DOES NOT MEAN "VALUE DISCARDED": the consumer may be a
+  // Stmt. `return <chain>;` out of `std::ostream &operator<<(std::ostream &,
+  // T)` is exactly that case -- VisitReturnStmt (converter.cpp:3083) hands the
+  // operand to ConvertVarInit, so the value IS used, while the parent walk
+  // above answered false because a ReturnStmt is a Stmt and GetParentExpr
+  // dyn_casts to Expr. That produced, in the unsafe model,
+  //     return &mut (*os).write_all(&([..].concat()));
+  // i.e. `&mut Result<(),Error>` where the declared return type is
+  // `*mut std::fs::File` -- E0308 -- and in refcount
+  //     return os.write_all(&([..].concat()));
+  // i.e. `Result<(),Error>` where `Ptr<File>` is declared: E0308 in BOTH
+  // models, from the same predicate. (The refcount half is NOT saved by
+  // ConverterRefCount::IsReferenceType's CXXOperatorCallExpr override: that
+  // override only stops ConvertVarInit taking an address, it cannot conjure the
+  // StreamValue tail, which only ConvertCallToOstream emits.)
+  //
+  // Both callers of this predicate want `true` here and neither wants anything
+  // else, so there is no need to narrow to return position at the call sites:
+  //   * ConvertCallToOstream (:4804) -> wraps the writes in a block whose tail
+  //     is StreamValue(), the reference value the chain evaluates to;
+  //   * IsOstreamChainValue (:4753) -> ConvertVarInit's third conjunct, which
+  //     must now fire because VisitReturnStmt reaches ConvertVarInit with
+  //     exactly that block as the initialiser.
+  // Together they emit `return { (*os).write_all(..); &raw mut (*os) };` under
+  // unsafe and `return { os.write_all(..); (os).clone() };` under refcount --
+  // C++ ground truth, which is "do the writes, then yield the stream".
+  // MEASURED at compile level, rustc 1.98.0, on the exact emitted text
+  // minimised: E0308 before / rc=0 after, in BOTH models
+  // (snap/g3053/shape.rs, shapefix.rs, shape_rc.rs, shapefix_rc.rs).
+  //
+  // ⚠️ NO `isVoidType()` GUARD, deliberately, because it would be VACUOUS: a
+  // `return <expr>;` whose operand has non-void type is ill-formed in a
+  // void-returning function, so clang never builds this AST. The one shape that
+  // looks like a counter-example -- `return (void)(os << x);` -- has a
+  // CStyleCastExpr parent, which is an Expr, so it answers true one iteration
+  // earlier and is untouched by this arm.
+  //
+  // ⛔ OTHER non-Expr consumers, censused rather than assumed. Each answers
+  // false here and stays exactly as loud/wrong as it is today:
+  //   * a VarDecl initialiser -- `std::ostream &r = os << x;` -- whose parent
+  //     node is a Decl, so GetParentExpr is null. (Hoisted argument bindings are
+  //     NOT this case: their AST parent is still the enclosing
+  //     CXXOperatorCallExpr, which is why 35c9eaec's site works.)
+  //   * `co_return <chain>;` (CoreturnStmt).
+  //   * the tail statement of a GNU StmtExpr, `({ os << x; })`.
+  // ⭐ CENSUSED, not assumed: over all of repos/dt_src, `git grep -n co_return`
+  // is 0 hits; a stream-reference variable initialised from a chain
+  // (`(ostream|ofstream|stringstream|osyncstream)\s*&\s*\w+\s*=[^;]*<<`) is 0
+  // hits; and the 11 hits for `\(\{[^}]*<<` are ALL `LLVM_DEBUG({ llvm::dbgs()
+  // << ..; })` -- a macro argument whose braces are a plain block, not a GNU
+  // statement expression, with the chain's value discarded inside it. So the
+  // corpus has no witness for any of the three, and inventing lowerings for
+  // them would be untestable guesswork; naming them is the honest deliverable.
+  auto parents = ctx_.getParentMapContext().getParents(*cur);
+  if (parents.empty()) {
+    return false;
+  }
+  const auto *ret = parents.begin()->get<clang::ReturnStmt>();
+  return ret != nullptr && ret->getRetValue() == cur;
 }
 
 // ⭐ THE RULE ConvertVarInit's `&mut` IMPLEMENTS, stated so this narrowing can
