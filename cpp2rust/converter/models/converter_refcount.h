@@ -276,6 +276,16 @@ private:
   const char *GetPointerDerefSuffix(clang::QualType pointee_type);
   const char *GetPointerDerefPrefix(clang::QualType pointee_type) override;
 
+  // The two model hooks for the const-lvalue-reference holder arm of
+  // `ConvertTupleDecompositionDecl`. See the comment on the base declarations
+  // (converter.h) for why the spelling is model-specific and for the aliasing
+  // argument behind the `.clone()`.
+  void EmitDecompositionHolderAnnotation(clang::QualType value_type,
+                                         bool is_mut) override;
+  std::string DecompositionHolderElement(const std::string &holder,
+                                         const std::string &element,
+                                         clang::QualType value_type) override;
+
   // Converts `expr` for use where a `qual_type` function pointer is
   // expected, inserting a `.cast()` if `expr`'s own fn pointer type differs
   // from `qual_type` -- e.g. because the two describe the same C function

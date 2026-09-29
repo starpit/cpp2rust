@@ -1600,15 +1600,63 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
     }
   }
 
-  // REFCOUNT IS REFUSED, measured: that model wraps every local in
-  // `Rc<RefCell<..>>`, so the holder comes out as
-  // `Rc<RefCell<(Rc<RefCell<i32>>, Rc<RefCell<bool>>)>>` and the index gives
-  // `E0609: no field `0``. Reaching the elements needs a borrow of the cell
-  // before the index, which is not expressible from here without duplicating
-  // that model's access-mode expansion. `keyword_unsafe_` is the only model
-  // discriminator the base class has -- ConverterRefCount passes "" for it
-  // (converter_refcount.cpp:33) and ConverterUnsafe passes "unsafe".
-  if (keyword_unsafe_ == nullptr || *keyword_unsafe_ == '\0') {
+  // ⭐ REFCOUNT: THE CONST-LVALUE-REFERENCE HOLDER ARM IS NOW LOWERED; every
+  // other arm of this function stays refused for that model.
+  //
+  // `keyword_unsafe_` is the only model discriminator the base class has --
+  // ConverterRefCount passes "" for it (converter_refcount.cpp:33) and
+  // ConverterUnsafe passes "unsafe".
+  //
+  // WHAT THE OLD BLANKET REFUSAL GOT RIGHT, and why it still applies to the
+  // BY-VALUE holder: that model wraps a named local in `Rc<RefCell<..>>`, so
+  // `let h = <tuple init>;` comes out as
+  // `Rc<RefCell<(Rc<RefCell<i32>>, Rc<RefCell<bool>>)>>` and `h.0` is
+  // `E0609: no field `0``. That is a real measured refusal and it is kept.
+  //
+  // WHAT IT GOT WRONG: on a REFERENCE holder this function does NOT let the
+  // model box the local. It writes the annotation itself (`ref_holder` branch
+  // below) and reads each element through it, so the two model-specific pieces
+  // are just the pointer spelling and the deref spelling -- and the refcount
+  // model already has both, MEASURED by asking the converter to translate the
+  // hand-written equivalent of the target shape
+  //     const std::pair<const FoldDimProp *, BaseFuncType> &h = dim_prop_.at(i);
+  //     const FoldDimProp *fp_dim = h.first;
+  // which it lowers, with no change of any kind, to
+  //     let h: Ptr<(Value<*const FoldDimProp>, Value<BaseFuncType>)> = ..;
+  //     .. (*h.upgrade().deref()).0 ..
+  // i.e. `std::pair` is a BARE 2-TUPLE OF `Value<..>` in this model
+  // (`rules/pair/tgt_refcount.rs`: `(Value<T1>, Value<T2>)`), NOT a boxed
+  // tuple, so there is no cell to borrow before the index and no E0609. The
+  // holder is `Ptr<T>` (ConverterRefCount::VisitReferenceType, :197) and the
+  // deref carries `.upgrade().deref()`
+  // (ConverterRefCount::GetPointerDerefSuffix, :2959) -- both supplied by the
+  // two hooks this arm now goes through.
+  //
+  // ALIASING. `(*h..).N` is a place of type `Value<..>` = `Rc<RefCell<..>>`;
+  // the refcount hook appends `.clone()`, and cloning an `Rc` SHARES the cell,
+  // so the binding names the very object the pair element names -- object
+  // identity preserved, nothing copied, nothing moved. (The `.clone()` is not
+  // optional: moving the `Rc` out of a deref of a `Ptr` is `E0507`.) It is
+  // also strictly stronger than C++ needs here: every binding on this arm is
+  // const-qualified (checked above), so no write can travel back through the
+  // alias in either language. That is the same argument as the map-range
+  // decomposition's `second()`, which likewise clones an `Rc<RefCell<V>>`.
+  //
+  // ⛔ EVERY OTHER ARM STAYS LOUD, gated here BEFORE any emission so a refusal
+  // leaves no partial text:
+  //   * the BY-VALUE holder (`ref_holder` false, which includes the
+  //     temporary-holder arm that deliberately clears it): the E0609 case
+  //     above.
+  //   * the POINTER-FORM arms -- the MUTABLE reference holder, and a const
+  //     holder with a record-typed element -- emit `&raw mut/const (*h).N`
+  //     plus a `ptr_bindings_` registration, i.e. a RAW POINTER binding whose
+  //     uses this model derefs its own way. `ptr_form` is non-empty for both
+  //     (the mutable arm inserts every binding), so one test covers them.
+  //   * the MEMBER-WISE arm: `(*h).field_` on a refcount struct reaches an
+  //     `Rc<RefCell<..>>` FIELD, which is a different spelling again and has
+  //     no measured witness under this model.
+  if ((keyword_unsafe_ == nullptr || *keyword_unsafe_ == '\0') &&
+      !(ref_holder && ptr_form.empty() && memberwise_fields.empty())) {
     return false;
   }
 
@@ -1679,9 +1727,13 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
     // built-in coercion at a `let` with an explicit annotation; `&mut T` to
     // `*const T` would also coerce, but would then make the binding pointers
     // `*const` and no write could reach the container.
-    StrCat(mut_holder ? "*mut" : "*const");
+    // Through the hook, so the refcount model can spell its own `Ptr<T>`; the
+    // base implementation is the `*const`/`*mut` + `Convert(type)` that used to
+    // be inlined here, so the unsafe emission is unchanged byte for byte.
+    EmitDecompositionHolderAnnotation(type, mut_holder);
+  } else {
+    Convert(type);
   }
-  Convert(type);
   StrCat(token::kAssign);
   // Hand the ORIGINAL reference QualType to ConvertVarInit so its
   // reference-reconciliation branch (:6170) is reachable: when the init is NOT
@@ -1706,7 +1758,15 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
     // that case FAILS LOUDLY rather than being silently miscompiled.
     if (binding_name == "_") {
       StrCat(keyword::kLet, "_", token::kAssign);
-    } else if (ptr_form.contains(binding)) {
+      // ⭐ A REFCOUNT reference-holder binding is a `Value<..>` = an
+      // `Rc<RefCell<..>>` handle that is never REASSIGNED -- writes go through
+      // `borrow_mut()` -- so `mut` here would only be an `unused_mut`. That is
+      // how this model already spells its own locals
+      // (`let r: Value<i32> = Rc::new(RefCell::new(0));`, measured on the
+      // hand-written equivalent of the target shape).
+    } else if (ptr_form.contains(binding) ||
+               (ref_holder &&
+                (keyword_unsafe_ == nullptr || *keyword_unsafe_ == '\0'))) {
       // A pointer-form binding is a const alias that is never reassigned, so
       // `mut` would only be an `unused_mut` warning -- and this is the same
       // plain `let` that `EmitVectorDecompositionBindings` already emits for the
@@ -1741,8 +1801,13 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
       StrCat(std::format("&raw {} (*{}).{}", mut_holder ? "mut" : "const",
                          holder, element));
     } else {
-      StrCat(ref_holder ? std::format("(*{}).{}", holder, element)
-                        : std::format("{}.{}", holder, element));
+      // Through the hook, so the refcount model can add its own
+      // `.upgrade().deref()` and the `.clone()` that shares the element's
+      // `Rc`; the base implementation is the `(*h).N` that used to be inlined
+      // here, so the unsafe emission is unchanged byte for byte.
+      StrCat(ref_holder
+                 ? DecompositionHolderElement(holder, element, type)
+                 : std::format("{}.{}", holder, element));
     }
     StrCat(token::kSemiColon);
     ++index;
@@ -9995,6 +10060,23 @@ void Converter::ConvertConstructedValue(clang::QualType type,
 
 const char *Converter::GetPointerDerefPrefix(clang::QualType pointee_type) {
   return token::kStar;
+}
+
+void Converter::EmitDecompositionHolderAnnotation(clang::QualType value_type,
+                                                  bool is_mut) {
+  // A MUTABLE reference holder annotates `*mut`, so the `&mut <init>`
+  // ConvertVarInit already emits for a non-const reference QualType coerces to
+  // it; `*const` would make the binding pointers `*const` and no write could
+  // reach the container. This is verbatim the text that was inlined at
+  // ConvertTupleDecompositionDecl (:1196) before it became a hook.
+  StrCat(is_mut ? "*mut" : "*const");
+  Convert(value_type);
+}
+
+std::string Converter::DecompositionHolderElement(const std::string &holder,
+                                                  const std::string &element,
+                                                  clang::QualType value_type) {
+  return std::format("(*{}).{}", holder, element);
 }
 
 } // namespace cpp2rust

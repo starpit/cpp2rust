@@ -2964,6 +2964,41 @@ ConverterRefCount::GetPointerDerefSuffix(clang::QualType pointee_type) {
   return ".upgrade().deref()";
 }
 
+void ConverterRefCount::EmitDecompositionHolderAnnotation(
+    clang::QualType value_type, bool is_mut) {
+  // Byte-for-byte what `ConverterRefCount::VisitReferenceType` (:197) emits for
+  // a non-array pointee, which is the annotation this model ALREADY gives the
+  // hand-written equivalent of a decomposition holder
+  // (`const std::pair<..> &h = v.at(i);` -> `let h: Ptr<(Value<..>,
+  // Value<..>)> = ..;`) -- deliberately the same three lines rather than a call
+  // to it, because that function takes a `ReferenceType *` we do not have here
+  // and synthesising one would be worse than repeating three tokens.
+  //
+  // `is_mut` is deliberately UNUSED: this model has no `*mut`/`*const`
+  // distinction to make -- mutability lives in the `RefCell`, not in the
+  // pointer -- and in any case the mutable-reference-holder arm never reaches
+  // this model (it is gated out in ConvertTupleDecompositionDecl because its
+  // bindings are raw `&raw mut` pointers).
+  PushConversionKind push(*this, ConversionKind::Pointee);
+  StrCat("Ptr<");
+  Convert(value_type);
+  StrCat(token::kGt);
+}
+
+std::string ConverterRefCount::DecompositionHolderElement(
+    const std::string &holder, const std::string &element,
+    clang::QualType value_type) {
+  // `.upgrade().deref()` is what a `Ptr<T>` deref costs in this model, and
+  // `.clone()` is MANDATORY, not cosmetic: the place `(*h..).N` has type
+  // `Value<..>` = `Rc<RefCell<..>>`, and moving it out of a deref of a `Ptr` is
+  // `E0507`. Cloning an `Rc` SHARES the cell, so the binding names the very
+  // object the pair element names -- the same aliasing the C++ `const auto &`
+  // asks for, and the same argument as the map-range decomposition's
+  // `second()`.
+  return std::format("(*{}{}).{}.clone()", holder,
+                     GetPointerDerefSuffix(value_type), element);
+}
+
 const char *
 ConverterRefCount::GetPointerDerefPrefix(clang::QualType pointee_type) {
   if (pointee_type.isPODType(ctx_) && !pointee_type->isRecordType()) {
