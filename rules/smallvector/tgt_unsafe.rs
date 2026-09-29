@@ -160,3 +160,14 @@ unsafe fn f24<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
 unsafe fn f25<T1: PartialEq>(a0: &Vec<T1>, a1: Vec<T1>) -> bool {
     *a0 != a1
 }
+
+// f40/f41 -- `rbegin()`/`rend()`.  `rules/reverse_iterator` t1 is the `current`
+// pointer, which points ONE PAST the designated element, so `rbegin()` is f9`s
+// end pointer and `rend()` is f8`s begin pointer.  Same two expressions, swapped.
+unsafe fn f40<T1>(a0: &mut Vec<T1>) -> *mut T1 {
+    unsafe { a0.as_mut_ptr().add(Vec::len(&a0)) }
+}
+
+unsafe fn f41<T1>(a0: &mut Vec<T1>) -> *mut T1 {
+    a0.as_mut_ptr()
+}

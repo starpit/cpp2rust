@@ -5282,3 +5282,133 @@ fn f2631(a0: &mut dataflowir_gen::OpBuilder, a1: (usize, usize)) {
 fn t2631() -> dataflowir_gen::OpBuilder {
     dataflowir_gen::OpBuilder::new(dataflowir_gen::new_block_list_with_entry())
 }
+
+// t2800 / f2800 -- `mlir::Pass::Statistic` as a `u64` counter.  IDENTICAL on both
+// arms, for the same reason `thread_id`'s t1 is: u64 is neither a pointer nor a
+// container, so there is no ownership or sharing to model differently.  See
+// rules/mlir/src.cpp for why a unit model is forbidden (ported code branches on
+// the value at SetSendDestinationRE.cpp:148).
+fn t2800() -> u64 {
+    0
+}
+
+fn f2800(a0: &mut u64, a1: u32) -> &mut u64 {
+    *a0 = a1 as u64;
+    a0
+}
+
+// f2801 -- the three-argument Statistic constructor.  Arguments dropped (owner /
+// name / description are for the -stats printout only); 0 is the real initial
+// value of an llvm::TrackingStatistic, not a placeholder.  See src.cpp.
+fn f2801(a0: *mut (), a1: *const i8, a2: *const i8) -> u64 {
+    let _ = (a0, a1, a2);
+    0
+}
+
+// t2750 -- `llvm::iterator_range<std::reverse_iterator<mlir::Operation **>>`.
+// A `Vec` OF POINTERS: `mlir::Operation *` is t243`s `*mut fmt::OpInst`, so the
+// snapshot copies the pointers and every `op->moveBefore(...)` in the loop body
+// still lands on the real op.  `init` is the empty range, which is the only thing
+// a default-constructed `iterator_range` can be.
+fn t2750() -> Vec<*mut dataflowir_gen::fmt::OpInst> {
+    Vec::new()
+}
+
+// f2750 -- `llvm::make_range(rbegin, rend)`.  `a0` is `rbegin()` = the END
+// pointer, `a1` is `rend()` = the BEGIN pointer (rules/reverse_iterator t1 models
+// a reverse_iterator as its underlying `current`, which points ONE PAST the
+// element it designates).  So the element count is `a0 - a1` and the elements are
+// read DOWNWARD from `a0`, `*(a0 - 1)` first -- reverse order, as C++ has it.
+unsafe fn f2750(
+    a0: *mut *mut dataflowir_gen::fmt::OpInst,
+    a1: *mut *mut dataflowir_gen::fmt::OpInst,
+) -> Vec<*mut dataflowir_gen::fmt::OpInst> {
+    unsafe {
+        (0..a0.offset_from(a1) as usize)
+            .map(|i| *a0.sub(i + 1))
+            .collect()
+    }
+}
+
+// ============================================================================================
+// ROW g3081 -- GAP FAMILY F1 continuation: the three MEASURED-GATE dialect-op keys, t2650-t2652.
+//
+// Each maps to `fmt::OpInst` carrying the op's own generated `DEF` -- t161/t162/t2610-t2619's body
+// with the concrete op substituted, and no new model claim.  See `src.cpp` at t2650 for: the DEF
+// verification (positive AND negative control, two independent instruments, rmeta md5 re-measured
+// rather than inherited); the gate-TU re-derivation, which CORRECTED the brief's attribution of
+// `vector::StoreOp` from `VectorChainToSentientPESFP.cpp` (still blocked on
+// `mlir::ConversionPatternRewriter`) to `VectorChainToSentientPT.cpp`; the position census that is
+// why there is NO `fN` constructor on any of the three; and the MEMBER finding -- no member of any
+// of the three is mapped, which is a NAMED residue (`g3067`), not a closed argument.
+//
+// All three are case 1 of the trichotomy: ordinary ODS ops with their own generated `DEF`, so none
+// needs t162/t2619's hand-written-view-class redirection and each carries its own marker.
+//
+// The `init` is t25's/t152's/t157's/t158's/t161's/t162's/t2610-t2619's, and for their reason: a
+// default-constructed ODS op handle is the NULL handle, `fmt::OpInst` has no null, and this
+// expression exists only to type-check the type key.
+//
+// ⛔ t25's PROHIBITION APPLIES UNCHANGED: no `operator==`, no `operator!=`, no identity test.
+// ⚠️ THIS ARM IS NOT THE OTHER ARM'S `sed`: it comes out byte-identical to the other, for the
+// reason t157's, t2610's and t2617's arms record -- `fmt::OpInst` is a plain generated value type,
+// it is not behind a `Value<T>`/`Ptr<T>` wrapper in either model, and NO `ptr_bindings_` is
+// registered here (registering one on the refcount arm is `E0614`).  Each body was reasoned for
+// its own model and the identity is the conclusion, not the method.
+fn t2650() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_arith_OrIOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+fn t2651() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_affine_AffineVectorLoadOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+fn t2652() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_vector_StoreOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+// ===========================================================================
+// GAP FAMILY F5 -- the two waiting `mlir::OwningOpRef` instantiations (g3082).
+// Both reuse t980's landed model, `libcc2rs::OwningOpRef<OpTy>` -- an `Option<OpTy>`
+// whose `Drop` panics if it still holds an op.  See src.cpp at t2680 for the
+// character-exact abort the keys were read from and for why no member is keyed.
+
+// t2680 -- `mlir::OwningOpRef<mlir::Operation *>` ->
+// `libcc2rs::OwningOpRef<*mut dataflowir_gen::fmt::OpInst>`.
+// The `OpTy` argument is t36's model for `mlir::Operation *` (:507), i.e.
+// `*mut dataflowir_gen::fmt::OpInst`, spelled CONCRETELY because the refcount arm
+// disagrees (`libcc2rs::Ptr<..>` there) and a type parameter in type position is not
+// an inference variable.
+//
+// The default value is the NULL HANDLE, which is what C++'s
+// `OwningOpRef(std::nullptr_t = nullptr)` gives a declaration the converter cannot
+// initialise -- and it is exactly what `ddc/ddl/ddl.h:22`'s member holds until
+// something assigns it.  ⚠️ Like t980 and unlike t800 this default must NOT be a
+// panic: a null handle is a real, valid, observable C++ state whose destructor is a
+// no-op (`if (op)` is false), so inventing a failure here would be wrong.
+//
+// ⚠️ THE ONE FIDELITY GAP, STATED: the tripwire keys on `Option::is_some()`, while
+// C++ keys on the POINTER being non-null, so an adopted NULL `Operation *` would
+// panic in Rust where C++ is silent.  That divergence is UNREACHABLE from this key
+// alone -- `adopt()` is only callable from a constructor key, and no constructor is
+// keyed for any `OwningOpRef` instantiation, so `null()` is the only handle this
+// rule tree can produce.  A future ctor key must take `Option::None` for a null
+// argument rather than `adopt(null_mut())`.
+fn t2680() -> libcc2rs::OwningOpRef<*mut dataflowir_gen::fmt::OpInst> {
+    libcc2rs::OwningOpRef::null()
+}
+
+// t2681 -- `mlir::OwningOpRef<mlir::ktdf_arch::DeviceOp>` ->
+// `libcc2rs::OwningOpRef<dataflowir_gen::fmt::OpInst>`.
+// `DeviceOp` is an ODS-generated op class, so its value model is t161's
+// (`dataflowir_gen::fmt::OpInst`), the same model t400 gives the interface trait
+// over this very op.  ⭐ NO `MlirOp::DEF` IS NAMED HERE and none is needed: the
+// handle is constructed EMPTY, so no `OpInst` value is built and this key does not
+// depend on the `mlir_ktdf_arch_DeviceOp` marker existing.
+fn t2681() -> libcc2rs::OwningOpRef<dataflowir_gen::fmt::OpInst> {
+    libcc2rs::OwningOpRef::null()
+}

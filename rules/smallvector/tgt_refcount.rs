@@ -83,3 +83,14 @@ fn f24<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
 fn f25<T1: PartialEq>(a0: &Vec<T1>, a1: Vec<T1>) -> bool {
     *a0 != a1
 }
+
+// f40/f41 -- `rbegin()`/`rend()`, mirroring f9/f8 verbatim: the refcount receiver
+// for `SmallVectorTemplateCommon<T1> &` is already lowered to `Ptr<T1>`, and
+// `to_end()` is the same end-of-vector handle f9 returns.
+fn f40<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0.to_end()
+}
+
+fn f41<T1>(a0: Ptr<T1>) -> Ptr<T1> {
+    a0
+}

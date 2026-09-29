@@ -41,6 +41,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <iterator>   // std::reverse_iterator, f40/f41`s return type
 
 namespace llvm {
 
@@ -79,6 +80,15 @@ public:
   bool empty() const;
   iterator begin();
   iterator end();
+  // ⚠️ THE RETURN TYPE IS WRITTEN OUT AS `std::reverse_iterator<T *>` AND NOT AS
+  // the class`s own `reverse_iterator` typedef, the f461 discipline: the recorded
+  // key carries the spelling, and `rules/reverse_iterator` t1 is recorded as
+  // `std::reverse_iterator<T1 *>`.  A typedef-spelled key would be DEAD.
+  // Only the NON-CONST pair is declared -- the corpus receiver
+  // (`finallist.rbegin()` on a local `SmallVector<Operation *, 2>`) is a mutable
+  // lvalue -- so a const ask fails loudly rather than binding wrong.
+  std::reverse_iterator<T *> rbegin();
+  std::reverse_iterator<T *> rend();
   T *data();
   T &operator[](size_type idx);
   T &front();
@@ -386,4 +396,36 @@ bool f24(const llvm::SmallVectorImpl<T1> &a0,
 template <typename T1>
 bool f25(const llvm::SmallVectorImpl<T1> &a0, llvm::ArrayRef<T1> a1) {
   return operator!=(a0, a1);
+}
+
+// ===========================================================================
+// f40 / f41 -- `rbegin()` / `rend()` on `llvm::SmallVectorTemplateCommon<T1>`.
+// THE DECLARING CLASS IS THE RECEIVER, f1100/f461`s rule: LLVM declares both in
+// `SmallVectorTemplateCommon` (llvm/ADT/SmallVector.h), so a key written on
+// `llvm::SmallVector<T1, N>` would be DEAD.  They mirror f8/f9 (`begin`/`end`)
+// exactly -- same receiver class, same non-const receiver, same one-member body.
+//
+// WHY THEY EXIST: the corpus site is
+// `llvm::make_range(finallist.rbegin(), finallist.rend())` in
+// `RDETreeOptimizer<T>::verticalRedundancyElimination`
+// (dcc/src/Transform/Sentient/Analyses/RedundantDefinitionEliminationTreeImpl.cpp:337),
+// the producer of `rules/mlir` t2750.  ⛔ WITHOUT THESE TWO KEYS t2750 IS THE
+// STRICTLY-WORSE-THAN-NO-KEY CASE: `rbegin`/`rend` are MEMBERS, and an unmapped
+// member does NOT abort -- it is emitted textually, so the TU would reach rc=0
+// and then fail rustc with `E0599 no method named rbegin on Vec<_>`, which no
+// bucket census can see.  The producer chain is landed whole or not at all.
+//
+// THE MODEL IS t1`s, NOT A NEW ONE.  `rules/reverse_iterator` t1 models
+// `std::reverse_iterator<T *>` as the underlying `current` pointer, which points
+// ONE PAST the element `*rit` designates.  So `rbegin()` is the END pointer and
+// `rend()` is the BEGIN pointer -- the same two expressions f9 and f8 already
+// return, in the opposite order.  That is why no new representation appears here.
+template <typename T1>
+std::reverse_iterator<T1 *> f40(llvm::SmallVectorTemplateCommon<T1> &o) {
+  return o.rbegin();
+}
+
+template <typename T1>
+std::reverse_iterator<T1 *> f41(llvm::SmallVectorTemplateCommon<T1> &o) {
+  return o.rend();
 }

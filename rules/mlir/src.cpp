@@ -1161,6 +1161,50 @@ class Pass {
 public:
   template <typename DataType>
   class Option {};
+
+  // PASS 2026-09-29 (g3083).  `mlir::Pass::Statistic` -- Pass.h:134:9,
+  // `class Statistic : public llvm::Statistic`, i.e. a `llvm::TrackingStatistic`
+  // (Statistic.h:160) with an owning `Pass *` and a name/description, registered
+  // into `Pass::statistics` (Pass.h:325) so the pass framework can print it under
+  // `-stats`.  Declared here WITHOUT its base so the recorded key is exactly the
+  // `searched as:` spelling `mlir::Pass::Statistic`.
+  //
+  // ⛔⛔ AN OPAQUE `()` IS FORBIDDEN HERE AND THE REASON IS MEASURED, NOT
+  // STYLISTIC.  Unlike t40 (`Pass`) and t64 (`PassManager`), whose values the
+  // corpus never inspects, a Statistic's VALUE IS READ BY PORTED CODE:
+  // `dcc/src/Transform/Sentient/SetSendDestinationRE.cpp:148` is
+  // `if (set_send_dst_re_count == 0) return;` -- a control-flow decision taken on
+  // the counter.  A unit model plus unit-returning `operator=` would compile,
+  // reach `rc=0`, and take the WRONG BRANCH.  Same forbidden trade as
+  // `mlir::InFlightDiagnostic` (t-key below) and `mlir::OperationPass`.
+  //
+  // -> `u64`, exactly the `thread_id` t1 precedent (`std::thread::id` -> `u64`,
+  // identical on both arms because u64 is neither a pointer nor a container).
+  // `llvm::TrackingStatistic` IS a `std::atomic<uint64_t>` plus a name pair
+  // (Statistic.h:52-66), and every corpus use is `= n`, `++`, `n++` or `== 0`, so
+  // a plain u64 is a FAITHFUL model of the part the corpus observes.
+  //
+  // ⛔ WHAT IS DELIBERATELY DROPPED, STATED: the name, the description, and the
+  // registration into `Pass::statistics`. Those exist only to be printed by the
+  // PassManager under `-stats`, and this crate models NO PASS INFRASTRUCTURE at
+  // all (t40's own note) -- there is no PassManager to print them. So nothing
+  // observable is lost; what would be lost by a `()` (the count itself) is
+  // exactly what this rule keeps.
+  //
+  // ⛔ NOT KEYED, deliberately, and they are the named successor: `operator++`,
+  // `operator++(int)`, `operator+=` and `operator uint64_t` are members of
+  // `llvm::TrackingStatistic`, NOT of `mlir::Pass::Statistic`, so a key declared
+  // here cannot spell them -- the converter records the key from the DECLARING
+  // class. They need `llvm::TrackingStatistic` declared as its own rule (GAPS.md
+  // B14 lists it as an open singleton) mapping to the same `u64`. Sites:
+  // `LoopMerging.cpp:278` (`++`), `LoopSplittingAndUnrolling.cpp:1001,1011` and
+  // `VectorRegisterInitialization.cpp:163` (postfix `++`). Likewise the
+  // three-argument constructor is unkeyed.
+  class Statistic {
+  public:
+    Statistic(Pass *owner, const char *name, const char *description);
+    Statistic &operator=(unsigned value);
+  };
 };
 
 // mlir/include/mlir/IR/BuiltinTypeInterfaces.h -- `ShapedType`, a TYPE
@@ -9349,11 +9393,16 @@ unsigned f909(const t923 &a0) { return a0.size(); }
 // loud.
 //
 // ⛔ `OwningOpRef<mlir::Operation *>` and `OwningOpRef<mlir::ktdf_arch::DeviceOp>`
-// are DELIBERATELY NOT KEYED.  Both have `searched as:` lines in the baseline TSVs
-// and both want this same wrapper, but their OpTy models are not settled here
-// (`mlir::Operation *` is the same pointer-model gap the nine unlanded `SmallSet`
-// spellings hit at :5527), and a key naming the wrong `OpTy` records cleanly and
-// then lies.  They keep aborting loudly.
+// were DELIBERATELY NOT KEYED here, on the ground that "their OpTy models are not
+// settled".  ⭐ THAT GROUND WAS WRONG AND IS RETRACTED 2026-09-29 (g3082): BOTH OpTy
+// MODELS ARE ALREADY IN THIS FILE.  `mlir::Operation *` is t36 -- an EXPLICIT
+// pointer-spelled type key, landed, `*mut dataflowir_gen::fmt::OpInst` on the unsafe
+// arm and `libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>` on the refcount arm -- so
+// there is no "pointer-model gap" to wait on; the `SmallSet` spellings at :5527 are
+// blocked on a CONTAINER-OF-POINTER question (what a `SmallSet` element is), not on
+// what an `Operation *` is.  And `mlir::ktdf_arch::DeviceOp` is already DECLARED at
+// :5719 for t400 and is an ODS op, so its value model is t161's
+// `dataflowir_gen::fmt::OpInst`.  Keyed t2680 / t2681 at the bottom of this file.
 namespace mlir {
 template <typename OpTy> class OwningOpRef {};
 }  // namespace mlir
@@ -11691,6 +11740,308 @@ using t2618 = mlir::affine::AffineApplyOp;
 using t2619 = mlir::arith::ConstantIntOp;
 
 // ===========================================================================
+// GAP FAMILY F5 -- THE TWO WAITING `mlir::OwningOpRef` INSTANTIATIONS.  g3082,
+// 2026-09-29.  Indices start at 2680 to stay clear of the in-flight F1/F4 blocks
+// (t2610-t2619, t2630/t2631, t2650+) and of t2700/f2700-f2702; indices are
+// per-module and need not be dense.
+//
+// ⭐ THE HARD PART OF THIS ROW WAS ALREADY BUILT.  `libcc2rs::OwningOpRef<OpTy>`
+// (libcc2rs/src/owning_op_ref.rs) is the landed ownership-plus-tripwire model that
+// t980 uses for `mlir::OwningOpRef<mlir::ModuleOp>`: an `Option<OpTy>` whose `Drop`
+// PANICS if it still holds an op, because `~OwningOpRef` erases the adopted op
+// (`OwningOpRef.h:29`, `if (op) op->erase();`) and no rule in this tree models
+// `Operation::erase`.  These two keys are the SAME model at two more `OpTy`s; the
+// destructor test that forbids an opaque `()` here is satisfied by the wrapper, not
+// by the key.
+//
+// ⭐ BOTH KEYS WERE READ OFF THE CONVERTER, CHARACTER-FOR-CHARACTER, not off a queue
+// row (which truncates at 96 chars and shows `mlir::OwningOpRef<mlir::Operat...`).
+// `pin/cpp2rust` md5 a0b0a70761208ff7559492f8a5fd8cca on ddc/ddl/ddl.cpp printed:
+//   unsupported system type has no rule: `mlir::OwningOpRef<mlir::Operation *>`
+//   (would be emitted as the undefined name `mlir_OwningOpRef_mlir_Operation_ptr_`)
+//   rule key: searched as: mlir::OwningOpRef<mlir::Operation *>; from decl (NOT a
+//   key -- canonicalised, defaulted args kept): mlir::OwningOpRef<mlir::Operation *>
+//   at .../mlir/IR/OwningOpRef.h:29:7
+// The mangled name carries ONE `_`-joined argument (`_mlir_Operation_ptr_`), which is
+// the arity-1 confirmation t980's comment asks for: the key takes exactly one
+// template argument and the `searched as:` half -- not the canonicalised "from decl"
+// half -- is what a key must equal.  ⚠️ The pointer is spelled `mlir::Operation *`
+// with the space, as t36 spells it.
+//
+// ⛔ NO CONSTRUCTOR AND NO ACCESSOR IS KEYED, deliberately, exactly as for t980.
+// `get()`, `operator*`, `operator->`, `operator bool` and `release()` stay unmapped,
+// so every READ still fails at translate time; the `Drop` panic is only the backstop
+// for a path that gets there anyway.  ⚠️ AND THE HONEST LIMIT OF THAT CLAIM: those
+// are MEMBER calls, and an unmapped member does NOT abort (the converter prints the
+// literal C++ name, giving `rc=0` plus a rustc `E0599` that no census sees -- row
+// g3067's opt-in refusal marker is the unblocker and has NOT landed on this base).
+// So the loudness claim here is about the TYPE lookup only, plus the runtime
+// tripwire.  The measured consequence is visible in this very row: keying t2681
+// moves DeviceManager.cpp's first abort to its ADOPTING site
+// `OwningOpRef<DeviceOp>(device)` (DeviceManager.cpp:96), which is a CONSTRUCTOR and
+// therefore still loud.
+//
+// ⛔ WHY THIS IS NOT A GENERIC KEY.  The two arms disagree about what an
+// `Operation *` is (`*mut fmt::OpInst` unsafe vs `libcc2rs::Ptr<fmt::OpInst>`
+// refcount), and a type parameter in TYPE POSITION is not an inference variable --
+// the converter annotates its temporaries.  So t2680 is written with a CONCRETE
+// `OpTy` in each tgt_*.rs, never as one bare path shared by both.
+// ---------------------------------------------------------------------------
+
+// t2680 -- `mlir::OwningOpRef<mlir::Operation *>`.  A MEASURED first-abort gate on
+// three TUs, all three reproduced on this base (`ddc/ddl/ddl.cpp`,
+// `ddc/ddl/ddl_conversion.cpp`, `ddc/ddl/ddl_standalone.cpp`), and 3 of 3 are bucket
+// B / lines=0 / NOFILE.  The declaring sites are `ddc/ddl/ddl.h:22`
+// (`OwningOpRef<Operation*> ddl_module_op_`, a member) and five function
+// return/local positions in `ddc/ddl/ddl.cpp:36,54,62,78,96`.
+// ⛔ Do NOT read the 3 TUs off the queue: rows g2337/g2338/g2339 for this exact
+// spelling are all marked `done` while the gate is live -- a false closure.  Row
+// g455 (`blocked:refused-dtor-erases-the-op-it-adopted`) is the real one.
+using t2680 = mlir::OwningOpRef<mlir::Operation *>;
+
+// t2681 -- `mlir::OwningOpRef<mlir::ktdf_arch::DeviceOp>`.  Queue row g2340, 1 TU,
+// `reached while converting mlir::ktdf_arch::DeviceManager...`; the single source
+// site is
+// `dataflow-scheduler/external/dataflow-scheduler-dialects/lib/Dialect/KTDFArch/
+//  Analysis/DeviceManager.cpp:70` (a lambda return type) and `:96` (the adopting
+// ctor).  ⚠️ IT IS NOT IN THE 218-TU COHORT and it does NOT appear in
+// verif/g3059.gate-table.txt at all -- so this key is sized from the SOURCE and from
+// a direct run of that TU, not from the ranking, and its TU count is 1.
+// `mlir::ktdf_arch::DeviceOp` is already declared at :5719 (for t400) and is
+// declared NOWHERE ELSE in this file, so this key adds no shadow type rule.
+using t2681 = mlir::OwningOpRef<mlir::ktdf_arch::DeviceOp>;
+
+// ============================================================================================
+// ROW g3081 -- GAP FAMILY F1, continuation of g3064/g3073: the three dialect-op keys that are
+// FIRST-ABORT GATES ON THIS ROW'S OWN BASELINE (9fead6a0, which already contains t2610-t2619).
+// Every gate below was RE-DERIVED here, not inherited from the brief, and each is quoted from the
+// verbatim `unsupported system type has no rule` line of an unsafe-model run on that baseline:
+//
+//   t2650  mlir::arith::OrIOp                dcc/src/Conversion/StandardToSentient/StandardToSentient.cpp
+//   t2651  mlir::affine::AffineVectorLoadOp  dcc/src/Conversion/AffineToStandard/AffineToStandard.cpp
+//   t2652  mlir::vector::StoreOp             dcc/src/Conversion/VectorChainLowering/
+//                                            VectorChainToSentientPT/VectorChainToSentientPT.cpp
+//
+// ⭐⭐ THE ONE CORRECTION THIS ROW MAKES TO ITS OWN BRIEF, AND IT IS A GATE-ATTRIBUTION ERROR.
+// The brief named `VectorChainToSentientPESFP.cpp` as `vector::StoreOp`'s gate TU, inherited from
+// g3077.  Measured on this baseline, PESFP does NOT abort on `vector::StoreOp` -- it aborts on
+// `mlir::ConversionPatternRewriter` (g3077's own t2631, which is NOT merged at 9fead6a0), so
+// `StoreOp` is not reached there and could not have been proven from that TU.  The op IS a real
+// first-abort gate, but on a DIFFERENT, previously unnamed TU: `VectorChainToSentientPT.cpp`.
+// ⭐ The reusable point: an "X is the successor gate of Y" claim is a claim about ONE TU, and it
+// expires if the predecessor key it was measured behind does not actually land.  Re-derive the TU,
+// not just the spelling.
+//
+// ⭐ EVERY `DEF` VERIFIED PRESENT WITH BOTH INSTRUMENTS AND BOTH CONTROLS IN ONE BATCH, against
+// the rmeta `rule-preprocessor/src/semantic.rs` `find_artifact` resolves -- resolved by this row,
+// not inherited: `pin/target_preprocessor/release/build/dataflowir-gen/48cebb0c20af925b/out/
+// libdataflowir_gen-48cebb0c20af925b.rmeta`, md5 `0ed4a952cad1155f4fd4acae06eaed12` (the same
+// value g3073 measured; g3064's `f4ac1f4295ae` is stale).  `grep -aoF <name> | wc -l` on the
+// rmeta, and `grep -oE "struct <name>\b" | wc -l` on the CURRENT release `dataflow_ods.rs`
+// (`build/dataflowir-gen/076768bb830512c5/out/`, 638,134 B):
+//       name                             rmeta   ods
+//       mlir_arith_ConstantOp   POS CTL      2     1
+//       mlir_arith_OrIOp                    2     1
+//       mlir_affine_AffineVectorLoadOp      2     1
+//       mlir_vector_StoreOp                 2     1
+//       mlir_FAKE_NegCtl_XYZ    NEG CTL      0     0
+// So all three are case 1 of the trichotomy (ODS op with its own generated DEF) -- none needs
+// g3073's hand-written-view-class reasoning, and none is generator-side.
+// ⚠️ AND A CORRECTION TO `GAPS.md` SECTION F: it cites `isa.rs:42`'s parsed-dialect list
+// (`dataflow builtin arith affine scf func vectorchain agen uniform`) as the set for which "the
+// generator side is already done".  `vector` IS NOT ON THAT LIST, yet `mlir_vector_StoreOp` and
+// `mlir_vector_LoadOp` both read 2/1.  The list is therefore NOT a sound proxy for marker
+// presence in either direction -- measure the marker, never the dialect name.  (The converse
+// also holds: `mlir_vectorchain_StoreOp`/`mlir_vectorchain_LoadOp` read 0/0 although
+// `vectorchain` IS on the list.)
+//
+// ⛔⛔ THE HONEST COST, MEASURED, SCOPED TO THE DECLARATIONS THAT ACTUALLY BIND A HANDLE (an
+// unscoped identifier grep over-counts -- `op` is rebound to several other op types in each of
+// these files, and A SITE COUNT IS NOT AN ERROR COUNT).  NO MEMBER OF ANY OF THE THREE IS KEYED:
+//   OrIOp             `or_op.getLhs()` :179, `or_op.getRhs()` :182, `or_op.getOperand(…)` x4
+//                     :395,396,401,403, `or_op.erase()` :429 -- all inside the gate TU itself;
+//                     plus `orop` :461 and `op` parameters :70,:287 that only dispatch.
+//   AffineVectorLoadOp `op.getMapOperands()`, `op.getLoc()`, `op.getAffineMap()`,
+//                     `op->getAttrs()`, `op.getVectorType()`, `op.getMemRef()` -- six accessors,
+//                     all inside `AffineVectorLoadLowering::matchAndRewrite` in the gate TU.
+//   vector::StoreOp   `store_op.getValueToStore()` :99,:105 in the gate TU.
+// An unmapped MEMBER does not abort -- `VisitCallExpr` gates on `Mapper::Contains` and falls
+// through to `ConvertCallExpr`, emitting the literal C++ name -- so these become rustc `E0599`s
+// one stage later rather than translate-time aborts.  That is the PRE-EXISTING `g3067` capability
+// gap, and it is the SAME bargain every landed op key in this file already struck (t25, t61,
+// t157, t158, t161, t162, t2610-t2619).  ⛔ NO MEMBER COVERAGE IS CLAIMED.  It is named here, not
+// papered over, and not inflated.
+// ⚠️ `::create` SINKS, the standing documented refusal of this module, counted so the number is
+// on the record rather than implied: `arith::OrIOp::create` 4, `AffineVectorLoadOp::create` 1,
+// `vector::StoreOp::create` 2 across `repos/dt_src` -- 7 sites, PRE-EXISTING, not introduced by
+// these keys.
+// ⛔ NO `fN` CONSTRUCTOR KEY: a default construction of any of the three would be needed to
+// warrant one and there are ZERO in the corpus (`(mlir::)?(arith|affine|vector)::<Op>\s+ident;`
+// = 0 hits for all three), t161's grep repeated.
+// ⛔ t25's PROHIBITION APPLIES UNCHANGED: no `operator==`, no `operator!=`, no identity test.  A
+// C++ op handle compares `Operation *`; an `OpInst` is an op's printed CONTENT.
+// ⚠️ SWALLOW / DEAD-KEY SAFETY: all three spellings have arity 0 -- no `<`, no comma at any
+// depth, no operator name -- so neither `matchTemplate`'s same-depth-comma over-run nor the
+// `operator>=` angle-bracket-depth desync can apply.  Each key is read back out of `ir_src.json`
+// with `value == spelling` (`==`, never `in`) after the regen rather than assumed.
+//
+// ⛔ WHAT THIS ROW DELIBERATELY LEAVES KEYLESS, AND WHY -- the eight ops g3073 left unkeyed for
+// want of a gate.  `mlir::arith::OrIOp` was one of them and now IS a gate, so it is keyed above.
+// The other eight are NOT gates on this baseline and stay keyless, because trading a loud gate for
+// a silent undefined name is the forbidden trade (this module's own `mlir::OperationPass` note):
+//   AddFOp, MulFOp, RemUIOp, SubFOp -- **not mentioned in ANY of the 218 corpus TUs at all**
+//       (qualified and bare-identifier greps over the whole 218-TU list, 0 hits each).  They
+//       cannot be gates; the markers exist but nothing asks for them.
+//   DivSIOp, MinSIOp, MulIOp -- mentioned only in corpus TUs that abort EARLIER and elsewhere,
+//       measured on this baseline: `dbo/src/SymbolExpr.cpp` aborts on a 2-binding
+//       `DecompositionDecl` (family A1), `dbo/src/Utils/sdsc_bundle/ProgramCorrection.cpp` on a
+//       self-recursive lambda, `VectorChainToSentientPT/LoweringXRF.cpp` on
+//       `mlir::affine::FlatAffineValueConstraints`.
+//   vector::LoadOp -- already DECLARED in this file (:5311) and named by `t214`'s trait key, and
+//       its six corpus TUs all abort earlier: `FlatAffineValueConstraints` (VectorChainHelper.cpp,
+//       LoweringXRF.cpp), `mlir::SplatElementsAttr` (VectorOperands.cpp),
+//       `mlir::ConversionPatternRewriter` (PESFP.cpp), and `vector::StoreOp` itself
+//       (VectorChainToSentientPT.cpp, i.e. behind t2652).  Re-measure LoadOp after t2652 lands.
+//
+// ⚠️ NAMED SUCCESSOR, PREDICTED AND NOT YET MEASURED WHEN THIS COMMENT WAS WRITTEN:
+// `AffineToStandard.cpp` declares `AffineVectorStoreLowering : OpRewritePattern<
+// AffineVectorStoreOp>` immediately after the `AffineVectorLoadOp` pattern t2651 unblocks, so
+// `mlir::affine::AffineVectorStoreOp` is the expected next first abort there.  It is left keyless
+// on purpose: this row keys only what it measured.
+namespace mlir {
+namespace affine {
+// mlir/Dialect/Affine/IR/AffineOps.h.inc -- an ordinary ODS-generated op class (marker
+// `mlir_affine_AffineVectorLoadOp` reads 2/1 above), one `Operation *` through its OpState base.
+// Declared here ONLY so t2651's key can be SPELLED.  No member mapped.
+class AffineVectorLoadOp {};
+} // namespace affine
+namespace vector {
+// mlir/Dialect/Vector/IR/VectorOps.h.inc -- ordinary ODS-generated op class (marker
+// `mlir_vector_StoreOp` reads 2/1 above).  `vector::LoadOp`, its sibling, is already declared at
+// :5311; only `StoreOp` is new.  Declared ONLY so t2652's key can be SPELLED.  No member mapped.
+class StoreOp {};
+} // namespace vector
+} // namespace mlir
+
+// t2650 -- `mlir::arith::OrIOp`.  Gate TU
+// dcc/src/Conversion/StandardToSentient/StandardToSentient.cpp (g3073's own named successor there,
+// after t2617 `AndIOp` landed; re-derived and REPRODUCED on this baseline).  The class is ALREADY
+// DECLARED at :5292 by the `OneTypedResult` block (`t198` spells it as a trait argument), so no
+// new declaration is made for it.
+using t2650 = mlir::arith::OrIOp;
+// t2651 -- `mlir::affine::AffineVectorLoadOp`.  Gate TU
+// dcc/src/Conversion/AffineToStandard/AffineToStandard.cpp (g3073's successor there, after t2618
+// `AffineApplyOp` landed).  ⚠️ NOTE FOR ANY LATER CENSUS: this TU names the op UNQUALIFIED
+// (`OpRewritePattern<AffineVectorLoadOp>` at :152, inside `using namespace mlir::affine`), so a
+// grep for the QUALIFIED spelling `affine::AffineVectorLoadOp` does NOT find its own gate TU.
+// That is how a candidate-selection grep can miss the very TU it is looking for.
+using t2651 = mlir::affine::AffineVectorLoadOp;
+// t2652 -- `mlir::vector::StoreOp`.  Gate TU
+// dcc/src/Conversion/VectorChainLowering/VectorChainToSentientPT/VectorChainToSentientPT.cpp --
+// NOT the `VectorChainToSentientPESFP.cpp` the brief named; see the correction above.
+using t2652 = mlir::vector::StoreOp;
+
+// ===========================================================================
+// t2750 / f2750 -- GAP FAMILY B3: `llvm::iterator_range<std::reverse_iterator<
+// mlir::Operation **>>`, the n=4 gate ranked #10 in verif/g3059.gate-table.txt,
+// and its PRODUCER.  The four TUs are dcc/src/Transform/Sentient/{ImplicitSyncRE,
+// SetMaskRE, SetActiveMaskValueRE, SetSendDestinationRE}.cpp; all four reach it
+// through the SAME single site, the template body
+// `RDETreeOptimizer<TreeType>::verticalRedundancyElimination`
+// (dcc/src/Transform/Sentient/Analyses/RedundantDefinitionEliminationTreeImpl.cpp:336-340):
+//
+//     for (Operation *op : llvm::make_range(finallist.rbegin(), finallist.rend()))
+//
+// with `finallist` a local `llvm::SmallVector<mlir::Operation *, 2>`.
+//
+// ⭐⭐ IT IS A `Vec<ELEMENT>`, NOT A PAIR OF ITERATORS, and that is derived from
+// what the CONVERTER does with it, not from the C++ class definition.
+// `Converter::VisitCXXForRangeStmt` dispatches map -> string -> set and otherwise
+// falls through to `VisitCXXForRangeStmtVector` (positional); the `.iter()` path
+// needs `HasSetLikeClassName` AND a `HashSet<`/`BTreeSet<` target, both of which
+// this type fails.  A range-for is the ONLY use in the corpus, so a `Vec` model is
+// what makes the dominant use work.  It is also what every landed MLIR range in
+// this module already is -- t14 `OperandRange`, t15 `ResultRange`, t16
+// `ValueRange`, t37/t38/t166 `indexed_accessor_range_base`, t2410
+// `ValueTypeRange` -- with `libcc2rs::RangeIter<T>` as the separate ITERATOR layer.
+//
+// ⭐ THE ALIASING LICENCE, RE-DERIVED FOR THIS INSTANTIATION AND NOT INHERITED.
+// A snapshot `Vec` is a SEMANTIC CHOICE and it is only sound when nothing observes
+// the aliasing.  Here the elements are `mlir::Operation *` -- POINTERS -- so the
+// loop body`s `op->moveBefore(insert_point)` mutates the REAL IR through the
+// pointer, exactly as in C++; the snapshot copies the 2-or-so POINTERS, not the
+// ops.  ⛔⛔ AND THIS IS THE BOUNDARY OF THE MODEL, WRITTEN DOWN RATHER THAN
+// ASSUMED: for a range whose element is a `mlir::Operation &` or any by-value
+// record, a snapshot `Vec` TYPE-CHECKS AND SILENTLY DROPS EVERY MUTATION THROUGH
+// THE RANGE.  "It is a Vec" is true for ITERATION and FALSE FOR MUTATION-THROUGH.
+// The sibling gates whose element is NOT a pointer are therefore deliberately NOT
+// keyed here (see the omission list below).
+//
+// ⛔ THE PRODUCER IS LANDED IN THE SAME CHANGE OR NOTHING IS.  `VisitCallExpr`
+// gates mapped emission on `Mapper::Contains(callee)`; on false it prints the
+// literal C++ name, so a type key with no `make_range` key would reach rc=0 and
+// then fail rustc with an undefined `make_range_6` that no bucket census can see.
+// The census log names exactly that: "called system function has no rule:
+// `llvm::make_range` ... would be emitted as the undefined name `make_range_6`".
+// The chain is THREE keys, in two modules: `rules/smallvector` f40/f41
+// (`rbegin`/`rend`, which are MEMBERS and therefore do not abort at all when
+// unmapped -- they would have become a silent `E0599` on `Vec<_>`), then f2750.
+//
+// SWALLOW-SAFETY, argued rather than assumed.  `GetTypeMapKey` truncates at the
+// first `<`, so the bucket is `llvm::iterator_range`; `grep -rn iterator_range
+// rules/*/src.cpp` names it in NO module`s `using` -- every other occurrence is
+// prose in a comment -- so the bucket holds exactly one candidate, t2750.  The
+// spelling is FULLY CONCRETE (no `T<digits>` anywhere), so `matchTemplate`'s
+// placeholder capture never runs and the same-depth-comma swallow is ruled out by
+// construction; the `>` in no operator name appears, so the angle-depth desync
+// cannot apply either.
+//
+// ⛔ WHAT IS DELIBERATELY LEFT OUT, WITH ITS REASON -- the t243-t246 discipline.
+// `begin()`, `end()`, `empty()` and `size()` are real members of the real
+// `iterator_range` and get NO key: the corpus`s only use is the range-for, so a
+// declaration here would record a key with nothing under it, and any future site
+// asking for one must ABORT LOUDLY.  The SIBLING instantiations stay unkeyed for a
+// STRONGER reason -- `llvm::iterator_range<mlir::ValueUseIterator<mlir::OpOperand>>`
+// (n=4) has `mlir::OpOperand` as an opaque `()` (t43), and
+// `llvm::iterator_range<mlir::Region::OpIterator>` (n=2) /
+// `<mlir::detail::op_iterator<..., Region::OpIterator>>` (n=2) yield
+// `mlir::Operation &`, i.e. exactly the by-reference case whose snapshot is the
+// silent-miscompile above.  Those are separate rows, not this key`s business.
+namespace llvm {
+// llvm/ADT/iterator_range.h:32.  Declared only as far as t2750 and f2750 need:
+// the class must be COMPLETE to be a return type, and NO member is declared, so
+// no member key can be recorded against it by accident.
+template <typename IteratorT> class iterator_range {
+public:
+  iterator_range(IteratorT begin_iterator, IteratorT end_iterator);
+};
+
+// llvm/ADT/iterator_range.h:70 -- the FREE function template the site calls, and
+// the one the census log names as unmapped.  Written with the qualified
+// `llvm::make_range` at the call below because it is a NAMED function, not an
+// operator: the ADL requirement that forces f22/f23/f25 in rules/smallvector to
+// be spelled unqualified does not apply.
+template <typename T> iterator_range<T> make_range(T x, T y);
+} // namespace llvm
+
+using t2750 = llvm::iterator_range<std::reverse_iterator<mlir::Operation **>>;
+
+// f2750 -- `llvm::make_range(std::reverse_iterator<mlir::Operation **>,
+//           std::reverse_iterator<mlir::Operation **>)`.
+// ⚠️ The parameters are BY VALUE, as LLVM declares them, and their model is
+// `rules/reverse_iterator` t1 (`std::reverse_iterator<T1 *>` with
+// T1 = `mlir::Operation *`) -- the underlying `current` pointer, which points ONE
+// PAST the element it designates.  So `x` is the END of the vector and `y` is its
+// BEGIN, and the target body walks DOWNWARD from `x`, which is what makes the
+// resulting `Vec` reverse-ordered.  ⛔ Getting that direction wrong is silent:
+// it type-checks and reverses the loop.
+llvm::iterator_range<std::reverse_iterator<mlir::Operation **>>
+f2750(std::reverse_iterator<mlir::Operation **> x,
+      std::reverse_iterator<mlir::Operation **> y) {
+  return llvm::make_range(x, y);
+}
+
+// ===========================================================================
 // GAP FAMILY F4 -- REWRITER / BUILDER INFRASTRUCTURE.  g3077, 2026-09-29.
 // Indices start at 2630 to leave 2617-2629 clear of the in-flight F1 continuation
 // (g3073), which extends the t2610-t2616 block; indices are per-module and need
@@ -11786,6 +12137,41 @@ void f2631(mlir::OpBuilder &a0, mlir::OpBuilder::InsertPoint a1) {
 // replaceOp on dataflowir_gen::OpBuilder`).  ⭐ Unblocker, already named at t541:
 // `OpBuilder::handle_of(&OpInst) -> Option<OpHandle>` in dataflowir-gen.
 using t2631 = mlir::ConversionPatternRewriter;
+
+// t2800 -- `mlir::Pass::Statistic` -> u64.  Argued in full at the class
+// declaration above (`class Statistic` inside `class Pass`): the counter's VALUE
+// is read by ported code, so an opaque unit is forbidden.  Gate: n=3 stamped in
+// verif/g3059.gate-table.txt plus the 4 TUs g3072 measured behind it.
+using t2800 = mlir::Pass::Statistic;
+
+// f2800 -- `mlir::Pass::Statistic &mlir::Pass::Statistic::operator=(unsigned)`,
+// Pass.h:141.  This is the ONE member declared on `Pass::Statistic` itself
+// rather than inherited from `llvm::TrackingStatistic`, and it is the one the
+// four blocked TUs use: `<stat> = optimizer.optimize();` at
+// SetActiveMaskValueRE.cpp:70, ImplicitSyncRE.cpp:74, SetMaskRE.cpp:175 and
+// SetSendDestinationRE.cpp:136.  MLIR's override forwards to the base and
+// returns `*this`; on a u64 model the assignment IS the semantics.
+mlir::Pass::Statistic &f2800(mlir::Pass::Statistic &a0, unsigned a1) {
+  return a0 = a1;
+}
+
+// f2801 -- `mlir::Pass::Statistic::Statistic(Pass *, const char *, const char *)`,
+// Pass.h:138.  ⛔⛔ THIS KEY IS NOT OPTIONAL AND THE PROOF IS A MEASUREMENT: with
+// t2800 landed and no ctor key, the tablegen-generated pass base emits
+// `set_mask_re_count : mlir_Pass_Statistic :: new ( &raw mut *this, c"...".as_ptr(),
+// c"...".as_ptr() )` -- the FABRICATED `::new_N` class, an undefined name at rc=0/1
+// that no bucket census can see (GAPS.md, 31,369 sites).  Measured at 2 sites in
+// SetMaskRE.cpp's emitted .rs before this key existed.
+//
+// The three arguments are DISCARDED, and that is the same statement t2800 makes:
+// the owner back-pointer and the name/description exist only for the PassManager's
+// `-stats` printout, and this crate models no pass infrastructure (t40).  The
+// initial value of an `llvm::TrackingStatistic` is 0 (Statistic.h:54, `Value` is a
+// zero-initialised `std::atomic<uint64_t>`), so returning 0 is the C++ semantics
+// exactly, not a placeholder.
+mlir::Pass::Statistic f2801(mlir::Pass *a0, const char *a1, const char *a2) {
+  return mlir::Pass::Statistic(a0, a1, a2);
+}
 
 // ---------------------------------------------------------------------------
 // ⛔ THE THREE F4 SPELLINGS DELIBERATELY LEFT WITHOUT A KEY, SO THEY KEEP ABORTING
