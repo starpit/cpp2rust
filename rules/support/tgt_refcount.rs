@@ -159,3 +159,20 @@ fn t5() -> Ptr<u8> {
 fn f25() -> Ptr<u8> {
     Ptr::null()
 }
+
+// f26/f27/f28 -- the `To == From` slice of llvm::cast / dyn_cast /
+// dyn_cast_or_null.  See src.cpp for why `a0.clone()` is the EXACT body of all
+// three and not an approximation of a downcast, and for the three things
+// deliberately left unkeyed.  Identical to tgt_unsafe.rs: a `const T1 &`
+// parameter is `&T1` in both models and a by-value `T1` return stays `T1`.
+fn f26<T1: Clone>(a0: &T1) -> T1 {
+    a0.clone()
+}
+
+fn f27<T1: Clone>(a0: &T1) -> T1 {
+    a0.clone()
+}
+
+fn f28<T1: Clone>(a0: &T1) -> T1 {
+    a0.clone()
+}

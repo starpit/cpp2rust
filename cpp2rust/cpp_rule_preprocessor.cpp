@@ -45,6 +45,12 @@ struct LookupInfo {
   clang::DeclarationName name;
   LookupKind kind;
   llvm::ArrayRef<clang::TemplateArgumentLoc> explicitArgs;
+  // The nested-name-specifier the rule body actually WROTE in front of the
+  // callee, e.g. the `llvm::` of `llvm::cast<T1>(a0)`.  It used to be dropped
+  // on the floor here, which made every QUALIFIED call to a non-`std`, non-
+  // global function TEMPLATE unresolvable from inside a rule TEMPLATE: see
+  // regularNameLookup, which could only search `std` and the TU.
+  clang::NestedNameSpecifierLoc qualifierLoc;
 
   LookupInfo(const clang::Expr *expr) {
     if (const auto *ul = llvm::dyn_cast<clang::UnresolvedLookupExpr>(expr)) {
@@ -56,6 +62,7 @@ struct LookupInfo {
         kind = LookupKind::RegularName;
       }
       explicitArgs = ul->template_arguments();
+      qualifierLoc = ul->getQualifierLoc();
     } else if (const auto *dm =
                    llvm::dyn_cast<clang::CXXDependentScopeMemberExpr>(expr)) {
       name = dm->getMember();
@@ -677,14 +684,53 @@ private:
     return nullptr;
   }
 
+  // The DeclContext the rule body's own nested-name-specifier names, or null
+  // when the call was unqualified or the qualifier is dependent (`T1::foo`).
+  //
+  // WHY THIS EXISTS.  regularNameLookup re-resolves the callee of a DEPENDENT
+  // call written inside a rule TEMPLATE.  It used to look the bare
+  // DeclarationName up in exactly two scopes -- `std`, then the translation
+  // unit -- and LookupQualifiedName does NOT descend into nested namespaces.
+  // So a rule template that called `llvm::cast<T1>(a0)` had its `llvm::`
+  // discarded, found nothing, and died with `No viable function` followed by a
+  // null-deref crash on the resolution-failure path below.  That blocked the
+  // largest undefined-name row in the corpus (`llvm::cast` /
+  // `llvm::dyn_cast` / `llvm::dyn_cast_or_null`, ~96,600 call sites), and it
+  // could not be worked around from the rules side: the recorded key follows
+  // the RESOLVED decl's qualified name, so the namespace that must be searched
+  // is exactly the namespace the key must name.
+  //
+  // ⛔ DELIBERATELY NOT A NAMESPACE ALLOW-LIST.  The scope searched is whatever
+  // the rule body wrote, so `mlir::`, `llvm::sys::`, `llvm::cl::`, `DCC::` and
+  // class-qualified static calls all work by construction, and a namespace
+  // nobody has tried yet cannot be the reason a future rule fails.
+  clang::DeclContext *qualifiedLookupContext(clang::NestedNameSpecifierLoc nns) {
+    if (!nns) {
+      return nullptr;
+    }
+    clang::CXXScopeSpec scope;
+    scope.Adopt(nns);
+    // Returns null for a dependent qualifier, which is the correct answer here:
+    // fall through to the std/TU searches rather than guessing.
+    return sema_->computeDeclContext(scope, /*EnteringContext=*/false);
+  }
+
   void regularNameLookup(llvm::ArrayRef<clang::Expr *> callArgs,
                          clang::TemplateArgumentListInfo *explicitTArgs,
                          clang::DeclarationName &name,
+                         clang::NestedNameSpecifierLoc qualifierLoc,
                          clang::OverloadCandidateSet &candidates) {
     clang::LookupResult decls(*sema_, name, loc_,
                               clang::Sema::LookupOrdinaryName);
-    if (clang::NamespaceDecl *std_ns = sema_->getStdNamespace()) {
-      sema_->LookupQualifiedName(decls, std_ns);
+    // The written qualifier wins, exactly as it does in real C++ lookup.
+    if (clang::DeclContext *qualified = qualifiedLookupContext(qualifierLoc)) {
+      sema_->LookupQualifiedName(decls, qualified);
+    }
+    if (decls.empty()) {
+      decls.clear();
+      if (clang::NamespaceDecl *std_ns = sema_->getStdNamespace()) {
+        sema_->LookupQualifiedName(decls, std_ns);
+      }
     }
     if (decls.empty()) {
       decls.clear();
@@ -849,7 +895,8 @@ private:
     clang::OverloadCandidateSet candidates(loc_, csk);
     switch (lookup.kind) {
     case LookupKind::RegularName:
-      regularNameLookup(callArgs, &explicitTArgs, name, candidates);
+      regularNameLookup(callArgs, &explicitTArgs, name, lookup.qualifierLoc,
+                        candidates);
       break;
     case LookupKind::CXXMethodName: {
       llvm::ArrayRef<clang::Expr *> margs = callArgs;
@@ -861,12 +908,16 @@ private:
       cxxConstructorNameLookup(rule->getReturnType(), callArgs, candidates);
       break;
     case LookupKind::ADL:
-      regularNameLookup(callArgs, &explicitTArgs, name, candidates);
+      // An ADL call is by definition unqualified, so qualifierLoc is empty
+      // here; passed for uniformity rather than because it can be set.
+      regularNameLookup(callArgs, &explicitTArgs, name, lookup.qualifierLoc,
+                        candidates);
       adlLookup(callArgs, name, candidates);
       break;
     }
 
     clang::OverloadCandidateSet::iterator best;
+    const char *reason = "no candidate selected";
     switch (candidates.BestViableFunction(*sema_, loc_, best)) {
     case clang::OverloadingResult::OR_Success:
       return best->Function;
@@ -876,17 +927,30 @@ private:
           return candidate.Function;
         }
       }
+      reason = "ambiguous, and no candidate was viable";
       break;
     case clang::OverloadingResult::OR_No_Viable_Function:
-      llvm::errs() << "No viable function\n";
+      reason = "no viable function";
       break;
     case clang::OverloadingResult::OR_Deleted:
-      llvm::errs() << "Deleted function selected\n";
+      reason = "the selected function is deleted";
       break;
     }
 
-    assert(0 && "Rule resolution failed");
-    return nullptr;
+    // ⛔ THIS USED TO BE `assert(0 && "Rule resolution failed")`, AND THE PIN IS
+    // BUILT -DNDEBUG, so the assert was a NO-OP: the function returned nullptr,
+    // the caller dereferenced it, and the tool died with SIGSEGV after printing
+    // a bare `No viable function` with no rule name and no callee name.  Worse,
+    // callers of pin/regen-rule.sh recorded that crash as SUCCESS -- the only
+    // reliable success signal is the `OK <module> -> <dir>` line -- so a rule
+    // that never resolved read as a landed key.  A harness fault recorded as a
+    // result is the most expensive failure mode in this project, so fail loudly,
+    // name both ends, and exit nonzero.  Same pattern as converter.cpp:2793.
+    llvm::report_fatal_error(llvm::Twine("rule resolution failed for `") +
+                                 decl->getQualifiedNameAsString() +
+                                 "`: could not resolve the call to `" +
+                                 name.getAsString() + "` (" + reason + ")",
+                             /*gen_crash_diag=*/false);
   }
 
   clang::NamedDecl *lookupMemberAccess(clang::FunctionTemplateDecl *decl,

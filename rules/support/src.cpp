@@ -391,6 +391,17 @@ llvm::SMLoc f25() { return llvm::SMLoc(); }
 
 // --- llvm::cast / dyn_cast / dyn_cast_or_null / isa -- REFUSED, AND WHY -----
 //
+// ⭐⭐ SUPERSEDED IN PART.  The blocker this block diagnoses -- `regularNameLookup`
+// never searching the namespace written in the rule body -- IS NOW FIXED (see the
+// f26/f27/f28 block at the tail of this file), and the three const-identity keys
+// ARE LANDED.  Read the rest of this block for the derivation, which all still
+// holds and which the keys rest on: the real `searched as:` spellings, the target
+// type living in the RETURN position, `return a0;` being EXACT for `To == From`,
+// and the two-mechanism swallow-safety proof.  ⛔ WHAT IS STILL TRUE AND STILL
+// UNLANDED: `isa` (`To` is absent from its key -- all 1,428 sites collapse onto
+// TWO key strings), non-identity `cast<A>(B)`, `dyn_cast<Op>(mlir::Operation *)`,
+// and the non-const `T1 llvm::cast(T1 &)` slice.  Each reason below is unchanged.
+//
 // llvm/Support/Casting.h.  This four-function family is the LARGEST
 // undefined-name row in the project.  A census of called-but-undefined
 // `name_<N>` functions over 312 emitted .rs measured
@@ -576,3 +587,94 @@ llvm::SMLoc f25() { return llvm::SMLoc(); }
 // trade this row's E0425 for an E0277 at every site.  Start with the const
 // overload, which carries the majority of the mass and is identical in both
 // models.
+
+// --- llvm::cast / dyn_cast / dyn_cast_or_null -- THE IDENTITY SLICE ---------
+//
+// llvm/Support/Casting.h.  The largest undefined-name row in the project:
+// 54,082 `cast` sites over 212 TUs, 39,866 `dyn_cast_or_null` over 205, 2,773
+// `dyn_cast` over 185 (census of 312 emitted .rs, 2026-09-29).  Only the
+// `To == From` slice is keyed here; the derivation of what is and is not safe is
+// in the block that follows f28.
+//
+// ⛔ THIS BLOCK WAS UNWRITABLE UNTIL cpp_rule_preprocessor.cpp's
+// `regularNameLookup` learned to search the namespace the rule body NAMES.  It
+// searched `std` and the global namespace only, so `llvm::` was discarded and a
+// DEPENDENT call inside a rule TEMPLATE could not reach any `llvm::` function
+// template -- `No viable function`, then a SIGSEGV.  That is why f5 and f22
+// above, which are NON-template rules resolved by clang at parse time, worked
+// the whole time while nothing templated in `namespace llvm` did.
+
+namespace llvm {
+template <typename To, typename From> To cast(const From &Val);
+template <typename To, typename From> To dyn_cast(const From &Val);
+template <typename To, typename From> To dyn_cast_or_null(const From &Val);
+} // namespace llvm
+
+template <typename T1> T1 f26(const T1 &a0) { return llvm::cast<T1>(a0); }
+
+template <typename T1> T1 f27(const T1 &a0) { return llvm::dyn_cast<T1>(a0); }
+
+template <typename T1> T1 f28(const T1 &a0) {
+  return llvm::dyn_cast_or_null<T1>(a0);
+}
+
+// ⭐ THE TARGET TYPE `To` IS IN THE RETURN POSITION, so the three keys read
+//     T1 llvm::cast(const T1 &)
+//     T1 llvm::dyn_cast(const T1 &)
+//     T1 llvm::dyn_cast_or_null(const T1 &)
+// and a corpus site keyed `mlir::StringAttr llvm::cast(const mlir::StringAttr &)`
+// matches while `mlir::IntegerAttr llvm::cast(mlir::Attribute &)` does not.  Same
+// mechanism as rules/tuple f10/f11 on `std::get`: the explicit template argument
+// does not reach the key, the deduced return type does.
+//
+// ⭐ `return a0;` IS EXACT HERE, NOT AN APPROXIMATION.  For To == From:
+//   * `cast<T>(x : T)` asserts `isa<T>(x)` -- a tautology -- then returns x.
+//   * `dyn_cast<T>(x : T)` returns x when `isa<T>(x)` and the empty value
+//     otherwise.  `isa<T>(x : T)` holds, so THE FAILURE BRANCH IS UNREACHABLE.
+//     A key of this shape cannot match a cast that is able to fail, so no
+//     checked downcast is being silently collapsed into an unchecked one.
+//   * `dyn_cast_or_null<T>(x : T)` is x when x is non-null and the empty value
+//     when x is null -- and when To == From THE EMPTY VALUE IS x.  Exact on BOTH
+//     paths.
+// A body that panicked, or that produced anything but a0, would be the wrong one.
+//
+// ⭐ SWALLOW-SAFE, by two independent mechanisms in matchTemplate:
+//   1. THE REPEATED PLACEHOLDER IS CHECKED LITERALLY (mapper.cpp:711-717).  On
+//      the SECOND occurrence of T1 `repl.has_value()` is true, so the code takes
+//      the `matchLiteralAt` branch and returns nullopt on mismatch.
+//      `mlir::IntegerAttr llvm::cast(mlir::Attribute &)` therefore captures
+//      T1 = mlir::IntegerAttr at the return position and then FAILS against
+//      mlir::Attribute.  The rules/tuple f10 over-match cannot happen here.
+//   2. THE FIRST CAPTURE IS ANCHORED ON A UNIQUE LITERAL: T1's nextLit is the
+//      whole run ` llvm::cast(const `, which occurs exactly once in any
+//      instantiated signature, so the capture is the return type and cannot
+//      swallow into the parameter list.
+// The `operator>=` angle-depth desync class cannot reach it either: there is no
+// operator name anywhere in the spelling.
+//
+// Both models are IDENTICAL: `const T1 &` lowers to `&T1` and a by-value `T1`
+// return stays `T1` (cf. rules/functional f4), so the two overlays agree.  The
+// `T1: Clone` bound is the same one f19/f20 above already carry; every type
+// observed at these sites (ir::Attr, ir::Ty, ir::Value, ir::AffineMap) derives
+// Clone.
+//
+// ⛔ THREE THINGS DELIBERATELY NOT KEYED HERE.
+//   * `isa` -- `isa<To>(x)` returns bool, so `To` is NOWHERE in its key and all
+//     1,428 sites over 170 TUs collapse onto TWO key strings.  One body would
+//     have to answer `isa<ForOp>` and `isa<WhileOp>` identically.  Closing it
+//     needs the explicit template-argument list in the recorded key -- a
+//     CONVERTER change, not a rule.
+//   * The NON-IDENTITY casts.  A generic `T1 llvm::cast(const T2 &)` binds T1
+//     and T2 independently and its body would have to manufacture a T1 from a
+//     T2; there is no cast-free, transmute-free projection that does that.  And
+//     `mlir::scf::ForOp llvm::dyn_cast(mlir::Operation *)` has the right
+//     discriminator in `OpInst::is_a::<T>()` but no value for the `true` branch
+//     to yield: the generated MlirOp markers are ZSTs, usable only as that type
+//     argument.
+//   * The NON-CONST lvalue overload `T1 llvm::cast(T1 &)` (~1/3 of identity
+//     sites).  A non-const `T1 &` lowers to `&mut T1` in the unsafe model but to
+//     `Ptr<T1>` in refcount (cf. rules/algorithm f9), and reading a value back
+//     out of a `Ptr<T1>` needs a `ByteRepr` bound the MLIR handle types are not
+//     known to satisfy -- it would trade this row's E0425 for an E0277 at every
+//     site.  The const overload carries the majority of the mass and is
+//     identical in both models, so it goes first.

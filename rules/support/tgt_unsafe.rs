@@ -154,3 +154,19 @@ fn t5() -> *const u8 {
 unsafe fn f25() -> *const u8 {
     std::ptr::null()
 }
+
+// f26/f27/f28 -- the `To == From` slice of llvm::cast / dyn_cast /
+// dyn_cast_or_null.  See src.cpp for why `a0.clone()` is the EXACT body of all
+// three and not an approximation of a downcast, and for the three things
+// deliberately left unkeyed.  Identical in both models.
+unsafe fn f26<T1: Clone>(a0: &T1) -> T1 {
+    a0.clone()
+}
+
+unsafe fn f27<T1: Clone>(a0: &T1) -> T1 {
+    a0.clone()
+}
+
+unsafe fn f28<T1: Clone>(a0: &T1) -> T1 {
+    a0.clone()
+}
