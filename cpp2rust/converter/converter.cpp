@@ -1027,6 +1027,13 @@ static const clang::Expr *GetTemporaryHolderInit(const clang::Expr *init) {
   return nullptr;
 }
 
+// Defined with the by-value decomposition emitter it was written for (:3153).
+// Forward-declared because the mutable-reference-holder arm of
+// ConvertTupleDecompositionDecl below reuses it rather than re-deriving it --
+// getting this predicate wrong is a silently-dropped write, so there must be
+// exactly one copy of it.
+static bool HolderHoldsReference(clang::QualType holder_type);
+
 bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
   // Only a local `let` is lowered: a file-scope or static-local decomposition
   // would need one `static mut` per binding plus the init hoisting that goes
@@ -1256,9 +1263,15 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
       type.getNonReferenceType().isConstQualified() &&
       GetTemporaryHolderInit(decl->getInit()) != nullptr;
   // ⭐ THE BINDINGS THAT GET THE POINTER FORM instead of a by-value element read.
-  // Only ever populated on the CONST-REFERENCE-holder arm below; empty means the
-  // emission is byte-for-byte what it was before this set existed.
+  // Only ever populated on an LVALUE-REFERENCE-holder arm below -- the non-scalar
+  // elements of a const-reference holder, and EVERY element of a mutable one;
+  // empty means the emission is byte-for-byte what it was before this set existed.
   std::unordered_set<const clang::BindingDecl *> ptr_form;
+  // ⭐ A MUTABLE lvalue-reference holder. Drives `*mut` instead of `*const` on
+  // the holder annotation and `&raw mut` instead of `&raw const` on every
+  // binding. Only ever set on the mutable arm below; false means every emitted
+  // byte is exactly what it was before this flag existed.
+  bool mut_holder = false;
   if (temp_holder) {
     for (const auto *binding : bindings) {
       // A reference binding still aliases observably; those stay on the loud
@@ -1274,9 +1287,64 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
       return false;
     }
     auto pointee = type.getNonReferenceType();
-    if (!pointee.isConstQualified()) {
-      return false;
-    }
+    // ⭐ THE MUTABLE-REFERENCE HOLDER. Measured shape (ddc/ddcv1.cpp:1495, inside
+    // `ddc::Ddc::exploreAssignDataStages`, the first abort of that TU at
+    // 18a29078):
+    //     auto& [dim, size] = tn->unitTimeTransferChunkSize_[i].sizeDim_;
+    //   DecompositionDecl 'dsc2::ScheduleNode::Size &'   (dsc/dsc2.h:486)
+    //   BindingDecl dim   'PrimaryDimTypes'   <- enum, NOT const, NOT a reference
+    //   BindingDecl size  'int'               <- scalar, NOT const
+    // This is the `let` path (VisitDeclStmt -> here), NOT a range-for: neither
+    // VisitCXXForRangeStmt nor EmitVectorDecompositionBindings is on it.
+    //
+    // ⛔⛔ EVERY BINDING TAKES THE POINTER FORM ON THIS ARM, WITHOUT EXCEPTION,
+    // AND THAT IS THE WHOLE CORRECTNESS ARGUMENT. In C++ `dim` and `size` are
+    // lvalues that NAME `h.dim_` and `h.size_`, so `size = 4;` writes THROUGH to
+    // the container element. The const-reference arm below may read a scalar
+    // element by value (`(*h).N`) precisely because every binding there is const
+    // and no write can travel back; here writes can and do travel back, so a
+    // by-value read would SILENTLY DROP THEM -- a lowering that is strictly worse
+    // than the loud abort and the exact failure this construct is policed for.
+    // `&raw mut (*h).field` plus a `ptr_bindings_` registration makes every use a
+    // deref of a `*mut` into the container element, so a write reaches the
+    // container and object identity is preserved. Nothing is copied, so E0507
+    // cannot arise for a class-typed element either, and the scalar/record
+    // distinction the const arm needs does not apply.
+    //
+    // ⛔ THE ALIASING-HOLDER SUBSET IS STILL REFUSED, via the same
+    // `HolderHoldsReference` the by-value arm uses (:3153) -- do not re-derive
+    // it. `llvm::detail::enumerator_result<size_t, X &>` and
+    // `DscPcfgTranslator::PcfgInfo` (member `SenPcfg &pcfg`) hold a reference, so
+    // clang hands NON-reference binding types while the C++ still names the
+    // original through that member. Refusing them here keeps this arm's
+    // guarantee -- "the pointer names the very object the holder names" -- true
+    // by construction instead of by inspection.
+    const bool mut_ref_holder = !pointee.isConstQualified();
+    if (mut_ref_holder) {
+      if (HolderHoldsReference(type)) {
+        return false;
+      }
+      for (const auto *binding : bindings) {
+        auto bt = binding->getType();
+        // A reference BINDING aliases observably on top of the holder's own
+        // aliasing and is refused on this construct everywhere else.
+        if (bt->isReferenceType()) {
+          return false;
+        }
+        // ⛔ Same restriction as the const arm, and for the same reason: an
+        // array element would need `&raw mut` of an array plus a decayed use, and
+        // a member-pointer / vector / complex element has no established model
+        // here. Those stay on the LOUD refusal path rather than being guessed at.
+        if (!bt->isPointerType() && !bt->isEnumeralType() &&
+            !bt->isIntegralType(ctx_) && !bt->isFloatingType() &&
+            !bt->isRecordType()) {
+          return false;
+        }
+        ptr_form.insert(binding);
+      }
+      mut_holder = true;
+      type = pointee;
+    } else {
     for (const auto *binding : bindings) {
       auto bt = binding->getType();
       if (bt->isReferenceType() || !bt.isConstQualified()) {
@@ -1327,6 +1395,7 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
     }
     // Everything below is written against the VALUE type.
     type = pointee;
+    }
   } else {
     for (const auto *binding : bindings) {
       if (binding->getType()->isReferenceType()) {
@@ -1445,7 +1514,13 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
   // Pointer-holder + deref-at-use is the convention the converter already
   // ships in `EmitVectorDecompositionBindings` and `VisitCXXForRangeStmtMap`.
   if (ref_holder) {
-    StrCat("*const");
+    // A MUTABLE reference holder annotates `*mut`, so the `&mut <init>`
+    // ConvertVarInit already emits for a non-const reference QualType (it tests
+    // `IsMut`, converter_lib.cpp:269) coerces to it. `&mut T` -> `*mut T` is a
+    // built-in coercion at a `let` with an explicit annotation; `&mut T` to
+    // `*const T` would also coerce, but would then make the binding pointers
+    // `*const` and no write could reach the container.
+    StrCat(mut_holder ? "*mut" : "*const");
   }
   Convert(type);
   StrCat(token::kAssign);
@@ -1495,11 +1570,17 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
             ? std::to_string(index)
             : GetNamedDeclAsString(memberwise_fields[index]);
     // A NON-SCALAR element is taken BY POINTER (`&raw const (*h).N`), never read
-    // by value: the by-value read of a class element is E0507. `ptr_form` is
-    // only ever non-empty on the const-reference-holder arm, so `ref_holder` is
-    // necessarily true here and `(*h)` is the correct base.
+    // by value: the by-value read of a class element is E0507. On the MUTABLE
+    // arm every element is taken by pointer regardless of scalarness, because a
+    // by-value read would drop a write. `ptr_form` is only ever non-empty on an
+    // lvalue-reference-holder arm, so `ref_holder` is necessarily true here and
+    // `(*h)` is the correct base.
     if (ptr_form.contains(binding)) {
-      StrCat(std::format("&raw const (*{}).{}", holder, element));
+      // ⭐ `&raw mut` on the mutable-holder arm, so `(*binding) = v` at every use
+      // WRITES INTO the container element -- see the arm's comment above for why
+      // anything else silently drops the write.
+      StrCat(std::format("&raw {} (*{}).{}", mut_holder ? "mut" : "const",
+                         holder, element));
     } else {
       StrCat(ref_holder ? std::format("(*{}).{}", holder, element)
                         : std::format("{}.{}", holder, element));
