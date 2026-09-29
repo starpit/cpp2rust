@@ -110,4 +110,10 @@ pub use getopt::*;
 mod cctype;
 pub use cctype::*;
 
+// `llvm::cl` carrier types that the corpus CONSTRUCTS rather than reads through,
+// so a value/opaque model cannot serve them: an aggregate initialiser makes the
+// converter print the mapped type's NAME as a struct-literal path.  See cl.rs.
+mod cl;
+pub use cl::*;
+
 pub use libcc2rs_macros::{ByteRepr, goto, goto_block, switch};

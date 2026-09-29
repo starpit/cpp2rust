@@ -128,24 +128,64 @@ unsafe fn f1911<'a, T1: Clone>(a0: &'a mut T1, a1: &T1) -> &'a mut T1 {
     a0
 }
 
-// t2410 `llvm::cl::OptionEnumValue` -> `()`, and
-// t2411 `llvm::cl::ValuesClass`     -> `()`.
-//   Both are CONSTRUCT-ONLY carriers on this corpus: a python scan for a DECLARED
-//   OBJECT of either type over repos/dt_src + rules/ finds 0, against 114 mentions
-//   of `clEnumVal*`/`OptionEnumValue`, so there is no named receiver anywhere and
-//   every occurrence is a temporary inside a `cl::values(...)` argument list.
-//   A multi-line-aware scan for `.Description` / `->Description` likewise finds 0.
-//   The unit is therefore the statement "this value is never observed".
-//   ⛔ The one real reader, `ValuesClass::apply` (CommandLine.h:702, which reads
-//   all three fields), lives in the LLVM header and is reachable only by
-//   descending into `cl::values` -- which has NO rule and stays a marked
-//   placeholder, so keying these two does not open a path to it.  See src.cpp.
-//   ⛔ No member is declared on either type, so a future field read emits
-//   textually against a `()` and fails LOUDLY in rustc rather than answering.
-fn t2410() -> () {
-    ()
+// t2410 `llvm::cl::OptionEnumValue` -> `libcc2rs::ClOptionEnumValue`, and
+// t2411 `llvm::cl::ValuesClass`     -> `Vec<ClOptionEnumValue>`.
+//
+// ⛔⛔ THE `()` MODEL THAT USED TO BE HERE EMITTED TEXT THAT IS NOT RUST, and it is
+//   the reason this block was rewritten.  Both types are CONSTRUCT-ONLY on this
+//   corpus -- that measurement (0 declared objects of either type against 114
+//   mentions of `clEnumVal*`/`OptionEnumValue`; 0 hits for `.Description` /
+//   `->Description`) is CORRECT and the conclusion drawn from it was BACKWARDS.
+//   `clEnumValN` is a macro expanding to an AGGREGATE INITIALISER
+//   (CommandLine.h:686), and both models' `VisitInitListExpr` emit a mapped record
+//   type's aggregate init as a Rust STRUCT LITERAL whose PATH is the mapped type's
+//   own name (`GetUnsafeTypeAsString`, converter.cpp:7964 /
+//   converter_refcount.cpp:1844) and whose field names are the C++ field names
+//   verbatim (`GetNamedDeclAsString(field)` over the REAL `RecordDecl`).  So `()`
+//   produced `() { Name : ... , Value : ... , Description : ... , }` -- a struct
+//   literal body with `()` as its path -- at 46 sites in 13 TUs, every one of which
+//   rustfmt rejects with `error: struct literal body without path`.
+//   ⭐ AN OPAQUE `()` KEY IS LEGITIMATE ONLY WHERE THE CORPUS NEVER TOUCHES THE
+//   VALUE AT ALL.  CONSTRUCTION IS A TOUCH: it is the one syntactic position in
+//   which a mapped type's NAME is printed.  This is the fifth member of the
+//   documented "a type key that is worse than no key" class and the first one where
+//   the hazard is construction rather than member access.
+//
+//   THE MODEL.  CommandLine.h:679 is `struct OptionEnumValue { StringRef Name;
+//   int Value; StringRef Description; }` and :693's `ValuesClass` holds a
+//   `SmallVector<OptionEnumValue, 4> Values`, so the faithful shapes are a
+//   three-field struct and a `Vec` of it.  The struct lives in `libcc2rs` (cl.rs)
+//   rather than in this file because a FILE-LEVEL item in a `tgt_*.rs` is NOT
+//   copied into the emitted output -- the f1911 note above records that measurement
+//   -- so a struct declared here would type-check the rule and leave the emission
+//   naming an undefined type.
+//   ⭐ ITS THREE TYPE PARAMETERS ARE THE TWO MODELS, NOT GENERALITY.  The field
+//   VALUES are converted by `ConvertVarInit(field->getType(), ...)` per model
+//   (`StringRef` -> `Vec<libc::c_char>` unsafe, `Value<Vec<u8>>` refcount; `int` ->
+//   `i32` vs `Value<i32>`) while the PATH is printed once, so no single concrete
+//   field type can serve both arms.  The defaults in cl.rs are the unsafe shapes,
+//   matching this file.
+//   ⛔⛔ AND THAT MAKES THIS A PARTIAL FIX, NOT A CLOSE.  An earlier version of this
+//   note claimed the parameters are INFERRED from the field expressions in
+//   struct-literal expression position, so one bare path served both arms.
+//   REFUTED with rustc: the converter ANNOTATES the temporary
+//   (`let mut __tmp_68: Vec<ClOptionEnumValue> = ...` unsafe,
+//   `let __tmp_61: Value<Vec<ClOptionEnumValue>> = ...` refcount), and a defaulted
+//   parameter in TYPE position is not an inference variable -- so the bare path
+//   pins the unsafe shapes on both legs.  The unsafe arm type-checks; the refcount
+//   arm is 3x E0308 per site.  ⭐ Nothing reachable regresses -- every site is an
+//   argument to the deliberately-refused `Cpp2RustUnmappedFn_values_N`, so an
+//   intentional E0425 already sits upstream -- but the refcount arm went from
+//   unparseable to ill-typed, not to correct.  See cl.rs.
+//   ⛔ STILL NO MEMBER KEY, deliberately, and none is needed: the only reader of the
+//   three fields anywhere is `ValuesClass::apply` (CommandLine.h:702), which is
+//   reachable only by descending into `llvm::cl::values(...)` -- a variadic that no
+//   rule `fN` signature can spell, left as a loud `Cpp2RustUnmappedFn_values_N`
+//   placeholder.  A method call on either carrier therefore still fails `E0599`.
+fn t2410() -> ClOptionEnumValue {
+    Default::default()
 }
 
-fn t2411() -> () {
-    ()
+fn t2411() -> Vec<ClOptionEnumValue> {
+    Vec::new()
 }

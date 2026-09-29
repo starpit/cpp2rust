@@ -42,14 +42,17 @@
 //   f1  llvm::cl::init(const T1 &)              returns the value it carries.
 //
 // DELIBERATELY NOT KEYED, and why -- an unreached key is an unchecked key:
-//   * llvm::cl::ValuesClass (13 A-TUs) and llvm::cl::OptionEnumValue (13):
-//     header:679/693.  OptionEnumValue is `{ StringRef Name; int Value;
-//     StringRef Description; }` and ValuesClass is a SmallVector of them.  The
-//     corpus only ever CONSTRUCTS them (clEnumValN inside cl::values, e.g.
-//     dcc/src/Transform/Sentient/RegisterInitialization.cpp:39-66) and never
-//     reads a field, so a unit model would pass every site -- but it would also
-//     be a model with no observer, i.e. unfalsifiable.  Left unmapped and named
-//     in the report instead of guessed.
+//   * ⛔ STALE AS OF 2026-09-29 (row g3062): llvm::cl::ValuesClass and
+//     llvm::cl::OptionEnumValue ARE NOW KEYED, as t2410/t2411 at the bottom of
+//     this file, with a real three-field struct.  This bullet is kept only
+//     because its reasoning was MEASURED FALSE and the correction is the point:
+//     it said "the corpus only ever CONSTRUCTS them ... so a unit model would
+//     pass every site".  The premise is right and the conclusion is wrong.  A
+//     unit model passes NO site, because CONSTRUCTION is itself an observation:
+//     `clEnumValN` is an aggregate initialiser, the converter prints the mapped
+//     type's NAME as the struct-literal PATH, and `() { Name: ... }` is not
+//     Rust.  See the g3062 block at the bottom for the numbers (46 malformed
+//     sites in 13 TUs, all 13 rejected by rustfmt).
 //   * llvm::cl::initializer<char[N]> (the `initializer_chararr_arr_` spelling,
 //     15 A-TUs): the recorded spelling of an array type is not yet read back
 //     verbatim, and keying it from the mangled name is exactly the guess this
@@ -535,17 +538,90 @@ template <typename T1> T1 &f1911(llvm::cl::opt<T1> &a0, const T1 &a1) {
 // The single reader is therefore behind a placeholder, and keying these two
 // types does not open a path to it.
 //
-// THE MODEL: `()`.  Both are pure construct-only carriers on this corpus, so the
-// honest Rust type is the unit -- the statement "this value is never observed",
-// which the two censuses above make falsifiable.  ⛔ `()` is written as `()`, not
-// as an empty body (an empty body panics at syntactic.rs:591).
-// ⛔ NO MEMBER IS DECLARED on either type -- not `Name`, not `Value`, not
-// `Description`, not `apply`.  A future read therefore emits textually against a
-// `()` and fails LOUDLY in rustc (E0609 / E0599) rather than answering with a
-// fabricated value.  This is the `std::hash<int>` lesson applied in the only
-// direction available for a fieldless model: there is no method to key, so the
-// loudness has to come from the target type having no such member, and `()` has
-// none.
+// THE MODEL WAS `()`.  ⛔⛔ REFUTED BY MEASUREMENT 2026-09-29 (row g3062); the
+// model is now `libcc2rs::ClOptionEnumValue` / `Vec<ClOptionEnumValue>`.
+//
+// The block below argued that the unit is "the honest Rust type ... the statement
+// `this value is never observed`".  ⭐ THE CLAIM THAT MADE IT WRONG IS THE ONE
+// THAT LOOKED LIKE THE SAFE HALF: the two censuses proved no *member access*
+// exists, and the block then treated that as "no observer".  CONSTRUCTION IS AN
+// OBSERVATION.  `clEnumValN` expands to an aggregate initialiser, so the
+// converter takes the InitListExpr path -- `Converter::VisitInitListExpr`
+// (converter.cpp:7931, path printed at :7964) and
+// `ConverterRefCount::VisitInitListExpr` (converter_refcount.cpp:1809, record
+// branch ~:1844).  BOTH print `GetUnsafeTypeAsString(qual_type)` as the
+// struct-literal PATH and then iterate the real RecordDecl's `fields()`, emitting
+// the C++ field names VERBATIM via `GetNamedDeclAsString(field)`.  With `()`
+// keyed, that emits
+//     () { Name : ... , Value : ... , Description : ... , }
+// which rustfmt rejects: `error: struct literal body without path`.
+// ⭐ MEASURED, on snap/g3059/cpp2rust (md5 7089f1ad66d2c9ec7757dc9a5db4dc4c) +
+// a copy of ir/g3059, `-model=refcount`: 46 such sites in exactly the 13 TUs that
+// this key gated -- and it was the #1 first-abort gate of the 218-TU cohort.
+// So the unit model did not "pass every site"; it FAILED EVERY SITE, and it was a
+// strictly worse outcome than having no key at all.  With the three-field struct
+// the same 13 TUs give 0 malformed sites and 12 reach rc=0.
+//
+// ⚠️ WHAT THIS COSTS, STATED PLAINLY.  The old block's loudness argument was:
+// "NO MEMBER IS DECLARED ... a future read therefore emits textually against a
+// `()` and fails LOUDLY in rustc (E0609/E0599)".  Declaring the three fields is
+// NOT optional -- the converter emits those exact names from clang's RecordDecl,
+// so a struct that omits or renames them is E0560 -- which means a future
+// `.Name`/`.Value`/`.Description` read now type-checks instead of failing loudly.
+// That is a real narrowing and it is the honest price of the fix.  It is also the
+// narrowest available: the fields it opens are exactly the three the C++ struct
+// has, carrying exactly the constructed values, so a read gets the right answer
+// rather than a fabricated one.  `apply` and every other member are still
+// UNDECLARED here and absent from the target, so `x.apply()` still emits
+// textually and still fails loudly (E0599).
+//
+// ⭐ WHY THE MODEL IS GENERIC, AND WHY THAT IS FORCED RATHER THAN CLEVER.  The
+// struct-literal PATH comes from `GetUnsafeTypeAsString` -- ONE spelling, used by
+// BOTH models -- while the field VALUES go through `ConvertVarInit(field->
+// getType(), ...)` PER MODEL.  Measured field expression shapes, re-read from the
+// emitted `.rs` on BOTH legs (unsafe RegisterInitialization.cpp:28679,
+// refcount TransformPagedMemView.cpp:4528):
+//     field         unsafe arm                        refcount arm
+//     Name          Vec<libc::c_char>                 Value<Vec<u8>>
+//                   (from_raw_parts(...).to_vec())    (to_c_bytes + push(0))
+//     Value         i32                               Value<i32>
+//     Description   Vec<libc::c_char>                 Value<Vec<u8>>
+// so ONE concrete field type cannot serve both arms, which is why the struct is
+// generic.  ⛔⛔ BUT THE GENERIC DOES NOT ACTUALLY RESCUE THE REFCOUNT ARM, AND
+// AN EARLIER VERSION OF THIS BLOCK CLAIMED IT DID.  The claim was "in
+// struct-literal EXPRESSION position Rust infers the type parameters from the
+// field expressions, so a generic with defaults gives one bare path correct in
+// both arms".  ⛔ REFUTED by rustc 2026-09-29: the converter does not leave the
+// temporary un-annotated, it emits
+//     let mut __tmp_68: Vec<ClOptionEnumValue> = ...            (unsafe)
+//     let __tmp_61: Value<Vec<ClOptionEnumValue>> = ...         (refcount)
+// and a DEFAULTED type parameter in TYPE position is NOT an inference variable --
+// the bare path means `ClOptionEnumValue<Vec<c_char>, i32, Vec<c_char>>` in both.
+// So the annotation PINS the defaults and inference never runs.  Checked directly
+// (the harness cannot see this: rustfmt is its only Rust parser):
+//   unsafe arm   -- type-checks, defaults match the field expressions exactly;
+//   refcount arm -- 3x E0308 per site, `expected Vec<i8>, found Rc<RefCell<Vec<u8>>>`.
+// ⚠️ THIS IS A PARTIAL, NOT A CLOSE, and the honest scope is: the UNSAFE arm is
+// fixed at all 46 sites; the REFCOUNT arm goes from unparseable to ill-typed.
+// ⭐ It regresses nothing reachable, because every one of these sites is an
+// argument to `Cpp2RustUnmappedFn_values_N` -- `llvm::cl::values(...)` is
+// deliberately refused below -- so the site already carries an intentional loud
+// E0425 and the E0308 sits downstream of it.  The refcount residual needs the
+// path emitted WITH arguments (or a per-model target spelling); rowed separately.
+// ⭐ And note what the old table got backwards: the unsafe field expression ends
+// in `.to_vec()`, so copying `rules/stringref`'s `Vec<libc::c_char>` would have
+// been RIGHT, not the silent E0308 the old text warned against.  Reading
+// `slice::from_raw_parts` and stopping before `.to_vec()` is what produced it.
+// ⛔ Neither alternative exists for the PATH itself: a turbofish-free generic
+// spelling is not valid expression syntax, and a target-only generic is a
+// load-time `Absent generic from src` fatal.
+//
+// ⛔ THE STRUCT CANNOT LIVE IN tgt_unsafe.rs.  A FILE-LEVEL helper item in a
+// `tgt_*.rs` is NOT copied into the emitted output -- it type-checks, regenerates
+// OK, and the converter emits the bare name (the measurement is recorded in the
+// f1911 block above).  It therefore lives in `libcc2rs/src/cl.rs`, which the
+// emission prelude already pulls in via `extern crate libcc2rs; use libcc2rs::*;`,
+// so the recorded bare target `ClOptionEnumValue` resolves.
 //
 // ⛔⛔ `llvm::cl::values(...)` IS STILL REFUSED, and this is the hard end of the
 // chain rather than an omission.  It is `template <typename... OptsTy>
