@@ -144,7 +144,7 @@ fn f35<T1: Clone + ByteRepr>(a0: Ptr<T1>, a1: Ptr<T1>) -> Vec<T1> {
 fn f37<T1: TryFrom<T2>, T2: Clone + ByteRepr>(a0: Ptr<T2>, a1: Ptr<T2>) -> Vec<T1> {
     let __count = a1.get_offset() - a0.get_offset();
     PtrValueIter::new(&a0, __count)
-        .map(|item| T1::try_from(item).ok().unwrap())
+        .map(|item| <T1>::try_from(item).ok().unwrap())
         .collect::<Vec<_>>()
 }
 
@@ -318,7 +318,7 @@ fn f90<T1: Clone + ByteRepr>(a0: Ptr<T1>, a1: Ptr<T1>) -> Vec<T1> {
 fn f92<T1: TryFrom<T2>, T2: Clone + ByteRepr>(a0: Ptr<T2>, a1: Ptr<T2>) -> Vec<T1> {
     let __count = a1.get_offset() - a0.get_offset();
     PtrValueIter::new(&a0, __count)
-        .map(|item| T1::try_from(item).ok().unwrap())
+        .map(|item| <T1>::try_from(item).ok().unwrap())
         .collect::<Vec<_>>()
 }
 

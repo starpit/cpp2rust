@@ -9,19 +9,19 @@
 use libcc2rs::{Variant2, Variant3, Variant8};
 
 fn t1<T1: Default, T2>() -> Variant2<T1, T2> {
-    Variant2::V0(T1::default())
+    Variant2::V0(<T1>::default())
 }
 
 fn t2<T1: Default, T2, T3>() -> Variant3<T1, T2, T3> {
-    Variant3::V0(T1::default())
+    Variant3::V0(<T1>::default())
 }
 
 fn f1<T1: Default, T2>() -> Variant2<T1, T2> {
-    Variant2::V0(T1::default())
+    Variant2::V0(<T1>::default())
 }
 
 fn f2<T1: Default, T2, T3>() -> Variant3<T1, T2, T3> {
-    Variant3::V0(T1::default())
+    Variant3::V0(<T1>::default())
 }
 
 fn f3<T1, T2>(a0: T1) -> Variant2<T1, T2> {
@@ -56,11 +56,11 @@ fn f7<T1, T2, T3>(a0: T3) -> Variant3<T1, T2, T3> {
 // `OperandAttr::data_` deterministically.
 
 fn t3<T1: Default, T2, T3, T4, T5, T6, T7, T8>() -> Variant8<T1, T2, T3, T4, T5, T6, T7, T8> {
-    Variant8::V0(T1::default())
+    Variant8::V0(<T1>::default())
 }
 
 fn f10<T1: Default, T2, T3, T4, T5, T6, T7, T8>() -> Variant8<T1, T2, T3, T4, T5, T6, T7, T8> {
-    Variant8::V0(T1::default())
+    Variant8::V0(<T1>::default())
 }
 
 fn f11<T1, T2, T3, T4, T5, T6, T7, T8>(a0: T1) -> Variant8<T1, T2, T3, T4, T5, T6, T7, T8> {

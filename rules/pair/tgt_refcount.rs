@@ -7,8 +7,8 @@ use std::rc::Rc;
 
 fn t1<T1: Default, T2: Default>() -> (Value<T1>, Value<T2>) {
     (
-        Rc::new(RefCell::new(T1::default())),
-        Rc::new(RefCell::new(T2::default())),
+        Rc::new(RefCell::new(<T1>::default())),
+        Rc::new(RefCell::new(<T2>::default())),
     )
 }
 
@@ -205,7 +205,7 @@ fn f23<T1: Clone, T2: Clone>(a0: (Value<T1>, Value<T2>)) -> (Value<T1>, Value<T2
 // rules/pair/src.cpp's f24 note.
 fn f24<T1: Default, T2: Default>() -> (Value<T1>, Value<T2>) {
     (
-        Rc::new(RefCell::new(T1::default())),
-        Rc::new(RefCell::new(T2::default())),
+        Rc::new(RefCell::new(<T1>::default())),
+        Rc::new(RefCell::new(<T2>::default())),
     )
 }

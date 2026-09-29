@@ -105,12 +105,12 @@ fn f18<T1>(a0: T1) -> Option<Value<T1>> {
 }
 
 fn f19<T1: Clone>(a0: &T1) -> Option<Value<T1>> {
-    Some(Rc::new(RefCell::new(T1::clone(a0))))
+    Some(Rc::new(RefCell::new(<T1>::clone(a0))))
 }
 
 fn f20<T1: Clone>(a0: &Option<Value<T1>>) -> Option<Value<T1>> {
     a0.as_ref().map(|v| {
-        Rc::new(RefCell::new(T1::clone(&*v.borrow())))
+        Rc::new(RefCell::new(<T1>::clone(&*v.borrow())))
     })
 }
 
