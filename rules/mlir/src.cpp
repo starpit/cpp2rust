@@ -8890,3 +8890,103 @@ llvm::ArrayRef<T1> f1000(mlir::StorageUniquer::StorageAllocator &a0,
                          llvm::ArrayRef<T1> a1) {
   return a0.copyInto(a1);
 }
+
+// ===========================================================================
+// t990 -- `mlir::detail::DialectInterfaceBase<mlir::ktdf_arch::FeatureDialectInterface,
+//          mlir::DialectInterface>`, THE LARGEST SINGLE TYPE GAP IN THE CORPUS: 42 TUs.
+//
+// THE ROW.  Newly VISIBLE, not new: converter 907226d5 replaced a compiled-out
+// `assert(0)` in `ReportUnmappedSystemType` with `report_fatal_error`, so these 42
+// TUs stopped being counted as bucket A rc=0 while emitting the undefined name
+// `mlir_detail_DialectInterfaceBase_mlir_ktdf_arch_FeatureDialectInterface__mlir_DialectInterface_`.
+// fresh38 (PRE-fix binary) showed ONE TU; fresh39 (post-fix, same binary md5
+// a855a649e4b74fa3ea1587f333cebcc7, rules pin/ir.v36) shows 42.
+//
+// ⭐ KEY SPELLING CONFIRMED FROM THE CONVERTER'S OWN ASK, not from the abort text.
+// `--verbose` on dataflow-scheduler/lib/Utils/SchedulerExtContext.cpp:
+//     search type mlir::detail::DialectInterfaceBase<mlir::ktdf_arch::FeatureDialectInterface, mlir::DialectInterface>, result: None
+// and the abort's own `searched as:` AGREES with its `from decl` form here.  The
+// placeholder token carries `..._FeatureDialectInterface__mlir_DialectInterface_`
+// -- a DOUBLE underscore where the comma is -- which independently confirms ARITY 2.
+// The real declaration (DialectInterface.h:28-29,
+// `template <typename ConcreteType, typename BaseT> class DialectInterfaceBase`) has
+// exactly two parameters and NO defaults, so there is no trailing defaulted argument
+// for the recorder to drop and no `_` can appear in the spelling.
+//
+// ⭐⭐ THE MEMBER CENSUS, WHICH IS THE WHOLE DECISION.  `--survey` on SIX of the 42
+// (SchedulerExtContext, KTDFArchDialect, KTDFArchIntrinsics, StageCoarsening,
+// ResourceKinds, RegisterEverything -- chosen to include the ONLY TWO TUs in the
+// corpus that NAME the type).  In ALL SIX the type appears with `count=1` and in
+// exactly ONE role:
+//     info  rule-mapped base class `DialectInterface::Base<FeatureDialectInterface>`
+//           -> `mlir_detail_DialectInterfaceBase_...` lowered as inherent impls
+//           (correct); virtual dispatch through a reference to the base is not available
+// and there is NOT ONE member row naming it in any of the six -- no
+// `getInterfaceID`, no constructor, no `getDialect`.  The corpus grep agrees:
+// `grep -rn getInterfaceID` over dt_src has 8 hits and NONE is on a
+// `FeatureDialectInterface` (they are `Resource`/`Node`/`Link`, other classes and
+// other instantiations, plus three DEFINITIONS in the Python bindings).
+//
+// ⛔ WHY THIS IS NOT THE `mlir::OperationPass<mlir::ModuleOp>` REFUSAL.  That row --
+// 40 TUs, declined by the t980 slot -- has the IDENTICAL `info` shape, and it appears
+// in these very same surveys (StageCoarsening, DoubleBuffering) beside mine, so the
+// `info` line ALONE distinguishes nothing.  The DISCRIMINATOR is the member census:
+// `OperationPass::getOperation()` IS read and its result is immediately `.walk()`-ed,
+// so keying that type would trade 40 loud aborts for 40 silent `E0599`s (unmapped
+// MEMBERS are emitted textually with no placeholder token).  Here the count of
+// members read through the base is MEASURED ZERO in six TUs, so there is no member
+// half to land and no silent trade to make.  Verified additionally against the
+// emitted `.rs`, because a FABRICATED `::new_N` constructor is invisible to
+// `--survey`: see the witness note on the target side.
+//
+// ⭐ AND `()` IS EXACT, NOT MERELY LOUD-FREE.  DialectInterface.h:28-38 is the WHOLE
+// class: `using Base = ...` (a typedef), `static TypeID getInterfaceID()`, and a
+// PROTECTED forwarding constructor.  It declares ZERO DATA MEMBERS and has NO
+// destructor of its own -- all state (`Dialect *dialect`, `TypeID interfaceID`) lives
+// in `mlir::DialectInterface`, a DIFFERENT declaring class, whose three accessors
+// (`getDialect`, `getContext`, `getID`) a key on THIS class could not relocate anyway
+// and which the corpus never calls on a `FeatureDialectInterface`.  An empty class
+// with no destructor and no member read is the t720 `DialectRegistry` / t72 `TypeID`
+// shape, where the unit is faithful rather than lossy.
+//
+// ⛔ THE STANDING `mlir::detail::*Trait` REFUSAL IS NOT BEING EXTENDED HERE AND ITS
+// VERDICT IS NOT INHERITED.  t750/t751 + f650/f651 already disproved it for
+// `ShapedTypeTrait` by measuring the emitted corpus rather than the decl site; this
+// key is justified from its own six-TU survey, per-key, and it happens to land on the
+// opposite side of that argument -- the trait had members to relocate, this base has
+// none.
+//
+// SWALLOW-SAFETY.  `GetTypeMapKey` truncates at the first `<`, so the bucket is
+// `mlir::detail::DialectInterfaceBase`; `grep -rn 'DialectInterfaceBase'
+// rules/*/src.cpp` found it in NO module before this one, so the bucket holds exactly
+// t990.  ⭐ The key is FULLY CONCRETE -- no `T<digits>` anywhere in the spelling -- so
+// `matchTemplate`'s placeholder capture (`findNextLiteralSameDepth`) NEVER RUNS and
+// the same-depth-comma swallow class cannot reach it, which matters precisely because
+// this is the first two-argument key in the module whose arguments are separated by a
+// comma at depth 1.  Nor does the `operator>=` angle-depth desync apply: there is no
+// operator in the spelling.
+//
+// ⚠️ THE BASE IS DELIBERATELY OMITTED from the stub below.  The real template is
+// `class DialectInterfaceBase : public BaseT`, but writing that would make the
+// recorder demand a model for `BaseT` = `mlir::DialectInterface` and cascade a second
+// abort.  t750's `ShapedTypeTrait` stub omits its real base
+// (`TypeInterface<ShapedType, ...>::Trait<ConcreteType>`) for the same reason.
+// ⚠️ `mlir::DialectInterface` and `mlir::ktdf_arch::FeatureDialectInterface` are
+// declared ONLY as spelling vehicles for the key text; NEITHER is keyed, and neither
+// needs to be, because a fully concrete key is matched by canonical type SPELLING and
+// the converter never maps the arguments of one (the t48/t49 rule -- "a generic
+// `TypedValue<T1>` forces the converter to map the template ARGUMENT" -- is about
+// GENERIC keys and does not apply).
+// ===========================================================================
+namespace mlir {
+class DialectInterface {};
+namespace ktdf_arch {
+class FeatureDialectInterface {};
+}  // namespace ktdf_arch
+namespace detail {
+template <typename ConcreteType, typename BaseT> class DialectInterfaceBase {};
+}  // namespace detail
+}  // namespace mlir
+
+using t990 = mlir::detail::DialectInterfaceBase<
+    mlir::ktdf_arch::FeatureDialectInterface, mlir::DialectInterface>;

@@ -4183,3 +4183,19 @@ fn t1040() -> () {
 unsafe fn f1000<T1>(a0: &mut (), a1: Vec<T1>) -> Vec<T1> {
     a1
 }
+
+// t990 `mlir::detail::DialectInterfaceBase<mlir::ktdf_arch::FeatureDialectInterface,
+// mlir::DialectInterface>` -> AN OPAQUE UNIT.  42 TUs, the largest single type gap in
+// the corpus.  See src.cpp for the six-TU `--survey` member census (count=1 per TU,
+// role = rule-mapped base class, ZERO member rows) and for why `()` is exact: the
+// class declares no data member, has no destructor of its own, and its only two
+// members are a static RTTI accessor the corpus never calls on this instantiation and
+// a protected forwarding constructor.
+//
+// ⚠️ IDENTICAL IN BOTH MODELS and spelled in BOTH overlays, the t72 `mlir::TypeID`
+// precedent: a unit type key is repeated rather than relying on a "value types are not
+// repeated" convention, which is the guess that reads as a dead key.
+// ⚠️ The body is `()`, NOT empty -- an empty rule body panics at syntactic.rs:591.
+fn t990() -> () {
+    ()
+}
