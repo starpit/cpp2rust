@@ -173,6 +173,22 @@ public:
   // defaults and passed explicitly in the rule body below, which renders identically.
   template <typename Callable>
   function_ref(Callable &&callable, void * = nullptr, void * = nullptr);
+  // ⛔ THE CALL OPERATOR.  IT WAS MISSING FROM THIS RESTATED CLASS UNTIL 2026-09-29,
+  // and the omission was not cosmetic: t8..t13 were TYPE KEYS WITH NO METHOD KEY,
+  // which is STRICTLY WORSE THAN NO KEY AT ALL.  A type key routes the receiver away
+  // from the loud `no rule for type` path, and the converter then reaches EmitCall's
+  // terminal `else` (converter.cpp:5163) and aborts
+  //   `unsupported call operator has no rule: ... (the receiver's mapped VALUE would
+  //    be emitted in callee position, e.g. `0(v)`)`
+  // -- 15/15 of the gating TUs measured at 31edbf97.  (Without the guard the SAME
+  // shape emits `0(v)` silently; that is the `std::hash` 427-site precedent.)
+  // Real LLVM declares it at llvm/ADT/STLFunctionalExtras.h:68 as
+  //     Ret operator()(Params ...params) const
+  // i.e. parameters BY VALUE and the method `const`, which is exactly what the
+  // refusal text prints:
+  //     `void llvm::function_ref<void (mlir::Value, llvm::StringRef)>
+  //          ::operator()(mlir::Value, llvm::StringRef) const`
+  Ret operator()(Params...) const;
 };
 } // namespace llvm
 
@@ -216,4 +232,73 @@ template <typename T1, typename T2, typename T3, typename T4, typename T5, typen
 template <typename T1, typename T2>
 llvm::function_ref<T1()> f16(T2 &&a0) {
   return llvm::function_ref<T1()>(std::move(a0));
+}
+
+// ---------------------------------------------------------------------------
+// PER-ARITY `llvm::function_ref` CALL OPERATORS -- the t8..t13 twins of the
+// `std::function` keys f4/f6/f8/f10/f12/f14.  MUST be written in CALL form
+// (`a0.operator()(...)`); the infix `a0(...)` records nothing at all, silently --
+// the same trap documented at f4.
+//
+// ⭐ ARITY CENSUS, 2026-09-29, depth-aware scan of every `function_ref<...>`
+// spelling in repos/dt_src + toolchain/gen-inc + the LLVM 22.1.3 include tree,
+// splitting the arrow-parens on depth-0 commas (`arity_census.py`):
+//     arity   spellings   files
+//       0        14310      319     (13721 of them `::mlir::InFlightDiagnostic()`,
+//                                    the generated op/type `verify` hooks)
+//       1          479      224
+//       2          357      127
+//       3          200       60
+//       4           83       29
+//       5           32        7
+//      10            1        1
+// So arities 0..5 are the set in use, exactly matching the existing t8..t13, and
+// EVERY ONE OF THEM IS WRITTEN HERE.  ⛔ A GAP WOULD BE SILENTLY SWALLOWED: the last
+// placeholder of a lower-arity key scans to the closing paren and eats the remaining
+// depth-0 commas, so e.g. the arity-2 key alone would also match an arity-3
+// instantiation and bind T3 to `llvm::StringRef, bool`.  `search()`
+// (mapper.cpp:429-437) breaks that tie by PREFERRING THE LONGER src, and src length
+// is monotone in arity, so the exact-arity key always wins -- but only if it exists.
+// That is the identical argument recorded for t3..t7 and for t9..t13 above.
+// ⭐ The arity-0 key is immune to the swallow by construction: its literal is `()`,
+// which requires EMPTY parens and so cannot match any instantiation with arguments.
+// ⛔ THE LONE ARITY-10 SPELLING IS DELIBERATELY NOT COVERED.  It is
+// `void (IRBuilderBase &, Value *, Value *, Value *, Align, AtomicOrdering,
+//  SyncScope::ID, Value *&, Value *&, Instruction *)` -- one occurrence, in LLVM's
+// own AtomicExpand header, with no type key (t8..t13 stop at 5) and no corpus use.
+// With no type key it stays on the LOUD path, which is the correct outcome.
+//
+// ⚠️ WHY THE BODY MAY `unwrap`, stated here and not in the body because a rule body's
+// COMMENTS AND STRING LITERALS ARE INLINED INTO THE EMITTED `.rs`.  The model is
+// `Option<&'a dyn Fn..>` only because a TYPE key must have a default value and t8's
+// is `None`; `llvm::function_ref` is non-owning and is ALWAYS callable when invoked,
+// so the only way a `None` reaches one of these bodies is a default-constructed
+// `function_ref` being called -- which in C++ dereferences a null callback pointer and
+// is UNDEFINED BEHAVIOUR.  A `panic` is therefore a strictly LOUDER and faithful
+// rendering of that C++ semantics, not a papering-over, and it is the same choice
+// f4..f14 already make for `std::function` (where an empty `std::function` throws
+// `std::bad_function_call`).
+
+template <typename T1> T1 f17(const llvm::function_ref<T1()> &a0) {
+  return a0.operator()();
+}
+
+template <typename T1, typename T2> T1 f18(const llvm::function_ref<T1(T2)> &a0, T2 a1) {
+  return a0.operator()(a1);
+}
+
+template <typename T1, typename T2, typename T3> T1 f19(const llvm::function_ref<T1(T2, T3)> &a0, T2 a1, T3 a2) {
+  return a0.operator()(a1, a2);
+}
+
+template <typename T1, typename T2, typename T3, typename T4> T1 f20(const llvm::function_ref<T1(T2, T3, T4)> &a0, T2 a1, T3 a2, T4 a3) {
+  return a0.operator()(a1, a2, a3);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5> T1 f21(const llvm::function_ref<T1(T2, T3, T4, T5)> &a0, T2 a1, T3 a2, T4 a3, T5 a4) {
+  return a0.operator()(a1, a2, a3, a4);
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5, typename T6> T1 f22(const llvm::function_ref<T1(T2, T3, T4, T5, T6)> &a0, T2 a1, T3 a2, T4 a3, T5 a4, T6 a5) {
+  return a0.operator()(a1, a2, a3, a4, a5);
 }

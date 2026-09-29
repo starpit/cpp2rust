@@ -125,3 +125,31 @@ fn t13<'a, T1, T2, T3, T4, T5, T6>() -> Option<&'a (dyn Fn(T2, T3, T4, T5, T6) -
 fn f16<'a, T1, T2: Fn() -> T1 + 'a>(a0: &'a mut T2, a1: AnyPtr, a2: AnyPtr) -> Option<&'a (dyn Fn() -> T1 + 'a)> {
     Some(&*a0)
 }
+
+// `T1 llvm::function_ref<T1 (..)>::operator()(..) const`, arities 0..5 -- the
+// t8..t13 twins of f4/f6/f8/f10/f12/f14.  See src.cpp for the arity census, the
+// swallow-tie argument, and why `unwrap` is the faithful rendering of calling an
+// empty non-owning `function_ref` (C++ UB) rather than a papering-over.
+fn f17<'a, T1>(a0: &Option<&'a (dyn Fn() -> T1 + 'a)>) -> T1 {
+    (a0.unwrap())()
+}
+
+fn f18<'a, T1, T2>(a0: &Option<&'a (dyn Fn(T2) -> T1 + 'a)>, a1: T2) -> T1 {
+    (a0.unwrap())(a1)
+}
+
+fn f19<'a, T1, T2, T3>(a0: &Option<&'a (dyn Fn(T2, T3) -> T1 + 'a)>, a1: T2, a2: T3) -> T1 {
+    (a0.unwrap())(a1, a2)
+}
+
+fn f20<'a, T1, T2, T3, T4>(a0: &Option<&'a (dyn Fn(T2, T3, T4) -> T1 + 'a)>, a1: T2, a2: T3, a3: T4) -> T1 {
+    (a0.unwrap())(a1, a2, a3)
+}
+
+fn f21<'a, T1, T2, T3, T4, T5>(a0: &Option<&'a (dyn Fn(T2, T3, T4, T5) -> T1 + 'a)>, a1: T2, a2: T3, a3: T4, a4: T5) -> T1 {
+    (a0.unwrap())(a1, a2, a3, a4)
+}
+
+fn f22<'a, T1, T2, T3, T4, T5, T6>(a0: &Option<&'a (dyn Fn(T2, T3, T4, T5, T6) -> T1 + 'a)>, a1: T2, a2: T3, a3: T4, a4: T5, a5: T6) -> T1 {
+    (a0.unwrap())(a1, a2, a3, a4, a5)
+}
