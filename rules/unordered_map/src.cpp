@@ -448,3 +448,172 @@ std::pair<typename std::unordered_map<T1, T2>::iterator, bool>
 f57(std::unordered_map<T1, T2> &o, const T1 &a1, const T2 &a2) {
   return o.emplace(a1, a2);
 }
+
+// ===========================================================================
+// ⛔⛔ `emplace` AT ARITY 1 (`m.emplace(some_pair)`) IS NOT KEYABLE TODAY, AND THE
+// REASON IS A PREPROCESSOR GAP, NOT A MISSING SPELLING.  MEASURED 2026-09-29 on
+// pin/cpp2rust md5 a1bc90153318514a178849ebd27944fa + pin/ir.v41.
+//
+// THE SYMPTOM.  `dxp/dxp.cpp:1126-1129` builds
+//     std::unordered_map<VariableSymbol, VariableDefinition::ValueType> values;
+//     for (const auto &symVal : dataTensorStartAddrSymVals) values.emplace(symVal);
+// where `symVal` is a `const std::pair<VariableSymbol, ValueType> &` -- i.e. ONE
+// argument, the whole value_type.  f57's body binds a1 AND a2, so the TU dies:
+//     LLVM ERROR: rule body references placeholder a2 but the call site supplies
+//     only 2 argument(s) at .../dxp/dxp.cpp:1128:12
+// That is a WHOLE-TU abort (bucket B, 0 lines emitted), not a bad site: the
+// arity check at converter.cpp:9748-9762 calls `report_fatal_error` in every mode
+// except `--survey`.  Reproduced standalone in 9 lines (`m.emplace(p)`).
+//
+// ⭐⭐ NEITHER OF THE TWO OBVIOUS FIXES EXISTS.  Both were measured, not reasoned:
+//
+// (1) NARROWING f57 SO IT CANNOT MATCH ARITY 1 IS IMPOSSIBLE.  The ask spelling is
+//     BYTE-IDENTICAL at both arities.  Two single-arity probes, `-verbose`:
+//       arity 1  m.emplace(p)      | search expr std::pair<std::__hash_map_iterator<
+//       arity 2  m.emplace(1, 2L)  |   std::__hash_iterator<std::__hash_node<
+//                                  |   std::__hash_value_type<int, long>, void *> *>>,
+//                                  |   bool> std::unordered_map<int, long>::emplace(&&...)
+//     Both lines md5 d1f4c6473d1843f837a13392e3d62c25, `cmp` clean.  The cause is
+//     `Mapper::HasFunctionParameterPack` (mapper.cpp:2872-2876), which resolves
+//     through `getPrimaryTemplate()`: a SPECIALIZATION of a variadic template
+//     therefore still prints the pack marker, so `ToString` renders `(&&...)` at
+//     EVERY arity on the ask side exactly as it does on the load side.  And the
+//     `#arity` bucket that would otherwise separate them is never formed on either
+//     side, because `GetExprCallArity` returns nullopt on a top-level `...`
+//     (mapper.cpp:237-240).  There is no string to narrow.
+//
+// (2) A SIBLING KEY PLUS THE LONGER-`src` TIE-BREAK DOES NOT APPLY EITHER, and
+//     adding one would be a SILENT MIS-BIND rather than a fix.  A second rule
+//     spelled on the same receiver records the SAME src (it comes from
+//     `Mapper::ToString(callee)`, and the callee is the same libc++ variadic
+//     `emplace` declaration), so both land in the same bucket AND their srcs are
+//     the same LENGTH.  `search`'s tie-break is a STRICT `>` --
+//     `if (!rule || this_rule.src.size() > rule->src.size())`, mapper.cpp:907 --
+//     so on equal lengths the winner is whichever the `unordered_multimap` bucket
+//     happens to yield FIRST.  An arity-1 call could bind the arity-2 body or the
+//     reverse, nondeterministically, and it would COMPILE.
+//     ⭐ WHY `rules/functional` f17-f22 AND `rules/tuple` f6-f9 ARE DIFFERENT, and
+//     it is not luck: their arity is carried by a part of the key that is NOT the
+//     parameter list.  `std::tie`'s RETURN type is `std::tuple<T1 &, ..., TN &>`,
+//     so the arity-2 and arity-27 keys are genuinely different strings of
+//     genuinely different length and the tie-break resolves them.
+//     `unordered_map::emplace` always returns `pair<iterator, bool>`, INDEPENDENT
+//     of arity, so that discriminator does not transfer.
+//
+// ⛔ AND DO NOT "FIX" THIS BY REWRITING f57's BODY FOR ARITY 1.  Both arities are
+// real in this corpus (the arity-2 site that f57 was written for is quoted in the
+// f57 note above, `firstIndex.emplace(k, v)`), so an arity-1 body would turn that
+// site into a rustc E0308 on `let (__k, __v) = <key>;`.  That is LOUD, not silent,
+// but it is still trading one broken arity for the other, not a fix.
+//
+// ⭐⭐ WHAT HAS TO LAND, AND IT IS FIVE LINES IN THE PREPROCESSOR, NOT HERE.  The
+// arity-GENERIC pack mechanism (`Init<T, Args> &&...args`, what `rules/vector`
+// f112 uses for `emplace_back`) is the right shape and would serve EVERY arity
+// from one key: `Converter::ConvertInitFragment` (converter.cpp:9822-9837) hands
+// the actual arguments to `BuildInitExpr`, which copy-initialises the pair from a
+// single pair argument and 2-ary-constructs it from `(k, v)` -- correct at both,
+// with no arity in the key at all.  The ONE thing in the way is that
+// `cpp_rule_preprocessor.cpp:286-303 findTemplateArgument` records the init type
+// as a (depth, index) PAIR INTO THE CALLEE'S OWN TEMPLATE ARGUMENT LIST, so the
+// init type must be VERBATIM one of those arguments.  For `unordered_map<K, V, H,
+// E, A>::emplace` they are `Args...`, K, V, `hash<K>`, `equal_to<K>` and
+// `allocator<pair<const K, V>>` -- and `value_type` = `pair<const K, V>` is NOT
+// among them; it is only reachable INSIDE the allocator argument.  Measured, both
+// directions, on the pinned preprocessor md5 a46d45dc97f80a5ba8ee07b3eb5b6a96:
+//    Init<std::pair<const T1, T2>, Args>  -> ERROR: Init type std::pair<const T1,
+//        T2> is not a template argument of ... ::emplace(&&...)   (exit 1, NO IR)
+//    Init<std::pair<T1, T2>, Args>        -> the SAME ERROR, so it is STRUCTURAL,
+//        not a const-qualification mismatch
+//    Init<T2, Args>                       -> `OK unordered_map -> ...`
+// ⭐ That last line is the POSITIVE CONTROL and it is the whole point: the pack
+// path itself works fine for `unordered_map` -- `getInitType`, `addPackRule` and
+// the Rust `init:` parameter all resolve -- and ONLY the (depth, index) encoding
+// of the init type is too weak to name `pair<const K, V>`.  (It is also wrong
+// semantically, of course: `Init<T2, ...>` would construct the VALUE from the
+// arguments.  It is here as a control, and it is NOT a key.)  The preprocessor
+// needs to record the init type STRUCTURALLY -- as a spelling the converter
+// re-substitutes -- or `findTemplateArgument` needs to search NESTED template
+// arguments.  Until then f57 stays arity-2-only and every arity-1 site stays a
+// LOUD whole-TU abort, which is the correct failure while the shape is unkeyable.
+//
+// ⚠️⚠️ AND THE ARITY-1 ABORT IS NOT THE WORST SHAPE THIS KEY CAN MEET.  A
+// 2-PLACEHOLDER BODY UNDER AN ARITY-FREE KEY IS SILENTLY WRONG AT ARITY >= 3:
+// the bounds check at converter.cpp:9748 only fires when the body asks for MORE
+// arguments than the site supplies, so at arity 3 or 4 `a1`/`a2` bind the FIRST
+// TWO and every further argument is DROPPED -- no abort, no placeholder token,
+// nothing for `pin/no-placeholders.sh` or a bucket census to see.
+// ⭐ MEASURED on the corpus 2026-09-29.  Funnel: 216 raw `emplace(` occurrences
+// repo-wide -> 201 non-vendored (`external/`, `common/json/` nlohmann,
+// `dataflow-scheduler/external/`) -> 153 `.emplace(`/`->emplace(` after removing 48
+// `try_emplace(` -> 143 on an ASSOCIATIVE receiver after removing 10 that are
+// `std::optional` (6), `std::vector` (3) and `std::queue` (1).  `emplace_back` /
+// `emplace_front` (794 non-vendored) are a different member and are not counted.
+// Arities counted by top-level commas at paren/brace/angle depth 0:
+//     container            arity1  arity2  arity3  arity4   total
+//     std::map                  1      84       3       0      88
+//     std::unordered_map        1      43       0       0      44
+//     std::set                  6       1       0       1       8
+//     std::unordered_set        1       0       0       0       1
+//     generic (map-or-umap)     0       2       0       0       2
+//     TOTAL                     9     130       3       1     143
+// No `multimap`/`multiset`/`unordered_multimap`/`unordered_multiset` receiver
+// appears anywhere.  The four arity->=3 sites are
+//     dsm/dsm.cpp:3928, dsc-based-utils/progtailor/progtailor.cpp:334 and :472
+//        -- all three `emplace(std::piecewise_construct, forward_as_tuple(core,
+//           comp), forward_as_tuple(...))`, and all three read `.first->second`
+//     dxp/test/dxp_unittest.cpp:1404
+//        -- `seenLocs.emplace(loc.flitId, loc.sliceId, loc.stPosn, loc.endPosn)`,
+//           reading `.second`
+// ⭐ NONE of them is reachable from f57: the three piecewise sites are
+// `std::map<std::pair<int, SenComponents>, ...>` (declared at progtailor.cpp:319
+// and :447, and dsm.cpp:3912) and the fourth is `std::set<std::tuple<uint32_t,
+// uint32_t, uint32_t, uint32_t>>` (dxp_unittest.cpp:1398).  So there is NO silent
+// mis-bind in the tree today -- but only because of the last paragraph below.
+//
+// ⭐⭐ AND THE CENSUS CLOSES THE ONE ESCAPE HATCH THE ARGUMENT ABOVE LEAVES OPEN.
+// The remaining idea would be a RECEIVER-SPECIALIZED key -- spell the receiver
+// concretely so the arity-1 sites get their own longer `src`, the way
+// `rules/algorithm` f13/f18 spell `std::string::iterator` instead of `T1 *`.  That
+// CANNOT WORK HERE, because the SAME receiver type is emplaced at BOTH arities:
+//   * `std::unordered_map<VariableSymbol, VariableDefinition::ValueType>` is
+//     arity 1 at dxp/dxp.cpp:1128 and arity 2 at
+//     dbo/src/Utils/sdsc_bundle/ProgramCorrection.cpp:2348.  And the spelling is
+//     not even the discriminator it looks like: `VariableSymbol = int64_t`
+//     (util/variabledefinition/VariableDefinition.h:32) and
+//     `VariableDefinition::ValueType = VariableSymbol` (:95), so the converter's
+//     DESUGARED ask for all of them is `std::unordered_map<long, long>` -- arity 1
+//     at dxp.cpp:1128 and arity 2 at eight other sites.
+//   * the same shape appears on `std::set`:
+//     `std::set<std::pair<SenComponents, SenComponents>>` is arity 2 at
+//     DSC2ToDataflowIR/V3/SNTransferLowering.cpp:2603 and arity 1 at :2651, from
+//     two character-identical parameter declarations in ONE file (:2566, :2619).
+// Of the 64 distinct receiver spellings those are the only two emplaced at more
+// than one arity -- but two is enough: no key spelled on the receiver can separate
+// the arities, so the (depth,index) fix below is the only one that works.
+//
+// ⛔⛔ `rules/map` AND `rules/set` HAVE NO `emplace` KEY AT ALL (checked, both
+// modules), AND THAT IS NOW A DELIBERATE ABSENCE, NOT AN OVERSIGHT.  Adding a
+// 2-ary `std::map::emplace` key would inherit the arity-1 abort AND immediately
+// turn those three `piecewise_construct` sites into silent argument drops, because
+// `std::map::emplace` / `std::set::emplace` are the same variadic
+// `template<class... Args>` shape with the same arity-free key and the same
+// arity-independent `pair<iterator, bool>` return -- every measurement above
+// transfers verbatim.  DO NOT ADD ONE until the preprocessor change above has
+// landed.  The corpus's own return-value usage says the same thing from the other
+// side.  Over the 143 sites: 117 DISCARDED, 15 READS_SECOND, 8 READS_FIRST, 3
+// READS_BOTH, 0 RETURNED.  So 26 sites genuinely read the pair and BOTH halves are
+// load-bearing -- `.second` alone at dxp_unittest.cpp:1404, dsc/dsc2.cpp:1369 and
+// :5171, dsc/pcfg.cpp:2605, dsc/dims.cpp:768, progtailor/regstitcher.cpp:27/:81/
+// :119/:139/:142, progtailor.cpp:764, util/utils.h:150,
+// VariableDefinition.cpp:310, DataConvertInfoGenerate.cpp:44 and
+// deeprt_scheduler_codegen_pipeline.cpp:550; `.first->second` at dsm.cpp:3928,
+// progtailor.cpp:334, ddc_transformation_util.cpp:130, ddc/ddcv1.cpp:1031 and
+// :1169, ddl_conversion.cpp:1332, dsc/dsc2.cpp:3487 and :3731; and BOTH at
+// regstitcher.cpp:71, ProgramCorrection.cpp:2600 and sys-arch-spec/dpc/dpc.cpp:591.
+// A body may therefore neither fabricate `true` nor discard the iterator, which is
+// what f57 already gets right.  `dxp/dxp.cpp:1128` itself DISCARDS the pair, but
+// that is no licence to drop it from the model: it is one of 117.
+// ⚠️ `try_emplace` (48 non-vendored sites) has the same `pair<iterator, bool>`
+// return and the same arity-free variadic key, so everything above applies to it
+// too.  It is likewise unkeyed, deliberately.
+// ===========================================================================
