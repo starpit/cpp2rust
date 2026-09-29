@@ -92,4 +92,12 @@ pub use tool_output_file::*;
 mod owning_op_ref;
 pub use owning_op_ref::*;
 
+// `getopt(3)`/`getopt_long(3)`: a STATEFUL cursor over `argv`.  The `libc` crate
+// binds the two functions and `struct option` but NOT `optarg`/`optind`/
+// `opterr`/`optopt`, and the twelve `*_standalone.cpp` drivers -- the port goal
+// `dxp/dxp_standalone.cpp:66` among them -- are a `while (getopt_long(...) != -1)`
+// loop whose body READS `optarg`.  rules/getopt maps to it.  See getopt.rs.
+mod getopt;
+pub use getopt::*;
+
 pub use libcc2rs_macros::{ByteRepr, goto, goto_block, switch};
