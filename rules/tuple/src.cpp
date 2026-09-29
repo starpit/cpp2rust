@@ -138,3 +138,40 @@ std::tuple<T1 &, T2 &, T3 &, T4 &> f9(T1 &a0, T2 &a1, T3 &a2, T4 &a3) {
 // swallow commas, then this src cannot match an arity >= 2 instantiation either.
 // Either way this key is confined to arity 1 and changes no existing outcome.
 template <typename T1> using t6 = std::tuple<T1>;
+
+// `std::get<0>` / `std::get<1>` on a 2-tuple.  MEASURED, not assumed: the MLIR
+// TableGen storage classes emit `std::get<I>(tblgenKey)` three times per type
+// (operator==, hashKey, construct), and with no key here the converter emitted
+// them as the UNDEFINED NAMES `get_101`..`get_117` -- which stops the whole TU at
+// NAME RESOLUTION, so rustc never reaches type or borrow checking on it at all.
+// The `-verbose` search line is verbatim
+//     search expr const mlir::ktdp::SpyreMemorySpaceKind & std::get(const std::tuple<mlir::ktdp::SpyreMemorySpaceKind, int> &), result:
+//     None
+// i.e. ASKED AND MISSED, not never-asked.
+//
+// ⭐ THIS RETRACTS rules/variant/src.cpp's REFUSAL PREMISE, WHICH IS MEASURABLY
+// FALSE FOR THE TUPLE CASE.  That comment says `get<0>` and `get<1>` "record
+// BYTE-IDENTICAL keys (the explicit non-type template argument does not reach the
+// key)".  The index indeed does not reach the key -- but THE RETURN TYPE DOES, and
+// for a tuple the two indices have DIFFERENT element types, so the keys differ:
+//     const T1 & std::get(const std::tuple<T1, T2> &)     <- index 0
+//     const T2 & std::get(const std::tuple<T1, T2> &)     <- index 1
+// and a search key can only bind consistently to one of them (binding `T2` from
+// the return type of a `get<0>` call contradicts the `T2` bound from the tuple's
+// second element).  The refusal is only correct where the two element types can be
+// EQUAL -- see the guard note below.
+//
+// ⛔ THE ONE CASE THIS IS WRONG FOR, STATED SO IT IS NOT REDISCOVERED:
+// `std::tuple<X, X>` -- both keys then match and `search()` must tie-break between
+// two equal-length srcs.  ZERO such instantiation exists in the corpus reached by
+// these sites (every MLIR storage KeyTy measured has distinct element types), so
+// this is not exercised today; if one appears it must abort, not pick.
+template <typename T1, typename T2>
+const T1 &f10(const std::tuple<T1, T2> &a0) {
+  return std::get<0>(a0);
+}
+
+template <typename T1, typename T2>
+const T2 &f11(const std::tuple<T1, T2> &a0) {
+  return std::get<1>(a0);
+}

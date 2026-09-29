@@ -89,3 +89,18 @@ fn f9<T1, T2, T3, T4>(a0: *mut T1, a1: *mut T2, a2: *mut T3, a3: *mut T4) -> (*m
 fn t6<T1: Default>() -> (T1,) {
     Default::default()
 }
+
+// std::get<0>/std::get<1> -> a FIELD PROJECTION, returning a RAW POINTER, not a value.
+// `const T1 &` maps to `*const T1` exactly as f6 documents, and the emitted call site
+// already declares the hoisted local as `*const Vec<i64>` and DEREFERENCES it, so a
+// by-value body would not typecheck AND would be a silent copy where C++ referred.
+// `addr_of!` rather than `&(*a0).0 as *const _`: it forms the pointer without creating
+// an intermediate Rust reference, which is what a C++ `const &` return into a
+// possibly-unaligned/uniqued storage object needs. `a0` appears EXACTLY ONCE.
+fn f10<T1, T2>(a0: *const (T1, T2)) -> *const T1 {
+    unsafe { ::core::ptr::addr_of!((*a0).0) }
+}
+
+fn f11<T1, T2>(a0: *const (T1, T2)) -> *const T2 {
+    unsafe { ::core::ptr::addr_of!((*a0).1) }
+}
