@@ -2211,6 +2211,85 @@ using t60 = mlir::IndexType;
 // `ModuleOp` remodel) LANDS FIRST, in `dataflowir-gen`; the type key is worth
 // writing only after it.  The exact method wanted, in the shape the converter
 // already emits, is specified at the t61 block in `tgt_unsafe.rs`.
+//
+// ⭐⭐ RE-MEASURED 2026-09-29 03:2x AT pin/ir.v39 (slot `oppass`), AND THE WHOLE ROW
+// IS RETIRED: **`mlir::OperationPass<mlir::ModuleOp>` IS NO LONGER A GATE ON ANY OF
+// THE 42 TUs.**  Binary `snap/coord43/cpp2rust` md5 3e92c2e9…, trees pin/ir.v39
+// (BEFORE) and v39 + a throwaway `t2000 = mlir::OperationPass<mlir::ModuleOp>` opaque
+// unit (AFTER, key spelling read back out of `ir_src.json` as
+// `mlir::OperationPass<mlir::ModuleOp>`, i.e. byte-equal to the abort's `searched
+// as:`).  Both legs, all 42 TUs:
+//     bucket   17 A / 25 B   ===   17 A / 25 B
+//     first abort text       byte-identical on 42 of 42
+//     emitted `.rs`          md5-identical on 17 of 17 A-TUs
+//     dsc/dims.cpp           A rc=0 32,255 both legs
+//     RegisterEverything.cpp A rc=0 24,089 both legs
+// ⛔⛔ THE KEY IS A DEAD KEY, and this is not an inference: across the 42 BEFORE logs
+// `grep -c 'searched as: mlir::OperationPass<mlir::ModuleOp>'` is **0**.  The only
+// six surviving mentions of the spelling are inside TWO composite keys,
+// `mlir::PassWrapper<dbo::DumpIrPass, mlir::OperationPass<mlir::ModuleOp>>` and
+// `…<dbo::SimplifyCorrectionSymbolsPass, …>` (Debug.cpp, SimplifyCorrectionSymbols.cpp)
+// -- a DIFFERENT key that a bare `OperationPass<ModuleOp>` rule cannot satisfy.
+// ⭐ Keys landed between the 00:38 probe and v39 (t66/t980/t990/t1040, t1100/t1200,
+// t1500, t1710+f1710-f1713, cl t1900, hash f1) already carry all 17 past this point.
+// ⭐ The three TUs named as "successor gates" are stale too: `EmitSpyreCode.cpp` is
+// **A rc=0 9,979** at v39; `KTIRLegalityCheck.cpp` gates on `mlir::scf::WhileOp`;
+// `AgenToSentient/Helper.cpp` on `operator<<(raw_ostream &, mlir::Value)`.
+//
+// ⛔⛔ AND THE 64 SILENT MEMBER CALLS ARE NOT A CONSEQUENCE OF ANY KEY -- THEY ARE
+// ALREADY IN THE TREE AT v39 WITH NO KEY AT ALL.  Re-censused over the 17 A-TUs'
+// emitted `.rs` (identical in both legs):
+//     `.getBody(` 16 -> 18 · `.emitError(` 13 -> 17 · `.getSymName(` 12 -> 12
+//     `.walk(` 11 -> 14 · `.getBodyRegion(` 10 -> 10 · `.getOps(` 2 -> 2
+//     TOTAL 64 -> 73
+// So the trade the probe was reverted over is **not a trade any more**: there are no
+// loud gates left to buy, and the 73 silent sites are HEAD's own pre-existing damage.
+// ⭐⭐ AND `f1300`/`f1800` DO NOT TOUCH THEM.  `grep -c 'f1300(' / 'f1800('` over all
+// 17 A-TUs is **0/0**.  Every one of the 14 `.walk(` sites has an OP-HANDLE receiver
+// (`module.walk`, `func.walk`, `unit.walk`, `program_module.walk`), i.e.
+// `mlir::OpState::walk` -- a THIRD declaring class, neither `mlir::Operation` (f1300)
+// nor `mlir::Region` (f1800).  Read off `--verbose` on PlacePrograms.cpp, verbatim:
+//     16  mlir::InFlightDiagnostic mlir::OpState::emitError(const llvm::Twine &)
+//      8  std::optional<llvm::StringRef> mlir::ModuleOp::getSymName()
+//      8  mlir::Region & mlir::ModuleOp::getBodyRegion()
+//      4  mlir::WalkResult mlir::OpState::walk((lambda at <path>:_:_) &&)
+//
+// ⛔⛔ AND NO MEMBER KEY CAN FIX THEM WHILE `t61` IS `()`.  The emitted text is
+// `let mut module: () = …;  module.walk(&mut _callback)` and
+// `pub unsafe fn callTo(mut top: (), …) { … top.getBodyRegion() … }`  -- the RECEIVER
+// IS THE UNIT TYPE.  A member rule takes the receiver as its first parameter, so its
+// Rust signature would be `fn f20xx(a0: ()) -> mlir::Region` and no honest body
+// exists.  rustc on PlacePrograms.cpp confirms the shape: `E0599 … found for unit
+// type` on `getSymName` x2, `getBodyRegion` x2, `walk` x1, `to_bool` x1.
+// ⭐⭐ THE EXACT LIST THAT WOULD FLIP IT, in order, and the FIRST ITEM IS A TYPE:
+//   0. **`t61` `mlir::ModuleOp` -> `dataflowir_gen::fmt::OpInst`**, not `()`.  ⭐ This
+//      is no longer a new judgement: `t25` (`mlir::OpState`) ALREADY maps to
+//      `fmt::OpInst` (tgt_unsafe.rs:419), and `ModuleOp` DERIVES from `OpState`, so
+//      `()` here is an INCONSISTENCY with a landed decision, not a conservative
+//      choice.  The "no TD_OPS row" objection is already retracted above.
+//   1. `mlir::WalkResult mlir::OpState::walk((lambda at <path>:_:_) &&)`
+//        -> `OpInst::walk_any_r_mut` (fmt.rs:1446, landed).  ⛔ f1300's redeclaration
+//        constraint applies: the `void`- and `WalkResult`-returning `walk` cannot both
+//        be declared in one C++ class, so ONE per declaring class only.
+//   2. `mlir::Region & mlir::ModuleOp::getBodyRegion()` -> `&mut a0.regions[0]`
+//        (`OpInst::regions` is `pub Vec<Region>`, fmt.rs:445).
+//   3. `std::optional<llvm::StringRef> mlir::ModuleOp::getSymName()` -> the `sym_name`
+//        entry of `OpInst::attrs` (`pub attrs: AttrDict`, fmt.rs:443).
+//   4. `mlir::ModuleOp::getBody()` -> `a0.regions[0].entry()` (`Region::entry`,
+//        fmt.rs:675).  ⚠️ SPELLING NOT CAPTURED: the only `--verbose` leg carrying a
+//        `getBody` ask (WrapProgramDfir.cpp, 11,217 lines) was cut off by my window
+//        and a TRUNCATED `-verbose` log must not be recorded.  Re-read it first.
+//   5. `mlir::ModuleOp::getOps<…>()` (2 sites, WrapProgramDfir.cpp only) -- spelling
+//        not captured, same reason.  Expect the f1300 filter problem: the op-type
+//        filter is an EXPLICIT template argument, which the recorder does not put in
+//        a member key.
+//   6. ⛔ `mlir::InFlightDiagnostic mlir::OpState::emitError(const llvm::Twine &)`
+//        -- **REFUSED, 16 of the 17 sites in one TU and the single largest name.**
+//        `mlir::InFlightDiagnostic` is already an OPAQUE UNIT (f39), so a body could
+//        only FABRICATE a diagnostic: it would have to return `()` and drop the
+//        message, i.e. silently delete a real diagnostic emission at rc=0.  That is
+//        exactly the class the hard rules forbid.  This one stays unmapped and must
+//        be made to ABORT, not keyed.
 // ⛔ NO EQUALITY IS ADDED for this or any op handle, on purpose.  Two distinct
 // handles to ONE operation must compare EQUAL, and two handles to two ops that
 // happen to print identically must compare UNEQUAL -- mapping a handle onto a
