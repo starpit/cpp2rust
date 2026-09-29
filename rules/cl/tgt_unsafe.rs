@@ -76,3 +76,54 @@ fn f671<T1>(a0: &Vec<T1>) -> bool {
 fn t1900() -> Vec<u8> {
     Vec::new()
 }
+
+// t1910 `llvm::cl::opt_storage<T1, false, true>` -> `T1`, the same value model t2
+//   uses for the `isClass == false` specialisation -- but here it is the HEADER'S
+//   OWN STATEMENT rather than a modelling choice: CommandLine.h:1354 declares the
+//   primary template as `class opt_storage : public DataType`, so the storage IS-A
+//   DataType by inheritance.  `Default` is the unobservable cl::init bookkeeping
+//   t2 already drops.  See src.cpp for why the `true` matters and for the list of
+//   members left undeclared so they stay loud.
+fn t1910<T1: Default>() -> T1 {
+    Default::default()
+}
+
+// f1910 `opt_storage<T1, false, true>::getValue()` -> THE IDENTITY.
+//   CommandLine.h:1359 is literally `return *this;`.  No value is invented and
+//   none can be lost.  Non-const receiver only; the `const` overload is a
+//   different key and is deliberately unkeyed.
+unsafe fn f1910<T1>(a0: &mut T1) -> &mut T1 {
+    a0
+}
+
+// f1911 `opt<T1>::operator=(const T1 &)` -> ASSIGN, THEN RETURN THE RECEIVER.
+//   CommandLine.h:1478 is `{ this->setValue(Val); return this->getValue(); }` and
+//   `setValue` is `{ DataType::operator=(V); if (initial) Default = V; }` with
+//   `initial` defaulted false at every corpus call site, so the observable effect
+//   is exactly `*this = Val` returning `*this`.
+//   ⚠️ `Clone::clone(&(*a1))`, NOT `a1.clone()`: a `const &` parameter cloned in a
+//   reference-producing position emits `&((*x).clone())`, a reference to a
+//   temporary.
+//   ⚠️ THE `'a` BINDER IS REQUIRED, measured: with two reference parameters rustc
+//   cannot elide the returned lifetime (`E0106: expected named lifetime
+//   parameter`), and the rule preprocessor turns that into a core dump with no
+//   `OK` line.  `a1` keeps its own anonymous lifetime; only `a0` and the result
+//   are tied, which is what the C++ does.
+//   ⛔⛔ THE ASSIGNMENT MUST GO THROUGH A NESTED `fn`, NOT `*a0 = ...`.  MEASURED.
+//   The converter substitutes `a0` AND `*a0` with the SAME argument text, so the
+//   obvious body `*a0 = Clone::clone(&(*a1)); a0` emitted
+//       &mut (*o) = Clone::clone(&(*&(*s)));
+//   -- an assignment whose left-hand side is a `&mut` expression, which is not a
+//   place: `error[E0070]: invalid left-hand side of assignment`.  Passing the
+//   reference to a nested `fn` keeps the deref INSIDE a body the converter does
+//   not rewrite, so `a0` is substituted only in argument position where it is
+//   already a `&mut`.  ⚠️ The `fn` is nested in the block on purpose: a
+//   FILE-LEVEL helper item in a `tgt_*.rs` is NOT copied into the emitted output
+//   (it type-checks, regenerates OK, and the converter emits the bare name).
+unsafe fn f1911<'a, T1: Clone>(a0: &'a mut T1, a1: &T1) -> &'a mut T1 {
+    fn __cl_assign<T: Clone>(dst: &mut T, src: &T) {
+        *dst = Clone::clone(src);
+    }
+    __cl_assign(a0, a1);
+    a0
+}

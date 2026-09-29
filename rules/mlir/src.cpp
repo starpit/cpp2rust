@@ -10370,3 +10370,118 @@ bool f2103(mlir::OpState a0, mlir::OpState a1) { return operator!=(a0, a1); }
 // not member rules.  Until then IRMapping is unkeyable and a key here is a
 // silent-miscompile generator.
 // ===========================================================================
+// PASS 2026-09-29 (slot optstr2).  t2300 / t2301 / f2300 --
+// `mlir::detail::PassOptions::Option<std::string>`, THE #1 TRANSLATION GATE
+// (32 of 179 censused TUs).  ALL THREE KEYS ARE MEASURED: they RECORD, they
+// MATCH (`Matching:` in -verbose), and both models translate rc=0 on a probe
+// that reproduces the corpus abort verbatim.
+//
+// ⭐⭐ ESCROW RESOLVED 2026-09-29 (slot escrowfix).  This block and `rules/cl`'s
+// t1910/f1910/f1911 (branch slot-clopt) landed TOGETHER, and the target of t2300 was
+// CHANGED in the process: it shipped as `String` on slot-optstr2 and is now
+// `Vec<libc::c_char>` / `Vec<u8>`, i.e. `rules/string` t1, because the paired member
+// keys are generic on `T1 = std::string` and resolve THROUGH t1.  `String` made every
+// `getValue()` read and every `operator=` write an `E0308`.  The full argument, and
+// the matching change to f2300's body, are in the two tgt_*.rs files at t2300.
+// ⛔ THE "DO NOT MERGE ALONE" WARNING BELOW STILL STANDS AS WRITTEN, for the record
+// of why it was in escrow -- read it as history, not as a live instruction.
+//
+// ⛔⛔ DO NOT MERGE THIS BLOCK ON ITS OWN.  It clears the LOUD abort and leaves
+// TWO loud rustc errors in its place, and the standing rule ("a type key with no
+// method key is strictly worse than no key at all, because it bypasses the loud
+// path") applies until `rules/cl` supplies the two member keys named below.  The
+// residual is LOUD, not silent -- that part of the brief was measured FALSE, see
+// (3) -- but it is still rc=0-and-does-not-compile for 32 TUs.
+//
+// ---------------------------------------------------------------------------
+// (1) ⭐⭐ THE CONSTRUCTOR KEY MUST BE SPELLED AS A PACK.  MEASURED BOTH WAYS.
+// The `CXXConstructExpr` clang builds for `Option<std::string> o{*this, "n",
+// cl::desc("d"), cl::init("")}` prints its callee as the INSTANTIATED signature
+//   'void (PassOptions &, StringRef, llvm::cl::desc &&, llvm::cl::initializer<char[1]> &&)'
+// and that is what a rule declared with those four concrete parameters RECORDS:
+//   void ...::Option(mlir::detail::PassOptions &, llvm::StringRef,
+//                    llvm::cl::desc &&, llvm::cl::initializer<char[_]> &&)
+// ⛔ THAT KEY IS DEAD.  `Mapper::ToString` prints the *pattern* for the converter's
+// ASK, so the ask reads
+//   void ...::Option(mlir::detail::PassOptions &, llvm::StringRef, &&...)
+// and the four-argument spelling cannot unify with it -- `result:` came back None.
+// Declaring the MODEL ctor variadic records that spelling character-for-character
+// and the very next run printed `Matching:`.  This is the `rules/unordered_map`
+// f57 observation ("ARITY IS NOT IN THE KEY") seen from the other side: there the
+// CALLEE was libc++'s real variadic template, here the callee is OUR model, so the
+// model is what has to carry the pack.  ⭐ ARITY IS NOT IN THE KEY, so this ONE key
+// serves every `Option<std::string>` declaration in the corpus whatever its arity,
+// and the `char[N]` bound never enters the key at all.
+//
+// (2) ⭐ THE VALUE REACHES RUST.  Emitted for `cl::init("")` on the ORIGINAL (`String`)
+// target, verbatim:
+//     String::from_utf8_lossy(&(unsafe {
+//         Cpp2RustUnmappedFn_init_0(&[0 as libc::c_char; 1]) }))
+//       .trim_end_matches('\0').to_owned()
+// so the `cl::init` argument IS threaded into the payload and a non-empty default
+// would survive.  ⛔ RESIDUAL, and it is NOT this block's to fix: the free function
+// `llvm::cl::initializer<char[_]> llvm::cl::init(const char (&)[_])` is UNKEYED
+// (f600/f601 here cover only `init<bool>` / `init<int>`; `rules/cl` t1900 keys the
+// TYPE `initializer<char[_]>` but not the function), so the argument arrives through
+// the undefined `Cpp2RustUnmappedFn_init_0`.  ⚠️ `pin/no-placeholders.sh` PASSES that
+// name (measured rc=0), so it is invisible to the placeholder gate.
+// ⭐ VALUE AUDIT, read off all six declarations: five are `cl::init("")` and the
+// payload's `String::new()` default is EXACTLY right for them; the sixth,
+// `hcc/src/Common/EmitBinaryOptions.h:27`, is `cl::init("host_senprog.so")` and
+// `grep -ci hcc fresh38/paths403.txt` = 0, so hcc is not in the measured population.
+// ⛔ THE MOMENT hcc ENTERS THE POPULATION, `init_0` must be keyed or that default is
+// a silent lie.  Written down here rather than left to be discovered.
+//
+// (3) ⛔⛔ THE MEMBER KEYS ARE NOT ON THIS RECEIVER, and the brief's spec for them is
+// DEAD.  `getValue()` / `operator=` are INHERITED from the `llvm::cl::opt` base, and
+// the converter asks for them on the BASE, measured verbatim:
+//     search expr std::string & llvm::cl::opt_storage<std::string, false, true>::getValue(), result:  (None)
+//     search expr std::string & llvm::cl::opt<std::string>::operator=(const std::string &), result:   (None)
+// so `std::string & mlir::detail::PassOptions::Option<std::string>::getValue()` and
+// its two siblings RECORD but can never match -- three dead keys.  They are
+// DELIBERATELY ABSENT from this block.  ⭐ The real row is `rules/cl`'s:
+//   * a type key for `llvm::cl::opt_storage<T1, false, true>` -- t2 there is
+//     `<T1, false, false>`, the OTHER third argument, so the `true` form is unkeyed;
+//   * `T1 & llvm::cl::opt_storage<T1, false, true>::getValue()`;
+//   * `T1 & llvm::cl::opt<T1>::operator=(const T1 &)` -- t1 keys the TYPE only.
+// Until those land, `opts.outputPath.getValue()` emits `.getValue()` TEXTUALLY on a
+// `String` (`error[E0599]`) and `progIROpt.artifacts_outfile = s` emits a bare Rust
+// assignment of `Vec<libc::c_char>` into a `String` (`error[E0308]`).  ⭐ BOTH ARE
+// LOUD.  The brief's forbidden outcome -- "getValue() would answer "" uncondition-
+// ally" -- is measured FALSE: with the member keys dead nothing silently defaults.
+// ---------------------------------------------------------------------------
+namespace mlir {
+namespace detail {
+// ⚠️ AN EXPLICIT SPECIALISATION of the member class template declared memberless at
+// :1531, NOT a member added to the primary.  t66 `<int>`, t1200 `<bool>` and t1500
+// `<DCC::ProgIRFormat>` all ride on the primary as OPAQUE UNITS and stay bit-for-bit
+// untouched -- the t750/t751 / SymbolOpInterfaceTrait discipline.  ONE template
+// argument, so the recorded key cannot drift to the dead canonical two-argument
+// spelling `Option<std::string, llvm::cl::parser<std::string>>` that the abort's
+// `from decl` half prints.
+// ⚠️ NO `getValue` / `operator=` / `operator std::string` IS DECLARED -- see (3).
+template <> class PassOptions::Option<std::string> {
+public:
+  template <typename... Args>
+  Option(PassOptions &parent, llvm::StringRef arg, Args &&...args);
+};
+} // namespace detail
+} // namespace mlir
+
+using t2300 = mlir::detail::PassOptions::Option<std::string>;
+
+// t2301 -- `mlir::detail::PassOptions`, the ctor's FIRST parameter type.  NOT keyed
+// at HEAD (only the nested Option/ListOption instantiations were), and an unmapped
+// type reached THROUGH a rule key aborts, so f2300 needs it.  An opaque unit: the
+// only members are the private `options` vector and the OptionBase virtuals, none of
+// which the corpus reads off a `PassOptions` receiver.
+using t2301 = mlir::detail::PassOptions;
+
+// f2300 -- the constructor.  The pack is declared but NOT expanded in the body: the
+// rule keeps its arguments addressable as a1/a2/a3 while the KEY carries `&&...`.
+mlir::detail::PassOptions::Option<std::string>
+f2300(mlir::detail::PassOptions &a0, llvm::StringRef a1, llvm::cl::desc &&a2,
+      llvm::cl::initializer<char[1]> &&a3) {
+  return mlir::detail::PassOptions::Option<std::string>(a0, a1, std::move(a2),
+                                                        std::move(a3));
+}

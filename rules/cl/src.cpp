@@ -92,7 +92,14 @@ public:
 // recorded spelling.
 template <class DataType, bool ExternalStorage = false,
           class ParserClass = int>
-class opt : public opt_storage<DataType, ExternalStorage, false> {};
+class opt : public opt_storage<DataType, ExternalStorage, false> {
+public:
+  // CommandLine.h:1478 -- `template <class T> DataType &operator=(const T &Val)
+  // { this->setValue(Val); return this->getValue(); }`.  Declared here as the
+  // NON-TEMPLATE `const DataType &` overload because that is the shape the
+  // converter asks for; see the t1910/f1911 block at the tail of this file.
+  DataType &operator=(const DataType &Val);
+};
 
 // llvm/Support/CommandLine.h -- initializer<Ty> init(const Ty &Val).
 template <class Ty> initializer<Ty> init(const Ty &Val);
@@ -364,3 +371,103 @@ template <class Ty> struct initializer;
 }  // namespace llvm
 
 using t1900 = llvm::cl::initializer<char[1]>;
+
+
+// ===========================================================================
+// PASS 2026-09-29 (slot clopt).  t1910 / f1910 / f1911 --
+// `llvm::cl::opt_storage<T1, false, true>` and the two members the corpus reads
+// through `mlir::detail::PassOptions::Option<std::string>`.  THIS IS THE PAIRED
+// HALF of rules/mlir's t2300/t2301/f2300 (branch slot-optstr2): that block
+// clears the #1 translation gate for ~32 TUs and deliberately ships NO member
+// key, because the members are NOT on its receiver.
+//
+// ⛔⛔ THE RECEIVER IS THE BASE, NOT THE DERIVED CLASS -- MEASURED, NOT REASONED.
+// `getValue` and `operator=` are INHERITED by `PassOptions::Option<T>` from
+// `llvm::cl::opt` / `llvm::cl::opt_storage`, and A RECORDED KEY NAMES THE
+// *DECLARING* CLASS.  The optstr2 slot wrote all three keys on
+// `PassOptions::Option<std::string>`, measured them dead, and did not commit
+// them.  The converter's verbatim asks are:
+//     search expr std::string & llvm::cl::opt_storage<std::string, false, true>::getValue(), result:  (None)
+//     search expr std::string & llvm::cl::opt<std::string>::operator=(const std::string &), result:   (None)
+// so those two strings, wildcarded on the value type, are exactly what this
+// block records.
+//
+// ⚠️⚠️ THE THIRD TEMPLATE ARGUMENT IS `true` HERE AND `false` IN t2 -- A
+// DIFFERENT INSTANTIATION, AND BOTH BOOLS ARE PART OF THE KEY.  t2 is
+// `opt_storage<T1, false, false>`, the `isClass == false` PARTIAL SPECIALISATION
+// (CommandLine.h:1422) that owns a `DataType Value;` field.  `isClass` is
+// `std::is_class<DataType>::value`, so for `DataType = std::string` it is TRUE
+// and the instantiation is the PRIMARY template (CommandLine.h:1354), which
+// instead DERIVES from DataType:
+//     template <class DataType, bool ExternalStorage, bool isClass>
+//     class opt_storage : public DataType {
+//       OptionValue<DataType> Default;
+//       DataType &getValue() { return *this; }
+// ⭐ THAT IS WHY THE VALUE MODEL IS THE SAME ONE THIS MODULE ALREADY RESTS ON,
+// AND WHY IT IS STRONGER HERE THAN FOR t2: in the `isClass == true` form the
+// storage IS-A DataType by inheritance, so "an opt_storage IS its value" is the
+// header's own statement and not a modelling choice.  `getValue()` returning
+// `*this` is the IDENTITY, literally.  `Default` is the same unobservable
+// cl::init bookkeeping t2 already drops.
+// ⛔ The bools record LITERALLY, never as `_` -- the t2 comment above records
+// that `<T1, true, true>` was a DEAD key when the census spelling was
+// `<bool, false, false>`.  Written literally for that reason.
+//
+// f1910 -- `T1 & llvm::cl::opt_storage<T1, false, true>::getValue()`.
+// CommandLine.h:1359 is `return *this;`, so the target is the identity on the
+// receiver: no value is invented and none can be lost.  ⚠️ NON-CONST receiver
+// only.  The header declares a `const DataType &getValue() const` overload too
+// (:1360) and it records as a DIFFERENT key; the measured ask is the non-const
+// one (`std::string &`, not `const std::string &`), so only that one is keyed
+// and a const-receiver read stays LOUD.
+//
+// f1911 -- `T1 & llvm::cl::opt<T1>::operator=(const T1 &)`.  CommandLine.h:1478
+// is `{ this->setValue(Val); return this->getValue(); }` and `setValue` is
+// `{ DataType::operator=(V); if (initial) Default = V; }` with `initial` DEFAULTED
+// TO FALSE at every corpus call site, so the whole observable effect is
+// `*this = Val`, returning the receiver.  That is exactly the target body.
+// ⚠️ DECLARED AS A NON-TEMPLATE `const DataType &` OVERLOAD, not as the header's
+// `template <class T>`: the measured ask is the INSTANTIATED
+// `operator=(const std::string &)`, i.e. T already collapsed onto DataType, and a
+// member-template pattern would print `const T &` and miss it.  The corpus's only
+// assignments to a `PassOptions::Option<std::string>` pass a `std::string`
+// (`progIROpt.artifacts_outfile = s`), so the collapsed overload is the whole
+// traffic.
+// ⛔ `operator std::string() const` IS DELIBERATELY NOT KEYED.  It is declared on
+// the t2 (`isClass == false`) specialisation only -- the PRIMARY template has no
+// such conversion operator, it relies on the DataType base -- so on
+// `opt_storage<std::string, false, true>` there is nothing to key, and the
+// `operator basic_string()` spelling the brief flagged cannot be produced from
+// this instantiation at all.  Any implicit conversion on this receiver is served
+// by the converter's own derived-to-base elision (HEAD~ `6f102175
+// CK_UncheckedDerivedToBase -- a derived-to-base is never a Rust cast`), which is
+// why it never appears as an ask.
+//
+// ⛔ WHAT IS LEFT UNKEYED AND STAYS LOUD, enumerated so it is not discovered
+// later: `setValue`, `setInitialValue`, `getDefault`, `operator DataType`,
+// `const`-qualified `getValue`, and every member of the `cl::Option` base
+// (`getNumOccurrences`, `setDescription`, ...).  None is declared, so a site that
+// reads one emits textually and fails `E0599`.
+//
+// SWALLOW-SAFETY.  `GetTypeMapKey` truncates at the first `<`, so the bucket is
+// `llvm::cl::opt_storage` and holds exactly two candidates, t2 and t1910, both
+// mine.  Each has ONE placeholder whose capture (`findNextLiteralSameDepth`) is
+// stopped by a LITERAL tail -- `, false, false>` for t2 and `, false, true>` for
+// t1910 -- and `opt_storage` is 3-ary with NO defaulted arguments, so there is no
+// fourth argument for T1 to swallow past a same-depth comma and nothing for
+// SuppressDefaultTemplateArgs to drop.  The two literal tails differ in their
+// last token, so the keys cannot alias each other.  f1911's receiver key is the
+// existing t1 spelling `llvm::cl::opt<T1>`, unchanged.  No `>` occurs inside any
+// argument, so the `operator>=` angle-depth desync class does not apply.
+// ===========================================================================
+
+template <typename T1> using t1910 = llvm::cl::opt_storage<T1, false, true>;
+
+template <typename T1>
+T1 &f1910(llvm::cl::opt_storage<T1, false, true> &a0) {
+  return a0.getValue();
+}
+
+template <typename T1> T1 &f1911(llvm::cl::opt<T1> &a0, const T1 &a1) {
+  return a0.operator=(a1);
+}
