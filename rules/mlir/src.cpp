@@ -10634,3 +10634,181 @@ class ValueImpl {};
 
 using t2400 = mlir::AttributeStorage;
 using t2401 = mlir::detail::ValueImpl;
+
+// ===========================================================================
+// THE walkrest ROW -- `mlir::Region::walk`, `mlir::Block::walk`,
+// `mlir::OpState::walk`.  MEASUREMENT ONLY: NO KEY IS LANDED, and all three
+// reasons are measured with binary md5 91aefc07b0d1652f95a5920d1f58b86a against
+// pin/ir.v37 + this module.  Probe: walkrest/probe/walkrest.cpp, six functions --
+// {Region, Block, OpState} x {void-returning lambda, WalkResult-returning lambda}.
+//
+// ⭐⭐ RECOVERED-AND-CORRECTED 2026-09-29 (row g3026).  THIS BLOCK IS A MEASUREMENT
+// RECORD THAT SAT UNLANDED ON `wt-walkrest` WHILE TWO OF ITS THREE BLOCKERS WERE
+// BEING CLOSED UNDERNEATH IT, so read the STATUS lines before the prose.  Measured
+// against `pin/ir.v44` + this worktree's `rules/mlir` regenerated with
+// `pin/cpp-rule-preprocessor` md5 173da9f76355c15bb2e68ff346088c2e:
+//   * BLOCKER 1 (`mlir::Region::walk`) is ⭐ CLOSED -- `f1800` is LANDED in
+//     `ir_src.json` as `void mlir::Region::walk(T1 &&)`, in BOTH overlays, by
+//     commit `31edbf97`.  Its `ir_unsafe.json` body is a SINGLE `method_call` whose
+//     receiver is placeholder 0 and whose text is `.walk_any_mut(&mut |o: &mut
+//     dataflowir_gen::fmt::OpInst| { <1>(::core::ptr::from_mut(o)) })` -- i.e. the
+//     named `dataflowir-gen` ask spelled out at the end of BLOCKER 1 WAS DONE, and
+//     the rule then collapsed to exactly f1300's single-node shape, which is what
+//     the "⭐ THE FIX IS A NAMED `dataflowir-gen` ASK, NOT A CONVERTER CHANGE"
+//     paragraph predicted.  ⭐ And note WHICH return form landed: `void`, exactly as
+//     the RETURN-FORM SPLIT below says Region's only site asks for.  That split is a
+//     CONFIRMED prediction, not a conjecture, and it is the sentence in this block
+//     worth keeping.
+//   * BLOCKER 3's PREREQUISITE is ⭐ CLOSED.  `mlir::WalkResult` is no longer
+//     comment-only: `31edbf97` landed the FULL five-key set this block specified --
+//     `t1710` (`mlir::WalkResult` -> `dataflowir_gen::ir::LocWalkResult`, init
+//     `::Advance`, derives Copy/Clone/Debug/PartialEq/Eq) plus `f1710`/`f1711`/
+//     `f1712` (`advance`/`interrupt`/`skip`) and `f1713` (`wasInterrupted`).  The
+//     "⚠️ AND THAT TYPE KEY MUST NOT BE ADDED ALONE" warning was heeded.  ⛔ So
+//     BLOCKER 3 is NOT a blocker any more, only an UNDONE ROW: `mlir::OpState::walk`
+//     is still absent from `ir_src.json` and is now immediately actionable.
+//   * BLOCKER 2 (`mlir::Block::walk`) STANDS, unchanged and for its original reason
+//     -- a HARD RULE 1 refusal about the one site's TYPED lambda, which no crate or
+//     type-key work touches.  `mlir::Block::walk` is still absent from
+//     `ir_src.json`; the grep for `Block::walk`/`OpState::walk` over all 466 src
+//     keys returns NONE.
+// ⚠️ ONE STALE SENTENCE LEFT IN PLACE BELOW, flagged rather than rewritten so the
+// original measurement stays verbatim: BLOCKER 3 says "`grep -rn WalkResult rules/`
+// is 13 hits and every one is a COMMENT".  That was true when measured and is FALSE
+// now -- see t1710/f1710-f1713 above.
+//
+// ⭐⭐ THE SIX `search expr` SPELLINGS, VERBATIM from `--verbose`, and they settle the
+// question f1300's block left open.  All six record `None` against the BEFORE tree:
+//   search expr void mlir::Region::walk((lambda at <path>:_:_) &&), result: None
+//   search expr void mlir::Block::walk((lambda at <path>:_:_) &&), result: None
+//   search expr void mlir::OpState::walk((lambda at <path>:_:_) &&), result: None
+//   search expr mlir::WalkResult mlir::Region::walk((lambda at <path>:_:_) &&), result: None
+//   search expr mlir::WalkResult mlir::Block::walk((lambda at <path>:_:_) &&), result: None
+//   search expr mlir::WalkResult mlir::OpState::walk((lambda at <path>:_:_) &&), result: None
+// ⭐ So f1300's `_:_` line:column normalisation holds for ALL THREE classes -- the
+// per-call-site part of the closure type collapses to the FILE PATH alone in each --
+// and THE RETURN TYPE IS IN THE KEY, which is what makes the next paragraph decisive.
+//
+// ⭐⭐ WHICH RETURN FORM EACH SITE ASKS FOR -- THE NEW MEASUREMENT THIS ROW OWED.
+// f1300's block establishes that "two member templates differing only in return type
+// cannot both be declared" is a PER-CLASS constraint, so a class whose sites all want
+// ONE form can declare that form alone with no redeclaration conflict.  Read off the
+// C++ lambda bodies and cross-checked against fresh39's emitted Rust:
+//   Liveness.cpp:75       Region   lambda has NO `return` at all              -> void
+//   PipelineScope.cpp:35  Block    `return WalkResult::interrupt()/skip()`    -> mlir::WalkResult
+//   Reuse.cpp:86          OpState  `return WalkResult::advance()`             -> mlir::WalkResult
+//   Collector.cpp:143     OpState  `return WalkResult::skip()/advance()`      -> mlir::WalkResult
+//   Collector.cpp:157     OpState  `return WalkResult::skip()/advance()`      -> mlir::WalkResult
+// ⭐ THE SPLIT IS CLEAN: Region wants ONLY `void`, Block and OpState want ONLY
+// `mlir::WalkResult`.  SO C++ IS NOT THE BLOCKER FOR ANY OF THE THREE -- one
+// declaration per class suffices, and the redeclaration conflict never arises.
+//
+// ⭐ AND THE SITE CENSUS IS FIVE, NOT SIX -- f1300's block is off by one.  Over the
+// same 10 emitted `.walk(&mut _callback)` sites (fresh39, 403-TU sweep) the split is
+// 5/5, not 4/6: `Collector.cpp:167` is `op.walk<WalkOrder::PreOrder>(...)` on an
+// `mlir::Operation &` drawn from `block.getOperations()`, so it declares on
+// `mlir::Operation` and f1300 ALREADY COVERS IT.  fresh39's Collector .rs shows it as
+// `(*op).walk(&mut _callback)` at :27048 -- a POINTER receiver -- next to the two
+// `self.prog_unit_.walk(&mut _callback)` OpState sites at :26998 and :27056.
+//
+// ⭐ BLOCKER 1 IS CLOSED -- `f1800` LANDED IN `31edbf97`; see the STATUS lines at the
+// top of this block.  The paragraph below is kept as the measurement record of WHY it
+// needed the crate ask, and it is still the only written account of the abort.
+// ⛔ BLOCKER 1, `mlir::Region::walk` -- THE RULE-IR BODY MUST BE A SINGLE
+// f1300-SHAPED `method_call`, AND A REGION TRAVERSAL CANNOT BE ONE.  This is the one
+// that was attempted and measured, twice.  `dataflowir-gen` f32f967 put all EIGHT walk
+// forms in `impl OpInst` (fmt.rs:1239-1313); `fmt::Region` (fmt.rs:595) and
+// `fmt::Block` (fmt.rs:476) have NO walk, their whole traversal surface being
+// `get_blocks_mut()` / `get_operations_mut()`.  So the body has to be a two-level
+// traversal ending in `OpInst::walk_any_mut`.  BOTH spellings were written, regenerated
+// (`OK mlir -> ...`) and run, and the key MATCHED -- `--verbose` prints
+//     search expr void mlir::Region::walk((lambda at <path>:_:_) &&), result:
+//     Matching: void mlir::Region::walk(T1 &&)
+//       param a0: *mut dataflowir_gen::fmt::Region [unsafe_ptr]
+//       param a1: T1
+//       generic T1: FnMut(*mut dataflowir_gen::fmt::OpInst)
+// -- and then the converter ABORTED, identically for both, with:
+//     LLVM ERROR: unsupported unmapped type `(lambda at <path>:_:_)` has no model in
+//     types_, while mapping `parameter 0 of void mlir::Region::walk((lambda at
+//     <path>:_:_) &&)`
+//         (no outer QualType in hand -- mapped from an expression or rule-setup
+//         context ...): type `(lambda at <path>:_:_)` is not present in types_
+//         (rule key `(lambda at <path>:_:_)`)
+// ⭐ THE DISCRIMINATOR IS THE DUMPED BODY IR, and it is why f1300 works and this does
+// not.  f1300's body dumps as ONE node -- `method_call{ receiver: "(*" placeholder 0
+// ")", body: ".walk_any_mut(&mut |o| " placeholder 1 "(...)" }` -- so the closure-typed
+// parameter is never named, only substituted.  Both region bodies dump as a top-level
+// SEQUENCE:
+//   * `for b in (*a0).get_blocks_mut()...` -> `[text "for b in ", method_call, ...]`
+//   * `(*a0).get_blocks_mut().iter_mut().for_each(|b| { b...for_each(|o| { o.walk_any_mut(...) }) })`
+//     -> `[method_call, text "\n })", text "\n })"]` -- the parser does NOT nest a
+//     method call written inside a closure literal that is itself a method-call
+//     argument; it closes the outer node early and leaves the `})` as TRAILING TOP-LEVEL
+//     TEXT.  (A fifth way a rule-IR tree lies.)
+// In either sequence form the converter leaves the substitution path and tries to MAP
+// the key's parameter 0 -- the closure type -- which by construction has no model.
+// ⛔ WHICH OF THE TWO (multi-node body, or nested method_call inside a closure) IS THE
+// PROXIMATE TRIGGER WAS NOT ISOLATED: the discriminating probe needs a body whose only
+// method call is the outermost one, which cannot be written type-correctly, and
+// `rule-preprocessor` TYPECHECKS the overlay -- the ill-typed attempt made it
+// `Aborted (core dumped)` with no `OK` line.  Stated as unresolved rather than guessed.
+// ⭐ THE FIX IS A NAMED `dataflowir-gen` ASK, NOT A CONVERTER CHANGE, because with it
+// the rule becomes byte-for-byte f1300's shape:
+//     file:   cpp2rust-port/dataflowir-gen/src/fmt.rs
+//     impl:   `impl Region` (fmt.rs:599), anchor: after `get_blocks_mut` (fmt.rs:~640)
+//     pub fn walk_any_mut(&mut self, f: &mut impl FnMut(&mut OpInst))
+//     pub fn walk_any_r_mut(&mut self, f: &mut impl FnMut(&mut OpInst)
+//                           -> crate::ir::LocWalkResult) -> crate::ir::LocWalkResult
+//     and the same two in `impl Block` (fmt.rs:483), anchor after `get_operations_mut`.
+//   Body: for each block in `self.blocks` (Block: for each op in `self.ops`) call the
+//   op's existing `walk_any_mut` / `walk_any_r_mut`; the `_r` forms must PROPAGATE
+//   `Interrupt` out of BOTH loops and must NOT let a `Skip` returned for a top-level op
+//   stop its siblings -- `walk_pre_mut` (fmt.rs:1195) already maps `Skip` to `Advance`
+//   at the point it prunes, so forwarding its result is correct.
+//   ⭐ EXACTNESS, already verified so the crate slot need not re-derive it: MLIR's
+//   `Region::walk` visits every op nested in the region, pre-order, and no enclosing op;
+//   `walk_pre_mut` tests `matches(self)` and calls `f(self)` BEFORE descending, so
+//   `OpInst::walk_any_mut` is SELF-INCLUSIVE pre-order; blocks are a `Vec` in region
+//   order and ops a `Vec` in PROGRAM order (fmt.rs:483 -- "the order IS the meaning").
+//   So block-then-op-then-`walk_any_mut` yields each op exactly once in MLIR's own
+//   sequence.  Test: build a region of two blocks with a nested op in each and assert
+//   the visit sequence, plus one `Interrupt` case that must stop at the first op.
+//
+// ⛔ BLOCKER 2, `mlir::Block::walk` -- HARD RULE 1, and it survives the crate ask.  Its
+// ONLY site passes a TYPED lambda, `[&](PipelineOp pipeline)`, i.e. MLIR's FILTERED
+// walk, which invokes the callback only on `ktdf.pipeline` ops.  f1300 proves the
+// op-type filter is UNRECOVERABLE from the key -- it appears only as the lambda's
+// parameter type, inside the closure type, and `T1` swallows it -- so the only body
+// this key could ever have is an UNFILTERED one, visiting every op instead of the
+// pipelines.  Region and OpState each have UNTYPED sites that make an unfiltered body
+// exactly right; `mlir::Block` has NONE, so the key would buy nothing but a wrong
+// traversal.  ⭐ Measured corroboration that a typed site cannot be silently mis-served
+// even where it shares a key with untyped ones: fresh39 emits that site's closure as
+// `|pipeline: mlir_ktdf_PipelineOp|` (PipelineScope .rs:3949) and Reuse.cpp:86's as
+// `|transfer: mlir_ktdf_DataTransferOp|` (:4024) -- UNDEFINED NAMES.  A rule bound of
+// `FnMut(*mut OpInst)` cannot accept either, so such a site is a loud rustc error, never
+// a silent wrong walk.
+//
+// ⭐ BLOCKER 3'S PREREQUISITE IS CLOSED -- `t1710`/`f1710`/`f1711`/`f1712`/`f1713` ALL
+// LANDED IN `31edbf97`, the exact five keys this paragraph specified.  What remains is
+// the SIXTH key, `mlir::OpState::walk` itself, which is still absent and is now an
+// UNDONE ROW rather than a blocked one.  The paragraph below is the specification for
+// it; only its "no `tN` anywhere" premise is out of date.
+// ⛔ BLOCKER 3, `mlir::OpState::walk` -- A MISSING TYPE KEY, and it is a five-key row of
+// its own.  Its two untyped sites are exactly f1300's shape and the target already
+// exists (`fmt::OpInst::walk_any_r_mut`, fmt.rs:1307, returning `ir::LocWalkResult`), so
+// no crate change is needed here.  The blocker is that `mlir::WalkResult` HAS NO `tN`
+// ANYWHERE IN `rules/`: `grep -rn WalkResult rules/` is 13 hits and every one is a
+// COMMENT (this file and tgt_unsafe.rs:820-857).  A rule function's RETURN type must be
+// mapped, so `mlir::WalkResult walk(T1 &&)` cannot be written until
+// `mlir::WalkResult -> crate::ir::LocWalkResult` is a type key.
+// ⚠️ AND THAT TYPE KEY MUST NOT BE ADDED ALONE.  `LocWalkResult`'s constructors are
+// `advance()`/`interrupt()`/`skip()` and its predicate is `was_interrupted()`, all
+// snake_case, while the corpus spells `WalkResult::advance()` and `.wasInterrupted()`.
+// Mapping the TYPE without those four member keys lands in the measured SILENT class --
+// an unmapped member on a MAPPED type is emitted TEXTUALLY rather than aborting.  So
+// `mlir::WalkResult` is FIVE keys (the type, three static factories, one predicate) and
+// `OpState::walk` is its sixth, not a widening of this row.  Today all three OpState
+// sites are ALREADY loud on `mlir_WalkResult` as an undefined name (fresh39:
+// `return (unsafe { mlir_WalkResult::advance() })`), so nothing regresses by waiting.
+// ===========================================================================
