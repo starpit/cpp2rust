@@ -89,4 +89,7 @@ pub use istream::*;
 mod tool_output_file;
 pub use tool_output_file::*;
 
+mod owning_op_ref;
+pub use owning_op_ref::*;
+
 pub use libcc2rs_macros::{ByteRepr, goto, goto_block, switch};

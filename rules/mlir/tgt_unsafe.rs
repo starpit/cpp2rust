@@ -4062,3 +4062,17 @@ unsafe fn f908(a0: std::collections::HashSet<dataflowir_gen::ir::Attr>) -> u32 {
 unsafe fn f909(a0: std::collections::HashSet<dataflowir_gen::ir::Attr>) -> u32 {
     (a0.len() as u32)
 }
+
+// t980 -- `mlir::OwningOpRef<mlir::ModuleOp>` -> `libcc2rs::OwningOpRef<()>`.
+// The OpTy argument is t61's model for `mlir::ModuleOp`, i.e. `()`; see src.cpp for
+// why ownership-with-a-tripwire is the model and why no member is keyed.
+//
+// The default value is the NULL handle, which is what C++'s
+// `OwningOpRef(std::nullptr_t = nullptr)` gives a declaration the converter cannot
+// initialise -- and it is exactly what `dxp/dxp.h:76`'s member holds for the whole
+// of `dxp_standalone.cpp`.  ⚠️ Unlike t800 (`rules/tooloutputfile`) this default is
+// NOT a panic and must not be: a null handle is a real, valid, observable C++ state
+// with a no-op destructor, so inventing a failure here would be wrong.
+fn t980() -> libcc2rs::OwningOpRef<()> {
+    libcc2rs::OwningOpRef::null()
+}

@@ -3745,3 +3745,14 @@ unsafe fn f908(a0: std::collections::HashSet<dataflowir_gen::ir::Attr>) -> u32 {
 unsafe fn f909(a0: std::collections::HashSet<dataflowir_gen::ir::Attr>) -> u32 {
     (a0.len() as u32)
 }
+
+// t980 -- `mlir::OwningOpRef<mlir::ModuleOp>` -> `libcc2rs::OwningOpRef<()>`.
+// IDENTICAL in both models, and spelled in both files for the reason
+// rules/tooloutputfile's t800 gives: t70 (`libcc2rs::InFlightDiagnostic`), the other
+// libcc2rs-struct type key in this module, is present in both overlays, and relying
+// on a "value types are not repeated" convention for a non-std struct is the guess
+// that reads as a dead key.  `mlir::ModuleOp` is `()` under BOTH models (t61), so the
+// OpTy argument does not differ either.
+fn t980() -> libcc2rs::OwningOpRef<()> {
+    libcc2rs::OwningOpRef::null()
+}

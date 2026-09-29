@@ -8588,3 +8588,73 @@ bool f907(const t923 &a0) { return a0.empty(); }
 unsigned f908(const t922 &a0) { return a0.size(); }
 
 unsigned f909(const t923 &a0) { return a0.size(); }
+
+// ---------------------------------------------------------------------------
+// t980 -- `mlir::OwningOpRef<mlir::ModuleOp>`, THE PORT GOAL TU'S LAST TYPE ABORT.
+//
+// THE ROW.  After converter 907226d5 replaced the compiled-out `assert(0)` in
+// `ReportUnmappedSystemType` with `report_fatal_error`, the port goal TU itself went
+// A rc=0 -> B on exactly this type.  Measured at HEAD with the goal TU's own
+// `--cxxflags` (verify0928.sh):
+//   dxp/dxp_standalone.cpp  B  LLVM ERROR: unsupported system type has no rule:
+//     `mlir::OwningOpRef<mlir::ModuleOp>` (would be emitted as the undefined name
+//     `mlir_OwningOpRef_mlir_ModuleOp_`)  rule key: searched as:
+//     mlir::OwningOpRef<mlir::ModuleOp>; from decl (NOT a key -- canonicalised,
+//     defaulted args kept): mlir::OwningOpRef<mlir::ModuleOp> at
+//     .../include/mlir/IR/OwningOpRef.h:29:7
+// ⭐ `searched as:` and `from decl` AGREE here, and the placeholder token
+// `mlir_OwningOpRef_mlir_ModuleOp_` confirms ARITY 1 -- so the key below is the
+// converter's ask and not the from-decl form.  The rc=0 this replaced was never a
+// compile: the assert fell through and the converter emitted that undefined name.
+//
+// ⛔⛔ THE STANDING REFUSAL AT :2361 WAS RIGHT ABOUT WHAT IT REFUSED, AND IT IS NOT
+// BEING WEAKENED.  It refused an OPAQUE UNIT for this type because `~OwningOpRef`
+// ERASES the adopted op (OwningOpRef.h:37, `if (op) op->erase();`) and the corpus
+// relies on that in its own words at `dcc/src/Driver/dcc.cpp:60-70` -- "for an
+// external context, module_ (OwningOpRef) erases the module it adopted and the
+// caller frees the context".  A `()` has no destructor, so it would SILENTLY drop
+// the erase.  That judgement stands; what changes is that the same measurement
+// names an honest model, exactly as `rules/tooloutputfile` did for the type
+// `rules/error_code` had refused.
+//
+// ⭐ AND THE ERASE CANNOT BE PERFORMED, WHICH IS A FACT ABOUT THE OP MODEL.  t61
+// maps `mlir::ModuleOp` to AN OPAQUE UNIT -- `builtin.module` is an MLIR builtin
+// with no `TD_OPS` row, so no `fmt::OpInst` can name it -- and `grep -n
+// 'Operation::erase' src.cpp` is ZERO HITS: `erase` is mapped nowhere in this tree,
+// for any op handle.  So neither a unit NOR a `Drop`-that-erases is available.
+//
+// MODEL: `libcc2rs::OwningOpRef<T>` -- OWNERSHIP PLUS A TRIPWIRE.  An `Option<T>`
+// whose `Drop` PANICS if it still holds an op.  The full argument and the header
+// transcription are in `libcc2rs/src/owning_op_ref.rs`; in one line: a handle that
+// never adopts an op drops silently (C++'s `if (op)` is false too), and a handle
+// that DID adopt one fails LOUDLY at the point where C++ would have erased, rather
+// than leaking it quietly.  ⭐ EXECUTED, NOT ARGUED: three `#[test]`s in that module
+// -- null-drops-silently, release-disarms, and `#[should_panic]` on dropping an
+// adopted op -- which is the same create/drop/observe standard `ToolOutputFile` set.
+//
+// ⭐ NO MEMBER AND NO CONSTRUCTOR IS KEYED, AND FOR THIS TU THAT IS NOT A
+// LOUD-FOR-SILENT TRADE.  Censused by reading all 178 lines of
+// `dxp/dxp_standalone.cpp`: the type is reached ONLY as the declared type of the
+// `Dxp` member `sdscBundleModuleOp` (`dxp/dxp.h:76`), and the TU never names that
+// member -- `rg -n sdscBundleModuleOp dxp/dxp_standalone.cpp` is ZERO HITS.  Every
+// read of one (`*`, `.get()`, `operator bool`, `->`) lives in OTHER TUs:
+//   dxp/dxp.cpp:1403,1408,1410 `*sdscBundleModuleOp`   dxp/dxp.cpp:1492 `.get().print()`
+//   dxp/dxp.cpp:1490 `operator bool`                   dxp/util.cpp:179 move-assign
+//   SplitDFIROutput.cpp:158,166,181,187   dcc/src/Driver/dcc.cpp:96   dr5/src/Driver/DR5.h:84
+// so this key adds NO silent `E0599` to the goal TU, and those sites keep failing at
+// TRANSLATE time.  ⚠️ In the goal TU the member is default-initialised and never
+// assigned, so the C++ destructor's `if (op)` is provably FALSE there and the
+// tripwire is provably not reached -- the model is exact for this TU, not merely
+// loud.
+//
+// ⛔ `OwningOpRef<mlir::Operation *>` and `OwningOpRef<mlir::ktdf_arch::DeviceOp>`
+// are DELIBERATELY NOT KEYED.  Both have `searched as:` lines in the baseline TSVs
+// and both want this same wrapper, but their OpTy models are not settled here
+// (`mlir::Operation *` is the same pointer-model gap the nine unlanded `SmallSet`
+// spellings hit at :5527), and a key naming the wrong `OpTy` records cleanly and
+// then lies.  They keep aborting loudly.
+namespace mlir {
+template <typename OpTy> class OwningOpRef {};
+}  // namespace mlir
+
+using t980 = mlir::OwningOpRef<mlir::ModuleOp>;
