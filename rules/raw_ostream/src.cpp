@@ -399,3 +399,162 @@ llvm::raw_string_ostream f560(std::string &s) {
 // reference the object holds, so the body is the identity here too.  NOT `const` in
 // the header, and the key spelling above confirms it.
 std::string &f561(llvm::raw_string_ostream &o) { return o.str(); }
+
+// ---------------------------------------------------------------------------
+// PASS 2026-09-29, slot `ostreamshl`: THREE MORE OF THE FREE `llvm::raw_ostream
+// <<` MLIR FAMILY.  f600/f601/f602.
+//
+// ⭐ WHY THESE ARE HERE AND NOT IN rules/mlir, WHERE f126-f128 ARE.  f126
+// (mlir::Type) / f127 (mlir::Attribute) / f128 (const mlir::Location &) landed in
+// rules/mlir/src.cpp:4096-4125, and these three are their exact siblings.  They
+// are in THIS module only because two other slots hold rules/mlir today and a
+// concurrent edit to one 10k-line src.cpp is how a wave loses a module.  A KEY IS
+// GLOBAL, NOT PER-MODULE -- the mapper searches one flat key space and `types_`
+// is tree-wide -- so placement is free and the bodies resolve their arguments
+// against rules/mlir's t18 / t83 / t8 exactly as if they sat next to f126.
+// ⚠️ IF rules/mlir LATER ADOPTS THEM, MOVE, DO NOT COPY: two modules recording the
+// same key is a cross-module disagreement, which is what check-ir.sh's "all rule
+// modules agree" leg is for.
+//
+// THE CENSUS THAT SIZED THIS ROW (survey-v10, 403 TUs, all 45 `<<`-with-an-MLIR-
+// operand shapes; 100 TUs contain at least one, 1,892 sites).  The
+// `llvm::raw_ostream` LHS half is 63 TUs / 279 sites over 9 shapes:
+//     mlir::Operation         24 TU  58 site   REFUSED, see below
+//     mlir::Value             20 TU  80 site   REFUSED, see below
+//     mlir::OpState           17 TU  56 site   REFUSED, see below
+//     mlir::OperationName     10 TU  18 site   f600  <-- landed here
+//     mlir::Attribute          8 TU  20 site   f127, rules/mlir
+//     mlir::Location           8 TU  20 site   f128, rules/mlir
+//     mlir::Type               4 TU  23 site   f126, rules/mlir
+//     mlir::AffineExpr         1 TU   3 site   f601  <-- landed here
+//     mlir::AffineMap          1 TU   1 site   f602  <-- landed here
+//
+// ⭐⭐ f600 EXISTS BECAUSE rules/mlir's OWN REFUSAL OF IT WENT STALE TODAY, and
+// this is the second time that has happened to a refusal in that block (the
+// AsmPrinter refusal at :4180 carries the same correction).  rules/mlir/src.cpp:
+// 4085-4088 refuses `mlir::OperationName` on the ground that
+//     "t18's model is `Option<&'static TdOpDef>` and TdOpDef's fields
+//      (td.rs:446-457) carry no full-name field and no dialect prefix."
+// That was TRUE when written and is FALSE since 91b3c13a (2026-09-29), which
+// landed f2100 `OperationName::getStringRef()` in that same module.  f2100's
+// target body (rules/mlir/tgt_unsafe.rs:4699) is
+//     format!("{}.{}", dataflowir_gen::row_dialect(__d), __d.mnemonic)
+// i.e. the FULL dialect-qualified name, reached through `row_dialect`
+// (dataflowir-gen/src/lib.rs:154).  So the prefix IS derivable, the premise is
+// gone, and the same string is what `<<` must write.
+//
+// ⛔ WHAT `raw_ostream << OperationName` PRINTS, and the standard used.
+// OperationSupport.h:507 is `{ info.print(os); return os; }`, and
+// `OperationName::print` (OperationSupport.h:478) is OUT-OF-LINE -- this toolchain
+// ships MLIR HEADERS ONLY (no libMLIR .so or .a under
+// toolchain/llvm/LLVM-22.1.3-Linux-X64/lib), so its body cannot be read or
+// disassembled here.  ⭐ The fidelity argument is therefore the SAME ONE f126-f128
+// were landed on, and it is an argument from the MLIR ASSEMBLY GRAMMAR rather than
+// from a .cpp: an operation name's one textual spelling is `dialect.mnemonic`, and
+// `getStringRef()` (OperationSupport.h:473 -> `getIdentifier()` :476 -> the
+// registry's StringAttr) IS that spelling.  There is no second candidate text.
+// ⚠️ THE HONEST RESIDUAL, stated so nobody has to re-derive it: `print` could in
+// principle decorate an UNREGISTERED name.  It cannot matter here -- an
+// unregistered name has no TdOpDef row, t18 models that as `None`, and f2100
+// already panics on `None` rather than inventing text.  f600 panics identically
+// and for the identity of reason, so the two keys cannot disagree.
+//
+// ⛔⛔ THE THREE THAT STAY REFUSED.  rules/mlir:4069-4084 already refuses them;
+// this re-states the reasons ONLY because a reader who finds f600 here will ask
+// why its siblings are absent, and a missing answer reads as an oversight.
+//   * `mlir::Value`, 20 TU / 80 sites, THE BIGGEST SINGLE ROW IN THIS FAMILY AND
+//     THE ONE THAT MUST STAY LOUD.  Value.h:246 is `{ value.print(os); return
+//     os; }` and `Value::print` prints THE DEFINING OPERATION'S FULL FORM, not the
+//     SSA name.  `dataflowir_gen::ir::Value` is `{ name: String, ty: Ty }` and its
+//     own doc-comment (ir.rs:17-19) says why: "In real MLIR a Value is a pointer
+//     into a live Operation.  For EMITTING IR none of that is needed."  There is NO
+//     back-pointer to a defining op, so the information the C++ prints is
+//     STRUCTURALLY ABSENT from the model, not merely unimplemented.
+//     ⭐ dataflowir-gen ALREADY RECORDS THIS REFUSAL ITSELF, at asm.rs above
+//     `print_operand`: "`llvm::raw_ostream << Value` is a DIFFERENT function and
+//     prints the DEFINING OPERATION's full form (Value.h:246) ... NOT expressible
+//     here and is deliberately absent ... a method claiming to be it could only
+//     print the name -- a plausible wrong answer.  A raw-stream key for `Value`
+//     therefore fails to resolve, which is the intended direction."  ⛔ SO THERE IS
+//     NOTHING TO SPECIFY IN dataflowir-gen EITHER: the crate has already adjudicated
+//     it, on the same evidence, against adding a printer.  Widening `ir::Value` to
+//     carry a defining-op handle is a MODEL change (it makes an SSA handle own the
+//     op graph) and is out of scope for a rules slot.
+//     ⚠️ NOTE THE OPPOSITE ANSWER ON A PRINTER RECEIVER: rules/mlir f363
+//     (`OpAsmPrinter << Value`) IS landed and IS correct, because
+//     OpImplementation.h's body there is `p.printOperand(value)` -- the SSA name.
+//     Same operator token, same argument type, two different right answers.
+//   * `const mlir::Operation &` (24 TU / 58 site, Operation.h:1100) and
+//     `mlir::OpState` (17 TU / 56 site, OpDefinition.h:315).  Both are
+//     `op.print(os, OpPrintingFlags().useLocalScope())`.  t1/t25 both model these
+//     as `fmt::OpInst`, and `OpInst::print()` (fmt.rs:1454) DOES exist -- so unlike
+//     `Value` this is not structurally absent, and rules/mlir's "has no Display"
+//     wording understates what is actually in the way.  ⭐ THE REAL BLOCKER,
+//     measured: `print()` returns `Result<String, PrintError>` and returns
+//     `Err(PrintError::CustomAssembly(mnemonic))` for every op whose `.td` sets
+//     `custom_asm` (fmt.rs:1470).  MLIR prints such an op fine -- it calls the
+//     hand-written C++ printer.  So a body would have to choose, on the Err arm,
+//     between a panic (turning a debug dump into a crash at RUNTIME, long past any
+//     translate-time signal) and a marker string (silent wrongness in exactly the
+//     diagnostics a compiler is debugged with).  Neither is admissible, so the key
+//     stays out and the site stays loud.  This is a REAL row for a dataflowir-gen
+//     slot -- "make `print` total" -- and it is a dataflowir-gen row, not a rules
+//     row; ⛔ DO NOT close it with a key.
+// ---------------------------------------------------------------------------
+
+namespace mlir {
+// ⛔ RESTATED EMPTY AND WITH NO `using` OF THEIR OWN, so this module records NO
+// type key for any of them.  rules/mlir owns all three (t18 mlir::OperationName,
+// t83 mlir::AffineExpr, t8 mlir::AffineMap) and `types_` is tree-wide.  The
+// in-tree precedent for an inert restatement that maps nothing is rules/mlir's
+// own `class AsmPrinter {};` / `class StringRef {}` (src.cpp:4270, :1242), and the
+// precedent for the mirror case -- an incomplete type owned by another module --
+// is rules/mlir's `class raw_ostream;` at :4093, which points back at t1/t2 here.
+class OperationName {};
+class AffineExpr {};
+class AffineMap {};
+} // namespace mlir
+
+// ⭐ DECLARED AT GLOBAL SCOPE, UNQUALIFIED, exactly as rules/mlir:4096-4098 does.
+// A free two-parameter operator records UNQUALIFIED in this tree even though the
+// real functions live in namespace mlir (OperationSupport.h:507, AffineExpr.h:276,
+// AffineMap.h:664); the baseline precedent is rules/cstddef:10's `std::byte
+// operator shr(std::byte, unsigned int)`.
+// ⚠️ AND THE KEY SAYS `operator shl`, NOT `operator<<`: Mapper::ToString
+// (mapper.cpp:2330-2360) rewrites all four shift spellings so matchTemplate's
+// bracket-depth tracker never sees the `>`.  Read the recorded key out of
+// ir_src.json, never off this line.
+llvm::raw_ostream &operator<<(llvm::raw_ostream &os, mlir::OperationName n);
+llvm::raw_ostream &operator<<(llvm::raw_ostream &os, mlir::AffineExpr e);
+llvm::raw_ostream &operator<<(llvm::raw_ostream &os, mlir::AffineMap m);
+
+// ⚠️ INDICES f600-f602, not the next free f19, for the reason t560/f560/f561
+// above give: several slots are live in the rule tree today and f19 is what a
+// concurrent slot would also pick.  Indices are per-module and need not be dense.
+
+// f600 -- `mlir::OperationName` BY VALUE (OperationSupport.h:507 takes
+// `OperationName info`).  10 TUs, 18 sites.
+llvm::raw_ostream &f600(llvm::raw_ostream &a0, mlir::OperationName a1) {
+  return operator<<(a0, a1);
+}
+
+// f601 -- `mlir::AffineExpr` BY VALUE (AffineExpr.h:276).  1 TU, 3 sites.
+// The rendered text is `ir::AffineExpr`'s Display (ir.rs:359), whose
+// `print_affine` helper carries MLIR's affine-expression precedence and its
+// "addition of a negative constant prints as subtraction" special case (ir.rs:341)
+// -- i.e. it was written against the printed grammar, not invented.
+llvm::raw_ostream &f601(llvm::raw_ostream &a0, mlir::AffineExpr a1) {
+  return operator<<(a0, a1);
+}
+
+// f602 -- `mlir::AffineMap` BY VALUE.  1 TU, 1 site.  AffineMap.h:664 is inline
+// and visible: `{ map.print(os); return os; }`.  The rendered text is
+// `ir::AffineMap`'s Display (ir.rs:402), which emits
+// `affine_map<(d0, d1)[s0] -> (...)>` -- MLIR's affine-map attribute syntax,
+// dim/symbol list included.  ⚠️ f601/f602 rest on the same grammar argument f126
+// does, and for the same unavoidable reason: `AffineExpr::print` (AffineExpr.h:89)
+// and `AffineMap::print` (AffineMap.h:200) are both out-of-line and this toolchain
+// has no MLIR library to read them from.
+llvm::raw_ostream &f602(llvm::raw_ostream &a0, mlir::AffineMap a1) {
+  return operator<<(a0, a1);
+}

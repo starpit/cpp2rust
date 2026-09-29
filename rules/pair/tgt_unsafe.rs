@@ -133,3 +133,12 @@ unsafe fn f20<T1: From<Vec<libc::c_char>>, T2>(a0: Vec<libc::c_char>, a1: T2) ->
         a1.into(),
     )
 }
+
+// f21/f22 -- std::make_pair with an LVALUE first argument; same tuple
+// construction as f9/f10.
+unsafe fn f21<T1, T2>(a0: T1, a1: T2) -> (T1, T2) {
+    (a0.into(), a1.into())
+}
+unsafe fn f22<T1, T2>(a0: T1, a1: T2) -> (T1, T2) {
+    (a0.into(), a1.into())
+}

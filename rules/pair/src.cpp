@@ -187,3 +187,36 @@ template <typename T1, typename T2, std::size_t T3>
 std::pair<T1, T2> f20(char const (&a0)[T3], const T2 &a1) {
   return std::pair<T1, T2>(a0, a1);
 }
+
+// ---------------------------------------------------------------------------
+// f21/f22 -- `std::make_pair` WITH AN LVALUE FIRST ARGUMENT.  5 of
+// dxp_standalone.cpp's placeholders, in 3 keys, read off a `--verbose` log:
+//   pair<__unwrap_ref_decay_t<int &>, __unwrap_ref_decay_t<int &> > (int &, int &)
+//   pair<__unwrap_ref_decay_t<std::deque<long> &>, __unwrap_ref_decay_t<std::vector<int> > >
+//       (std::deque<long> &, std::vector<int> &&)
+//   pair<__unwrap_ref_decay_t<std::deque<long> &>, __unwrap_ref_decay_t<std::vector<long> > >
+//       (std::deque<long> &, std::vector<long> &&)
+// f9 is `(T1 &&, T2 &)` and f10 is `(T1 &&, T2 &&)` -- BOTH have an RVALUE first
+// parameter, because both call `std::make_pair(std::move(a0), ..)`.  The sites all
+// pass an LVALUE first, so libc++ deduces `_T1 = X &` and the declared signature
+// prints `(X &, ..)`.  Hence two new shapes: lvalue/lvalue and lvalue/rvalue.
+// ⭐⭐ AND THE `__unwrap_ref_decay_t<..>` SCARE IS REFUTED -- MEASURED, NOT
+// ASSUMED.  The search exprs above carry libc++'s AS-WRITTEN return type with the
+// deduced arguments substituted, i.e. the alias UNEXPANDED, while these two rules
+// record a DESUGARED return type (readback from ir_src.json):
+//     std::pair<T1, T2> std::make_pair(T1 &, T2 &)
+//     std::pair<T1, T2> std::make_pair(T1 &, T2 &&)
+// A rule therefore CANNOT reproduce the sugared spelling -- and DOES NOT NEED TO.
+// Both keys MATCH: all 5 of the goal TU's make_pair placeholders are gone and the
+// body is inlined at the sites (`return (start_vcoord.into(), end_vcoord.into());`
+// at dxp_standalone.cpp.rs:10816), and dsc/dims.cpp lost its make_pair placeholder
+// too.  The return type is evidently not part of what the search unifies for a
+// free function, so the thing to get right here was only the PARAMETER value
+// categories.
+template <class T1, class T2> auto f21(T1 &a0, T2 &a1) {
+  return std::make_pair(a0, a1);
+}
+
+template <class T1, class T2> auto f22(T1 &a0, T2 &&a1) {
+  return std::make_pair(a0, std::move(a1));
+}

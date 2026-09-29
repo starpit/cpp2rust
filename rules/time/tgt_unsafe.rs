@@ -64,3 +64,8 @@ unsafe fn f10() -> libc::clockid_t {
 unsafe fn f11() -> libc::clockid_t {
     libc::CLOCK_MONOTONIC_RAW
 }
+
+// f12 -- difftime: (t1 - t0) as seconds, exactly as the standard defines it.
+unsafe fn f12(a0: ::libc::time_t, a1: ::libc::time_t) -> f64 {
+    (a0 as f64) - (a1 as f64)
+}

@@ -51,3 +51,11 @@ clockid_t f10() { return CLOCK_MONOTONIC; }
 #ifdef __linux__
 clockid_t f11() { return CLOCK_MONOTONIC_RAW; }
 #endif
+
+// f12 -- `difftime(t1, t0)`.  PURE ARITHMETIC: the standard defines it as the
+// difference t1 - t0 expressed in seconds as a double, and on glibc `time_t` is a
+// signed integer count of seconds, so the subtraction IS the answer -- no model,
+// no approximation, nothing to fabricate.  1 of dxp_standalone.cpp's placeholders
+// (dxp_standalone.cpp:174).  Both models get the same body: the parameters are
+// scalars, so the refcount lowering is identical.
+double f12(time_t a0, time_t a1) { return difftime(a0, a1); }

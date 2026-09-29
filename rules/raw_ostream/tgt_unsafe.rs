@@ -249,3 +249,70 @@ unsafe fn f560(a0: &mut Vec<libc::c_char>) -> *mut Vec<libc::c_char> {
 unsafe fn f561(a0: *mut Vec<libc::c_char>) -> *mut Vec<libc::c_char> {
     a0
 }
+
+// ---------------------------------------------------------------------------
+// f600 / f601 / f602 -- the free `llvm::raw_ostream <<` MLIR keys.  See the
+// PASS 2026-09-29 block in src.cpp for the census, the fidelity argument, and the
+// three shapes of this family that STAY REFUSED.
+//
+// ⚠️ EVERY BODY BELOW IS SELF-CONTAINED AND CARRIES NO FILE-LEVEL ITEM OF ITS OWN.
+// A file-level helper in a tgt_*.rs is NOT copied into the emitted output (measured
+// on rules/getopt, 2026-09-29: the converter emits the bare name, i.e. the same
+// E0425 MINUS the Cpp2RustUnmapped marker the placeholder census greps for -- which
+// is strictly worse than having no key).  Everything these need is either in `core`
+// or reached by an absolute `dataflowir_gen::` path, so nothing has to be in scope
+// in the translated crate.
+// ---------------------------------------------------------------------------
+
+// f600 -- `raw_ostream << mlir::OperationName`.  `mlir::OperationName` is
+// rules/mlir t18, `Option<dataflowir_gen::TdOpDef>` (an OWNING copy of the
+// immutable registry row -- see t18's note there for why it may not carry a
+// lifetime).  The string is byte-identical to rules/mlir f2100
+// (`OperationName::getStringRef`) ON PURPOSE: `<<` is `info.print(os)` and
+// `print` writes `getStringRef()`, so the two keys must never be able to disagree.
+//
+// ⛔ `None` PANICS RATHER THAN PRINTING ANYTHING.  `None` is the null / unregistered
+// handle, and in C++ `OperationName::print` on one dereferences a null `Impl *` --
+// UB.  f2100 panics on the same arm with the same wording; inventing a placeholder
+// text here would be the silent-wrongness this whole row exists to avoid.
+unsafe fn f600(
+    a0: *mut std::fs::File,
+    a1: Option<dataflowir_gen::TdOpDef>,
+) -> *mut std::fs::File {
+    let __o = a0;
+    let __s = match a1 {
+        Some(ref __d) => {
+            format!("{}.{}", dataflowir_gen::row_dialect(__d), __d.mnemonic)
+        }
+        None => panic!(
+            "ub: llvm::raw_ostream << mlir::OperationName on a null op-name handle"
+        ),
+    };
+    let _ = ::std::io::Write::write_all(&mut *__o, __s.as_bytes());
+    __o
+}
+
+// f601 -- `raw_ostream << mlir::AffineExpr`.  rules/mlir t83 is
+// `dataflowir_gen::ir::AffineExpr`.  `Display` (ir.rs:359) is the printed affine
+// grammar; `ToString` is in the prelude, so `to_string()` needs nothing imported.
+unsafe fn f601(
+    a0: *mut std::fs::File,
+    a1: dataflowir_gen::ir::AffineExpr,
+) -> *mut std::fs::File {
+    let __o = a0;
+    let __s = ::std::string::ToString::to_string(&a1);
+    let _ = ::std::io::Write::write_all(&mut *__o, __s.as_bytes());
+    __o
+}
+
+// f602 -- `raw_ostream << mlir::AffineMap`.  rules/mlir t8 is
+// `dataflowir_gen::ir::AffineMap`; Display is ir.rs:402.
+unsafe fn f602(
+    a0: *mut std::fs::File,
+    a1: dataflowir_gen::ir::AffineMap,
+) -> *mut std::fs::File {
+    let __o = a0;
+    let __s = ::std::string::ToString::to_string(&a1);
+    let _ = ::std::io::Write::write_all(&mut *__o, __s.as_bytes());
+    __o
+}

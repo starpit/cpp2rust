@@ -179,3 +179,8 @@ unsafe fn f10() -> nix::time::ClockId {
 unsafe fn f11() -> nix::time::ClockId {
     nix::time::ClockId::CLOCK_MONOTONIC_RAW
 }
+
+// f12 -- difftime: (t1 - t0) as seconds, exactly as the standard defines it.
+fn f12(a0: ::libc::time_t, a1: ::libc::time_t) -> f64 {
+    (a0 as f64) - (a1 as f64)
+}

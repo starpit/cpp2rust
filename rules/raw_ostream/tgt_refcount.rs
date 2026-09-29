@@ -195,3 +195,42 @@ fn f560(a0: Ptr<Vec<u8>>) -> Ptr<Vec<u8>> {
 fn f561(a0: Ptr<Vec<u8>>) -> Ptr<Vec<u8>> {
     a0
 }
+
+// ---------------------------------------------------------------------------
+// f600 / f601 / f602 -- SPELLED OUT HERE, NOT LEFT TO THE OVERLAY.
+// ⛔ AN ABSENT REFCOUNT TARGET IS NOT A LOUD REFUSAL, IT IS A SILENT FALLBACK:
+// the two models are a UNION, so a key present only in tgt_unsafe.rs makes the
+// refcount model reuse the UNSAFE body, and the mismatch (`*mut std::fs::File` vs
+// `Ptr<std::fs::File>`) then surfaces at rustc rather than at translate time.
+// check-ir.sh reports that union explicitly; these three must not add to it.
+// Only the STREAM argument changes shape (`Ptr<std::fs::File>`, which already has
+// `write_all`); the rendered text is identical to tgt_unsafe.rs by construction.
+// ---------------------------------------------------------------------------
+
+fn f600(a0: Ptr<std::fs::File>, a1: Option<dataflowir_gen::TdOpDef>) -> Ptr<std::fs::File> {
+    let __o = a0;
+    let __s = match a1 {
+        Some(ref __d) => {
+            format!("{}.{}", dataflowir_gen::row_dialect(__d), __d.mnemonic)
+        }
+        None => panic!(
+            "ub: llvm::raw_ostream << mlir::OperationName on a null op-name handle"
+        ),
+    };
+    let _ = __o.write_all(__s.as_bytes());
+    __o
+}
+
+fn f601(a0: Ptr<std::fs::File>, a1: dataflowir_gen::ir::AffineExpr) -> Ptr<std::fs::File> {
+    let __o = a0;
+    let __s = ::std::string::ToString::to_string(&a1);
+    let _ = __o.write_all(__s.as_bytes());
+    __o
+}
+
+fn f602(a0: Ptr<std::fs::File>, a1: dataflowir_gen::ir::AffineMap) -> Ptr<std::fs::File> {
+    let __o = a0;
+    let __s = ::std::string::ToString::to_string(&a1);
+    let _ = __o.write_all(__s.as_bytes());
+    __o
+}

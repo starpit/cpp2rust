@@ -157,3 +157,41 @@ void f18(std::string::iterator a0, std::string::iterator a1, const char &a2,
          const char &a3) {
   return std::replace(a0, a1, a2, a3);
 }
+
+// ===========================================================================
+// ⛔⛔ `std::transform` (4-ARY, OVER `std::__wrap_iter<char *>`) IS NOT KEYABLE
+// TODAY, AND THE REASON IS A CONVERTER GAP, NOT A MISSING SPELLING.  MEASURED
+// 2026-09-29 on the GOAL TU (dxp/dxp_standalone.cpp), twice.
+//
+// The 3 placeholders are all the lowercasing idiom
+// `transform(s.begin(), s.end(), s.begin(), <tolower>)`: two pass a LAMBDA
+// (dxp_standalone.cpp:108, :116) and one passes `::tolower` BY NAME, i.e. an
+// `int (*)(int) noexcept` (dsc/designSpaceConfig.h:318).
+//
+// Both spellings RECORD CORRECTLY -- read back out of ir_src.json:
+//   std::__wrap_iter<char *> std::transform(std::__wrap_iter<char *>,
+//       std::__wrap_iter<char *>, std::__wrap_iter<char *>, T1)
+//   std::__wrap_iter<char *> std::transform(std::__wrap_iter<char *>,
+//       std::__wrap_iter<char *>, std::__wrap_iter<char *>, int (*)(int) noexcept)
+// (the operand must be T1, not T2: rule type variables must be CONSECUTIVE from
+// T1 -- `rule-preprocessor` aborts `generics: not consecutive. Got: ["T2"]` --
+// and f19's iterators are spelled concretely, so T1 is the only one available.
+// It needs a unary `char operator()(char) const` on struct T1 to compile.)
+//
+// AND EITHER KEY TURNS THE GOAL TU FROM `A rc=0 38,377` INTO A BUCKET-B ABORT:
+//   LLVM ERROR: rule body references placeholder a0 but the call site supplies
+//   only 0 argument(s) at .../dsc/designSpaceConfig.h:318:66
+// Column 66 is the ARGUMENT `::tolower`.  As soon as ANY rule matches the
+// enclosing transform call, the converter lowers that argument as an ordinary
+// expression, matches rules/cctype's `tolower` rule -- whose body references a0 --
+// and aborts, because a function NAME supplies zero arguments.  The UNMAPPED path
+// never reaches that step (it emits `Some(libcc2rs::tolower_unsafe)`), which is
+// exactly why the site is harmless as a placeholder and fatal as a match.
+// ⭐ A TYPE VARIABLE CANNOT DODGE IT: the operand placeholder unifies with
+// `int (*)(int) noexcept` too, so the lambda-only key aborts at the SAME site --
+// measured separately, with f20 removed and f19 alone in the tree.
+// ⛔ SO BOTH KEYS ARE DELIBERATELY ABSENT and all 3 sites stay LOUD.  What has to
+// land first is the CONVERTER: passing a mapped function BY NAME as a callable
+// operand must lower to the callable form (as the unmapped path already does)
+// instead of being translated as a 0-argument call of that function's rule.
+// ===========================================================================

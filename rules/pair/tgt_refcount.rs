@@ -163,3 +163,19 @@ fn f20<T1: TryFrom<Vec<u8>>, T2>(a0: Vec<u8>, a1: T2) -> (Value<T1>, Value<T2>) 
         Rc::new(RefCell::new(a1.try_into().ok().expect("failed conversion"))),
     )
 }
+
+// f21/f22 -- std::make_pair with an LVALUE first argument; same tuple
+// construction as f9/f10.
+fn f21<T1, T2>(a0: T1, a1: T2) -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(a0.try_into().expect("failed conversion"))),
+        Rc::new(RefCell::new(a1.try_into().expect("failed conversion"))),
+    )
+}
+
+fn f22<T1, T2>(a0: T1, a1: T2) -> (Value<T1>, Value<T2>) {
+    (
+        Rc::new(RefCell::new(a0.try_into().expect("failed conversion"))),
+        Rc::new(RefCell::new(a1.try_into().expect("failed conversion"))),
+    )
+}
