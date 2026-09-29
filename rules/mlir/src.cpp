@@ -141,6 +141,15 @@ class Operation;
 // is where the value is actually returned, sits long past the definition.
 class BlockArgument;
 
+// ⚠️ FORWARD DECLARATION ONLY, for the SAME reason as `BlockArgument` one line up and
+// with the same licence: `mlir::Block::getArgumentTypes()`'s return type may be
+// INCOMPLETE in a member DECLARATION, and the class is DEFINED at the tail of this
+// file (`template <typename ValueRangeT> class ValueTypeRange`) where f2410 actually
+// returns one by value.  It cannot be defined here: its `operator[]` returns
+// `mlir::Type`, which is not declared until ~:300.
+// mlir/IR/TypeRange.h:132 `template <typename ValueRangeT> class ValueTypeRange final`.
+template <typename ValueRangeT> class ValueTypeRange;
+
 // ⚠️ `getArgument()` IS DECLARED HERE AND NOT LATER, for the same reason `getBlocks()`
 // is declared inside `Region` below -- a C++ class cannot be reopened.  See f500 at the
 // bottom of this file for the whole deduction.
@@ -168,9 +177,22 @@ class BlockArgument;
 // g691 already owns the `getArguments()` row through `llvm::enumerate`, and declaring a
 // member with no `f` key behind it is a rule the preprocessor would carry with nothing
 // under it.
+// ⭐ `getArgumentTypes()` IS DECLARED HERE for the same "a class cannot be reopened"
+// reason, and it is the SIBLING of `getArgument()` in every respect: Block.h:100
+// `ValueTypeRange<BlockArgListType> getArgumentTypes();` with
+// `using BlockArgListType = MutableArrayRef<BlockArgument>;` at :95, NON-CONST, BY
+// VALUE.  Spelled with `BlockArgListType` SUBSTITUTED, because the recorder
+// canonicalises through the alias and records
+// `mlir::ValueTypeRange<llvm::MutableArrayRef<mlir::BlockArgument>>`.
+// ⛔ THE WHOLE POINT OF THIS DECLARATION: it is f2410's key, and WITHOUT IT a t2410
+// type key alone would let the 4 `getArgumentTypes()` calls be emitted TEXTUALLY --
+// f500's own note (see the bottom of this file) already measured exactly that:
+// "4 of those are `getArgumentTypes`, a DIFFERENT unmapped member that this key
+// deliberately does not touch".  See t2410's paragraph at the tail.
 class Block {
 public:
   BlockArgument getArgument(unsigned i);
+  ValueTypeRange<llvm::MutableArrayRef<BlockArgument>> getArgumentTypes();
 };
 
 // ⚠️ `getBlocks()` IS DECLARED HERE AND NOT LATER, because a C++ class cannot be
@@ -10610,10 +10632,18 @@ f2300(mlir::detail::PassOptions &a0, llvm::StringRef a1, llvm::cl::desc &&a2,
 // that genuinely dereferences one still ABORTS LOUDLY in the mapper.  These two
 // rules buy the SIGNATURE and nothing else.
 //
-// ⛔⛔ THE THIRD TYPE OF THAT CENSUS TRIPLE, `mlir::ValueTypeRange<llvm::
-// MutableArrayRef<mlir::BlockArgument>>` (7 TUs), IS DELIBERATELY *NOT* KEYED HERE.
-// It FAILS the gate: the aborting instantiation has a real member surface, measured
-// at four sites, all `operator[]`:
+// ⭐⭐ THE THIRD TYPE OF THAT CENSUS TRIPLE, `mlir::ValueTypeRange<llvm::
+// MutableArrayRef<mlir::BlockArgument>>`, IS NOW KEYED -- t2410 AT THE TAIL OF THIS
+// FILE, TOGETHER WITH f2410 AND f2411.  ⛔ THE REFUSAL BELOW IS KEPT VERBATIM
+// BECAUSE ITS ARGUMENT IS STILL EXACTLY RIGHT AND IS THE GATE THE NEW BLOCK HAD TO
+// PASS: a bare type key stays forbidden, and what landed is the type key PLUS the
+// `operator[] -> mlir::Type` model it demands PLUS `Block::getArgumentTypes()` --
+// which the refusal did NOT name and which is the third link the same argument
+// requires (f500's note two screens up already measured it silent: "4 of those are
+// `getArgumentTypes`, a DIFFERENT unmapped member").  The count is 17 TUs, not 7:
+// 8 bucket-A + 9 bucket-B, from g3022/g3023's own logs.
+// It FAILED the gate as a lone type key: the aborting instantiation has a real member
+// surface, measured at four sites, all `operator[]`:
 //   Agen.td:394, :466, :654, :750
 //     Type getLoadInductionVarType() {
 //       return getRegion().getBlocks().begin()->getArgumentTypes()[0]; }
@@ -10634,3 +10664,136 @@ class ValueImpl {};
 
 using t2400 = mlir::AttributeStorage;
 using t2401 = mlir::detail::ValueImpl;
+
+// ===========================================================================
+// ⭐⭐ t2410 / f2410 / f2411 -- `mlir::ValueTypeRange<llvm::MutableArrayRef<
+// mlir::BlockArgument>>`, ITS `operator[]`, AND `mlir::Block::getArgumentTypes()`.
+// ONE ATOMIC SET, and the reason it is a SET is the refusal recorded ~130 lines up:
+// an unmapped MEMBER does not abort, so a lone type key swaps a LOUD abort for a
+// SILENT textual call.  Landed 2026-09-29, row g3030.
+//
+// THE ROW, MEASURED.  17 TUs are gated on this type as their FIRST abort --
+// 8 of the 76-TU bucket-A stratum (g3022's logs) and 9 of the 142-TU bucket-B
+// stratum measured IN FULL (g3023's logs).  ⚠️ The brief that ordered this row said
+// "10 B + 7 A"; the logs say 9 B + 8 A.  Same total, different split.  All 17 print
+// the SAME line, byte for byte:
+//     unsupported system type has no rule:
+//       `mlir::ValueTypeRange<llvm::MutableArrayRef<mlir::BlockArgument>>`
+//       (would be emitted as the undefined name
+//        `mlir_ValueTypeRange_llvm_MutableArrayRef_mlir_BlockArgument__`),
+//       reached while converting
+//       `mlir::agen::CompositeIndirectLoadAndStoreOp::getLoadInductionVarType`
+//       ... at .../mlir/IR/TypeRange.h:133:7
+// ⛔ That `file:line:col` is the TYPE'S OWN DECLARATION in an LLVM header and can
+// never name a dt_src site; the `reached while converting` half is the only usable
+// pointer, and it leads to an ODS `extraClassDeclaration` body inlined through a
+// generated header -- NOT to any `.cpp`:
+//   dataflow-scheduler/external/dataflow-scheduler-dialects/include/
+//     dataflow-scheduler/Dialect/Agen/Agen.td:394, :466, :654, :750
+//       Type getLoadInductionVarType() {
+//         return getRegion().getBlocks().begin()->getArgumentTypes()[0]; }
+//
+// ⭐ THIS IS THE SAME CHAIN f460/f461/f500 ALREADY BUILT, ONE MEMBER OVER.  Agen.td
+// :391/:462/:653/:749 is the `getArgument(0)` twin of :394/:466/:654/:750, so
+// `getRegion()` (dataflowir-gen witness) -> `getBlocks()` (f460) -> `begin()` (f461)
+// -> `*` (t560/t561/t245) is LIVE TODAY and the receiver of `getArgumentTypes()`
+// arrives as a real `*mut fmt::Block` / `Ptr<fmt::Block>`.  Only the last two links
+// were missing, and they were missing DIFFERENTLY: the TYPE was loud (17 aborts) and
+// the MEMBER was silent.
+//
+// ⛔⛔ WHY THREE KEYS AND NOT ONE, RE-DERIVED RATHER THAN ASSERTED.  f500's paragraph
+// says, in its own textual-call audit of `DataTransferLowering.cpp`: "the bare token
+// count is 10 on that file and 4 of those are `getArgumentTypes`, a DIFFERENT
+// unmapped member that this key deliberately does not touch".  So the moment t2410
+// silences the abort, those 4 calls become `E0599: no method named getArgumentTypes`
+// on a `*mut fmt::Block` -- the f500 failure mode exactly, one member over.  f2410
+// is that fix.  f2411 is the `[0]`.  ⛔ REMOVE ANY ONE OF THE THREE AND THE SET IS
+// WORSE THAN NOTHING; that is the `std::hash<int>` / `OperationState -> ()` bargain.
+//
+// THE MODEL, AND IT IS NOT NEW.  `Vec<dataflowir_gen::ir::Ty>` -- the SAME model
+// t250 (`mlir::TypeRange`) already carries, "the elementwise lift of t5
+// (`mlir::Type` -> `ir::Ty`) the same way t14/t16 are the elementwise lift of t4".
+// ⭐ AND THE WITNESS ALREADY EXISTS AND ALREADY SPECIFIES IT:
+// `dataflowir-gen/src/fmt.rs:579 pub fn get_argument_types(&self) -> Vec<ir::Ty>`,
+// whose doc comment names these same 4 Agen.td sites, argues the snapshot semantics,
+// and states "`Vec<Ty>` is the only shape the key CAN name" because a rule key has no
+// lifetime in scope.  No dt_src edit is needed for this row.
+//
+// ⭐ THE ALIASING LICENCE, RE-DERIVED FOR **ValueTypeRange** AND NOT INHERITED, and
+// this CORRECTS the reason t251's note (:4312/:8426) gave for refusing it.  That note
+// says `ValueTypeRange` "DECLARES `front()` -- a reference-returning accessor".
+// ⛔ THAT IS WRONG, read off TypeRange.h:152: `Type front() { return (*this)[0]; }`
+// returns `Type` **BY VALUE**.  The whole public surface (TypeRange.h:133-165) is
+// `operator[]`, `size()`, `front()`, `operator==`, `operator!=` and the inherited
+// `iterator_range` ctors -- every one of them BY VALUE or `bool`, NO non-const
+// accessor, NO reference out, and the class is not assignable.  So nothing writes
+// through the handle and nothing hands a borrow out of a receiver this model owns by
+// value: an owning `Vec<ir::Ty>` loses only UNOBSERVABLE aliasing, exactly as for
+// t250, and the `mlir::MutableOperandRange` refusal at :1311 does NOT apply.
+//
+// SWALLOW-SAFETY, argued for the bucket rather than assumed.  `GetTypeMapKey`
+// truncates at the first `<`, so the bucket is `mlir::ValueTypeRange`.
+// `grep -rn 'ValueTypeRange' rules/*/src.cpp` names it in NO module but this one, and
+// inside this file the only OTHER mentions are prose in comments, never a `using`.
+// So the bucket holds exactly one candidate: t2410, mine.  The spelling is FULLY
+// CONCRETE -- no `T<digits>` anywhere in it -- so `matchTemplate`'s placeholder
+// capture (`findNextLiteralSameDepth`) NEVER RUNS and the same-depth-comma swallow is
+// ruled out by construction, the t243-t246 / t250-t251 / t560-t561 argument.
+// ⛔ AND DELIBERATELY NOT GENERIC.  `template <typename T1> using t2410 =
+// mlir::ValueTypeRange<T1>` would be the t26/t29 generic-MLIR-type regression: it
+// forces the converter to map the template ARGUMENT, and the sibling instantiations
+// `<mlir::OperandRange>` / `<mlir::ResultRange>` carry a DIFFERENT element
+// provenance and are a standing `OpAsmPrinter <<` refusal.  One concrete key per
+// instantiation, the t37-t39 discipline.
+//
+// ⛔ WHAT IS LEFT OUT, WITH ITS REASON -- the t243-t246 discipline.  `size()`,
+// `front()`, `operator==`, `operator!=`, `begin()`/`end()` and the
+// `iterator_range`/`Container&&` constructors are REAL members of the real class and
+// get NO key: all 4 corpus sites are `[0]` and nothing else, so a declaration here
+// would record a key with nothing under it, and any future site that asks for one
+// will ABORT LOUDLY -- which is the outcome this block is built to preserve.
+namespace mlir {
+// mlir/IR/TypeRange.h:132-165.  Only `operator[]` is declared; see the omission list
+// above.  ⚠️ The parameter is `unsigned long` (`size_t`) and NOT `unsigned`: TypeRange.h:152
+// reads `Type operator[](size_t index) const`, and a key that differs from the recorded
+// one in a parameter type is DEAD.  ⚠️ `const` is likewise copied exactly -- the corpus
+// receiver is a by-value TEMPORARY (`getArgumentTypes()[0]`), which binds the const
+// member, and TypeRange.h declares no non-const overload.
+template <typename ValueRangeT> class ValueTypeRange {
+public:
+  mlir::Type operator[](unsigned long index) const;
+};
+} // namespace mlir
+
+using t2410 = mlir::ValueTypeRange<llvm::MutableArrayRef<mlir::BlockArgument>>;
+
+// f2410 -- `mlir::ValueTypeRange<llvm::MutableArrayRef<mlir::BlockArgument>>
+//           mlir::Block::getArgumentTypes()`.  Declared at `class Block` near the top
+// of this file (a C++ class cannot be reopened); the value is returned BY VALUE here,
+// long past the class definition, which is why the forward declaration up there is
+// enough.  THE FORM IS f460's / f500's: a free function whose FIRST parameter is the
+// receiver, body calling NOTHING but the member.
+// ⚠️ `mlir::Block &` and not `const mlir::Block &`: Block.h:100 is NON-CONST and every
+// emitted receiver is a `*mut fmt::Block` dereference, i.e. a mutable lvalue -- f500's
+// receiver, identically.
+mlir::ValueTypeRange<llvm::MutableArrayRef<mlir::BlockArgument>>
+f2410(mlir::Block &b) {
+  return b.getArgumentTypes();
+}
+
+// f2411 -- `mlir::Type mlir::ValueTypeRange<llvm::MutableArrayRef<
+//           mlir::BlockArgument>>::operator[](unsigned long) const`.
+// ⚠️ Written `a0.operator[](a1)` and not `a0[a1]`, the f1 / f1102 convention in this
+// file: the explicit member form cannot be re-resolved to some free operator by ADL,
+// so the key cannot drift.
+// ⚠️ THE RECEIVER IS BY VALUE, the f1102/f1104 convention for a const member of a
+// handle-like range, and it is also what the corpus hands over: `getArgumentTypes()`
+// is a temporary.
+// ⚠️ The return is `mlir::Type` BY VALUE (t5 -> `ir::Ty`), so the target body CLONES
+// out of the owning `Vec` rather than borrowing -- the f500 `clone()` argument, at the
+// boundary where C++ copies the handle too.
+mlir::Type
+f2411(mlir::ValueTypeRange<llvm::MutableArrayRef<mlir::BlockArgument>> a0,
+      unsigned long a1) {
+  return a0.operator[](a1);
+}
