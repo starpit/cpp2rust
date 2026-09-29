@@ -213,6 +213,13 @@ public:
 
   virtual bool VisitCXXForRangeStmtString(clang::CXXForRangeStmt *stmt);
 
+  virtual bool VisitCXXForRangeStmtSet(clang::CXXForRangeStmt *stmt);
+
+  // True when the range init's MODELLED RUST TYPE is a set, i.e. a container
+  // with no positional element access at all. See the definition for why the
+  // test has to be on the Rust type and not on the C++ class name.
+  bool IsSetLikeRangeInit(clang::QualType range_init_type);
+
   bool VisitCXXForRangeStmtIndexBased(clang::CXXForRangeStmt *stmt,
                                       const char *len_suffix);
 

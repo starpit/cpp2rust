@@ -3355,7 +3355,30 @@ static bool IsNonIndexableSetTargetType(const std::string &rust_type) {
          rust_type.starts_with("std::collections::BTreeSet<");
 }
 
+// ⚠️ A NAME PRE-FILTER, AND ONLY A PRE-FILTER. It cannot decide indexability --
+// `llvm::SetVector` passes it and is correctly rejected by the Rust-type test --
+// and it is not what makes the predicate safe. It exists because ASKING the
+// mapper has an OBSERVABLE SIDE EFFECT: `Mapper::search` synthesises an identity
+// rule for a project type and prints `note: project leaf type ... has no types_
+// entry yet`. MEASURED 2026-09-28: without this filter, 16 of 32 corpus TUs grew
+// extra `note:` lines on stderr (their emitted Rust stayed byte-identical, and
+// every bucket and abort was unchanged) purely because every non-map, non-string
+// range init was now being mapped. Narrowing to set-NAMED classes keeps the
+// mapper out of the path of every range this row does not touch, so "everything
+// else takes exactly the path it took before" is true of the diagnostics too and
+// not only of the output.
+static bool HasSetLikeClassName(const std::string &class_name) {
+  auto pos = class_name.rfind("::");
+  std::string leaf =
+      pos == std::string::npos ? class_name : class_name.substr(pos + 2);
+  return leaf.find("Set") != std::string::npos ||
+         leaf.find("set") != std::string::npos;
+}
+
 bool Converter::IsSetLikeRangeInit(clang::QualType range_init_type) {
+  if (!HasSetLikeClassName(GetClassName(range_init_type))) {
+    return false;
+  }
   auto unqualified = range_init_type.getUnqualifiedType();
   // ⚠️ `Mapper::Contains` FIRST, and not as a "has a rule" test -- it is a known
   // TRUE for any user struct in the TU, because `search()` falls through to
