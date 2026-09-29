@@ -153,6 +153,11 @@ public:
 
   bool VisitCXXForRangeStmtVector(clang::CXXForRangeStmt *stmt) override;
 
+  // The DECOMPOSING arm of the above; see the definition for the aliasing
+  // argument and for the sub-shapes it refuses loudly.
+  bool VisitCXXForRangeStmtVectorDecomposition(clang::CXXForRangeStmt *stmt,
+                                              clang::DecompositionDecl *decomp);
+
   bool VisitCXXForRangeStmtString(clang::CXXForRangeStmt *stmt) override;
 
   void EmitByValueShadow(const std::string &loop_var_name, clang::QualType type,
