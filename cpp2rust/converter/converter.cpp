@@ -1060,7 +1060,7 @@ bool Converter::ConvertVarDeclSkipInit(clang::VarDecl *decl) {
 //    no addressable field to point at.
 //  - A record that HAS A RULE (`Mapper::Contains`).  Then the Rust type is
 //    whatever the rule says and its field names are not the C++ ones.
-static std::vector<const clang::FieldDecl *>
+std::vector<const clang::FieldDecl *>
 GetMemberwiseBindingFields(const clang::DecompositionDecl *decl) {
   const std::vector<const clang::FieldDecl *> kNotMemberwise;
   auto bindings = decl->bindings();

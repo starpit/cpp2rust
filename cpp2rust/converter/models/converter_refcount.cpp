@@ -2544,40 +2544,74 @@ bool ConverterRefCount::VisitCXXForRangeStmtVectorDecomposition(
 
   // ================= EVERY GATE IS BEFORE ANY EMISSION =================
   // (1) The element spelling. `.0`/`.1` only mean the C++ elements for a type
-  // modelled as a Rust tuple, and only `std::pair` is established here; a
-  // member-wise struct would need field NAMES (E0609 otherwise) and has no
-  // measured witness under this model.
-  if (bindings.size() != 2 || GetClassName(elem_type) != "std::pair") {
-    ReportUnsupportedStructuredBinding(decomp);
-    return false;
-  }
-  // (2) BOTH tuple components must be `Value<..>` in this model -- that is the
-  // whole aliasing argument above. A component that is a bare value (a POD
-  // field, say) would be COPIED by `.clone()` and a write through the binding
-  // would be silently dropped; a component that is a raw pointer model
-  // (`Value<*const T>`) has the recorded `no method named upgrade` defect. The
-  // element text is taken from the very same `ConvertPtrType` the `as` cast
-  // below emits, so the check cannot drift from what is emitted.
-  const std::string ptr_type = ConvertPtrType(range_init->getType());
-  std::string elem_text;
-  if (ptr_type.starts_with("Ptr<") && ptr_type.ends_with(">")) {
-    elem_text = ptr_type.substr(4, ptr_type.size() - 5);
-  }
-  if (elem_text.size() < 2 || elem_text.front() != '(' ||
-      elem_text.back() != ')') {
-    ReportUnsupportedStructuredBinding(decomp);
-    return false;
-  }
-  const auto components = SplitTopLevelCommas(
-      std::string_view(elem_text).substr(1, elem_text.size() - 2));
-  if (components.size() != bindings.size()) {
-    ReportUnsupportedStructuredBinding(decomp);
-    return false;
-  }
-  for (const auto &component : components) {
-    if (!component.starts_with("Value<")) {
+  // modelled as a Rust tuple (`std::pair`); a member-wise struct instead needs
+  // field NAMES (E0609 otherwise), exactly the split `EmitVectorDecompositionBindings`
+  // (converter.cpp) already draws for the unsafe model. `fields` stays empty for
+  // the tuple-like arm and holds the FieldDecl per binding, in order, for the
+  // member-wise arm; that is what selects the emission spelling below.
+  const bool is_pair = GetClassName(elem_type) == "std::pair";
+  std::vector<const clang::FieldDecl *> fields;
+  if (is_pair) {
+    if (bindings.size() != 2) {
       ReportUnsupportedStructuredBinding(decomp);
       return false;
+    }
+  } else {
+    // GetMemberwiseBindingFields (converter.cpp, shared via converter.h) is
+    // model-agnostic: it only inspects the AST (holding vars, base classes,
+    // anonymous/bitfield/reference members, a record with its own Mapper
+    // rule) and already refuses everything this model has no witness for. A
+    // reference MEMBER (the llvm::enumerate / PcfgInfo permanent-refusal
+    // family) is refused there for both models identically.
+    fields = GetMemberwiseBindingFields(decomp);
+    if (fields.empty()) {
+      ReportUnsupportedStructuredBinding(decomp);
+      return false;
+    }
+  }
+  // (2) EVERY BINDING'S COMPONENT MUST BE `Value<..>` IN THIS MODEL -- that is
+  // the whole aliasing argument above. A component that is a bare value would
+  // be COPIED by `.clone()` and a write through the binding would be silently
+  // dropped.
+  //
+  // For `std::pair` this is checked TEXTUALLY, against the very same
+  // `ConvertPtrType` the `as` cast below emits, so the check cannot drift from
+  // what is emitted: the pair is modelled as a Rust tuple, so its element text
+  // is `(Value<..>, Value<..>)` and is parsed apart on top-level commas.
+  //
+  // For a member-wise struct there is no tuple text to parse -- the element
+  // type is the struct itself (`Ptr<RowGroupInfo_RowGroupNodeInfo>`, not
+  // `Ptr<(..)>`) -- so the same fact is established STRUCTURALLY instead:
+  // this model wraps EVERY field of EVERY converter-emitted struct in
+  // `Value<T>` unconditionally (measured on `probe2.refcount.rs` for a
+  // `ScheduleNode*`, an `i32` and a second `i32` field, all three emitted as
+  // `Value<..>` -- see `RowGroupInfo_RowGroupNodeInfo`'s `Clone`/`ByteRepr`
+  // impls). `GetMemberwiseBindingFields` has already confirmed the record is
+  // one THIS TU emits as its own struct (not a `Mapper`-ruled library type,
+  // which could choose a different representation), so the invariant applies
+  // and no text-based re-derivation is needed.
+  std::string ptr_type = ConvertPtrType(range_init->getType());
+  if (is_pair) {
+    std::string elem_text;
+    if (ptr_type.starts_with("Ptr<") && ptr_type.ends_with(">")) {
+      elem_text = ptr_type.substr(4, ptr_type.size() - 5);
+    }
+    if (elem_text.size() < 2 || elem_text.front() != '(' ||
+        elem_text.back() != ')') {
+      ReportUnsupportedStructuredBinding(decomp);
+      return false;
+    }
+    const auto components = SplitTopLevelCommas(
+        std::string_view(elem_text).substr(1, elem_text.size() - 2));
+    if (components.size() != bindings.size()) {
+      ReportUnsupportedStructuredBinding(decomp);
+      return false;
+    }
+    for (const auto &component : components) {
+      if (!component.starts_with("Value<")) {
+        ReportUnsupportedStructuredBinding(decomp);
+        return false;
+      }
     }
   }
   // (3) THE BY-VALUE HOLDER. `for (auto [a, b] : v)` COPIES the element in C++,
@@ -2716,8 +2750,14 @@ bool ConverterRefCount::VisitCXXForRangeStmtVectorDecomposition(
     // mints a fresh cell holding a clone of the value, so a write through the
     // binding stays in the binding -- see gate (3). Gate (4) has refused the
     // by-value + `std::move` combination, so these three arms are disjoint.
+    // ⭐ THE MEMBER-WISE GENERALISATION: `element_key` is the tuple INDEX for a
+    // `std::pair` and the FIELD NAME for a member-wise struct (`fields` is
+    // empty in the first case, populated in order in the second) -- the exact
+    // same split `EmitVectorDecompositionBindings` draws for the unsafe model.
+    const std::string element_key =
+        fields.empty() ? std::to_string(index) : GetNamedDeclAsString(fields[index]);
     const std::string element =
-        std::format("(*{}{}).{}", holder, deref, index);
+        std::format("(*{}{}).{}", holder, deref, element_key);
     StrCat(binding_name, token::kAssign,
            moved_bindings.contains(binding)
                ? std::format("Rc::new(RefCell::new({}.take()))", element)
