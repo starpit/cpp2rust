@@ -4312,3 +4312,30 @@ fn f2103(
     }
     __x != __y
 }
+
+// t2300 -- `mlir::detail::PassOptions::Option<std::string>` -> a PLAIN `String`.
+// ⭐ NOT a new `libcc2rs` type.  The Rust stage type-checks rule targets against the
+// PREBUILT `liblibcc2rs-*.rmeta` in pin/target_preprocessor, so a
+// `libcc2rs::PassOptionString` added in a worktree is INVISIBLE (E0425, then a core
+// dump with no OK line).  `String` needs no libcc2rs change at all and carries
+// exactly the same information -- one field, an owned string.
+fn t2300() -> String {
+    String::new()
+}
+
+// t2301 -- `mlir::detail::PassOptions` -> an opaque unit; see the src note.
+fn t2301() -> () {
+    ()
+}
+
+// f2300 -- the constructor.  a0 (the parent `PassOptions`) and a2 (`cl::desc`, help
+// text) are DISCARDED; a1 is the option NAME, which the value model does not carry.
+// a3 is `cl::init("...")` -- THE COMPILED-IN DEFAULT -- and it is the only argument
+// that becomes the payload.  `trim_end_matches('\0')` drops the NUL that
+// `char[N]` carries as its last element.
+unsafe fn f2300(a0: &mut (), a1: Vec<u8>, a2: Vec<u8>, a3: Vec<u8>) -> String {
+    let _ = a0;
+    let _ = a1;
+    let _ = a2;
+    String::from_utf8_lossy(&a3).trim_end_matches('\0').to_owned()
+}
