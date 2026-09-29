@@ -2034,6 +2034,36 @@ bool ConverterRefCount::VisitCXXForRangeStmtMap(clang::CXXForRangeStmt *stmt) {
   }
   auto loop_var_name = GetNamedDeclAsString(loop_var);
 
+  // ⛔ THE HARDCODED `RefcountMapIter` BELOW IS CORRECT, and the obvious
+  // objection to it is REFUTED. `std::unordered_map`'s refcount iterator is
+  // `RefcountHashMapIter` (iterators.rs:413), not `RefcountMapIter` (:151), so
+  // this literal looks like it must be wrong for an unordered_map range -- it is
+  // NOT, because a non-decomposing unordered_map range NEVER ARRIVES HERE.
+  // `Converter::VisitCXXForRangeStmt` (converter.cpp) dispatches only
+  // `std::map` and `std::basic_string` by name; `std::unordered_map` reaches
+  // this function ONLY through the DECOMPOSING reroute, which is guarded by
+  // `llvm::dyn_cast<DecompositionDecl>` and so cannot fall through to this arm.
+  // Everything else, unordered_map included, goes down the SET or the
+  // INDEX-BASED path.
+  //
+  // MEASURED 2026-09-29, snap/coord44/cpp2rust (md5 a1bc9015..) and this tree's
+  // own BEFORE binary (829cd0f6..), pin/ir.v41, -model=refcount, on
+  // `for (auto &kv : m)` over a `std::unordered_map<int,int> &`: the emitted
+  // Rust contains NO `RefcountMapIter::begin(` at all. It is
+  //     'loop_: for mut kv in m as Ptr<HashMap<i32, Value<i32>>> {
+  //         (*t.borrow_mut()) += (*(*kv.upgrade().deref()).1.borrow());
+  // which rustc rejects with `error[E0609]: no field `1` on type
+  // `HashMap<i32, Rc<RefCell<i32>>>``. That failure is the POSITIONAL-lowering
+  // class already documented at the fall-through in
+  // `Converter::VisitCXXForRangeStmt` ("for (auto &kv : unordered_map) still
+  // goes down the positional path from here"), NOT an iterator-spelling defect
+  // in this function, and fixing it means routing the non-decomposing map range
+  // here -- a separate, larger row, because the loop variable's Rust type has to
+  // become the `std::pair<const K, V> &` the C++ program sees.
+  //
+  // So DO NOT add a class-keyed iterator selector to this arm: on today's
+  // dispatch it would be dead code that only looks like coverage. The selector
+  // belongs on whichever arm can actually see more than one range class.
   StrCat("'loop_:");
   // ⭐ ConvertFreshObject, NOT ConvertObject. `RefcountMapIter<K, V>` is
   // `MapIter<K, Ptr<BTreeMap<K, Value<V>>>>` and `MapIter::begin` takes its
