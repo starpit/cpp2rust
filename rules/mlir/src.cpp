@@ -9385,6 +9385,11 @@ public:
       mlir::OperandRange, mlir::OpOperand *, mlir::Value, mlir::Value,
       mlir::Value>::iterator
   operand_begin();
+  // f1300, merged in here rather than reopening the class: a C++ class cannot be
+  // reopened, and e9937a50 had already made this the module's first and only
+  // definition of `mlir::Operation` for `operand_begin()`.  See f1300's block at
+  // the tail for why the `T1 &&` (not `T1 &`) is load-bearing.
+  template <typename T1> void walk(T1 &&callback);
 };
 
 } // namespace mlir
@@ -9506,4 +9511,106 @@ llvm::detail::indexed_accessor_range_base<mlir::OperandRange, mlir::OpOperand *,
                                           mlir::Value>::iterator
 f1106(mlir::Operation *a0) {
   return a0->operand_begin();
+}
+
+// ===========================================================================
+// f1300 -- `void mlir::Operation::walk((lambda at <path>:_:_) &&)`
+//          -> `fmt::OpInst::walk_any_mut` (dataflowir-gen f32f967).
+//
+// ⭐ THE KEY SPELLING IS READ OFF THE CONVERTER'S OWN ASK, not derived from
+// Operation.h.  `--verbose` on a 3-function probe that does nothing but call
+// `op->walk(...)` three ways (walkkeys/probe/walkask.cpp) prints, verbatim:
+//     search expr void mlir::Operation::walk((lambda at /home/agent/work/walkkeys/probe/walkask.cpp:_:_) &&), result:
+//     None
+// ⭐⭐ TWO PROPERTIES OF THAT STRING ARE THE WHOLE ROW, and neither is derivable
+// from a specification:
+//   1. THE LINE:COLUMN ARE NORMALISED TO `_:_`.  `normalizeTranslationRule`
+//      erases the digits, so the per-call-site part of the closure type collapses
+//      to the FILE PATH alone.  Without that a key would be impossible; with it
+//      one `T1` placeholder captures `(lambda at <path>:_:_)` at every site.
+//   2. ⛔ AN EXPLICIT TEMPLATE ARGUMENT LIST IS NOT IN THE KEY.  The probe's
+//      second function writes `op->walk<mlir::WalkOrder::PreOrder>(...)` -- the
+//      form SEVEN of the corpus's eight untyped sites use -- and it records
+//      BYTE-IDENTICALLY to the bare `op->walk(...)` of the first.  `ToString(const
+//      clang::NamedDecl *)` (mapper.cpp:2890) calls `printQualifiedName`, which
+//      prints no template argument list, and NOTHING in the converter appends one
+//      for a member-call key.  ⭐ SO THE `explicit-template-args` MARKER
+//      (regen-rule.sh:101) IS NOT THE MECHANISM THIS ROW NEEDS, and turning it on
+//      would make the RULE side record an argument list the ASK side never spells
+//      -- i.e. it would convert a live key into a dead one.  The marker still has
+//      NO user in the tree.  This also disposes of the `E0283 cannot infer T`
+//      hypothesis by measurement: there is no `T` to infer from the key, because
+//      the op-type filter appears in the corpus ONLY as the LAMBDA'S PARAMETER
+//      TYPE, which is inside the closure type and not recoverable from it.
+//      ⭐ Consequence: `walk::<T>` (the FILTERED forms) CANNOT BE KEYED AT ALL
+//      from `mlir::Operation::walk`; only the UNFILTERED `walk_any` family can.
+//      That is not a shortfall for this row -- see the site census below.
+//
+// ⭐ THE SITE CENSUS, and it is why `walk_any_mut` is the right target and not a
+// fallback.  The 10 already-emitted `.walk(&mut _callback)` sites (fresh39, 7
+// bucket-A TUs) span FOUR declaring classes, not one, and the lambdas are almost
+// all UNTYPED:
+//     mlir::Operation::walk  -- Liveness.cpp:64 (bare), SbfUtils.cpp:28,
+//                               InstructionEstimation.cpp:76,
+//                               CFGDeepMergingConditionalTree.cpp:27  -- ALL FOUR
+//                               take `mlir::Operation *`, i.e. UNFILTERED
+//     mlir::Region::walk     -- Liveness.cpp:75          (NOT this key)
+//     mlir::Block::walk      -- PipelineScope.cpp:35     (NOT this key)
+//     mlir::OpState::walk    -- Reuse.cpp:86, Collector.cpp:143/157 (NOT this key)
+// ⛔ A KEY ON `mlir::Operation` CANNOT RELOCATE `Region::walk` OR `Block::walk`:
+// they are SEPARATE declarations in separate classes, not inherited members, so
+// the recorded key names a different declaring class each time.  Those are three
+// further rows, deliberately NOT attempted here.
+//
+// ⛔ THE `mlir::WalkResult`-RETURNING OVERLOAD IS NOT LANDED, and the reason is
+// C++ and not judgement.  The ask for it is
+//     search expr mlir::WalkResult mlir::Operation::walk((lambda at ...:_:_) &&)
+// (probe function three, measured) -- the SAME bucket (`GetExprMapKey` stops at
+// the name, so the return type is not in the bucket) but a DIFFERENT match, so it
+// needs its own key.  Two member function templates that differ ONLY in return
+// type cannot both be declared in one class: `template <typename T1> void
+// walk(T1 &&)` and `template <typename T1> WalkResult walk(T1 &&)` are a
+// redeclaration conflict, and real MLIR only gets away with it because both
+// return `std::enable_if_t<...>` spellings that DIFFER -- a spelling the recorder
+// would then put in the key, where it cannot match the resolved `void` /
+// `mlir::WalkResult` the converter asks with.  Landing it needs a mechanism this
+// module does not have; it is specified, unattempted, and still loud.
+//
+// ⛔ `mlir::Operation` IS ONLY FORWARD-DECLARED ABOVE (src.cpp:128), so this is
+// its FIRST AND ONLY DEFINITION in this module.  It is placed at the TAIL, past
+// every use of the incomplete type, for the reason the `Block`/`Region` notes give:
+// a C++ class cannot be reopened, and nothing before this point may require it
+// complete.  `t36` (`mlir::Operation *`) is unaffected -- a type key is matched by
+// SPELLING and the spelling of a pointer to a class does not depend on whether the
+// class is complete.
+// ⚠️ SWALLOW-SAFETY: the captured region is the SINGLE parameter, `T1`, whose
+// following literal is ` &&)`.  There is NO comma anywhere in the spelling at any
+// depth, so `matchTemplate`'s same-depth-comma capture cannot over-run, and there
+// is no operator name, so the `operator>=` angle-depth desync does not apply.
+// ===========================================================================
+// ⚠️ THE `walk` DECLARATION IS NOT HERE.  e9937a50 (OperandRange) had ALREADY made
+// the block at ~:9382 this module's first and only definition of `mlir::Operation`,
+// for `operand_begin()`.  A C++ class cannot be reopened, so `walk` was merged into
+// THAT block; appending a second `namespace mlir { class Operation { ... } }` here is
+// a redefinition error.  The note above is preserved because its reasoning about WHY
+// the definition must be at the tail (past every use of the incomplete type) is what
+// makes :9382 the correct home.
+
+// ⚠️ THE `T1 &&a1` PARAMETER AND THE `std::move` ARE BOTH LOAD-BEARING, MEASURED
+// THREE WAYS, and this is the SHAPE COPIED FROM `rules/densemap:556` -- the only
+// other rule in the tree that successfully records a `T1 &&` parameter:
+//   * `f1300(mlir::Operation *a0, T1 a1)` + `a0->walk(static_cast<T1 &&>(a1))`
+//     records `void mlir::Operation::walk(T1 &)` -- an LVALUE reference.  That key
+//     is DEAD: the ask ends ` &&)`, and after `T1` `matchTemplate` hunts the literal
+//     ` &)`, which does not occur inside ` &&)`.
+//   * adding an EXPLICIT template argument (`a0->walk<T1>(...)`, with or without
+//     `->template`) makes `cpp-rule-preprocessor` print `No viable function` and
+//     then SEGFAULT (rc=139, core dumped) -- its synthetic overload resolution does
+//     not handle explicit template arguments on a member.  The regen is atomic so
+//     the tree survived; `regen-rule.sh` printed no `OK` line, which is the signal.
+//   * `T1 &&a1` + `std::move(a1)` records `void mlir::Operation::walk(T1 &&)`.
+// ⭐ The spelling is READ BACK OUT OF `ir_src.json` after every regen.  Nothing else
+// shows it: the preprocessor reports success either way.
+template <typename T1> void f1300(mlir::Operation *a0, T1 &&a1) {
+  return a0->walk(std::move(a1));
 }

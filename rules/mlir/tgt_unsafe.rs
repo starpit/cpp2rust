@@ -4422,3 +4422,33 @@ unsafe fn f1106(
 ) -> libcc2rs::RangeIter<dataflowir_gen::ir::Value> {
     libcc2rs::RangeIter::begin((*a0).ordered_operands().into_iter().cloned().collect())
 }
+
+// f1300 `void mlir::Operation::walk((lambda at <path>:_:_) &&)` ->
+//   `fmt::OpInst::walk_any_mut` (fmt.rs:1299, dataflowir-gen f32f967).  The
+//   UNFILTERED form, which is exact for this key: all four corpus sites that ask
+//   it take `mlir::Operation *` (see src.cpp for the four-declaring-class census).
+// ⭐ THE BOUND IS THE SHAPE THE CONVERTER ALREADY EMITS, MEASURED, not the shape
+//   the crate signature wants.  fresh39's emitted text at Liveness.cpp:64 is
+//       let mut _callback: _ = (|op: *mut dataflowir_gen::fmt::OpInst| { ... });
+//       (*op).walk(&mut _callback)
+//   so the closure is `FnMut(*mut OpInst)`, NOT `FnMut(&OpInst)`.  The adapter
+//   below bridges them with `::core::ptr::from_mut` on a LIVE `&mut OpInst`.
+// ⭐ THAT IS NOT A CLONE, and the distinction is the whole reason this half is
+//   landable in a rule at all: `walk_any_mut` hands the callback `&mut OpInst`, so
+//   the pointer names the node IN the tree and a mutating body's writes land in the
+//   tree.  A by-VALUE `OpInst` adapter would have had to deep-copy the subtree and
+//   discard every write -- which is why the crate slot refused to bend the
+//   signature, and why `walk_any_mut` rather than `walk_any` is used here even for
+//   read-only bodies (`walk_any` yields `&OpInst`, from which no `*mut` can be
+//   made without UB).
+// ⚠️ `&mut` IS WRITTEN ON A LOCAL TEMPORARY CLOSURE, never on `a0` or `a1`: the
+//   "never write the `&mut` yourself" rule is about the RECEIVER and the rule
+//   arguments, both of which arrive already in their model's shape.
+unsafe fn f1300<T1: FnMut(*mut dataflowir_gen::fmt::OpInst)>(
+    a0: *mut dataflowir_gen::fmt::OpInst,
+    mut a1: T1,
+) -> () {
+    (*a0).walk_any_mut(&mut |o: &mut dataflowir_gen::fmt::OpInst| {
+        a1(::core::ptr::from_mut(o))
+    })
+}

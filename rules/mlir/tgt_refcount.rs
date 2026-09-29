@@ -3942,3 +3942,27 @@ unsafe fn f1106(
 ) -> libcc2rs::RangeIter<dataflowir_gen::ir::Value> {
     libcc2rs::RangeIter::begin((*a0).ordered_operands().into_iter().cloned().collect())
 }
+
+// f1300 `void mlir::Operation::walk((lambda at <path>:_:_) &&)` ->
+//   `fmt::OpInst::walk_any_mut` (fmt.rs:1299, dataflowir-gen f32f967).  Same row as
+//   the unsafe overlay; see that comment and src.cpp for the key spelling and the
+//   four-declaring-class site census.
+// ⚠️ THE MODELS DIVERGE IN THE CALLBACK'S ARGUMENT, and this overlay takes the
+//   CRATE'S shape rather than an adapter.  In the unsafe model the converter emits
+//   a closure over `*mut OpInst`, which `::core::ptr::from_mut` can produce from the
+//   live `&mut OpInst` `walk_any_mut` yields.  The refcount model emits a closure
+//   over `libcc2rs::Ptr<OpInst>`, and a `Ptr` CANNOT be manufactured from a borrow
+//   -- it needs an `Rc` owner that a tree node reached by traversal does not have.
+//   Fabricating one would either alias the node (unsound) or copy it (discarding a
+//   mutating body's writes, the exact loss the crate slot refused).  So this body
+//   takes `FnMut(&mut OpInst)` and the refcount half of the CONVERTER row below
+//   stays open.  ⚠️ This is a DECLARED divergence, not an oversight: the key set is
+//   identical in both overlays (check_rules.py's requirement), the `mlir::Region`/
+//   `Block`/`OpState` walks are unkeyed in both, and the refcount model emits ZERO
+//   lines for the goal TU today, so nothing measured regresses.
+fn f1300<T1: FnMut(&mut dataflowir_gen::fmt::OpInst)>(
+    a0: libcc2rs::Ptr<dataflowir_gen::fmt::OpInst>,
+    mut a1: T1,
+) -> () {
+    a0.with_mut_ref(|o| o.walk_any_mut(&mut a1))
+}
