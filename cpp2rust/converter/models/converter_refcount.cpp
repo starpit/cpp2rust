@@ -2066,6 +2066,59 @@ void ConverterRefCount::EmitByValueShadow(const std::string &loop_var_name,
   }
 }
 
+// ⭐ THE RECEIVER for the STANDALONE `const auto &[k, v] = *it;` map arm under
+// refcount (row g3036, witness dsc/dims.cpp:731 inside
+// `DataStructDims::pruneMaxSymbolicVolumes`).
+//
+// MEASURED (pin/cpp2rust 12820a5ddbba194f7a13fc585167e5c2 + pin/ir.v44,
+// `--model=refcount`) on a probe holding a `std::map<std::set<int>, int>`
+// iterator in a local: this model BOXES the iterator local, and derefs it at
+// every use --
+//     let it: Value<RefcountMapIter<std::collections::BTreeSet<i32>, i32>> =
+//         Rc::new(RefCell::new(RefcountMapIter::begin(..)));
+//     ... (*it.borrow()).first() ... (*it.borrow_mut()).prefix_inc() ...
+// `first()` / `second()` are `&self` methods on the ITERATOR, not on
+// `Rc<RefCell<_>>`, so the base's bare `<it>.first()` would be `E0599` at rc=0.
+// `.borrow()` (shared) and not `.borrow_mut()` is what those two `&self`
+// signatures ask for, and it is what the converter already emits for every other
+// const method call on a boxed local.
+//
+// ⛔ AND THE GUARD IS NOT VACUOUS, which the base's own gates cannot supply. The
+// caller admits any iterator in the map-iterator CLASS list whose `value_type`
+// is `std::pair<const K, V>` -- and under libc++ a `std::multimap` iterator is
+// the SAME class `std::__map_iterator` with the SAME `pair<const K, V>`
+// `value_type`, so it passes every one of those gates. There is no `rules/multimap`
+// (the rules tree carries `map` and `unordered_map` only), so without this test
+// a multimap witness would emit `first()` / `second()` on a type with no
+// `MapIterator` impl. Asking the MODEL what the iterator maps to, and requiring
+// it to name one of the two refcount iterators that carry the impl
+// (`RefcountMapIter`, iterators.rs:151; `RefcountHashMapIter`, :413), is what
+// makes the arm's domain exactly the shapes libcc2rs can serve.
+//
+// ⭐ NOTE WHAT IS *NOT* NEEDED: the iterator TYPE is never named in the emitted
+// text, only the existing local is, so unlike
+// `RefCountMapRangeIteratorName` this arm does not have to choose between
+// `RefcountMapIter` and `RefcountHashMapIter` -- both implement the same trait
+// with the same `Value<K>` / `Value<V>` associated types, so one emission covers
+// `std::map` and `std::unordered_map` alike.
+std::string ConverterRefCount::DecompositionMapIterReceiver(
+    clang::DeclRefExpr *iter_ref) {
+  auto iter_type =
+      iter_ref->getType().getNonReferenceType().getUnqualifiedType();
+  if (!Mapper::Contains(iter_type)) {
+    return {};
+  }
+  const std::string model = Mapper::Map(iter_type);
+  // `find` rather than a prefix test: the mapped spelling is the iterator type
+  // itself here, but a model that wrapped it would still be served by the same
+  // accessors, and an over-tight test would silently turn this arm back off.
+  if (model.find("RefcountMapIter") == std::string::npos &&
+      model.find("RefcountHashMapIter") == std::string::npos) {
+    return {};
+  }
+  return "(*" + GetNamedDeclAsString(iter_ref->getDecl()) + ".borrow())";
+}
+
 // The REFCOUNT map-range iterator whose `MapIterator` impl a decomposing loop
 // can address, or nullptr for a class this model cannot spell one for.
 //

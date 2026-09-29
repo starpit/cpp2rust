@@ -1289,15 +1289,65 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
       // BEFORE any emission, and register ptr_bindings_ only after we have
       // committed to emitting, so the refcount model never inherits derefs for
       // bindings it did not emit.
-      if (keyword_unsafe_ == nullptr || *keyword_unsafe_ == '\0') {
+      // ⭐⭐ ROW g3036 OPENS THIS ARM TO REFCOUNT, and corrects the reasoning the
+      // paragraph above used to carry. The premise was "that model wraps every
+      // local in `Rc<RefCell<..>>`, so the per-use deref these bindings need is
+      // not what it would emit" -- which conflates TWO different derefs. The
+      // bindings do not need a per-use deref BECAUSE they are pointers; they
+      // need it because the UNSAFE accessors return `*const K` / `*mut V`. The
+      // refcount `MapIterator` impl (libcc2rs/src/iterators.rs:151 for
+      // `RefcountMapIter`, :413 for `RefcountHashMapIter`) returns
+      // `Value<K>` / `Value<V>` -- which IS this model's native form for a
+      // local -- so the SAME two accessor calls are correct and NO
+      // `ptr_bindings_` registration may be made. That is exactly the split
+      // `c151701d` established for the decomposing map RANGE-for
+      // (ConverterRefCount::VisitCXXForRangeStmtMap); this is the standalone
+      // `let` twin of it, and it needs nothing new in libcc2rs and no new key.
+      //
+      // ⛔ THE ONE THING THAT IS NOT SHARED WITH THE RANGE-FOR ARM, and the
+      // reason a model hook is needed at all rather than reusing `iter_text`:
+      // there the receiver is the `for` pattern variable, a BARE
+      // `RefcountMapIter<K, V>`, so `<iter>.first()` type-checks. HERE the
+      // receiver is a user LOCAL, and this model boxes it --
+      // MEASURED, refcount, pin/cpp2rust 12820a5d + pin/ir.v44, on
+      // `for (auto it = m.begin(); it != m.end();)` over
+      // `std::map<std::set<int>, int>`:
+      //     let it: Value<RefcountMapIter<std::collections::BTreeSet<i32>, i32>>
+      //         = Rc::new(RefCell::new(RefcountMapIter::begin(..)));
+      //     ... (*it.borrow()).first() ... (*it.borrow_mut()).prefix_inc()
+      // so a bare `it.first()` would be `E0599` on `Rc<RefCell<..>>` -- rc=0
+      // output that does not compile, i.e. the silent class this project
+      // refuses. The receiver spelling is therefore asked of the MODEL.
+      //
+      // ⭐ AND THE `std::set` FIRST COMPONENT OF THIS ROW'S WITNESS NEEDS
+      // NOTHING SPECIAL, which is where the unsafe and refcount stories diverge
+      // most. Under unsafe a container element is what forced this whole branch
+      // to exist (`let symDims = (*holder).0;` is E0507, a move out of a
+      // raw-pointer deref). Under refcount `first()` is generic in K and hands
+      // back `Value<K>` for any K, so a `std::set` component is spelled
+      // IDENTICALLY to a scalar one: `Value<BTreeSet<PrimaryDimTypes>>`, and
+      // the body's `symDims.begin()` / `for (const auto &d : symDims)` go
+      // through this model's ordinary boxed-local path.
+      //
+      // ALIASING, which is what `const auto &[k, v] = *it` asks for, and it is
+      // the landed range-for arm's argument verbatim because it is the same two
+      // accessor bodies: `second()` returns `m.get(key).clone()` on a
+      // `BTreeMap<K, Value<V>>`, and cloning an `Rc` SHARES the cell, so
+      // `volumeLimit` aliases the map's element exactly as the C++ `const int &`
+      // does. `first()` returns `Rc::new(RefCell::new(key.clone()))`, i.e. a
+      // FRESH cell holding a deep copy -- sound because a map key is `const` in
+      // C++ (`value_type` is `pair<const K, V>`), so no well-formed program can
+      // write through `k` and observe the difference.
+      const bool unsafe_model =
+          keyword_unsafe_ != nullptr && *keyword_unsafe_ != '\0';
+      // ⛔ GATED BEFORE ANY EMISSION. The hook builds a STRING (the base
+      // implementation captures the conversion into a `Buffer`, exactly as the
+      // inline code it replaced did), and an empty return is a REFUSAL that
+      // leaves the loud diagnostic in place having emitted nothing.
+      const std::string iter_text = DecompositionMapIterReceiver(
+          const_cast<clang::DeclRefExpr *>(iter_ref));
+      if (iter_text.empty()) {
         return false;
-      }
-      std::string iter_text;
-      {
-        Buffer buf(*this);
-        Convert(const_cast<clang::Expr *>(
-            static_cast<const clang::Expr *>(iter_ref)));
-        iter_text = std::move(buf).str();
       }
       if (!EmitMapDecompositionBindings(decl, iter_text)) {
         return false;
@@ -1309,8 +1359,16 @@ bool Converter::ConvertTupleDecompositionDecl(clang::DecompositionDecl *decl) {
       // insert is correct instead: a BindingDecl* is unique per source site, and
       // pointer-ness is a property of the lowering we just emitted, not of a
       // scope.
-      for (const auto *binding : bindings) {
-        ptr_bindings_.insert(binding);
+      //
+      // ⛔⛔ UNSAFE ONLY. On the refcount arm the two bindings are already
+      // `Value<..>`, so registering them would make `VisitDeclRefExpr` (:4529)
+      // emit `(*symDims)` for a non-pointer -- `E0614` at rc=0. That is not
+      // merely redundant, it is positively wrong, and it is the same trap
+      // `VisitCXXForRangeStmtIndexBased` documents for a by-value loop variable.
+      if (unsafe_model) {
+        for (const auto *binding : bindings) {
+          ptr_bindings_.insert(binding);
+        }
       }
       return true;
     }
@@ -4110,6 +4168,19 @@ bool Converter::EmitMapDecompositionBindings(
     ++index;
   }
   return true;
+}
+
+// The UNSAFE receiver for the standalone-`let` map decomposition: the plain
+// conversion of the iterator variable reference. This is byte-for-byte the code
+// that used to sit inline in ConvertTupleDecompositionDecl's map branch, moved
+// behind a hook only so the refcount model can spell its boxed local. The
+// operand is already restricted to a side-effect-free DeclRefExpr by the caller,
+// which is what makes re-emitting it once per accessor sound.
+std::string Converter::DecompositionMapIterReceiver(
+    clang::DeclRefExpr *iter_ref) {
+  Buffer buf(*this);
+  Convert(iter_ref);
+  return std::move(buf).str();
 }
 
 // The range classes whose MODELLED iterator exposes a key accessor and a value
