@@ -4888,3 +4888,52 @@ fn t2400() -> () {
 fn t2401() -> () {
     ()
 }
+
+// ===========================================================================
+// t2410 / f2410 / f2411 -- `mlir::ValueTypeRange<llvm::MutableArrayRef<
+// mlir::BlockArgument>>`, `mlir::Block::getArgumentTypes()`, and the `operator[]`.
+// ONE ATOMIC SET: the type was LOUD (17 TUs aborted on it) and `getArgumentTypes` was
+// SILENT (an unmapped member is emitted textually, rc=0, no placeholder token), so
+// landing either alone is worse than landing neither.  See src.cpp for the 17-TU
+// census, the 4 Agen.td sites, and the omission list.
+//
+// ⭐ THE MODEL IS t250's, NOT A NEW ONE.  `Vec<ir::Ty>` is the elementwise lift of t5
+// (`mlir::Type` -> `ir::Ty`) exactly as t14/t16 are the lift of t4, and it is the
+// shape `dataflowir-gen/src/fmt.rs:579` already declares for this very member.
+//
+// ⚠️ IDENTICAL IN BOTH MODELS, and that is expected rather than sloppy -- the f500
+// argument verbatim: the receiver is a C++ `mlir::Block &`, which is
+// `&mut fmt::Block` in both, and the results are by-value `Vec<ir::Ty>` / `ir::Ty` in
+// both.  Only the ITERATOR that PRODUCES the receiver differs (t245/f461), and that
+// difference is absorbed before these calls.
+unsafe fn t2410() -> Vec<dataflowir_gen::ir::Ty> {
+    Default::default()
+}
+
+// f2410 -- `Block::getArgumentTypes()` -> `fmt::Block::get_argument_types()`.
+// ⚠️ NO `clone()` HERE: unlike f500, the witness already returns an OWNED
+// `Vec<ir::Ty>` (it clones each small `Ty` enum internally, because the types are a
+// field of each `Value` and are not contiguous anywhere, so there is no slice to
+// borrow).  The C++ return is by value, so owned is the faithful shape.
+// ⚠️ `a0` is named EXACTLY ONCE and carries nothing but the method call, because a
+// `&mut` formal's `aN` re-expands to the bare lvalue.
+// ⚠️ snake_case ON PURPOSE, the f460/f500 rule: a camelCase target name would let
+// `mlir::Block`'s dozens of still-unkeyed members resolve BY ACCIDENT against
+// dataflowir-gen and destroy the diagnostic.
+unsafe fn f2410(a0: &mut dataflowir_gen::fmt::Block) -> Vec<dataflowir_gen::ir::Ty> {
+    a0.get_argument_types()
+}
+
+// f2411 -- `ValueTypeRange::operator[](size_t) const` -> index + clone.
+// ⚠️ THE `clone()` IS THE C++ SIGNATURE, the f500/f1104 argument: TypeRange.h:152
+// returns `Type` BY VALUE, and an MLIR `Type` is itself a handle, so C++ copies the
+// handle here too.  `ir::Ty` is a small enum; nothing large is copied.
+// ⚠️ `a1 as usize` because the C++ parameter is `size_t` -> `u64` and Rust indexes
+// with `usize`; on this target they are the same width and the cast cannot truncate.
+// ⛔ OUT OF RANGE PANICS rather than fabricating a `Ty`.  That is FAITHFUL and
+// deliberate: TypeRange.h:153 is `assert(index < size() && "invalid index into type
+// range")`, so C++ traps here too in a debug build and is UB in a release one -- a
+// fabricated `Ty::…` would be the `PassOptions::Option<bool>` mistake.
+unsafe fn f2411(a0: Vec<dataflowir_gen::ir::Ty>, a1: u64) -> dataflowir_gen::ir::Ty {
+    a0[a1 as usize].clone()
+}
