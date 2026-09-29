@@ -3792,15 +3792,42 @@ bool Converter::VisitCXXForRangeStmt(clang::CXXForRangeStmt *stmt) {
   // TUs this row has not measured. Its own row, stated rather than widened.
   if (GetClassName(range_init_type) == "std::unordered_map") {
     const auto *loop_var = stmt->getLoopVariable();
+    // ⭐⭐ ROW g3013 CLOSES THE MAPPER HALF, so the REFERENCE shape is no longer
+    // refused -- it is routed to the map path, which is the fix the previous row
+    // built and correctly measured as insufficient ON ITS OWN.
+    //
+    // What changed is NOT here: `Mapper::ToString(const clang::Expr *)`'s
+    // for-range member-key branch now accepts `std::unordered_map<` as well as
+    // `std::map<`, so `kv.first` in the body is keyed as
+    // `std::unordered_map<K,V>::iterator->first` and reaches
+    // rules/unordered_map f36-f39 instead of lowering as the monomorphised
+    // pair's tuple index. With that in place the map path's existing machinery
+    // is sufficient: it binds the modelled iterator (MapRangeIteratorName /
+    // RefCountMapRangeIteratorName) and registers the loop variable in
+    // `map_iter_decls_` so its uses do not deref.
+    //
+    // ⛔ THE BY-VALUE SHAPE KEEPS THE LOUD ABORT, deliberately and measured-as-
+    // untested: `for (auto kv : m)` would bind `kv` to the iterator BY VALUE and
+    // the refcount arm already refuses a by-value loop variable over any
+    // map-like class other than `std::map` (see
+    // ConverterRefCount::VisitCXXForRangeStmtMap, whose `EmitByValueShadow`
+    // shape is a PRE-EXISTING E0308 even for `std::map`). Narrowing the refusal's
+    // domain to the shape that is not proven is the deliverable; removing it
+    // wholesale is not.
+    if (loop_var->getType()->isReferenceType()) {
+      return VisitCXXForRangeStmtMap(stmt);
+    }
     const std::string loc =
         loop_var->getLocation().printToString(ctx_.getSourceManager());
     std::string detail =
-        "non-decomposing range-`for` over `std::unordered_map` (loop variable `" +
+        "BY-VALUE non-decomposing range-`for` over `std::unordered_map` (loop "
+        "variable `" +
         GetNamedDeclAsString(loop_var) + "` of type `" +
         Mapper::ToString(loop_var->getType()) +
         "`) is not implemented: the positional lowering emits a field access the "
-        "mapped `HashMap` does not have, and the map lowering cannot resolve "
-        "`.first`/`.second` on an unordered_map iterator yet";
+        "mapped `HashMap` does not have, and the map path would bind the "
+        "modelled iterator BY VALUE, whose by-value shadow is a pre-existing "
+        "E0308 even for `std::map` (the REFERENCE shape is lowered, ROW g3013)";
     if (curr_function_ != nullptr) {
       detail += ", reached while converting `" +
                 curr_function_->getQualifiedNameAsString() + "`";

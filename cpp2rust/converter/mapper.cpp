@@ -3062,8 +3062,41 @@ std::string ToString(const clang::Expr *expr) {
           }
         }
       } else if (auto for_range = GetParentForRange(*ctx_, ME)) {
-        if (ToString(for_range->getRangeInit()->getType())
-                .starts_with("std::map<")) {
+        // ⭐⭐ ROW g3013 -- THIS `starts_with` IS THE ENTIRE DIVERGENCE between
+        // `std::map` and `std::unordered_map` for a NON-DECOMPOSING
+        // `for (auto &kv : m)`, and it is a MAPPER-KEY fact, not a dispatch fact.
+        //
+        // The map for-range binds its loop variable to the MODELLED ITERATOR
+        // (VisitCXXForRangeStmtMap), never to a pair, so `kv.first` in the body
+        // must be keyed as `<iterator type>->first` -- which is exactly what
+        // rules/map f20-f23 and rules/unordered_map f36-f39 declare. This branch
+        // is what performs that rewrite, and until ROW g3013 it accepted ONLY
+        // `std::map<`. For `std::unordered_map` it fell through to the bare
+        // `ToString(member_decl)` below, i.e. the FIELD `first` of the
+        // MONOMORPHISED `std::pair`, whose model is a plain Rust tuple -- so the
+        // body emitted `kv.0` / `kv.1` (a tuple index against the ITERATOR once
+        // the dispatch was routed) and rules/unordered_map's f36-f39 on
+        // `RefcountHashMapIter`/`UnsafeHashMapIterator` were NEVER REACHED.
+        // MEASURED on the previous row (54f7ee39): routing alone gave rc=0 plus
+        // `E0609: no field 0 on type HashMapIter<..>` in both models.
+        //
+        // rules/unordered_map/src.cpp:132 already promised the iterator protocol
+        // is "the same protocol, so ... the it->first / it->second routing to
+        // MapIterator::first/second work unchanged" -- true of an ARROW on a real
+        // iterator variable (the `ME->isArrow()` branch above), and false here,
+        // because a loop variable is a DOT on a pair. Accepting the second
+        // container name is all that was missing; nothing new is modelled.
+        //
+        // ⚠️ Kept as an exact prefix list rather than "any map-like class": the
+        // key must name a type for which the rules module actually declares
+        // `->first`/`->second` on its ITERATOR. `llvm::DenseMap` does NOT
+        // qualify -- rules/densemap's f15-f18 are the INHERENT
+        // `key_ptr()`/`value_ptr()` accessors under different keys (see
+        // MapDecompositionUsesPtrAccessors) -- so it is deliberately absent and
+        // its non-decomposing range stays refused in the converter.
+        auto range_type = ToString(for_range->getRangeInit()->getType());
+        if (range_type.starts_with("std::map<") ||
+            range_type.starts_with("std::unordered_map<")) {
           auto iter_type = GetForRangeIteratorType(for_range);
           if (!iter_type.isNull()) {
             return ToString(iter_type) + "->" + ToString(member_decl);
