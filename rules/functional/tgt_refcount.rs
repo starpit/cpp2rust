@@ -91,27 +91,27 @@ fn f15<T1, T2, T3, T4, T5, T6, T7: Fn(T2, T3, T4, T5, T6) -> T1 + 'static>(a0: T
     Some(Box::new(a0))
 }
 
-fn t8<'a, T1>() -> Option<&'a (dyn Fn() -> T1 + 'a)> {
+fn t8<'a, T1>() -> Option<&'a (dyn Fn() -> T1)> {
     None
 }
 
-fn t9<'a, T1, T2>() -> Option<&'a (dyn Fn(T2) -> T1 + 'a)> {
+fn t9<'a, T1, T2>() -> Option<&'a (dyn Fn(T2) -> T1)> {
     None
 }
 
-fn t10<'a, T1, T2, T3>() -> Option<&'a (dyn Fn(T2, T3) -> T1 + 'a)> {
+fn t10<'a, T1, T2, T3>() -> Option<&'a (dyn Fn(T2, T3) -> T1)> {
     None
 }
 
-fn t11<'a, T1, T2, T3, T4>() -> Option<&'a (dyn Fn(T2, T3, T4) -> T1 + 'a)> {
+fn t11<'a, T1, T2, T3, T4>() -> Option<&'a (dyn Fn(T2, T3, T4) -> T1)> {
     None
 }
 
-fn t12<'a, T1, T2, T3, T4, T5>() -> Option<&'a (dyn Fn(T2, T3, T4, T5) -> T1 + 'a)> {
+fn t12<'a, T1, T2, T3, T4, T5>() -> Option<&'a (dyn Fn(T2, T3, T4, T5) -> T1)> {
     None
 }
 
-fn t13<'a, T1, T2, T3, T4, T5, T6>() -> Option<&'a (dyn Fn(T2, T3, T4, T5, T6) -> T1 + 'a)> {
+fn t13<'a, T1, T2, T3, T4, T5, T6>() -> Option<&'a (dyn Fn(T2, T3, T4, T5, T6) -> T1)> {
     None
 }
 
@@ -122,7 +122,7 @@ fn t13<'a, T1, T2, T3, T4, T5, T6>() -> Option<&'a (dyn Fn(T2, T3, T4, T5, T6) -
 // is impossible for a BORROW model -- it would demand `'static` and an allocation.
 // The two trailing SFINAE pointers are the defaulted `enable_if_t<...> *` params;
 // `void *` is `AnyPtr` in the refcount model.
-fn f16<'a, T1, T2: Fn() -> T1 + 'a>(a0: &'a mut T2, a1: AnyPtr, a2: AnyPtr) -> Option<&'a (dyn Fn() -> T1 + 'a)> {
+fn f16<'a, T1, T2: Fn() -> T1 + 'a>(a0: &'a mut T2, a1: AnyPtr, a2: AnyPtr) -> Option<&'a (dyn Fn() -> T1)> {
     Some(&*a0)
 }
 
@@ -130,26 +130,26 @@ fn f16<'a, T1, T2: Fn() -> T1 + 'a>(a0: &'a mut T2, a1: AnyPtr, a2: AnyPtr) -> O
 // t8..t13 twins of f4/f6/f8/f10/f12/f14.  See src.cpp for the arity census, the
 // swallow-tie argument, and why `unwrap` is the faithful rendering of calling an
 // empty non-owning `function_ref` (C++ UB) rather than a papering-over.
-fn f17<'a, T1>(a0: &Option<&'a (dyn Fn() -> T1 + 'a)>) -> T1 {
+fn f17<'a, T1>(a0: &Option<&'a (dyn Fn() -> T1)>) -> T1 {
     (a0.unwrap())()
 }
 
-fn f18<'a, T1, T2>(a0: &Option<&'a (dyn Fn(T2) -> T1 + 'a)>, a1: T2) -> T1 {
+fn f18<'a, T1, T2>(a0: &Option<&'a (dyn Fn(T2) -> T1)>, a1: T2) -> T1 {
     (a0.unwrap())(a1)
 }
 
-fn f19<'a, T1, T2, T3>(a0: &Option<&'a (dyn Fn(T2, T3) -> T1 + 'a)>, a1: T2, a2: T3) -> T1 {
+fn f19<'a, T1, T2, T3>(a0: &Option<&'a (dyn Fn(T2, T3) -> T1)>, a1: T2, a2: T3) -> T1 {
     (a0.unwrap())(a1, a2)
 }
 
-fn f20<'a, T1, T2, T3, T4>(a0: &Option<&'a (dyn Fn(T2, T3, T4) -> T1 + 'a)>, a1: T2, a2: T3, a3: T4) -> T1 {
+fn f20<'a, T1, T2, T3, T4>(a0: &Option<&'a (dyn Fn(T2, T3, T4) -> T1)>, a1: T2, a2: T3, a3: T4) -> T1 {
     (a0.unwrap())(a1, a2, a3)
 }
 
-fn f21<'a, T1, T2, T3, T4, T5>(a0: &Option<&'a (dyn Fn(T2, T3, T4, T5) -> T1 + 'a)>, a1: T2, a2: T3, a3: T4, a4: T5) -> T1 {
+fn f21<'a, T1, T2, T3, T4, T5>(a0: &Option<&'a (dyn Fn(T2, T3, T4, T5) -> T1)>, a1: T2, a2: T3, a3: T4, a4: T5) -> T1 {
     (a0.unwrap())(a1, a2, a3, a4)
 }
 
-fn f22<'a, T1, T2, T3, T4, T5, T6>(a0: &Option<&'a (dyn Fn(T2, T3, T4, T5, T6) -> T1 + 'a)>, a1: T2, a2: T3, a3: T4, a4: T5, a5: T6) -> T1 {
+fn f22<'a, T1, T2, T3, T4, T5, T6>(a0: &Option<&'a (dyn Fn(T2, T3, T4, T5, T6) -> T1)>, a1: T2, a2: T3, a3: T4, a4: T5, a5: T6) -> T1 {
     (a0.unwrap())(a1, a2, a3, a4, a5)
 }
