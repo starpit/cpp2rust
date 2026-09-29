@@ -301,7 +301,88 @@ using t4 = std::map<T1, T2, T3>;
 // 4-ary key that the 2-ary search can never find.  The rule file fixes only the
 // SPELLING of the key, and this is the spelling that is searched.
 namespace llvm {
-template <typename KeyT, typename ValueT> class MapVector {};
+template <typename KeyT, typename ValueT> class MapVector {
+public:
+  ValueT &operator[](const KeyT &Key);
+  std::pair<std::pair<KeyT, ValueT> *, bool> insert(std::pair<KeyT, ValueT> &&KV);
+  std::size_t count(const KeyT &Key) const;
+  std::size_t size() const;
+  bool empty() const;
+  void clear();
+};
 } // namespace llvm
 
 template <typename T1, typename T2> using t5 = llvm::MapVector<T1, T2>;
+
+// --- MapVector members ---------------------------------------------------
+// CENSUS (dt_src corpus, git grep on MapVector-typed vars/fields, sites
+// counted with `grep -o | wc -l`, never `grep -c`):
+//   operator[]   10 sites  (RoutingGraph.cpp nodes_, BufferExpansion.cpp
+//                           memref_to_groups/buffer_to_loop_ivs,
+//                           FlatteningLocalRegions.cpp unit_to_ops/
+//                           equivalence_classes, ConstructThreeStagePipeline
+//                           fifo_type_groups, UnitTypeDiscovery result)  KEYED (f37)
+//   insert        3 sites  (same files, explicit .insert({k,v}) calls)     KEYED (f38)
+//   count         2 sites                                                 KEYED (f39)
+//   size          2 sites                                                 KEYED (f40)
+//   empty         1 site                                                  KEYED (f41)
+//   clear         1 site                                                  KEYED (f42)
+//   range-for    12 sites: 7 single-variable (`for (auto &kv : m)`) already
+//                fall through to the existing Vec<(K,V)> positional model
+//                via Converter::VisitCXXForRangeStmtVector -- no key needed;
+//                5 DECOMPOSING (`for (auto &[k,v] : m)`) are refused LOUDLY
+//                by ReportUnsupportedStructuredBinding regardless of any
+//                rules change (IsMapLikeRangeClass omits MapVector) --
+//                NOT KEYED, a converter-dispatch gap out of scope here.
+//   find/end/it->second: 1 site total                                     NOT KEYED
+//     (leaving a key out is preferred over an unproven one -- see brief).
+//
+// PLAIN REFERENCE receivers for all six (not `Ptr<...>`): the census
+// majority is a local variable or by-ref parameter, not a struct field.
+// A struct-field call site (e.g. RoutingGraph::nodes_) may need a
+// `Ptr`-based overload later -- a named follow-on gap, not silently
+// assumed away.
+template <typename T1, typename T2>
+T2 &f37(llvm::MapVector<T1, T2> &o, const T1 &key) {
+  return o.operator[](key);
+}
+
+// ⚠️ THIS RETURNS THE FULL PAIR, NOT `.second` -- MEASURED, NOT A STYLE CHOICE.
+// A body that reads `return o.insert(...).second;` (a member-call result then
+// a field access, both inside ONE rule body) makes cpp-rule-preprocessor
+// SIGSEGV deterministically (bisected: crashes with the field access present
+// in EITHER model regardless of the declared pair's element types; the same
+// body with `.first` instead of `.second` does NOT crash, so it is specific
+// to chaining a field access onto a call result inside a rule body, not to
+// this type). rules/smallptrset's f1 already establishes the fix as the
+// working convention: key the CALL (`insert`) to return the whole
+// `std::pair<iterator, bool>`, and let rules/pair's own generic `.second`
+// accessor (its f1) match the follow-on MemberExpr at the call site
+// separately -- the two AST nodes are matched independently, so the body
+// here must not pre-compose them.
+template <typename T1, typename T2>
+std::pair<std::pair<T1, T2> *, bool> f38(llvm::MapVector<T1, T2> &o,
+                                          std::pair<T1, T2> &&kv) {
+  return o.insert(static_cast<std::pair<T1, T2> &&>(kv));
+}
+
+template <typename T1, typename T2>
+std::size_t f39(const llvm::MapVector<T1, T2> &o, const T1 &key) {
+  return o.count(key);
+}
+
+template <typename T1, typename T2>
+std::size_t f40(const llvm::MapVector<T1, T2> &o) {
+  return o.size();
+}
+
+template <typename T1, typename T2>
+bool f41(const llvm::MapVector<T1, T2> &o) {
+  return o.empty();
+}
+
+template <typename T1, typename T2>
+void f42(llvm::MapVector<T1, T2> &o) {
+  return o.clear();
+}
+
