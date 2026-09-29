@@ -9783,6 +9783,89 @@ void Converter::ConvertArrow(clang::Expr *expr) { ConvertDeref(expr); }
 
 // See the header for WHY this is mandatory and why dropping the cast instead
 // would be silently wrong.
+// See the header for the measurement and for why `>`-family operators are
+// deliberately excluded.
+bool Converter::AngleCastOperandNeedsParens(std::string_view operand_text,
+                                           std::string_view opcode) {
+  if (opcode != "<" && opcode != "<<" && opcode != "<=") {
+    return false;
+  }
+  // Scan for an `as` token at bracket depth 0. A depth-0 `as` means the
+  // operand's own outermost form is (or contains at top level) a cast, so the
+  // parser is still inside a TYPE when `opcode` arrives.
+  int depth = 0;
+  bool found = false;
+  for (size_t i = 0; i < operand_text.size(); ++i) {
+    const char c = operand_text[i];
+    if (c == '(' || c == '[' || c == '{') {
+      ++depth;
+      continue;
+    }
+    if (c == ')' || c == ']' || c == '}') {
+      --depth;
+      if (depth < 0) {
+        llvm::report_fatal_error(
+            llvm::Twine("unsupported cast operand shape: unbalanced closing "
+                        "bracket in the operand text `") +
+                std::string(operand_text) + "` emitted left of `" +
+                std::string(opcode) +
+                "`; cannot decide whether the cast needs parentheses",
+            /*gen_crash_diag=*/false);
+      }
+      continue;
+    }
+    if (depth != 0 || c != 'a' || i + 1 >= operand_text.size() ||
+        operand_text[i + 1] != 's') {
+      continue;
+    }
+    const bool left_ok =
+        i == 0 || !(std::isalnum(static_cast<unsigned char>(
+                        operand_text[i - 1])) ||
+                    operand_text[i - 1] == '_');
+    const size_t after = i + 2;
+    const bool right_ok =
+        after >= operand_text.size() ||
+        !(std::isalnum(static_cast<unsigned char>(operand_text[after])) ||
+          operand_text[after] == '_');
+    if (left_ok && right_ok) {
+      found = true;
+    }
+  }
+  if (depth != 0) {
+    llvm::report_fatal_error(
+        llvm::Twine("unsupported cast operand shape: `") +
+            std::string(operand_text) + "` emitted left of `" +
+            std::string(opcode) +
+            "` has unbalanced brackets, so the top-level `as` scan that decides "
+            "whether to parenthesise the cast cannot be trusted",
+        /*gen_crash_diag=*/false);
+  }
+  return found;
+}
+
+std::string
+Converter::ParenthesizeAngleCastOperandText(std::string operand_text,
+                                            std::string_view opcode) {
+  if (!AngleCastOperandNeedsParens(operand_text, opcode)) {
+    return operand_text;
+  }
+  return "(" + operand_text + ")";
+}
+
+void Converter::ParenthesizeAngleCastOperand(size_t operand_start,
+                                             std::string_view opcode) {
+  if (rs_code_ == nullptr || operand_start >= rs_code_->size()) {
+    return;
+  }
+  std::string_view tail(*rs_code_);
+  tail.remove_prefix(operand_start);
+  if (!AngleCastOperandNeedsParens(tail, opcode)) {
+    return;
+  }
+  rs_code_->insert(operand_start, "(");
+  rs_code_->append(")");
+}
+
 void Converter::ParenthesizeBlockCastOperand(size_t operand_start) {
   if (rs_code_ == nullptr || operand_start >= rs_code_->size()) {
     return;
