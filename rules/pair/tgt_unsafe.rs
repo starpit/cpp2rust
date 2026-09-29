@@ -142,3 +142,10 @@ unsafe fn f21<T1, T2>(a0: T1, a1: T2) -> (T1, T2) {
 unsafe fn f22<T1, T2>(a0: T1, a1: T2) -> (T1, T2) {
     (a0.into(), a1.into())
 }
+
+// f23 -- `pair<T1,T2>::pair(const pair<T3,T4> &)`.  Body is f2's VERBATIM: both
+// pairs share the `(T1, T2)` model, so the converting copy is a plain clone.  See
+// rules/pair/src.cpp's f23 note for the blast-radius argument.
+unsafe fn f23<T1: Clone, T2: Clone>(a0: (T1, T2)) -> (T1, T2) {
+    a0.clone()
+}
