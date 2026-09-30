@@ -728,6 +728,28 @@ protected:
   virtual bool Convert(clang::Expr *expr,
                        std::optional<clang::QualType> implicit_convert_to = {});
 
+  // ⭐ THE ONE EXCEPTION TO "ZERO TOKENS MEANS THE CONSTRUCT WAS DROPPED", and
+  // it exists because ONE model has a legitimate deferred-emission protocol.
+  //
+  // `Convert(Expr*, ...)`'s empty-emission guard substitutes
+  // `Cpp2RustUnmappedExpr_<StmtClass>` whenever a sub-expression contributes no
+  // text, on the correct reasoning that the caller is about to splice nothing
+  // into a position that syntactically requires an expression. The refcount
+  // model breaks that equivalence: `pending_deref_` means "I converted this
+  // lvalue into a `Ptr<T>` string and handed it to my CALLER to spell, because
+  // a `Ptr` has no mutable place expression in this model". Zero tokens there is
+  // the protocol working, not a dropped construct.
+  //
+  // ⛔ NARROW BY CONSTRUCTION, TWO WAYS. (1) The base returns `false`
+  // unconditionally, so the unsafe leg cannot change — the byte-identical
+  // control for a refcount-only row holds by construction, not by measurement.
+  // (2) The refcount override returns true only while a caller that WILL consume
+  // the slot has opted in (`PushDeferredReceiver`), so a `pending_deref_` left
+  // set by anything else still produces the loud placeholder exactly as before.
+  // Without (2) this would trade a loud `E0425` for a missing receiver, i.e. a
+  // parse error, which is strictly worse.
+  virtual bool HasDeferredEmission() const { return false; }
+
   virtual std::string GetDefaultAsString(clang::QualType qual_type);
 
   virtual std::string GetArrayDefaultAsString(clang::QualType qual_type);

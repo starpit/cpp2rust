@@ -1264,12 +1264,28 @@ bool ConverterRefCount::VisitCallExpr(clang::CallExpr *expr) {
 
   std::optional<TempMaterializationCtx> ctx;
   std::string str;
+  // Saved and restored, not just cleared: this call may itself be an ARGUMENT of
+  // an outer unmapped mutating member call whose receiver is already parked here.
+  std::string outer_deferred_receiver = std::move(deferred_receiver_ptr_);
+  deferred_receiver_ptr_.clear();
+  const clang::Expr *outer_deferred_callee = deferred_receiver_callee_;
+  deferred_receiver_callee_ =
+      GetCallee(expr) != nullptr ? GetCallee(expr)->IgnoreParenImpCasts()
+                                : nullptr;
   {
     PushConversionKind push(*this, ConversionKind::Unboxed);
     Buffer buf(*this);
     ctx = Converter::ConvertCallExpr(expr);
     str = std::move(buf).str();
   }
+  if (!deferred_receiver_ptr_.empty()) {
+    // `VisitMemberExpr` spelled the receiver `__v` and handed us the `Ptr<T>`;
+    // close the closure now that the argument list is in `str`. See the long
+    // comment at the top of that branch for why this shape and not another.
+    str = std::format("{}.with_mut_ref(|__v| {})", deferred_receiver_ptr_, str);
+  }
+  deferred_receiver_ptr_ = std::move(outer_deferred_receiver);
+  deferred_receiver_callee_ = outer_deferred_callee;
 
   auto ty = GetReturnTypeOfFunction(expr);
   auto ref = clang::dyn_cast<clang::ReferenceType>(ty);
@@ -1980,8 +1996,80 @@ bool ConverterRefCount::VisitMemberExpr(clang::MemberExpr *expr) {
       base_type = base_type->getPointeeType();
     }
     bool needs_mut = NeedsMutAccess(method, base_type);
-    PushExprKind push(*this, needs_mut ? ExprKind::LValue : ExprKind::RValue);
-    Converter::ConvertMemberExpr(expr);
+    if (!needs_mut) {
+      PushExprKind push(*this, ExprKind::RValue);
+      Converter::ConvertMemberExpr(expr);
+      SetFreshType(expr->getType());
+      return false;
+    }
+
+    // ⭐⭐ THE UNMAPPED MUTATING MEMBER CALL ON A `Ptr<T>` RECEIVER. Measured on
+    // the goal TU `dxp/dxp_standalone.cpp`, 2026-09-30: 23 of its 114 refcount
+    // rustc errors, and ZERO of its 75 unsafe ones, were
+    // `E0425 cannot find value Cpp2RustUnmappedExpr_{DeclRefExpr,
+    // CXXMemberCallExpr}` standing in the RECEIVER position of
+    // `.at_usize(..)` / `.resize_usize(..)` / `.push_back_<mangled>(..)`.
+    //
+    // WHY ONLY REFCOUNT, AND WHY ONLY A MUTATING METHOD -- the discriminator is
+    // inside this very branch. `needs_mut` decides the kind the base is converted
+    // in. On the RValue side (a const method) the base's visitor ends in
+    // `StrCat(DerefPtrExpr(..))`, and `coord.size()` duly came out as
+    // `(*coord.upgrade().deref()).size()`. On the LValue side every one of those
+    // visitors -- `VisitDeclRefExpr` (:935), `VisitCallExpr` (:1291),
+    // `VisitMemberExpr` (:2019) -- instead calls `pending_deref_.set(..)` and
+    // RETURNS WITHOUT EMITTING, because `Ptr<T>` has no MUTABLE place expression
+    // in this model: `StrongPtr::deref()` yields `Ref<'_, T>`, there is no
+    // `deref_mut`, and the only mutable access is the closure form
+    // `Ptr::with_mut{,_ref}`. `pending_deref_` is consumed by `EmitSetOrAssign`,
+    // by `ConvertIncAndDec` and by `ConvertMappedMethodCall` -- i.e. only when the
+    // member HAS a rule key. For an unmapped member nothing consumed it, the base
+    // contributed no text, and `Convert(Expr*)`'s empty-emission guard papered
+    // over the hole with the placeholder. The unsafe leg cannot have the defect:
+    // there a reference is a raw pointer and `(*coord)` is already a mutable
+    // place, which is exactly what `head.unsafe.rs` emits at all 23 sites.
+    //
+    // ⭐ THE SHAPE IS NOT INVENTED: it is byte-for-byte the one
+    // `ConvertMappedMethodCall` (:4034) already emits for the MAPPED case,
+    // `{ptr}.with_mut(|__v: {ty}| __v{body})`. Two deliberate differences.
+    // (1) `with_mut_ref`, not `with_mut`: `with_mut` is `where T: ByteRepr` and
+    // these pointees are `Vec<_>`; `with_mut_ref` is the bound-free twin,
+    // identical on all six `Stack*`/`Heap*` kinds (`rc.rs`). (2) NO type
+    // annotation on `__v`: `with_mut_ref` is `impl FnOnce(&mut T) -> R` on
+    // `Ptr<T>`, so `T` is already pinned by the receiver and inference is not
+    // asked to solve anything -- which also sidesteps the measured trap that a
+    // defaulted template parameter in type position is not an inference variable.
+    //
+    // ⛔ WHAT THIS DOES **NOT** FIX, AND MUST NOT BE READ AS FIXING: the METHOD
+    // NAME. `at_usize`/`resize_usize`/`push_back_*` are `MapFunctionName`'s
+    // literal-C++ fallback for a member with no rule key (`std::deque<T1>::at`,
+    // `::resize`, and `std::vector<const FoldFunction<T>*>::push_back` are all
+    // unkeyed in `ir/goalHEAD`), and they stay exactly as they were. The receiver
+    // stops being a fabricated undefined name; the missing key stays loud, as its
+    // own row. This trades an `E0425` on text the converter invented for an
+    // `E0599` on the real C++ member name, which is the strictly more
+    // attributable of the two and is the ONLY honest answer available without a
+    // rules key.
+    const bool may_defer = (deferred_receiver_callee_ == expr);
+    std::string call_text;
+    {
+      Buffer buf(*this);
+      PushExprKind push(*this, ExprKind::LValue);
+      std::optional<PushDeferredReceiver> defer;
+      if (may_defer) {
+        defer.emplace(*this);
+      }
+      Converter::ConvertMemberExpr(expr);
+      call_text = std::move(buf).str();
+    }
+    if (may_defer && !pending_deref_.empty()) {
+      // The base emitted no text and handed us its `Ptr<T>`; `call_text` is
+      // therefore just `. <method>`. Spell the closure parameter as the receiver
+      // and let VisitCallExpr close the closure once the argument list is in.
+      deferred_receiver_ptr_ = pending_deref_.take();
+      StrCat("__v", call_text);
+    } else {
+      StrCat(call_text);
+    }
     SetFreshType(expr->getType());
     return false;
   }

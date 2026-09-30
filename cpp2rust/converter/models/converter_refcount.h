@@ -211,6 +211,25 @@ public:
     return result;
   }
 
+  // See `Converter::HasDeferredEmission`. `deferred_receiver_depth_` is the
+  // opt-in: only a caller that is about to CONSUME `pending_deref_` raises it,
+  // so an unconsumed slot anywhere else still reaches the loud placeholder.
+  bool HasDeferredEmission() const override {
+    return deferred_receiver_depth_ > 0 && !pending_deref_.empty();
+  }
+
+  // Scope during which the receiver of an UNMAPPED mutating member call is being
+  // converted. Inside it, and only inside it, a `Ptr`-valued lvalue is allowed to
+  // emit no text and leave `pending_deref_` for `VisitMemberExpr` to spell.
+  struct PushDeferredReceiver {
+    ConverterRefCount &c;
+    explicit PushDeferredReceiver(ConverterRefCount &c) : c(c) {
+      ++c.deferred_receiver_depth_;
+    }
+    ~PushDeferredReceiver() { --c.deferred_receiver_depth_; }
+    PushDeferredReceiver(const PushDeferredReceiver &) = delete;
+  };
+
   void ConvertVarInit(clang::QualType qual_type, clang::Expr *expr) override;
 
   std::string ConvertVarInitValue(clang::QualType qual_type, clang::Expr *expr);
@@ -473,5 +492,25 @@ private:
     bool pointee_is_boxed = false;
     bool ptr_is_fresh = false;
   } pending_deref_{computed_expr_type_};
+
+  // > 0 while converting the receiver of an unmapped mutating member call; see
+  // `PushDeferredReceiver` and `HasDeferredEmission`.
+  unsigned deferred_receiver_depth_ = 0;
+
+  // Set by `VisitMemberExpr` when the receiver of an unmapped mutating member
+  // call came back as a `Ptr<T>` in `pending_deref_` rather than as text: the
+  // `Ptr` expression that the enclosing `VisitCallExpr` must wrap the whole call
+  // in. Empty means "nothing to wrap". Saved and restored around the call
+  // emission so a nested unmapped mutating call in an ARGUMENT cannot steal it.
+  std::string deferred_receiver_ptr_;
+
+  // The exact callee expression the enclosing `VisitCallExpr` generic arm is
+  // about to convert, and therefore the ONLY `MemberExpr` allowed to defer its
+  // receiver. Without this identity check a `MemberExpr` reached from any other
+  // caller (an operator-call arm, a hoisted argument) could park a receiver that
+  // nothing wraps, leaving a bare undefined `__v` -- a fabricated name, i.e. the
+  // exact failure this row exists to remove. With it, every other path behaves
+  // byte-for-byte as before.
+  const clang::Expr *deferred_receiver_callee_ = nullptr;
 };
 } // namespace cpp2rust

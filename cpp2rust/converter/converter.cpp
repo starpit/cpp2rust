@@ -4603,7 +4603,7 @@ bool Converter::Convert(clang::Expr *expr,
   // error alone, with no converter rerun.
   const size_t before = rs_code_->size();
   bool result = TraverseStmt(expr);
-  if (expr && rs_code_->size() == before) {
+  if (expr && rs_code_->size() == before && !HasDeferredEmission()) {
     const std::string loc =
         expr->getBeginLoc().printToString(ctx_.getSourceManager());
     std::string detail = std::string("no Rust expression text for ") +
