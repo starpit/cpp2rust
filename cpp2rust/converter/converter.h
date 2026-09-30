@@ -241,8 +241,19 @@ public:
 
   virtual bool VisitContinueStmt(clang::ContinueStmt *stmt);
 
+  // `fmt_width` / `fmt_fill` / `fmt_left` are the WIDTH, FILL and ADJUSTFIELD
+  // of the `<<` chain being lowered -- `std::setw` / `std::setfill` /
+  // `std::left`-`std::right`.  `datum_follows` says whether a formattable
+  // operand still comes AFTER this one in the same chain; a manipulator is
+  // consumed only when one does, so `os << std::setfill('0');` on its own keeps
+  // reaching the loud/unmapped path instead of silently evaporating.  Row g3098.
+  // `fmt_padded` / `fmt_sticky` (row g3113) are the two facts the CALLER needs to
+  // decide whether a consumed sticky manipulator was actually honoured: did this
+  // chain spend a width on a field, and did it set `setfill`/`left`/`right`.
   bool GetFmtArg(clang::Expr *arg, std::string &fmt, std::string &fmt_args,
-                 const char *&fmt_trait, std::string &fmt_width);
+                 const char *&fmt_trait, std::string &fmt_width,
+                 std::string &fmt_fill, bool &fmt_left, bool datum_follows,
+                 bool &fmt_padded, std::string &fmt_sticky);
 
   bool GetRawArg(clang::Expr *arg, std::string &raw_args);
 

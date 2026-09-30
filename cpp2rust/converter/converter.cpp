@@ -4731,9 +4731,154 @@ std::string Converter::EscapeFmtBraces(std::string_view text) {
   return out;
 }
 
+// The OUTPUT manipulators, matched on the printed signature of the operand.
+//
+// ⛔⛔ THE SPELLING IS ANCHORED WITH `std::` AND `(`, AND BOTH HALVES ARE A FIX.
+// This test used to be `arg_str.contains("Setw")` -- capital S, unanchored --
+// and it was wrong in BOTH directions, measured 2026-09-29 (row g3098):
+//   * DEAD for its intended input.  `Mapper::ToString` of `std::setw(w)` is
+//     `std::__iom_t6 std::setw(int)`; nothing in the corpus ever produces the
+//     substring `Setw`, so EVERY ONE of the 380 `std::setw` sites (38 files)
+//     fell through to the generic datum arm and the width INTEGER was printed
+//     as a field -- `oss << std::setw(width)` became `write!(.., "{:}", width)`.
+//     That type-checks (measured: `i32` satisfies `Display`), so it is a SILENT
+//     wrong answer no census in this harness can see.
+//   * A FALSE POSITIVE for an unrelated one.  `PrintUtil::printSetwithQuotes`
+//     CONTAINS `Setw`, so `out << "[" << PrintUtil::printSetwithQuotes(data)`
+//     had its argument swallowed as a width and never printed at all.
+//     ⛔ CORRECTED BY MEASUREMENT (row g3113): the MECHANISM is real -- a probe
+//     with an `int`-returning `printSetwithQuotes` printed `[]` where clang
+//     prints `[14]`, byte-diffed under toolchain/shim4/clang++
+//     (verif/g3113/osrow_setwfp.cpp) -- but the THREE CORPUS SITES this comment
+//     named (util/foldManager/foldInfrastructure.h:2697,
+//     perfdsc/quantaCollection.h:165, dsm/.../dwsrsAct2.cpp:675) ARE NOT
+//     AFFECTED.  All 8 corpus `printSetwithQuotes(` call sites return
+//     `std::string`, which reaches a different arm of GetFmtArg entirely:
+//     anchored count of `printSetwithQuotes_[0-9]+` in the emitted Rust is
+//     4 (dsc/dims.cpp) and 8 (dsc/dataOpDsc.cpp) and is IDENTICAL before and
+//     after this row.  ⭐ The general lesson, again: a mechanism demonstrated on
+//     a probe is not a site count on the corpus.
+// ⭐ Same family as the `==`-not-`in` one-character check and the load-bearing
+// `;` in `extern crate libc;`: a substring match on an identifier is not an
+// identifier match.
+static bool IsOstreamManip(const std::string &arg_str, std::string_view name) {
+  return arg_str.contains(std::string("std::").append(name).append("(")) ||
+         arg_str.contains(std::string("std::__1::").append(name).append("("));
+}
+
+// Does a formattable operand still come after `i` in this chain?  Used to keep
+// a manipulator LOUD when nothing in its own statement can carry its effect:
+// the width/fill/adjustfield state this lowering keeps is per-`<<`-CHAIN, so a
+// manipulator with no following datum has nowhere to go and must NOT be
+// swallowed.  Conservative by construction -- it says "yes" for anything it
+// does not recognise as a manipulator, so it can only ever refuse to consume.
+// ⛔⛔ "A DATUM FOLLOWS" IS NOT ENOUGH -- IT MUST BE A DATUM THAT THIS LOWERING
+// CAN PAD, and getting that wrong turns a LOUD site into a SILENT one.  Measured
+// on dsc/sdsc-perfmodel/perfmodel.cpp: `printElement<const char *>` is
+// `oss << std::left << std::setw(width) << std::setfill(' ') << t` with `t` a
+// raw `char *`, which GetFmtArg REFUSES (it goes to GetRawArg/`write_all`, since
+// assuming UTF-8 would panic where C++ writes bytes).  A first cut of this
+// function said "yes, a datum follows", so the three manipulators were consumed,
+// the width had nothing to spend itself on, and the emitted Rust printed the
+// datum UNPADDED -- whereas BEFORE this row it emitted `Some(left_166)`, which
+// is an `Option<fn>` and does not implement Display, i.e. a compile error the
+// caller could see.  Trading E0277 for a wrong string is a regression even
+// though it makes more code compile.  So the predicate below mirrors the arms of
+// GetFmtArg exactly: only an ASCII string literal, a char literal, or a
+// non-char/non-raw-pointer/non-`Vec<char>` value can carry a field, and anything
+// else leaves the manipulators on the old, loud path.
+// ⛔⛔ THAT LAST CLAUSE WAS MEASURED FALSE -- see OstreamManipName below. The
+// "old path" for `std::setw` is the GENERIC DATUM ARM, which PRINTS the width;
+// only `std::left`/`std::right` were loud, and only by accident. Row g3113.
+static bool OstreamDatumFollows(const std::vector<clang::Expr *> &args, size_t i,
+                                const std::string &vec_char_type) {
+  for (size_t j = i + 1; j < args.size(); ++j) {
+    clang::Expr *a = args[j];
+    std::string s = Mapper::ToString(a);
+    if (IsOstreamManip(s, "setw") || IsOstreamManip(s, "setfill") ||
+        IsOstreamManip(s, "left") || IsOstreamManip(s, "right") ||
+        s.contains("std::hex") || s.contains("std::dec") ||
+        s.contains("std::flush")) {
+      continue;
+    }
+    if (auto *lit = clang::dyn_cast<clang::StringLiteral>(a->IgnoreImplicit()))
+      return IsAsciiStringLiteral(lit); // same test the literal arm uses
+    if (clang::isa<clang::CharacterLiteral>(a->IgnoreImplicit()))
+      return true; // paddable by the char-literal arm
+    return !a->getType()->isCharType() && !IsRawCharPointer(a) &&
+           Mapper::Map(a->getType()) != vec_char_type;
+  }
+  return false;
+}
+
+// The OUTPUT manipulators this lowering knows how to spend, by name, or "" for
+// anything else.  ⛔⛔ THE PREDICATE ABOVE IS NOT ENOUGH ON ITS OWN AND THE
+// COMMENT ABOVE WAS MEASURED WRONG (row g3113): it says an unconsumed
+// manipulator is "left on the old, loud path", but the old path for `std::setw`
+// is the GENERIC DATUM ARM, which prints the WIDTH INTEGER as a field.  Measured
+// end to end with toolchain/shim4/clang++ on verif/g3113/osrow_silent.cpp
+// (`oss << std::setw(8) << std::setfill(' ') << s` with `s` a raw `char *`, i.e.
+// exactly `printElement<const char *>` minus the `std::left`):
+//     clang                                  `     abc|`
+//     the g3098 lowering, COMPILES and runs  `832abc|`
+// -- the width `8` and the fill `' '` (as the `libc::c_char` 32) printed as DATA.
+// The only reason `perfmodel.cpp`'s own site looks loud is that `std::left`
+// happens to hit the NDEBUG MapFunctionName fallback and emit the undefined bare
+// name `left_166`; that is HARNESS-COMMON §9's silent class 1 firing by
+// ACCIDENT, not a design.  Drop the `std::left` and the site compiles and lies.
+// ⭐ And the same measurement refutes the claim in the other direction too: with
+// `rules/iomanip` f2 landed, `std::setfill` no longer emits
+// `Cpp2RustUnmappedFn_setfill_N`, so f2 CONVERTS A LOUD SITE INTO A SILENT ONE
+// -- the "a type key with no method key is strictly worse than no key at all"
+// pattern, one layer over.  One-factor control: same AFTER binary, ir/goalHEAD
+// (no f2) -> E0425; ir/g3113 (f2) -> compiles and prints `832abc|`.
+static std::string_view OstreamManipName(const std::string &arg_str) {
+  for (std::string_view n : {"setw", "setfill", "left", "right"}) {
+    if (IsOstreamManip(arg_str, n)) {
+      return n;
+    }
+  }
+  return {};
+}
+
+// A manipulator whose effect this lowering cannot carry, emitted as an UNDEFINED
+// NAME so it is an `E0425` at rustc rather than a wrong string at runtime.
+// ⭐ This is deliberately the `Cpp2RustUnmapped*` family (HARNESS-COMMON §9's
+// *detectable* class) and NOT `todo!`/`unimplemented!`/`UNSUPPORTED`: Rule 2's
+// gate is exactly those three spellings (pin/no-placeholders.sh:46), and an
+// undefined name keeps the rest of a 2 MB TU emitting instead of turning one bad
+// `<<` chain into a whole-TU translate-time abort.  It also restores exactly the
+// loudness the site had BEFORE row g3098, so it adds no gate: measured on
+// verif/g3113/osrow_silent.cpp, BEFORE = E0425, g3098 = silent, g3113 = E0425.
+static std::string OstreamUnhonouredManip(std::string_view name) {
+  return std::format("Cpp2RustUnmappedManip_{}", name);
+}
+
+// One padded field, as a `write!` ARGUMENT (the format string gets a plain
+// `{:}` for it).  `body` is a `format_args!(...)` expression carrying whatever
+// the operand formats to; `libcc2rs::ostream_field` then applies C++'s own
+// padding rules to that text.  Shared by the datum arm and by the two LITERAL
+// arms, which is the whole point: a literal operand under a pending `setw` must
+// be padded exactly like a datum.
+static std::string OstreamPaddedField(std::string body,
+                                      const std::string &fmt_width,
+                                      const std::string &fmt_fill,
+                                      bool fmt_left) {
+  return std::format(
+      "libcc2rs::ostream_field({}, ({}) as usize, {}, {}), ", std::move(body),
+      fmt_width,
+      // A C++ `char` is `libc::c_char`/`u8` depending on the model, so the fill
+      // goes through `as u8 as char` rather than being assumed a Rust `char`.
+      fmt_fill.empty() ? std::string("' '")
+                       : std::format("((({}) as u8) as char)", fmt_fill),
+      fmt_left ? "true" : "false");
+}
+
 bool Converter::GetFmtArg(clang::Expr *arg, std::string &fmt,
                           std::string &fmt_args, const char *&fmt_trait,
-                          std::string &fmt_width) {
+                          std::string &fmt_width, std::string &fmt_fill,
+                          bool &fmt_left, bool datum_follows,
+                          bool &fmt_padded, std::string &fmt_sticky) {
   std::string arg_str = Mapper::ToString(arg);
   if (auto *str_lit =
           clang::dyn_cast<clang::StringLiteral>(arg->IgnoreImplicit())) {
@@ -4741,34 +4886,112 @@ bool Converter::GetFmtArg(clang::Expr *arg, std::string &fmt,
       return false;
     }
     auto str = GetEscapedStringLiteral(arg);
-    std::string_view trim(str);
-    // Delete " from string
-    trim.remove_prefix(1);
-    trim.remove_suffix(1);
-    // LITERAL text, so braces must be doubled. `trim` is already backslash-
-    // escaped, which is orthogonal: a `{` in it is a real brace either way.
-    fmt += EscapeFmtBraces(trim);
+    if (!fmt_width.empty()) {
+      // ⭐⭐ A STRING LITERAL IS A FORMATTED OUTPUT OPERATION TOO, AND THIS ARM
+      // IS WHERE THE FIRST CUT OF THIS ROW WAS WRONG -- caught by the probe's
+      // byte comparison against clang and by nothing else.  `os << std::setw(8)
+      // << "abc"` must print `     abc`, but a literal operand is normally
+      // FOLDED INTO THE FORMAT STRING, where a pending width can never reach it:
+      // 4 of the 5 probe lines matched and this one printed `abc|` against
+      // clang's `     abc|`.  With a width pending the literal is promoted to a
+      // real `{:}` ARGUMENT so the padding applies.
+      fmt += "{:}";
+      fmt_args += OstreamPaddedField(std::format("format_args!(\"{{}}\", {})", str),
+                                     fmt_width, fmt_fill, fmt_left);
+      fmt_width.clear(); // setw is ONE-SHOT.
+      fmt_padded = true;
+    } else {
+      std::string_view trim(str);
+      // Delete " from string
+      trim.remove_prefix(1);
+      trim.remove_suffix(1);
+      // LITERAL text, so braces must be doubled. `trim` is already backslash-
+      // escaped, which is orthogonal: a `{` in it is a real brace either way.
+      fmt += EscapeFmtBraces(trim);
+    }
   } else if (auto ch = GetEscapedUTF8CharLiteral(arg); !ch.empty()) {
-    // `os << '{'` is literal text too.
-    fmt += EscapeFmtBraces(ch);
+    if (!fmt_width.empty()) {
+      // Same promotion as the string-literal arm above; `os << '{'` is literal
+      // text only while no width is pending.
+      fmt += "{:}";
+      fmt_args += OstreamPaddedField(std::format("format_args!(\"{{}}\", \"{}\")", ch),
+                                     fmt_width, fmt_fill, fmt_left);
+      fmt_width.clear();
+      fmt_padded = true;
+    } else {
+      // `os << '{'` is literal text too.
+      fmt += EscapeFmtBraces(ch);
+    }
   } else if (arg_str.contains("std::endl")) {
     fmt += "\\n";
   } else if (arg_str.contains("std::hex")) {
     fmt_trait = "x";
   } else if (arg_str.contains("std::dec")) {
     fmt_trait = "";
-  } else if (arg_str.contains("Setw")) {
-    fmt_width = Trim(ToString(arg));
+  } else if (auto manip = OstreamManipName(arg_str); !manip.empty()) {
+    if (!datum_follows) {
+      // ⛔⛔ NOT A FALL-THROUGH.  Row g3113: letting an unspendable manipulator
+      // reach the generic datum arm below PRINTS IT -- `std::setw(8)` becomes the
+      // field `8`, `std::setfill(' ')` becomes `32`.  Measured against clang:
+      // `     abc|` vs `832abc|`.  Emit an undefined name instead.
+      fmt += "{:}";
+      fmt_args += OstreamUnhonouredManip(manip) + ", ";
+    } else if (manip == "setw") {
+      // `Trim(ToString(arg))` is the RUST EXPRESSION for the width, which is why
+      // `rules/iomanip` f1 (`std::setw(int) -> int`, the identity) is
+      // LOAD-BEARING rather than the silent-wrongness bug it looks like: it is
+      // what turns `std::setw(width)` into the operand `width`.  The bug was
+      // never the rule, it was that nothing here consumed the value AS A WIDTH.
+      fmt_width = Trim(ToString(arg));
+    } else {
+      // ⭐⭐ THE STICKY THREE.  In C++ `setfill` and `left`/`right` persist on the
+      // STREAM OBJECT; this lowering keeps them per-`<<`-CHAIN.  So consuming one
+      // is only sound if this chain also SPENDS a width -- otherwise the operand
+      // is silently DISCARDED and its effect on a later statement is lost.
+      // Measured (verif/g3113/osrow_sticky2.cpp, both models, both with and
+      // without f2): `oss << std::setfill('0') << 1; oss << std::setw(5) << 42;`
+      // printed `   42|` where clang prints `00042|`.  `fmt_sticky` records the
+      // name so ConvertCallToOstream can be loud when no padded field appears.
+      if (manip == "setfill") {
+        // `rules/iomanip` f2 is the matching identity for the fill CHARACTER.
+        fmt_fill = Trim(ToString(arg));
+      } else {
+        fmt_left = (manip == "left");
+      }
+      if (fmt_sticky.empty()) {
+        fmt_sticky = std::string(manip);
+      }
+    }
   } else if (!arg->getType()->isCharType() && !IsRawCharPointer(arg) &&
              Mapper::Map(arg->getType()) !=
                  std::format("Vec<{}>", CharRustType())) {
-    fmt += ("{:" + fmt_width + fmt_trait + "}");
-    fmt_width.clear(); // Reset setw after first usage
-    arg_str = ToString(arg);
+    std::string value_str = ToString(arg);
     if (arg->getType()->isBooleanType()) {
-      arg_str = std::format("({} as u8)", std::move(arg_str));
+      value_str = std::format("({} as u8)", std::move(value_str));
     }
-    fmt_args += std::move(arg_str) + ", ";
+    if (fmt_width.empty()) {
+      // NO WIDTH IN EFFECT -- emit exactly what this function always emitted, so
+      // every site without a `std::setw` is BYTE-IDENTICAL to before.
+      fmt += std::format("{{:{}}}", fmt_trait);
+      fmt_args += std::move(value_str) + ", ";
+    } else {
+      // ⛔ THE RUST WIDTH SPEC CANNOT BE USED HERE AND THAT IS MEASURED, NOT
+      // STYLISTIC.  `"{:" + fmt_width + "}"` -- what this code did when its
+      // `Setw` test was live -- is only valid Rust when the width is a LITERAL:
+      // `std::setw(w)` would emit `{:w}`, which is not a format spec at all.
+      // And even for a literal, `{:8}` LEFT-aligns a `&str` while C++ pads on
+      // the LEFT by default for every type, so the Rust spec's per-type default
+      // adjustfield is wrong for exactly the table-formatting sites this
+      // family appears in.  `libcc2rs::ostream_field` takes the width as an
+      // ordinary runtime value and applies C++'s own rules (pad to width with
+      // fill, NEVER truncate, `left` pads right).
+      fmt += "{:}";
+      fmt_args += OstreamPaddedField(
+          std::format("format_args!(\"{{:{}}}\", {})", fmt_trait, value_str),
+          fmt_width, fmt_fill, fmt_left);
+      fmt_width.clear(); // setw is ONE-SHOT: consumed by this field.
+      fmt_padded = true;
+    }
   } else {
     return false;
   }
@@ -5024,6 +5247,25 @@ void Converter::ConvertCallToOstream(clang::CallExpr *expr) {
   std::string fmt;
   const char *fmt_trait = "";
   std::string fmt_width;
+  // FILL and ADJUSTFIELD, alongside the width. ⚠️ ALL THREE ARE PER-CHAIN, NOT
+  // STICKY ACROSS STATEMENTS, and that is a stated PARTIAL: in C++ `setfill` and
+  // `left`/`right` persist on the stream object until changed, while `setw` is
+  // one-shot. Row g3098 claimed OstreamDatumFollows kept the cross-statement case
+  // loud; row g3113 MEASURED THAT CLAIM FALSE (verif/g3113/osrow_sticky2.cpp,
+  // byte diff vs clang: `   42|` for clang's `00042|`, in BOTH models) and made
+  // the sound half of it loud instead -- see fmt_sticky below.
+  std::string fmt_fill;
+  bool fmt_left = false;
+  // Row g3113. `fmt_padded` = this chain actually SPENT a width on a field;
+  // `fmt_sticky` = the name of the first `setfill`/`left`/`right` this chain
+  // consumed. A chain that sets sticky state and never spends a width has
+  // DISCARDED that operand -- in C++ it would still be in effect for the next
+  // statement -- so it must not vanish. `Cpp2RustUnmappedManip_<name>` is
+  // emitted instead, which is exactly as loud as the pre-g3098 behaviour
+  // (`std::left` -> `Some(left_N)`, `std::setfill` -> `Cpp2RustUnmappedFn_
+  // setfill_N`, both E0425/E0277), so this adds no gate and removes a silent one.
+  bool fmt_padded = false;
+  std::string fmt_sticky;
   std::string fmt_args;
   std::string raw_args;
   std::string stream_str = ConvertStream(stream);
@@ -5072,7 +5314,12 @@ void Converter::ConvertCallToOstream(clang::CallExpr *expr) {
       continue;
     }
     while (i < arg_count && !IsStreamFlush(args[i]) &&
-           GetFmtArg(args[i], fmt, fmt_args, fmt_trait, fmt_width))
+           GetFmtArg(args[i], fmt, fmt_args, fmt_trait, fmt_width, fmt_fill,
+                     fmt_left,
+                     OstreamDatumFollows(args, i,
+                                         std::format("Vec<{}>",
+                                                     CharRustType())),
+                     fmt_padded, fmt_sticky))
       ++i;
     write_fmt_args();
     while (i < arg_count && !IsStreamFlush(args[i]) &&
@@ -5085,6 +5332,16 @@ void Converter::ConvertCallToOstream(clang::CallExpr *expr) {
     if (i == start) {
       break;
     }
+  }
+
+  // Row g3113. The sticky state this chain set was never spent on a field, so it
+  // was DISCARDED -- and in C++ it would still be in effect for the next
+  // insertion on this stream. Be loud, at the same level the site was loud at
+  // before row g3098 (an undefined name, E0425 at rustc), rather than silently
+  // dropping the operand. ⛔ This is NOT a Rule-2 placeholder: the gate is
+  // `unimplemented!|todo!|UNSUPPORTED` (pin/no-placeholders.sh:46).
+  if (!fmt_sticky.empty() && !fmt_padded) {
+    StrCat(OstreamUnhonouredManip(fmt_sticky), ";");
   }
 
   if (value_used) {
