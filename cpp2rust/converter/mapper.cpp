@@ -590,6 +590,128 @@ std::string MaskOperatorNameBrackets(const std::string &str) {
   return out;
 }
 
+// ⭐⭐ THE CONST-PLACEMENT DEAD-KEY CLASS. `matchTemplate` is purely TEXTUAL, so
+// a key whose recorded src spells the literal `const` IMMEDIATELY BEFORE a
+// placeholder -- `push_back(const T1 &)`, `const T1 & …at(unsigned long) const`,
+// `…::at(const T1 &)` -- can never match an instantiation whose element type is a
+// POINTER, because clang writes TOP-LEVEL const to the RIGHT of the star:
+// `X *const &`, never `const X *&`. `const T1 &` with T1 = `X *` would have to
+// print as `const X * &`, and clang prints `X *const &`.
+//
+// MEASURED (g3109, goal TU `dxp__dxp_standalone.cpp`, unsafe leg, `-verbose`
+// `search expr` lines): of 379 distinct missing signatures, **17 signatures / 150
+// occurrences** are this class, and EVERY ONE of the 17 contains ` *const `:
+// 10 `push_back` (vector 6, deque 4), 3 `std::vector::at() const`, and
+// `std::map<const SenPcfgNode *, SenPcfgNode *>::{at,count,operator[]}`.
+// ⭐ The NEGATIVE half of that measurement is what makes this a diagnosis rather
+// than a guess: the `&&` overloads (`push_back(X *&&)` -> vector f14) and the
+// NON-const `at` (`X *& …at(unsigned long)` -> vector f7) HIT on the very same
+// element types. So a pointer element is NOT the barrier and the missing space in
+// ` *&` is NOT the barrier -- only the const placement is.
+//
+// ⛔ THIS CANNOT BE FIXED IN THE RULES LAYER, and that is measured, not argued.
+// The obvious sibling key `void std::vector<T1 *>::push_back(T1 *const &)` DOES
+// match and DOES drive the miss count to zero, but its `T1` binds the POINTEE, so
+// the target has to spell the pointer itself -- and a rule can only write
+// `*mut T1` / `Ptr<T1>`, while the converter models a pointer to a POLYMORPHIC
+// pointee as `PtrDyn<dyn X_Virtual>`, which every corpus site here is. `PtrDyn`
+// appears in 0 of 93 `rules/*/tgt_*.rs`. Proved with the project rustc against the
+// real libcc2rs rlib (g3108): `Vec<Ptr<Plain>>` + `as Ptr<Vec<Ptr<Plain>>>`
+// compiles; `Vec<PtrDyn<dyn FF_Virtual>>` + `as Ptr<Vec<Ptr<FF>>>` gives
+// `E0277 AsPointer not satisfied`. The fix must keep `T1` bound to the POINTER,
+// which only the matcher can do.
+//
+// ⛔⛔ AND IT CANNOT BE FIXED IN `cpp-rule-preprocessor` EITHER, which is where
+// ROW g3109 expected it to live. A sibling src spelling needs a sibling KEY NAME,
+// `ir_src.json` is a flat name -> spelling map, and the TARGET side of that name
+// is written by the Rust `rule-preprocessor` from `tgt_*.rs`, which never reads
+// `ir_src.json` and asserts that fn keys are CONSECUTIVE `f1..fN`
+// (`rule-preprocessor/src/ir.rs:32 validate_consecutive_keys`). A src key with no
+// target entry is a FATAL load error (`<key> is in ir_src.json but in no IR
+// target`). So the only layer that can host this is the shared matcher -- which is
+// `cpp2rust_core`, linked into BOTH `cpp2rust` and `cpp-rule-preprocessor`.
+//
+// ⛔ THE THREE TYPES STAY DISTINCT, and here is exactly how. `const X &`,
+// `X *const &` (const POINTER) and `const X *&` / `X const *&` (const POINTEE) are
+// three different types and a normalisation that merged the last two would
+// silently lose constness. This rotation does not merge anything, because:
+//   * it rewrites the KEY, never the instantiated text, so nothing a placeholder
+//     captures is ever altered -- `T1` is captured verbatim out of the real
+//     signature and keeps every `const` the pointee had;
+//   * the rotated key still demands a LITERAL top-level `const` token AFTER the
+//     capture. `const X &` has none there (the rotated form does not match it, the
+//     as-recorded key does, `T1` = `X`); `X *const &` has one (only the rotated
+//     form matches, `T1` = `X *` -- the POINTER, which is the whole point);
+//     `const X *const &` matches with `T1` = `const X *`, pointee-const intact;
+//     and `const X *&`, which is a REFERENCE TO A MUTABLE pointer, has no
+//     top-level `const` and so is NOT matched by the rotated form at all.
+//   * and `search()` tries it ONLY after the as-recorded src has already MISSED,
+//     preferring any as-recorded match over any rotated one. So no lookup that
+//     succeeds today can change its answer -- the change is strictly additive.
+//
+// ⚠️ PRE-EXISTING, NOT INTRODUCED HERE, and left alone deliberately: because
+// `matchTemplate` lets a placeholder swallow a trailing `const`, the as-recorded
+// key `const T1 &` ALREADY matches `const X *const &` with `T1` = `X *const`, and
+// `T1 &` already matches `X *const &` with `T1` = `X *const` (measured: the HIT
+// `void std::pair<T1, T2>::pair(T3 &, T4 &)` against
+// `pair(FoldFunction<long> *const &, int &&)`). Those captures carry a C++ `const`
+// into a type-map lookup. Rowed separately; this function must not change them,
+// which is why the rotation is a fallback and not a normalisation.
+//
+// Returns `src` with each `const <placeholder>` run rewritten to
+// `<placeholder> const`, or `src` unchanged when there is no such run (the caller
+// uses that equality as its "nothing to retry" test). 148 of the 2,143 src keys in
+// a 99-module tree contain a `const T<N>` run.
+std::string RotateConstBeforePlaceholder(const std::string &src) {
+  constexpr std::string_view kConst = "const";
+  std::string out;
+  out.reserve(src.size());
+  size_t i = 0;
+  while (i < src.size()) {
+    // `const` must be a whole token, not the tail of an identifier.
+    const bool at_const =
+        src.compare(i, kConst.size(), kConst) == 0 &&
+        (i == 0 || (!std::isalnum((unsigned char)src[i - 1]) &&
+                    src[i - 1] != '_')) &&
+        (i + kConst.size() >= src.size() ||
+         (!std::isalnum((unsigned char)src[i + kConst.size()]) &&
+          src[i + kConst.size()] != '_'));
+    if (!at_const) {
+      out.push_back(src[i]);
+      i++;
+      continue;
+    }
+    // Whitespace, then a `T<digits>` placeholder that is itself a whole token.
+    size_t j = i + kConst.size();
+    const size_t ws_begin = j;
+    while (j < src.size() && std::isspace((unsigned char)src[j])) {
+      j++;
+    }
+    if (j == ws_begin || j >= src.size() || src[j] != 'T' ||
+        j + 1 >= src.size() || !std::isdigit((unsigned char)src[j + 1])) {
+      out.append(src, i, kConst.size());
+      i += kConst.size();
+      continue;
+    }
+    size_t k = j + 1;
+    while (k < src.size() && std::isdigit((unsigned char)src[k])) {
+      k++;
+    }
+    if (k < src.size() &&
+        (std::isalnum((unsigned char)src[k]) || src[k] == '_')) {
+      // `T1x` is an identifier, not placeholder `T1`.
+      out.append(src, i, kConst.size());
+      i += kConst.size();
+      continue;
+    }
+    out.append(src, j, k - j);   // the placeholder
+    out.push_back(' ');
+    out.append(kConst);          // then the const it used to precede
+    i = k;
+  }
+  return out;
+}
+
 std::optional<std::vector<std::optional<std::string>>>
 matchTemplate(const std::string &template_str,
               const std::string &instantiated) {
@@ -900,18 +1022,44 @@ std::string instantiateTgt(const std::vector<std::optional<std::string>> &types,
   return instantiated_template;
 }
 
+// `rotated`, when non-null, is set to true iff the returned rule matched only
+// through `RotateConstBeforePlaceholder`. Callers that compare results ACROSS
+// buckets use it to keep preferring an as-recorded match; see searchExpr.
 template <typename T>
 std::pair<T *, std::vector<std::optional<std::string>>>
 search(std::unordered_multimap<std::string, T> &map, const std::string &txt,
-       const std::string &key) {
+       const std::string &key, bool *rotated = nullptr) {
   auto [it, end] = map.equal_range(key);
   T *rule = nullptr;
   std::vector<std::optional<std::string>> subs;
+  // The const-placement fallback, kept strictly separate so that it can only
+  // ever be consulted when NO rule in this bucket matched as recorded.
+  T *rot_rule = nullptr;
+  std::vector<std::optional<std::string>> rot_subs;
 
   for (; it != end; ++it) {
     auto &this_rule = it->second;
     auto this_subs = matchTemplate(this_rule.src, txt);
     if (!this_subs) {
+      // ⭐ THE CONST-PLACEMENT RETRY. See RotateConstBeforePlaceholder: a key
+      // spelling `const T1 &` cannot textually reach a POINTER element type,
+      // whose top-level const clang writes as `X *const &`. Retrying the same
+      // key with the `const` moved to the right of the placeholder matches it
+      // with T1 still bound to the POINTER, which is the only binding a rule
+      // target can use. This arm is reachable ONLY on a miss, so it cannot
+      // perturb any lookup that succeeds today.
+      const std::string rot = RotateConstBeforePlaceholder(this_rule.src);
+      if (rot == this_rule.src) {
+        continue;
+      }
+      auto rot_match = matchTemplate(rot, txt);
+      if (!rot_match) {
+        continue;
+      }
+      if (!rot_rule || this_rule.src.size() > rot_rule->src.size()) {
+        rot_rule = &this_rule;
+        rot_subs = *std::move(rot_match);
+      }
       continue;
     }
     // tie breaker: prefer more specific rules (usually the longer ones)
@@ -920,7 +1068,16 @@ search(std::unordered_multimap<std::string, T> &map, const std::string &txt,
       subs = *std::move(this_subs);
     }
   }
-  return {rule, std::move(subs)};
+  if (rule) {
+    if (rotated) {
+      *rotated = false;
+    }
+    return {rule, std::move(subs)};
+  }
+  if (rotated) {
+    *rotated = rot_rule != nullptr;
+  }
+  return {rot_rule, std::move(rot_subs)};
 }
 
 // THE ONLY WAY AN EXPR BUCKET MAY BE ASKED. Consults the arity bucket AND the
@@ -937,13 +1094,23 @@ std::pair<TranslationRule::ExprRule *,
           std::vector<std::optional<std::string>>>
 searchExpr(const std::string &txt) {
   const std::string base = GetExprMapKey(txt);
-  auto best = search(exprs_, txt, base);
+  // ⭐ The two `rotated` flags keep this cross-bucket tie-break bit-for-bit
+  // today's: a src-length comparison cannot tell an as-recorded match from a
+  // const-placement one, so without them a longer rotated arity-bucket
+  // candidate could displace an as-recorded bare-bucket winner -- a change to a
+  // lookup that already succeeds, which this row is not allowed to make.
+  bool best_rot = false;
+  auto best = search(exprs_, txt, base, &best_rot);
   if (auto arity = GetExprCallArity(txt)) {
-    auto exact = search(exprs_, txt, base + '#' + std::to_string(*arity));
+    bool exact_rot = false;
+    auto exact =
+        search(exprs_, txt, base + '#' + std::to_string(*arity), &exact_rot);
     if (exact.first != nullptr &&
-        (best.first == nullptr ||
-         exact.first->src.size() > best.first->src.size())) {
+        (best.first == nullptr || (best_rot && !exact_rot) ||
+         (best_rot == exact_rot &&
+          exact.first->src.size() > best.first->src.size()))) {
       best = std::move(exact);
+      best_rot = exact_rot;
     }
   }
   return best;
@@ -971,14 +1138,21 @@ const TranslationRule::RefusedRule *refusedSearch(const std::string &txt) {
     return nullptr;
   }
   const std::string base = GetExprMapKey(txt);
-  auto best = search(refused_exprs_, txt, base);
+  // Same `rotated` discipline as searchExpr, for the same reason: a refusal must
+  // keep matching exactly the sites it matches today, plus the pointer-element
+  // sites its `const T1 &` spelling was always meant to cover.
+  bool best_rot = false;
+  auto best = search(refused_exprs_, txt, base, &best_rot);
   if (auto arity = GetExprCallArity(txt)) {
-    auto exact =
-        search(refused_exprs_, txt, base + '#' + std::to_string(*arity));
+    bool exact_rot = false;
+    auto exact = search(refused_exprs_, txt,
+                        base + '#' + std::to_string(*arity), &exact_rot);
     if (exact.first != nullptr &&
-        (best.first == nullptr ||
-         exact.first->src.size() > best.first->src.size())) {
+        (best.first == nullptr || (best_rot && !exact_rot) ||
+         (best_rot == exact_rot &&
+          exact.first->src.size() > best.first->src.size()))) {
       best = std::move(exact);
+      best_rot = exact_rot;
     }
   }
   return best.first;
