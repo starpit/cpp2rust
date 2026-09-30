@@ -5544,3 +5544,155 @@ fn f2911() -> () {
 fn t2912() -> () {
     ()
 }
+
+// ============================================================================================
+// ROW g3112 -- `mlir::IRMapping`, the #1 abort gate in dxp_standalone's 266-file link unit
+// (9 TUs, 2.25x the next).  See src.cpp at t2920 for: the gate re-measurement on this slot's own
+// pair, the 104-site member census with its negative control, the value/operation/block split,
+// every key read OFF THE CONVERTER with `-verbose | grep 'search expr'`, and the SIX things this
+// row deliberately leaves loud with the four parts each.
+//
+// ⛔⛔ THE ONE INVARIANT FOR ANYONE EDITING THIS BLOCK: f2927 IS THE ONLY THING THAT FILLS THE
+// TABLE.  Remove it and keep f2922/f2924 and the model becomes silently wrong at 26 sites --
+// `lookupOrDefault` degenerates to the identity and `contains` to constant `false`, both at rc=0,
+// both invisible to every census in this harness.  The readers and the populator ship together
+// or not at all.
+// ============================================================================================
+
+// t2920 -- `mlir::IRMapping` -> `dataflowir_gen::IRMapping` (ir.rs, crate-root re-export).
+// ⭐ THE `init` IS `IRMapping::new()` AND IT IS THE FAITHFUL ZERO VALUE, not a stand-in: the C++
+// default constructor leaves all three `DenseMap`s empty and `IRMapping::default()` leaves both
+// modelled `BTreeMap`s empty.  This is the ONE case in this module where the type's `init` and
+// its constructor key (f2920) are the same expression, and they are both present anyway for the
+// t73/f42 reason -- the `init` serves a FIELD's zero value, f2920 serves a written declaration.
+fn t2920() -> dataflowir_gen::IRMapping {
+    dataflowir_gen::IRMapping::new()
+}
+
+// f2920 -- `mlir::IRMapping::IRMapping()`.  All 13 corpus declarations are default construction.
+fn f2920() -> dataflowir_gen::IRMapping {
+    dataflowir_gen::IRMapping::new()
+}
+
+// f2921 -- `map(Value, Value)`, 48 sites.  `&mut` receiver: the C++ member is non-const and
+// `map_value` takes `&mut self`.  ⚠️ `map_value`, NOT `map_values`: the latter is the VARIADIC
+// range overload, which is a DIFFERENT C++ signature and is deliberately unkeyed (src.cpp item
+// (5)) because its search key has not been read off the converter.
+fn f2921(
+    a0: &mut dataflowir_gen::IRMapping,
+    a1: dataflowir_gen::ir::Value,
+    a2: dataflowir_gen::ir::Value,
+) {
+    a0.map_value(a1, a2)
+}
+
+// f2922 -- `contains(Value) const`, 13 sites.  `&` receiver, from the `const` on the header.
+fn f2922(a0: &dataflowir_gen::IRMapping, a1: dataflowir_gen::ir::Value) -> bool {
+    a0.contains_value(&a1)
+}
+
+// f2923 -- `lookup(Value) const`, 20 sites.  `lookup_value` PANICS when the key is absent, which
+// is the C++ `assert` at IRMapping.h:70-75 reproduced, not a placeholder -- see src.cpp.
+fn f2923(
+    a0: &dataflowir_gen::IRMapping,
+    a1: dataflowir_gen::ir::Value,
+) -> dataflowir_gen::ir::Value {
+    a0.lookup_value(&a1)
+}
+
+// f2924 -- `lookupOrDefault(Value) const`, 13 sites.  Returns `a1` itself when absent, which is
+// only CORRECT because f2927 fills the table; with an empty table this is the identity function.
+fn f2924(
+    a0: &dataflowir_gen::IRMapping,
+    a1: dataflowir_gen::ir::Value,
+) -> dataflowir_gen::ir::Value {
+    a0.lookup_or_default_value(&a1)
+}
+
+// f2927 / f2928 -- THE POPULATOR: `OpBuilder::clone(Operation &, IRMapping &)` and
+// `cloneWithoutRegions(Operation &, IRMapping &)` -> `clone_op_into` /
+// `clone_op_without_regions_into` (build.rs, `dataflowir-gen` 3e04c65).  Those two primitives do
+// the whole job: remap the operands through `lookup_or_default_value`, mint FRESH result names
+// per RESULT GROUP, record `map_op(src.id, clone.id)` before insertion, clone the regions
+// recursively (mapping each cloned block argument), and finally record
+// `map_values(src.results, clone.results)` -- MLIR's own order, step for step.
+//
+// ⛔⛔ THE RETURN TYPE, WHICH IS THE ONLY DIFFICULT PART OF THIS ROW.  C++ hands back
+// `mlir::Operation *`; t36 models that as `*mut fmt::OpInst`, while `clone_op_into` returns an
+// `OpHandle`.  There are exactly three candidate bodies and two of them are wrong:
+//   * `Box::into_raw(Box::new(h.clone_op().unwrap()))` -- a DETACHED COPY.  Reads through the
+//     pointer are right; every WRITE is dropped at rc=0.  This is the class f2900's note in this
+//     same file refuses in so many words, and t541-t543 refuse the whole rewriter family over.
+//   * returning the `OpHandle` -- a different type; the emitted code would not type-check at any
+//     use site, i.e. it trades a correct value for a loud failure with no gain.
+//   * ⭐ AN INTERIOR POINTER INTO THE LIVE `fmt::Block::ops` THE CLONE WAS JUST INSERTED INTO.
+//     That is what f2900 already returns for `mlir::Operation *` (`b.ops.iter_mut().map(|o| o as
+//     *mut OpInst)`) and what f2502/f2503/f2505/f2506 return for the `iplist` iterators
+//     (`Vec::as_mut_ptr`), so it makes NO new model claim -- it reuses the one this module
+//     already commits to for `Operation *`.  The 10 corpus sites that capture the result
+//     (`Operation *cloned_op = builder_.clone(*def_op, local_map);` and siblings) then read and
+//     write the op that is actually in the block, which is what C++ does.
+// ⚠️ WHAT THE INTERIOR POINTER COSTS, NAMED RATHER THAN HIDDEN: `fmt::Block::ops` is a
+// `Vec<OpInst>`, so inserting a LATER op can reallocate the buffer and invalidate a pointer
+// handed out earlier -- whereas a C++ `Operation *` is stable for the op's lifetime.  That is a
+// PRE-EXISTING property of this module's `Operation *` model (f2900 hands out a whole `Vec` of
+// such pointers, and f2502's begin()/end() are the same), not something this key introduces, and
+// the one corpus site that holds several at once is `RegionClonePrune.cpp:106`
+// (`cloned_top_level.push_back(builder.clone(op, value_map))`).  ⭐ NAMED UNBLOCKER, in the right
+// layer: `fmt::Block::ops` as a stable allocation (`Vec<Box<OpInst>>`) or an op registry keyed on
+// `OpId`, both in `dataflowir-gen`.  Do NOT "fix" it here by copying.
+//
+// ⛔ `.expect` RATHER THAN A SILENT FALLBACK, TWICE, and both are real invariants:
+//   * `clone_op_into` fails ONLY with `BuildError::CloneOfVerbatim` -- an op whose lines are
+//     replayed reference TEXT, whose SSA names live in a `String` no mapping can rewrite.  A
+//     clone of one would print a body wired to the ORIGINAL at rc=0.  Loud.
+//   * `OpHandle::index()` is `None` only if the op is not in its block, which cannot happen for
+//     an op this call just inserted; the `expect` documents that rather than papering over it.
+//
+// ⛔⛔ AND THERE IS NO REFCOUNT OVERLAY FOR f2927/f2928, DELIBERATELY -- f2900's decision, made
+// in this module for this exact reason.  The refcount arm's `mlir::Operation *` is
+// `libcc2rs::Ptr<fmt::OpInst>`, whose ONLY aliasing constructor is
+// `Ptr::borrow_vec(owner: &Value<Vec<T>>)` (libcc2rs/src/rc.rs:281).  `fmt::Block::ops` is a
+// PLAIN `Vec<OpInst>` reached through a plain `&mut OpBuilder`, so there is no
+// `Value<Vec<OpInst>>` on the path and no provenance to borrow.  The only writable refcount body
+// would be `Ptr::alloc(inst.clone())` -- the fabricated copy above.  So `ir_unsafe.json` (the
+// UNCONDITIONAL BASE FOR BOTH MODELS, translation_rule.cpp:487-494) carries this body for both
+// arms, and the refcount arm gets a LOUD rustc type mismatch at the use site instead of a silent
+// dropped mutation.  ⚠️ The five VALUE-half keys above DO carry refcount overlays, because
+// `mlir::Value` is `ir::Value` in both models (t4) and `IRMapping` is a value type, so those
+// bodies are genuinely identical rather than one being the other's `sed`.
+unsafe fn f2927(
+    a0: &mut dataflowir_gen::OpBuilder,
+    a1: &mut dataflowir_gen::fmt::OpInst,
+    a2: &mut dataflowir_gen::IRMapping,
+) -> *mut dataflowir_gen::fmt::OpInst {
+    {
+        let __h = a0
+            .clone_op_into(a1, a2)
+            .expect("mlir::OpBuilder::clone: a verbatim op cannot be cloned");
+        let __b = __h.block_index();
+        let __i = __h.index().expect("mlir::OpBuilder::clone: the clone is in its block");
+        let __p: *mut dataflowir_gen::fmt::OpInst =
+            &mut __h.block_list().borrow_mut()[__b].ops[__i];
+        __p
+    }
+}
+
+unsafe fn f2928(
+    a0: &mut dataflowir_gen::OpBuilder,
+    a1: &mut dataflowir_gen::fmt::OpInst,
+    a2: &mut dataflowir_gen::IRMapping,
+) -> *mut dataflowir_gen::fmt::OpInst {
+    {
+        let __h = a0
+            .clone_op_without_regions_into(a1, a2)
+            .expect("mlir::OpBuilder::cloneWithoutRegions: a verbatim op cannot be cloned");
+        let __b = __h.block_index();
+        let __i = __h
+            .index()
+            .expect("mlir::OpBuilder::cloneWithoutRegions: the clone is in its block");
+        let __p: *mut dataflowir_gen::fmt::OpInst =
+            &mut __h.block_list().borrow_mut()[__b].ops[__i];
+        __p
+    }
+}

@@ -4984,3 +4984,64 @@ fn f2911() -> () {
 fn t2912() -> () {
     ()
 }
+
+// ============================================================================================
+// ROW g3112 -- `mlir::IRMapping`, the #1 abort gate (9 TUs).  See src.cpp at t2920 for the gate
+// re-measurement, the member census and the six deliberate omissions; see tgt_unsafe.rs f2927
+// for the return-type argument.
+//
+// ⭐ THE FIVE KEYS BELOW ARE CHARACTER-FOR-CHARACTER THE UNSAFE BODIES, AND THAT IS ARGUED, NOT
+// COPIED: `mlir::Value` is `dataflowir_gen::ir::Value` in BOTH overlays (t4, and f16/f17 already
+// commit to it), and `mlir::IRMapping` is a VALUE type in both -- two `BTreeMap`s behind an
+// ordinary struct -- so neither model's pointer representation appears anywhere in this surface.
+// The "two arms of a rule are not each other's sed" rule is satisfied by there being nothing to
+// translate, not by skipping the check.
+//
+// ⛔⛔ f2927 / f2928 -- THE POPULATOR -- HAVE NO BODY HERE, DELIBERATELY, AND THIS IS f2900's
+// DECISION IN THIS MODULE REPEATED, NOT AN OMISSION.  The refcount `mlir::Operation *` is
+// `libcc2rs::Ptr<fmt::OpInst>` and its only aliasing constructor is
+// `Ptr::borrow_vec(owner: &Value<Vec<T>>)` (rc.rs:281); `fmt::Block::ops` is a plain
+// `Vec<OpInst>` reached through a plain `&mut OpBuilder`, so there is no `Value<Vec<OpInst>>` on
+// the path and no provenance to borrow -- the same shape f2900 measured for `Region`.  The only
+// writable alternative is `Ptr::alloc(inst.clone())`, a FABRICATED COPY whose mutations are
+// dropped at rc=0, which is the silent miscompile this whole family's boundary exists to prevent.
+// `ir_unsafe.json` is the unconditional base for both models, so this arm INHERITS the unsafe
+// body and gets a LOUD rustc type mismatch at the use site instead.
+// ⛔ DO NOT "FIX" THIS BY ADDING A `Ptr::alloc` BODY.  Named unblocker, in the right layer:
+// `Ptr::borrow_field`-style provenance from a `&mut T` interior in `libcc2rs`, or
+// `fmt::Block::ops` promoted to `Value<Vec<OpInst>>` in `dataflowir-gen`.
+// ============================================================================================
+
+fn t2920() -> dataflowir_gen::IRMapping {
+    dataflowir_gen::IRMapping::new()
+}
+
+fn f2920() -> dataflowir_gen::IRMapping {
+    dataflowir_gen::IRMapping::new()
+}
+
+fn f2921(
+    a0: &mut dataflowir_gen::IRMapping,
+    a1: dataflowir_gen::ir::Value,
+    a2: dataflowir_gen::ir::Value,
+) {
+    a0.map_value(a1, a2)
+}
+
+fn f2922(a0: &dataflowir_gen::IRMapping, a1: dataflowir_gen::ir::Value) -> bool {
+    a0.contains_value(&a1)
+}
+
+fn f2923(
+    a0: &dataflowir_gen::IRMapping,
+    a1: dataflowir_gen::ir::Value,
+) -> dataflowir_gen::ir::Value {
+    a0.lookup_value(&a1)
+}
+
+fn f2924(
+    a0: &dataflowir_gen::IRMapping,
+    a1: dataflowir_gen::ir::Value,
+) -> dataflowir_gen::ir::Value {
+    a0.lookup_or_default_value(&a1)
+}

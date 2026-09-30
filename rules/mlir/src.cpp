@@ -143,6 +143,14 @@ namespace mlir {
 
 class Operation;
 
+// ⚠️ FORWARD DECLARATION ONLY, for f2927/f2928 (`mlir::OpBuilder::clone` /
+// `cloneWithoutRegions`) -- row g3112.  `class IRMapping` is DEFINED at the tail
+// (t2920), but `class OpBuilder` at ~:1655 must declare the two clone overloads
+// whose second parameter is `IRMapping &`, and a C++ class cannot be reopened, so
+// the name has to exist ~11,000 lines before the definition.  Exactly the
+// `WalkResult` situation immediately below, and for the same mechanical reason.
+class IRMapping;
+
 // ⚠️ FORWARD DECLARATION ONLY, for f2500 (`mlir::OpState::walk`) -- row g3037.
 // `class WalkResult` is DEFINED far below (~:10190, with its four members for
 // t1710/f1710-f1713), but `class OpState` at ~:936 must declare a `walk` whose
@@ -1652,12 +1660,30 @@ class PassManager {};
 // `saved_insertion_pt`, `insPts`) are dotted only with `.push`/`.pop`/`.top`, which
 // belong to the `std::stack` and not to this type -- ZERO member calls on an
 // InsertPoint anywhere in the corpus, and zero default-constructed ones.
+// ⭐ `clone` AND `cloneWithoutRegions` ADDED 2026-09-30 (row g3112, the `mlir::IRMapping`
+// gate).  These are THE POPULATOR of an `IRMapping`; read the block at t2920 at the tail
+// for why keying the container's readers WITHOUT them would be silently wrong, and
+// tgt_unsafe.rs f2927 for the return-type argument.  Both are declared HERE and not in a
+// reopened class, the `saveInsertionPoint` lesson one paragraph up.  The signatures are
+// Builders.h:614/:624 and were read OFF THE CONVERTER, not hand-spelled:
+//     search expr mlir::Operation * mlir::OpBuilder::clone(mlir::Operation &, mlir::IRMapping &)
+//     search expr mlir::Operation * mlir::OpBuilder::cloneWithoutRegions(mlir::Operation &, mlir::IRMapping &)
+// ⛔ THE ONE-ARGUMENT OVERLOADS (`clone(Operation &)` / `cloneWithoutRegions(Operation &)`)
+// ARE DELIBERATELY NOT DECLARED.  In MLIR they are `IRMapping mapper; return clone(op,
+// mapper);` -- i.e. they throw the mapping away -- so `dataflowir-gen` would need a
+// `clone_op_into` against a scratch map, which exists, but no key is written here because
+// no key was READ: the converter never searched for either spelling in this corpus, and a
+// declared-but-unkeyed member records nothing while a KEYED one with no corpus site is a
+// dead key.  Census over repos/dt_src (excluding llvm-project/, build*/), anchored
+// `\.clone(<one arg>)` on the 24 builder/rewriter receiver spellings: 0 hits.
 class OpBuilder : public Builder {
 public:
   struct Listener {};
   class InsertPoint {};
   InsertPoint saveInsertionPoint() const;
   void restoreInsertionPoint(InsertPoint ip);
+  Operation *clone(Operation &op, IRMapping &mapper);
+  Operation *cloneWithoutRegions(Operation &op, IRMapping &mapper);
 };
 
 namespace detail {
@@ -12730,3 +12756,237 @@ mlir::MemRefLayoutAttrInterface f2911() {
 // `AnalysisManager&` to satisfy MLIR's analysis-construction interface and never read it
 // (`LoopTiling.h:237`, `MemoryTrackerAnalysis.h:66`, `RegisterPressureAnalysis.h:158`).
 using t2912 = mlir::AnalysisManager;
+
+// ===========================================================================================
+// ROW g3112 -- `mlir::IRMapping`, THE #1 ABORT GATE IN `dxp_standalone`'s LINK UNIT.
+// t2920 (the type), f2920 (its default constructor), f2921-f2924 (the VALUE-half readers),
+// and f2927/f2928 (THE POPULATOR, on an `OpBuilder` receiver).
+//
+// Gate, re-measured on MY OWN pair rather than inherited (binary
+// `verif/g3105/cpp2rust.AFTER` md5 `b0092971...`, rules `ir/g3112` 99 modules, `-model=unsafe`,
+// per-TU `--file` over `verif/goal/linkunit.indb.txt`): `mlir::IRMapping` is the verbatim first
+// abort of **9 of the 266 link-unit TUs** --
+//   ScheduleIRToDFIR/KTDFLowToDFIR/BufferPhaseLowering, KTDF/Transforms/BroadcastPromotion,
+//   KTDF/Transforms/StageCoarsening, KTDF/Transforms/StageCoarsening/Materializer,
+//   KTDF/Transforms/StageCoarsening/BufferExpansion, Transforms/PathExpansion,
+//   Transforms/PathExpansion/Materializer, Transforms/Utils/RegionClonePrune,
+//   dcc/src/Dialect/Uniform/Utils.
+// It was 5 before `c5d19141`; closing `memref::AllocOp`/`MemRefLayoutAttrInterface`/
+// `AnalysisManager` handed it 4 more, which is why it is now 2.25x the next gate.
+//
+// ⛔⛔ THE POPULATOR IS PART OF THIS KEY SET AND MAY NEVER BE SEPARATED FROM IT.  An
+// `IRMapping` is filled in C++ by `OpBuilder::clone(op, mapper)` and by nothing else in this
+// corpus.  Key the container and its READERS without the populator and the table is EMPTY at
+// every read: `lookupOrDefault` (13 sites) returns `from` -- the PRE-clone value -- so a pass
+// that meant to rewire a cloned region to its clone rewires it back to the original, and
+// `contains` (13 sites) takes the not-cloned branch and rewrites the wrong buffers.  It
+// compiles, it runs, the IR is wrong, and NO census in this harness can see it.  That is why
+// `dataflowir-gen` `3e04c65` landed the runtime half and deliberately left this gate LOUD, and
+// why f2927 is written here in the same commit as f2921-f2924.
+//
+// ⭐ THE MEMBER SURFACE, CENSUSED MYSELF over all 1,596 corpus sources (excluding
+// `llvm-project/`, `build*/`, `cpp2rust-port/`), anchored `\b<var>\s*\.\s*<member>\s*\(` on the
+// **13** variable names actually declared `IRMapping` (`bv_map` 17, `ir_map` 18, `value_map` 14,
+// `mapper` 6, `operandMap` 3, `arg_map` 3, `mapping` 2, `value_map_` 2, `operation_map_`,
+// `bv_map_else`, `mapper_`, `local_map`, `bvm`), negative control `zzznomapper.map(` = 0:
+//     map 50 · lookup 20 · lookupOrDefault 13 · contains 13 · lookupOrNull 8   = 104
+//     erase 0 · clear 0 · getValueMap 0 · getBlockMap 0 · getOperationMap 0
+// ⚠️ `3e04c65` reports 103 and a third census reported 92; mine is 104 and the difference is
+// which receiver spellings the census admits.  ⭐ THE TOTAL IS NOT WHAT SIZES THIS ROW -- the
+// value/operation/block SPLIT is, and all three censuses agree on it: **value half ~95,
+// operation half 5, block half 1.**
+//
+// ⛔ ALL FIVE READERS ARE TEMPLATES over `T in {Value, Block *, Operation *}` (IRMapping.h:30-32
+// for `map`'s three non-template overloads, :43-75 for the `erase`/`contains`/`lookup*`
+// templates, :92-100 for `getMap<T>`'s `if constexpr` chain).  ⭐ BUT THE RECORDED KEY CARRIES
+// NO TEMPLATE ARGUMENT LIST -- read OFF THE CONVERTER with `-verbose | grep 'search expr'` on a
+// purpose-built probe TU that calls every member (`verif/g3112/probe.cpp`, converter rc=0), and
+// compared with `==` rather than `in`:
+//     void mlir::IRMapping::IRMapping()                                     -> f2920
+//     void mlir::IRMapping::map(mlir::Value, mlir::Value)                   -> f2921
+//     bool mlir::IRMapping::contains(mlir::Value) const                     -> f2922
+//     mlir::Value mlir::IRMapping::lookup(mlir::Value) const                -> f2923
+//     mlir::Value mlir::IRMapping::lookupOrDefault(mlir::Value) const       -> f2924
+//     mlir::Value mlir::IRMapping::lookupOrNull(mlir::Value) const          -> NOT KEYED, below
+//     void mlir::IRMapping::map(mlir::Operation *, mlir::Operation *)       -> NOT KEYED, below
+//     bool mlir::IRMapping::contains(mlir::Operation *) const               -> NOT KEYED, below
+//     mlir::Operation * mlir::IRMapping::lookupOrNull(mlir::Operation *) const   -> NOT KEYED
+//     mlir::Operation * mlir::IRMapping::lookupOrDefault(mlir::Operation *) const -> NOT KEYED
+//     void mlir::IRMapping::map(mlir::Block *, mlir::Block *)               -> NOT KEYED, below
+//     void mlir::IRMapping::erase(mlir::Value)                              -> NOT KEYED (0 sites)
+//     void mlir::IRMapping::clear()                                         -> NOT KEYED (0 sites)
+//     mlir::Operation * mlir::OpBuilder::clone(mlir::Operation &, mlir::IRMapping &)  -> f2927
+//     mlir::Operation * mlir::OpBuilder::cloneWithoutRegions(mlir::Operation &, mlir::IRMapping &)
+//                                                                           -> f2928
+// ⭐ The instantiated signatures are FULLY CONCRETE (arity 0 placeholders), so `matchTemplate`'s
+// same-depth capture -- the swallow bug -- never runs, and the defaulted-template-argument trap
+// cannot arise either.  Every key below is read back out of `ir_src.json` and compared with `==`.
+//
+// ---------------------------------------------------------------------------------------------
+// WHAT IS *NOT* KEYED, each with the four parts.  ⚠️⚠️ AND NOTE THE DIRECTION FOR A MEMBER: no
+// key means the converter emits the call TEXTUALLY at rc=0 (`converter.cpp:4933`/`:5099` gate on
+// `Mapper::Contains(callee)`), so these are loud at RUSTC (`E0599 no method named lookupOrNull`),
+// NOT at translate time.  The leak is censused in the row report, not left to be discovered.
+//
+// (1) `lookupOrNull(mlir::Value)` -- 7 of the 8 `lookupOrNull` sites, i.e. the only VALUE-half
+//     member this row leaves out.
+//     MEASUREMENT: C++ returns `Value` and the absent case is `Value(nullptr)`; the Rust model's
+//     `IRMapping::lookup_or_null_value` returns `Option<Value>` because `ir::Value` (ir.rs:21)
+//     is `{ name: String, ty: Ty }` and has NO null form -- every `String` is a legal name.
+//     FAILURE MODE OF THE ALTERNATIVE: a rule returning `ir::Value` would have to invent a
+//     sentinel (`Value::new("", Opaque(""))`), and the 7 sites all test the result for truth
+//     (`if (auto v = bv_map.lookupOrNull(x))`), so the sentinel would test TRUE and every
+//     absent lookup would silently succeed with a garbage value.  That is strictly worse than
+//     the `E0599`.  DISCRIMINATOR: f2924 `lookupOrDefault`, right here, IS correct with the
+//     identical receiver and argument, because its absent case is a REAL `Value` (`from`
+//     itself) and needs no sentinel; and t2911 takes the opposite decision for the opposite
+//     reason (a null ATTRIBUTE has a representable meaning: `()`).
+//     UNBLOCKER, in the right layer: `mlir::Value`'s null state modelled in `dataflowir-gen`
+//     -- either `Option<Value>` as t4's representation (which would touch every `mlir::Value`
+//     key in this module) or an explicit `Value::NULL` with `is_null()`, plus a key for
+//     `mlir::Value::operator bool`.  Not a `rules/` change.
+//
+// (2) THE WHOLE OPERATION HALF -- 5 corpus sites, one of them inside gate TU
+//     `BufferPhaseLowering.cpp:109` (`ir_map.lookupOrNull(pre_clone_inner.getOperation())`),
+//     plus `DuplicateReusedToggle.cpp:163`, `AgenToSentient/Helper.cpp:1018`, `SPMDizer.cpp:588`,
+//     `OldRegisterInitialization.cpp:1172`.
+//     MEASUREMENT: the model's operation half IS built (`map_op`/`contains_op`/`lookup_op`/
+//     `lookup_or_null_op`/`lookup_or_default_op`, keyed on `fmt::OpId`), so this is a
+//     RETURN-TYPE problem and not a missing primitive.  C++ `lookupOrNull(Operation *)` returns
+//     `Operation *`, which t36 maps to `*mut fmt::OpInst`; the Rust map yields an `OpId`.
+//     `OpBuilder::handle_of_id(OpId) -> Option<OpHandle>` (new in `3e04c65`) bridges an id to a
+//     handle, but a rule body would then need `OpHandle -> *mut OpInst` AND AN `OpBuilder` IN
+//     SCOPE, and the C++ receiver is the `IRMapping`, which carries no builder.
+//     FAILURE MODE OF THE ALTERNATIVE: returning a freshly boxed copy of the mapped op
+//     (`Box::into_raw`) gives a DETACHED record, so every mutation through the returned
+//     pointer is dropped at rc=0 -- the exact class f2900's note refuses in this same file.
+//     DISCRIMINATOR: f2927 below, where the same `*mut fmt::OpInst` return IS correct, because
+//     the builder is the RECEIVER there and the pointer can be taken into the live
+//     `fmt::Block::ops` the clone was just inserted into.  UNBLOCKER: either `OpId -> *mut
+//     OpInst` resolution that does not need a builder (an op registry in `dataflowir-gen`), or
+//     `fmt::Block::ops` promoted to a stable allocation so an id lookup can hand back a
+//     pointer.  Both outside `rules/`.
+//
+// (3) THE BLOCK HALF -- 1 corpus site, `hcc/.../ProgramUnitExpansion.cpp:177`
+//     (`mapper_.map(&src_block, dst_block)`), and it is an UPSTREAM refusal that is already
+//     written in full at `dataflowir-gen/src/ir.rs`'s `IRMapping` doc comment: `fmt::Block` has
+//     NO id field, so the only key available is the block's INDEX in the enclosing `Vec<Block>`,
+//     and index 0 of one region is then the same key as index 0 of another.  Nothing in the
+//     model could consume a block mapping anyway -- MLIR builds one only so a cloned
+//     terminator's SUCCESSORS can be remapped, and `fmt::OpInst` has no successor field.
+//     The named unblocker is a `BlockId` on `fmt::Block` plus a successor list on `OpInst`.
+//     NO `map_block` EXISTS, so this is not declinable here in any case.
+//
+// (4) `erase(Value)` / `clear()` / `getValueMap()` / `getBlockMap()` / `getOperationMap()` --
+//     the model HAS all five (`erase_value`, `clear`, `get_value_map`, `get_operation_map`), and
+//     they are left out because the CORPUS HAS ZERO SITES for each, measured above with a
+//     negative control.  A key with no site is a dead key, the t480/t481 discipline.
+//
+// (5) The VARIADIC `map(S &&from, T &&to)` overload (IRMapping.h:34-41), 7 sites
+//     (`Deuniform.cpp:397`, `LiveRangeReduction.cpp:1023`, `UnitFiltering.cpp:228`,
+//     `dcc/src/Utils/Utils.cpp:362`, `LoweringXRF.cpp:171`/`:218`,
+//     `LoopSplittingAndUnrolling.cpp:253`).  The model HAS it (`map_values(&[Value], &[Value])`,
+//     with `Iterator::zip`'s shorter-range semantics deliberately matching `llvm::zip`).  IT IS
+//     LEFT OUT FOR ONE REASON ONLY AND IT IS AN EVIDENCE REASON: the probe TU did not exercise
+//     it, so ITS SEARCH KEY HAS NOT BEEN READ OFF THE CONVERTER, and the brief's own rule is not
+//     to hand-spell a key -- an `S &&`/`T &&` deduced pair is exactly where the `T1 &&` vs `T1 &`
+//     trap that made f2500's first key DEAD lives.  ⭐ NONE of the 7 sites is in the 9 gate TUs,
+//     so it costs this row nothing.  UNBLOCKER: one `-verbose` run over any of those 7 TUs,
+//     grepping `search expr`, then a key per recorded instantiation.  Rowed for the next slot.
+//
+// (6) The DETACHED `Operation::clone(IRMapping &)` form -- 1 site,
+//     `dcc/src/Transform/Dataflow/EnumerateCollectionUnit.cpp:78` `it.clone(operandMap)`.
+//     `3e04c65` deliberately does NOT make this public and says why: `OpBuilder::insert_op`
+//     re-stamps `OpId::fresh()`, while `Operation::clone` records `mapper.map(this, newOp)`
+//     BEFORE insertion, so routing a detached clone through the public insert would leave every
+//     mapping the clone recorded naming an id no operation has -- a lookup that silently misses.
+//     The unblocker is a public `insert_preserving_id` in `dataflowir-gen`.  1 site stays loud.
+//
+// (7) The ONE-ARGUMENT `clone(Operation &)` / `cloneWithoutRegions(Operation &)` overloads --
+//     0 corpus sites (censused), 0 converter asks.  Not declared, so nothing is recorded.
+// ---------------------------------------------------------------------------------------------
+namespace mlir {
+
+// mlir/IR/IRMapping.h:26 `class IRMapping`.  Declared with the DEFAULT CONSTRUCTOR and the four
+// VALUE-half members that are keyed, and with nothing else -- the t2911/t2912 discipline: a
+// declared-but-unkeyed member records nothing, and an undeclared member's call is emitted
+// textually and fails loudly at rustc, which is what items (1)-(5) above want.
+// ⛔ THE `const` ON THREE OF THEM IS LOAD-BEARING: it is on the header's declarations and it
+// ENTERS THE RECORDED SIGNATURE (`... (mlir::Value) const`), exactly as f2630's does.  Drop it
+// and all three keys are dead.
+class IRMapping {
+public:
+  IRMapping();
+  void map(Value from, Value to);
+  bool contains(Value from) const;
+  Value lookup(Value from) const;
+  Value lookupOrDefault(Value from) const;
+};
+
+} // namespace mlir
+
+// t2920 -- `mlir::IRMapping` -> `dataflowir_gen::IRMapping` (ir.rs, re-exported at the crate
+// root, `lib.rs:108-111`).  `searched as: mlir::IRMapping`, arity 0, read back from
+// `ir_src.json` as the exact string `mlir::IRMapping`.
+//
+// ⭐ IT IS A VALUE TYPE IN BOTH MODELS, like the six types at the head of this module: the model
+// is two `BTreeMap`s behind an ordinary struct, so neither model's pointer representation
+// appears and the two overlays are IDENTICAL rather than translations of each other.
+using t2920 = mlir::IRMapping;
+
+// f2920 -- the DEFAULT CONSTRUCTOR, `void mlir::IRMapping::IRMapping()`.  ⛔ NOT OPTIONAL: every
+// one of the 13 declarations is `IRMapping <name>;`, i.e. default construction, and the t73 /
+// f42 lesson is that a type key WITHOUT its constructor gives rc=0 and then `E0433: cannot find
+// mlir_IRMapping`.  t2911/f2911 landed as a set for the same reason.
+mlir::IRMapping f2920() { return mlir::IRMapping(); }
+
+// f2921 -- `void mlir::IRMapping::map(mlir::Value, mlir::Value)`, 48 of the 50 `map` sites (the
+// other two are the operation and block halves, items (2)/(3)).  ⚠️ AN EXISTING MAPPING IS
+// OVERWRITTEN, which IRMapping.h:30 documents explicitly and which `BTreeMap::insert` does; the
+// model asserts it in `dataflowir-gen/tests/clone.rs::the_value_half_is_a_map_with_a_fallback`.
+void f2921(mlir::IRMapping &a0, mlir::Value a1, mlir::Value a2) { return a0.map(a1, a2); }
+
+// f2922 -- `bool mlir::IRMapping::contains(mlir::Value) const`, 13 sites.  `const` receiver.
+bool f2922(const mlir::IRMapping &a0, mlir::Value a1) { return a0.contains(a1); }
+
+// f2923 -- `mlir::Value mlir::IRMapping::lookup(mlir::Value) const`, 20 sites.
+// ⚠️ THE MODEL PANICS WHEN THE KEY IS ABSENT AND THAT IS THE C++ `assert`, NOT A PLACEHOLDER:
+// IRMapping.h:70-75 is `lookupOrNull` + `assert(result && "expected 'from' to be contained
+// within the map")`, so a panic is IDENTICAL to the debug C++ and strictly SAFER than the
+// release C++, which hands back a null `Value` the caller then dereferences.  8 of the 20 sites
+// are guarded by a `contains` on the line above, which is the precondition this documents.
+mlir::Value f2923(const mlir::IRMapping &a0, mlir::Value a1) { return a0.lookup(a1); }
+
+// f2924 -- `mlir::Value mlir::IRMapping::lookupOrDefault(mlir::Value) const`, 13 sites.
+// ⛔⛔ THIS IS THE KEY THAT MAKES f2927 MANDATORY.  Its absent case returns `from` ITSELF, so
+// against an EMPTY table it is the identity function and every site silently keeps the pre-clone
+// value.  It is only correct because f2927 fills the table.
+mlir::Value f2924(const mlir::IRMapping &a0, mlir::Value a1) { return a0.lookupOrDefault(a1); }
+
+// f2927 / f2928 -- THE POPULATOR.  `mlir::Operation *mlir::OpBuilder::clone(mlir::Operation &,
+// mlir::IRMapping &)` (Builders.h:614) and its `cloneWithoutRegions` sibling (:624), declared on
+// `class OpBuilder` at ~:1655 above.
+//
+// ⭐ 48 OF THE CORPUS'S 49 CLONE-WITH-MAPPER SITES ARE THIS INSERTING BUILDER FORM (the other
+// one is item (6)'s detached form), across the receiver spellings `builder`, `builder_`,
+// `builder_region`, `builder_region0`, `builder_region_for_part`, `region_builder`,
+// `const_builder_`, `body_builder`, `rewriter_`.  ⭐ AND IT REACHES ALL THREE REWRITER TYPES FOR
+// FREE: t541/t542/t543/t2631 map `RewriterBase`/`PatternRewriter`/`IRRewriter`/
+// `ConversionPatternRewriter` to this same `dataflowir_gen::OpBuilder`, so `rewriter_.clone(op,
+// mapper_)` resolves on this key through the C++ inheritance the same way f400-f406 do.
+//
+// ⛔ THE RETURN TYPE IS THE HARD PART AND THE ANSWER IS f2900's, NOT A NEW DECISION.  See
+// tgt_unsafe.rs f2927 for the full argument: an INTERIOR raw pointer into the live
+// `fmt::Block::ops` the clone was just inserted into, which is what f2900/f2502/f2505/f2506
+// already return for `mlir::Operation *`; and NO refcount overlay, because
+// `libcc2rs::Ptr<OpInst>`'s only aliasing constructor is `Ptr::borrow_vec(&Value<Vec<T>>)` and
+// there is no `Value<Vec<OpInst>>` anywhere on the path, so the only writable refcount body
+// would be `Ptr::alloc(clone())` -- a FABRICATED COPY whose mutations are dropped at rc=0.
+// f2900 made exactly that call in exactly this module: between a loud rustc type mismatch and a
+// silent dropped mutation, pick loud.
+mlir::Operation *f2927(mlir::OpBuilder &a0, mlir::Operation &a1, mlir::IRMapping &a2) {
+  return a0.clone(a1, a2);
+}
+mlir::Operation *f2928(mlir::OpBuilder &a0, mlir::Operation &a1, mlir::IRMapping &a2) {
+  return a0.cloneWithoutRegions(a1, a2);
+}
