@@ -266,6 +266,7 @@ std::string TranspileSrc(std::string_view cc_code, Model model,
 }
 
 std::string TranspileDir(std::string_view build_dir, Model model,
+                         const std::vector<std::string_view> &cxx_flags,
                          const std::string &rules_dir) {
   std::string error_message;
   auto compile_dbase = clang::tooling::CompilationDatabase::loadFromDirectory(
@@ -328,6 +329,10 @@ std::string TranspileDir(std::string_view build_dir, Model model,
     std::vector<std::string> tool_args = getPlatformClangBeginFlags();
     tool_args.push_back("-fparse-all-comments");
     AppendDbFlags(commands[i], tool_args);
+    // AFTER the DB's flags, mirroring TranspileSrc: these are the caller's
+    // supplement to what the database could not record (a `--sysroot`, an extra
+    // `-D`), so a later `-D` wins and the DB's own include dirs keep priority.
+    tool_args.insert(tool_args.end(), cxx_flags.begin(), cxx_flags.end());
     auto end_flags = getPlatformClangEndFlags();
     tool_args.insert(tool_args.end(), end_flags.begin(), end_flags.end());
 

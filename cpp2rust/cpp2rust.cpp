@@ -182,11 +182,39 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
-  if (!BuildDir.empty() && !CXXFlags.empty()) {
-    llvm::errs() << "ERROR: can't combine --dir with --cxxflags\n";
-    return EXIT_FAILURE;
-  }
-
+  // --dir + --cxxflags USED TO BE REFUSED HERE, and that refusal made the
+  // whole-program route unusable on this corpus. MEASURED, one factor at a
+  // time, on dxp/dxp_standalone.cpp with the census binary and ir/goalHEAD:
+  //
+  //   * `--file` + dxpflags.py's 32 tokens + `--sysroot=<tc>/sysroot`:
+  //     translates, rc=0, 38,820 lines.
+  //   * the SAME `--file` invocation with ONLY `--sysroot` removed: `fatal
+  //     error: 'inttypes.h' file not found` at the `#include_next` in clang's
+  //     own resource-dir inttypes.h, then a truncated AST and a contained
+  //     abort. No output.
+  //   * `--dir` over a 2-entry DB containing that TU: byte-for-byte the SAME
+  //     two diagnostics, and the TU is DROPPED.
+  //
+  // The compile database does not carry `--sysroot` -- nothing in the 839-entry
+  // DB does, because the real compiler driver supplies its own -- so on the
+  // --dir path there was NO WAY to tell the frontend where libc lives, and
+  // every TU on this pod failed header resolution. `--cxxflags` is exactly the
+  // channel --file uses to supply it, and refusing to plumb it through --dir is
+  // what kept the only artifact in which a CROSS-TU symbol is ever DEFINED from
+  // being producible at all.
+  //
+  // WHY THIS MATTERS BEYOND A FLAG: there is no legal Rust spelling for "a fn
+  // defined in another TU of a crate I am not emitting", and the converter does
+  // not try to invent one -- tests/multi-file/extern_functions shows the
+  // intended artifact is ONE crate per LINK UNIT with every definition present
+  // (`helper_0`, from b.c, is defined in a.c's output file). The `_<N>` suffix
+  // is an insertion-order counter over the process-global `type_mapping`
+  // (converter_lib.cpp GetDeclId), so it is only consistent WITHIN one run:
+  // `FloatToBFloat16Bin` is `_36` in the goal TU's unsafe leg and `_35` in its
+  // refcount leg, same TU and same rules. A per-TU `extern "C"` declaration
+  // could therefore never name the symbol the defining TU emits, which is why
+  // the fix is to make whole-program emission WORK rather than to emit a
+  // declaration that would fail silently at link time.
   auto model = cpp2rust::Model::kRefCount;
   if (Model == "refcount") {
     // ok
@@ -223,7 +251,7 @@ int main(int argc, char *argv[]) {
   auto rs_code =
       BuildDir.empty()
           ? cpp2rust::TranspileSrc(cc_code, model, cxx_flags, RulesDir, CcFile)
-          : cpp2rust::TranspileDir(BuildDir, model, RulesDir);
+          : cpp2rust::TranspileDir(BuildDir, model, cxx_flags, RulesDir);
 
   if (Survey) {
     // Survey mode is a discovery pass: gaps out, no code out. Deliberately
