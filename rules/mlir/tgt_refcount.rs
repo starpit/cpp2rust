@@ -4920,3 +4920,67 @@ unsafe fn f2901(a0: dataflowir_gen::ir::Value) -> u64 {
         h.finish()
     }
 }
+
+// ============================================================================================
+// ROW g3110 -- the top four `mlir::` abort gates of `dxp_standalone`'s 266-file link unit,
+// holding 18 of its 110 aborted TUs.  Full argument, per-type member census and the overturned
+// def-absence refusal are in `src.cpp` at the `ROW g3110` banner.  ⭐ These arms are
+// BYTE-IDENTICAL between the two models, deliberately and for t157's reason: `fmt::OpInst` is a
+// plain generated value type and `()` is a unit, so neither carries a `RefCell` and neither has a
+// per-model spelling.  ⛔ That is the CONCLUSION of the per-model check, not a skipped one -- the
+// standing rule is that a rule whose return type is a type another module models must be written
+// in THAT module's model per model; `dataflowir_gen::fmt::OpInst` is modelled by this module and
+// `()` by nobody, so the rule does not apply here.
+// ============================================================================================
+
+// t2910 -- `mlir::memref::AllocOp` -> `fmt::OpInst` carrying the op's OWN generated `DEF`.  This is
+// t161's body with `mlir_memref_AllocOp` substituted.  ⭐⭐ THE `DEF` WAS VERIFIED PRESENT TWO WAYS
+// WITH BOTH CONTROLS IN THE SAME BATCH, because this key overturns a def-absence refusal:
+//   (1) `grep -aoF` on the rmeta the preprocessor's `find_artifact` resolves
+//       (`pin/target_preprocessor/release/build/dataflowir-gen/48cebb0c20af925b/out/
+//       libdataflowir_gen-48cebb0c20af925b.rmeta`, md5 4df82acd9370):
+//         mlir_memref_AllocOp 2   <- equal to the POSITIVE control mlir_arith_ConstantOp (t161's
+//                                    own DEF, also 2)
+//         mlir_arith_ConstantOp_NEGATIVE_CONTROL_XYZ 0 and zzz_fabricated_negative_control 0
+//   (2) the refusal's own instrument, `grep -oE "struct <name>\b"` on the generated
+//       `dataflow_ods.rs`: 1, equal to the positive control, negative control 0.
+// ⚠️ THE rmeta GREP ALONE WOULD NOT HAVE BEEN SUFFICIENT and the t2610 block says why -- a name can
+// sit in an rmeta string table without being an exported type.  Both instruments agree here.
+//
+// ⛔ The `init` is t25's/t152's/t157's/t158's/t161's/t2610's, and for their reason: a
+// default-constructed ODS op handle is the NULL handle, `fmt::OpInst` has no null, and this
+// expression exists only to type-check the type key.  NO MEMBER OF `AllocOp` IS MAPPED -- the 33
+// censused member-call sites are named in `src.cpp` and left to fail at rustc, the t161/t2610
+// bargain -- and no `operator==` may ever be added without a handle-identity model.
+fn t2910() -> dataflowir_gen::fmt::OpInst {
+    dataflowir_gen::fmt::OpInst::new(
+        <dataflowir_gen::ops::mlir_memref_AllocOp as dataflowir_gen::MlirOp>::DEF,
+    )
+}
+
+// t2911 / f2911 -- `mlir::MemRefLayoutAttrInterface` -> an OPAQUE UNIT, plus its DEFAULT
+// CONSTRUCTOR.  The two keys are the type's ENTIRE corpus surface: 4 occurrences, all 4 the default
+// construction, 0 member calls.  f2911 is byte-identical to t2911's body on purpose and for the
+// f121/f125 reason -- t2911 supplies the type's zero value while f2911 is the expression a written
+// `MemRefLayoutAttrInterface()` lowers to -- and BOTH are needed, because the f42/f137 precedent
+// records that a type key alone gives `rc=0` and then `E0433` at the constructor call.
+// ⛔ `()` IS NOT A PLACEHOLDER HERE: a default-constructed interface handle is MLIR's NULL
+// attribute, and `ir::Attr` has no null variant, so a unit is the only spelling that does not
+// invent content.  See `src.cpp` for the bound on that claim.
+fn t2911() -> () {
+    ()
+}
+
+fn f2911() -> () {
+    ()
+}
+
+// t2912 -- `mlir::AnalysisManager` -> an OPAQUE UNIT, t80's move one level up on the same header.
+// No constructor key, and that is structural: the class's only constructor is private, so ported
+// code can never make one.  Every member is unmapped; the corpus calls none (0 member-call sites
+// over 1,596 sources), and the 6 parameter sites are analysis constructors that ignore the
+// argument.  `AnalysisManager::PreservedAnalyses` is a `using` alias for
+// `mlir::detail::PreservedAnalyses`, already t80, so this key makes no second claim about it.
+fn t2912() -> () {
+    ()
+}

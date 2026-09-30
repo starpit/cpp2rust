@@ -12495,3 +12495,238 @@ namespace mlir {
 } // namespace mlir
 
 ::llvm::hash_code f2901(mlir::Value a0) { return mlir::hash_value(a0); }
+
+// ============================================================================================
+// ⭐⭐ ROW g3110 -- THE TOP FOUR `mlir::` ABORT GATES OF `dxp_standalone`'s LINK UNIT.
+//
+// Measured 2026-09-30 over the **266-file link unit** (`verif/goal/linkunit.indb.txt`, computed
+// from `dxpcfg/build.ninja`), converter `verif/g3105/cpp2rust.AFTER` md5 b00929714940772f73
+// a0e5b67232dada, rules `ir/g3110` (99 modules, a copy of `ir/goalHEAD`), `-model=unsafe`.  Of the
+// 110 TUs that abort, these four gates hold **18**, and each was reproduced as the TU's genuine
+// FIRST abort on this pair before anything was written -- 5 / 5 / 4 / 4, identical to
+// `GOAL-RANKING.md` §2:
+//     mlir::memref::AllocOp            5 TUs   -> t2910          (LANDED HERE)
+//     mlir::MemRefLayoutAttrInterface  4 TUs   -> t2911 / f2911  (LANDED HERE)
+//     mlir::AnalysisManager            4 TUs   -> t2912          (LANDED HERE)
+//     mlir::IRMapping                  5 TUs   -> STILL REFUSED, see :10687 and the re-test below
+// ⭐ An aborted TU withholds every definition it would contribute to the crate, which is why the
+// link unit's 9,127 "defined nowhere" name errors are almost all downstream of aborts like these.
+//
+// ⛔⛔ THE MEMBER QUESTION WAS MEASURED FIRST, PER TYPE, BEFORE ANY KEY WAS WRITTEN, because a type
+// key with no method key is strictly worse than no key: `converter.cpp:4933`/`:5099` gate emission
+// on `Mapper::Contains(callee)` and on false print the LITERAL C++ method name, so an OPERATOR
+// aborts loudly but a MEMBER does not.  Receiver-aware census over all 1,596 `repos/dt_src`
+// sources (declarations of the type per file, then member calls on THOSE receiver names -- a
+// receiver-blind grep for `.map(`/`.getType(` is worthless, those names belong to dozens of
+// types).  Instrument validated in-band: positive `MemRefLayoutAttrInterface()` = 4 hits,
+// negative `zzzT()` = 0.
+//     mlir::MemRefLayoutAttrInterface   member-call sites: **0**   (4 total occurrences, and ALL
+//                                       FOUR are `MemRefLayoutAttrInterface()`/`{}` -- i.e. the
+//                                       key set below is the type's ENTIRE corpus surface)
+//     mlir::AnalysisManager             member-call sites: **0**   (36 occurrences: 24 are
+//                                       `#include`s, 6 are parameters, 5 are the nested
+//                                       `AnalysisManager::PreservedAnalyses` in `isInvalidated`,
+//                                       and the only 3 value-position uses are copy-inits in
+//                                       `unittest/` directories, which are NOT in the link unit --
+//                                       verified against `linkunit.indb.txt`, 0 lines matching
+//                                       `unittest`)
+//     mlir::memref::AllocOp             member-call sites: **33** over 10 distinct members
+//                                       (getResult 9, getType 7, getLoc 5, getDynamicSizes 4,
+//                                       erase 3, getOperation/getBlock/getUsers/
+//                                       replaceAllUsesWith/emitError 1 each)
+//     mlir::IRMapping                   member-call sites: **92** over 5 distinct members
+//                                       (map 42, lookup 19, contains 13, lookupOrDefault 10,
+//                                       lookupOrNull 8) -- which is why it stays refused.
+// ⭐⭐ SO THE BRIEF THAT DISPATCHED THIS ROW WAS WRONG ABOUT TWO OF THE FOUR.  It named
+// `AnalysisManager::getAnalysis` and "the layout interface's accessors" as corpus member calls to
+// be keyed or marked refused.  THE CORPUS CALLS NEITHER.  `AnalysisManager` is structurally
+// incapable of it here: its ONLY constructor is PRIVATE (`AnalysisManager.h:373`,
+// `AnalysisManager(detail::NestedAnalysisMap *impl)`), so ported code can never make one, and the
+// six parameter sites are all analysis constructors that IGNORE the argument -- e.g.
+// `LoopTilingAnalysis(Operation* op, AnalysisManager& am) : info_(op) {}` (LoopTiling.h:237) has an
+// unnamed-in-effect `am`.  ⭐ The generalisation: "this type has methods in its header" is not
+// "the corpus calls them", and only the second one can justify a member key or a refusal marker.
+//
+// ⛔ WHY NO DELIBERATE-REFUSAL MARKER (`[[clang::annotate("cpp2rust::refused")]]`, 4c496685) IS
+// USED BY THIS ROW, AND IT IS NOT A JUDGEMENT CALL -- IT IS UNAVAILABLE ON THIS PAIR.  Measured:
+// `grep -aoF 'cpp2rust::refused'` over all 34 `cpp-rule-preprocessor` binaries on the pod is **1**
+// for exactly four of them (`verif/g3108/cpp-rule-preprocessor.e67efaf6` md5 448ce4f2,
+// `g3108.build/...` same md5, `verif/g3086.build/...` 05c13ca4, `g3067b/...` b33749b4) and **0**
+// for `pin/cpp-rule-preprocessor` (18cd96ef), `snap/g3078/...` (797fc353) and every other pin.
+// With a refusal-blind preprocessor `IsRefusedRule()` never fires, the key is emitted as an
+// ORDINARY `fN` with no target, and the converter then dies at LOAD time on EVERY TU with
+// `expr key 'fNNNN' is in ir_src.json but in no IR target` -- 4c496685's own finding (2).  A
+// marker is therefore a two-binary pin swap, not a rule edit, and it is out of scope here.
+// ⭐ It is also unnecessary for all three keys below: two of them have a measured ZERO member
+// surface, and the third is argued as the t161 bargain immediately under t2910.
+//
+// ============================================================================================
+// ⛔⛔ t2910 OVERTURNS A STORED REFUSAL IN THIS FILE, ON THE REFUSAL'S OWN TEST.
+//
+// The `mlir::LLVM` / `mlir::math` / `mlir::memref` def-absence block at :5318-5337 refuses 25 op
+// spellings, `AllocOp` among them, on the ground that `dataflowir-gen` generates no `DEF` for any
+// op in those three dialects.  It carries `⭐⭐ RE-TESTED 2026-09-28 ... THIS ONE STILL STANDS` and
+// `⛔ STAYS LOUD; do not reopen on a spot check`.  ⚠️ That is a stored ARGUMENT with no timestamp
+// semantics, and HARNESS-COMMON records that this exact phrasing has been measured false before.
+// Re-run on 2026-09-30 with the refusal's OWN instrument -- `grep -oE "struct <name>\b"` against
+// `dataflow_ods.rs` -- on BOTH the ods it was measured against and the CURRENT one:
+//
+//   generated dataflow_ods.rs             OLD (09-28 12:53, 5,342 lines)  NEW (09-29 06:47, 7,461)
+//   mlir_arith_ConstantOp  <- POS CONTROL              1                            1
+//   mlir_memref_AllocOp                                0                            1
+//   mlir_memref_LoadOp / GetGlobalOp /
+//     ExtractAlignedPointerAsIndexOp                   0                            1 each
+//   mlir_LLVM_UndefOp / mlir_LLVM_ConstantOp           0                            1 each
+//   mlir_math_AbsIOp / mlir_math_ExpOp                 0                            1 each
+//   zzzFabricatedNegControl <- NEG CONTROL             0                            0
+//
+// And on the refusal's OWN second route, the claim that the three dialect PREFIXES "do not occur
+// AT ALL" (`grep -oE "mlir_(LLVM|math|memref)_[A-Za-z0-9_]+"`):
+//   mlir_memref_  0 -> **128**   mlir_LLVM_  0 -> **320**   mlir_math_  0 -> **184**
+//   mlir_arith_ (positive control, untouched by the change)  204 -> 204
+//   zzz_neg_ (negative control)                                0 -> 0
+//
+// ⭐⭐ SO ALL 25 REFUSED SPELLINGS / 45 CORPUS OCCURRENCES ARE NOW MODELLED, and the mechanism is
+// the one the refusal itself named as the way `mlir::ktdf` fell: the generator's `.td` front-end
+// table grew.  `dataflowir-gen/build.rs:67-68` now carries
+//     ("memref", &["Dialect/MemRef/IR/MemRefBase.td", "Dialect/MemRef/IR/MemRefOps.td"]),
+// with a comment sourcing the dialect name to `MemRef_Dialect` in `MemRefBase.td:15`.  ⛔ THE
+// REFUSAL AT :5318 IS FALSIFIED AND SHOULD BE REWRITTEN BY WHOEVER OWNS `mlir::LLVM` AND
+// `mlir::math`; this row takes ONLY `AllocOp`, which is a measured first-abort gate, and does not
+// blind-sweep the other 24 (the refusal's own warning against a blind sweep is still good advice).
+// ⭐ The generalisation, and it is the reusable half: A DEF-ABSENCE REFUSAL IS A STATEMENT ABOUT
+// ONE BUILD OF THE GENERATOR, and the generator is the layer under active growth, so such a
+// refusal must be re-run against the CURRENT artifact and never honoured from its text.
+//
+// ⛔ AND THE MEMBER BARGAIN FOR t2910 IS THE t161 BARGAIN, NAMED RATHER THAN HIDDEN.  The 33
+// member-call sites above are NOT keyed: `getDynamicSizes`/`getResult`/`getType` need a per-op
+// operand model this crate does not have, and `erase`/`replaceAllUsesWith` are the
+// `OpInst`-vs-`OpHandle` family already refused at the RewriterBase block.  RULE 2 forbids a
+// placeholder, so they are emitted TEXTUALLY and fail at rustc rather than at translate time.
+// That is the `g3067` capability gap, and it is the IDENTICAL bargain every landed op key in this
+// file already strikes -- t25 `OpState`, t61 `ModuleOp`, t157 `func::FuncOp`, t158
+// `affine::AffineForOp`, t161/t162, t2610-t2616, t2650-t2652 -- on types the corpus also calls
+// members on.  ⭐ MEASURED, NOT ASSUMED: the row report records, per gate TU, whether it reaches
+// a member leak at all or lands on a further LOUD abort first; 5 of 5 land on a loud abort.
+//
+// ⚠️ SWALLOW / DEAD-KEY SAFETY, all three keys: every spelling is FULLY CONCRETE with placeholder
+// arity 0 -- no `<`, no comma at any depth, no operator name -- so neither `matchTemplate`'s
+// same-depth-comma over-run nor the `operator>=` angle-depth desync can reach them, and
+// `GetTypeMapKey` truncates at the first `<` which none of them has.  No defaulted template
+// argument is spelled, so `SuppressDefaultTemplateArgs` cannot mint a dead duplicate.  All three
+// are read back out of `ir_src.json` with `value == spelling` after the regen, never `in`.
+// ============================================================================================
+
+namespace mlir {
+namespace memref {
+// mlir/Dialect/MemRef/IR/MemRefOps.h.inc:2827 `class AllocOp` -- ODS-generated, one `Operation *`
+// through its `OpState` base, so it maps where `mlir::Operation`/`OpState` map.  Declared ONLY so
+// t2910 can be SPELLED, the t161 reason and nothing more; no member is declared, because no member
+// rule is written and a declared-but-unmapped member records nothing.  ⚠️ `namespace memref` is
+// already opened at :5952 for t420-t422 (`CastOp`/`MemorySpaceCastOp`/`ReinterpretCastOp`); this
+// reopens it, which is legal, and declares no second copy of any of those three.
+class AllocOp {};
+} // namespace memref
+
+// mlir/IR/BuiltinAttributeInterfaces.h.inc:632 `class MemRefLayoutAttrInterface` -- an ODS-generated
+// ATTRIBUTE INTERFACE handle, i.e. an `mlir::Attribute` viewed through an interface.  Declared with
+// ONLY the default constructor, which is the ONLY form the corpus reaches (all 4 occurrences are
+// `MemRefLayoutAttrInterface()` or `{}`); the interface's accessors -- `getAffineMap`,
+// `isIdentity`, `verifyLayout` -- are deliberately NOT declared, because none is mapped and the
+// corpus calls none of them (0 member-call sites, measured above).
+class MemRefLayoutAttrInterface {
+public:
+  MemRefLayoutAttrInterface();
+};
+
+// mlir/Pass/AnalysisManager.h:292 `class AnalysisManager` -- ONE pointer
+// (`detail::NestedAnalysisMap *impl`) and NO public constructor at all; see t2912.  Declared with
+// no member for the t80 reason: every member is unmapped, so declaring one would record nothing
+// and would only create a dead key.
+class AnalysisManager {};
+} // namespace mlir
+
+// t2910 -- `mlir::memref::AllocOp` -> `fmt::OpInst` carrying the op's OWN generated `DEF`.  This is
+// t161's body with `mlir_memref_AllocOp` substituted; NO NEW MODEL CLAIM is made beyond what t161
+// already claims, because the trait base of an ODS op IS that op.  `searched as:
+// mlir::memref::AllocOp`, arity 0.  5 gate TUs: DoubleBuffering, BroadcastPromotion,
+// StageCoarsening, StageCoarsening/Materializer, StageCoarsening/BufferExpansion.
+//
+// ⛔ NO `fN` DEFAULT-CONSTRUCTOR KEY, and this is t161's grep repeated rather than inherited:
+// `(?:mlir::)?memref::AllocOp\s*(?:\(\s*\)|\{\s*\})` is **0 hits** across all 1,596 corpus sources
+// (in-band positive control `MemRefLayoutAttrInterface()` = 4, negative `zzzT()` = 0), so no site
+// can ask for `mlir_memref_AllocOp::new_N()`.  ⚠️ The ONE near-miss is a STRUCT FIELD --
+// `DoubleBuffering.cpp:77` `mlir::memref::AllocOp alloc;` inside `struct CandidateShape`, whose
+// only default-construction is `CandidateShape shape;` at :182 -- and a field's zero value comes
+// from THIS key's own `init`, not from a constructor rule, exactly as t152's init serves f121's
+// role for a field while f121 serves a written statement.
+//
+// ⛔ t25's PROHIBITION APPLIES UNCHANGED: no `operator==`, no `operator!=`, no identity test.  A
+// C++ op handle compares `Operation *`; `fmt::OpInst`'s content fields are a VALUE.  (`f2102` on
+// t25 compares `op_id()` only and is the one sanctioned identity test.)
+using t2910 = mlir::memref::AllocOp;
+
+// t2911 / f2911 -- `mlir::MemRefLayoutAttrInterface` -> AN OPAQUE UNIT `()`, WITH ITS DEFAULT
+// CONSTRUCTOR, LANDED AS ONE SET so the `std::hash<int>` bargain cannot arise.  4 gate TUs:
+// PCFGToDataflowIR, SNTransferLowering, SNSyncLowering, SNComputeLowering.
+//
+// ⭐⭐ THESE TWO KEYS ARE THE TYPE'S ENTIRE CORPUS SURFACE, measured and not assumed: 4 occurrences,
+// all 4 the DEFAULT CONSTRUCTION, 0 member calls.  Every one is the third argument of
+// `MemRefType::get(shape, elementType, MemRefLayoutAttrInterface(), memorySpace)` --
+// `BufferExpansion.cpp:290`, `ScalarBroadcastLegalization.cpp:380`,
+// `PathExpansion/Materializer.cpp:329` and `:383`.
+//
+// WHY A UNIT IS THE HONEST MODEL, and this is a BOUNDED claim rather than a general one.  A
+// default-constructed interface handle is MLIR's NULL ATTRIBUTE, and `ir::Attr` (ir.rs:541) is an
+// enum of Str/Int/Bool/Unit/AffineMapAlias/AffineMap/I32Array/... with NO null variant -- so
+// mapping to `ir::Attr` would have to PICK a variant and would be a silent lie at every site.
+// `()` says exactly what a null layout carries at these four sites: nothing.  The same move as
+// t59 (`mlir::Builder`), t72 (`mlir::TypeID`) and t80 (`mlir::detail::PreservedAnalyses`).
+// ⛔ WHAT IT WOULD COST IF A SITE EVER CONSTRUCTED A REAL LAYOUT: nothing silent, because no
+// other constructor is declared -- `MemRefLayoutAttrInterface(AffineMapAttr)` and
+// `StridedLayoutAttr::get(...)` are unkeyed and abort loudly.  Revisit this key, do not extend it,
+// if such a site appears.
+// DESTRUCTOR TEST, t80's instrument, run WITH A VALIDATED CONTROL SET this time:
+// `grep -rhoF -- '~<name>'` over the MLIR include tree gives `~MemRefLayoutAttrInterface` = 0 and
+// `~AnalysisManager` = 0, against positives `~PassManager` 1, `~OpPassManager` 1, `~MLIRContext` 1,
+// `~Pass` 7 and negative `~zzzNoSuchClass` 0.  ⚠️ Worth recording: the first attempt used
+// `~OpBuilder` as the positive control and it reads **0** -- `OpBuilder` declares no destructor --
+// so that run proved nothing about either type.  An absence check whose control is itself absent
+// is not a measurement.
+using t2911 = mlir::MemRefLayoutAttrInterface;
+mlir::MemRefLayoutAttrInterface f2911() {
+  return mlir::MemRefLayoutAttrInterface();
+}
+
+// t2912 -- `mlir::AnalysisManager` -> AN OPAQUE UNIT `()`.  4 gate TUs: MemoryTrackerAnalysis,
+// KTDF/Analysis/LoopTiling, TileSCFForLoops, StripMineSCFForLoops.  `searched as:
+// mlir::AnalysisManager`, reached while converting
+// `mlir::ktdf::LoopTilingAnalysis::LoopTilingAnalysis`, i.e. in PARAMETER position -- which is
+// why the abort happens before any member call, the t80 situation exactly.
+//
+// ⭐⭐ NO `fN` CONSTRUCTOR KEY, AND THAT IS STRUCTURAL RATHER THAN A CENSUS ACCIDENT:
+// `AnalysisManager.h:377` declares `AnalysisManager(detail::NestedAnalysisMap *impl)` and it is
+// **private**, with no public constructor of any kind, so ported code CANNOT construct one and no
+// site can ask for `mlir_AnalysisManager::new_N()`.  The corpus agrees: 0 hits for
+// `AnalysisManager()`/`{}`.  The 3 value-position uses in the corpus
+// (`AnalysisManager analysis_manager = module_analyses;`) are COPY-INITS from a
+// `ModuleAnalysisManager` and live only under `unittest/`, which the link unit excludes.
+//
+// WHY A UNIT IS THE HONEST MODEL: the payload is a `detail::NestedAnalysisMap *` into the pass
+// manager's per-operation analysis cache.  `grep -rn NestedAnalysisMap dataflowir-gen/src` = 0 --
+// the model has no analysis cache at all, so there is nothing for a struct-shaped mapping to hold,
+// and a `Vec`/`HashMap` stand-in would have a size that means nothing.  This is t80's argument one
+// level up: t80 maps this same header's `PreservedAnalyses` to `()` for the same reason, and
+// `AnalysisManager::PreservedAnalyses` -- the nested name the 5 `isInvalidated` signatures write --
+// is a `using` alias for `detail::PreservedAnalyses` (`AnalysisManager.h:297`), so t80 ALREADY
+// covers it and this key adds no second claim about it.
+//
+// WHAT IS LOST, named: every member -- `getAnalysis<T>()`, `getCachedAnalysis<T>()`,
+// `getChildAnalysis<T>()`, `getCachedParentAnalysis<T>()`, `nest()`, `invalidate()`, `clear()`,
+// `getPassInstrumentor()`.  None is declared above and none is mapped.  ⚠️ AND FOR A MEMBER THAT
+// MEANS EMITTED TEXTUALLY, NOT ABORTING -- the `g3067` gap -- which is exactly why the 0-member
+// census above is load-bearing for this key and was taken before it was written.  The corpus
+// calls NONE of them: all six parameter sites are analysis constructors that take
+// `AnalysisManager&` to satisfy MLIR's analysis-construction interface and never read it
+// (`LoopTiling.h:237`, `MemoryTrackerAnalysis.h:66`, `RegisterPressureAnalysis.h:158`).
+using t2912 = mlir::AnalysisManager;
