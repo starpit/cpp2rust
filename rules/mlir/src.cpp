@@ -12427,3 +12427,71 @@ mlir::Pass::Statistic f2801(mlir::Pass *a0, const char *a1, const char *a2) {
 //     instantiation.  `grep -rn 'RewritePattern\|PatternSet' dataflowir-gen/src` is
 //     still EMPTY, so there is no type to point a key at either.  ⭐ NAMED UNBLOCKER:
 //     a rewrite-pattern model in dataflowir-gen -- strictly larger than this row.
+
+// ============================================================================================
+// f2901 -- `llvm::hash_code mlir::hash_value(mlir::Value)`.
+//
+// READ OFF THE CONVERTER, NOT GUESSED.  `cpp2rust -verbose` on the port goal TU
+// (`dxp/dxp_standalone.cpp`, binary `verif/g3105/cpp2rust.AFTER`
+// md5 b00929714940772f73a0e5b67232dada + `ir/goalHEAD`) prints, four times:
+//     search expr llvm::hash_code mlir::hash_value(mlir::Value), result:
+//     None
+// i.e. ASKED AND MISSED.  With no key the converter emits the OPT-IN marker
+// `Cpp2RustUnmappedFn_hash_value_191` -- 1 occurrence / 1 distinct emitted line /
+// 1 TU on the goal TU, IDENTICALLY in both models -- which is an E0425 at rustc,
+// i.e. a NAME-RESOLUTION failure that stops the whole TU before type checking.
+//
+// THE C++ SITES, all three in the 266-file link unit's transitive headers:
+//     dsc/sdsc_bundle/Dialect/SDSCBundleOps.hpp:43
+//     ddc/ddl/Dialect/DdlOps.hpp:40
+//     dataflow-scheduler/.../Dialect/KTDF/KTDFAttributes.h
+// and all three are the same one-liner
+//     size_t operator()(const mlir::Value& x) const { return mlir::hash_value(x); }
+// i.e. the `std::hash<mlir::Value>` specialisation a `std::unordered_map` keyed on
+// a Value needs.  `reached while converting std::hash<mlir::Value>::operator()`.
+//
+// WHY A BODY IS WRITABLE HERE WHEN `std::hash<int>`'s WAS NOT.  The upstream
+// `mlir::hash_value(Value)` hashes the value's opaque pointer, so its NUMERIC
+// result is unreproducible by construction -- but a hash function is only ever
+// required to be CONSISTENT WITH EQUALITY, and nothing in the corpus persists or
+// compares a hash_code across the C++/Rust boundary (the sole consumer is
+// `std::hash<mlir::Value>`, feeding a hash container).  The direction that is
+// fatal for a hash container -- two EQUAL values hashing DIFFERENTLY -- holds by
+// construction: `dataflowir_gen::ir::Value` is
+// `#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]` (ir.rs:20), and
+// a derived `Hash` hashes exactly the fields the derived `PartialEq` compares.
+// That is the same argument this file already makes for t920 / SmallDenseSet at
+// the `attr_is_a_sound_hash_set_key` note, and it is why this is NOT the
+// `std::hash<int>` mistake: that one emitted `0(v)` from a TYPE key with no
+// method key, whereas this is a FUNCTION key with a real body.
+//
+// `llvm::hash_code` is declared locally for the reason the f134/f135 block above
+// gives, and is MODELLED IN rules/support (t2 -> `u64`, f10), so the return type
+// has a real target type without this module claiming it.
+//
+// RESIDUAL, NAMED AND NOT HIDDEN: the call site's context wants a `size_t`
+// (`std::hash<>::operator()` returns `usize` in the emission), and the converter
+// emits NO conversion for C++'s implicit `hash_code -> size_t`.  So the rustc
+// error at this line becomes E0308 `expected usize, found u64` instead of E0425
+// `cannot find function`.  That is a strict improvement -- E0425 is a resolution
+// error that stops the TU before type checking -- but it is not zero, and the fix
+// is in the CONVERTER (emit `hash_code::operator size_t()`), not here: deliberately
+// declaring the target `-> usize` would contradict rules/support t2 and mis-annotate
+// every temporary the converter types as `llvm::hash_code`.
+// ============================================================================================
+
+namespace llvm {
+// MODELLED IN rules/support (t2 -> `u64`); declared here only to spell f2901's
+// return type.  No member is declared, so nothing of it is recorded.
+class hash_code {
+public:
+  hash_code();
+  hash_code(unsigned long value);
+};
+} // namespace llvm
+
+namespace mlir {
+::llvm::hash_code hash_value(Value value);
+} // namespace mlir
+
+::llvm::hash_code f2901(mlir::Value a0) { return mlir::hash_value(a0); }

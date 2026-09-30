@@ -5451,3 +5451,32 @@ fn t2680() -> libcc2rs::OwningOpRef<*mut dataflowir_gen::fmt::OpInst> {
 fn t2681() -> libcc2rs::OwningOpRef<dataflowir_gen::fmt::OpInst> {
     libcc2rs::OwningOpRef::null()
 }
+
+// f2901 `llvm::hash_code mlir::hash_value(mlir::Value)` -> a hash of the value,
+// consistent with its `PartialEq`.  src.cpp carries the full argument; in one line:
+// a hash function's only obligation is that EQUAL values hash EQUALLY, and
+// `ir::Value` derives `Hash` and `PartialEq` over the same fields (ir.rs:20), so the
+// obligation holds by construction.  The numeric result is NOT upstream's (upstream
+// hashes the opaque pointer, which does not exist in this model) and nothing in the
+// corpus compares a `hash_code` across the boundary.
+//
+// BYTE-IDENTICAL ON BOTH ARMS ON PURPOSE.  `mlir::Value` is t4 on both arms
+// (`dataflowir_gen::ir::Value`) and `llvm::hash_code` is rules/support t2 (`u64`) on
+// both arms, so neither the parameter nor the return changes model -- unlike the
+// (Iter, bool) family, this key names no type that one model boxes and the other
+// does not.  The converter passes the receiver by value at both sites (measured:
+// `((*x).clone())` unsafe, `((*x.upgrade().deref()).clone())` refcount).
+//
+// ONE BLOCK EXPRESSION, because a rule body is inlined into the caller: the `use`
+// items and the `let` are inside it, and the block's value is `h.finish()`.  The
+// borrow of `h` ends inside the block, so there is no borrow-of-temporary hazard of
+// the kind a refcount `(*x.borrow())` receiver has.
+unsafe fn f2901(a0: dataflowir_gen::ir::Value) -> u64 {
+    {
+        use std::hash::Hash as _;
+        use std::hash::Hasher as _;
+        let mut h: std::collections::hash_map::DefaultHasher = Default::default();
+        a0.hash(&mut h);
+        h.finish()
+    }
+}
