@@ -2580,13 +2580,50 @@ bool ConverterRefCount::VisitCXXForRangeStmtVectorDecomposition(
   // the tuple-like arm and holds the FieldDecl per binding, in order, for the
   // member-wise arm; that is what selects the emission spelling below.
   const bool is_pair = GetClassName(elem_type) == "std::pair";
+  // ⭐ THE ARITY-N TUPLE ARM. `std::pair` is not the only element whose Rust
+  // model is a tuple: `rules/tuple` keys `std::tuple` at arities 1..5 and 27 and
+  // maps each to the corresponding Rust tuple, so `.0 .1 .2 .3` name the C++
+  // elements there exactly as they do for a pair. The arm is therefore selected
+  // on THE MAPPER, never on the spelling -- `Mapper::Contains` plus, in gate (2),
+  // an arity check against the very text `ConvertPtrType` will emit -- because
+  // `SuppressDefaultTemplateArgs` means the written spelling and the key need not
+  // agree and an arity mismatch would emit `.3` on a 3-tuple.
+  //
+  // ⛔ AND IT IS DELIBERATELY *NOT* FOLDED INTO `is_pair`: the two differ in a
+  // way that is invisible in the arity. `rules/pair`'s refcount `t1` boxes EVERY
+  // component (`(Value<T1>, Value<T2>)`), which is what makes a mutable `auto&
+  // [a, b]` binding share the element's own cell; `rules/tuple`'s refcount
+  // `t1..t4` are PLAIN tuples (`(T1, T2, T3, T4)` -- measured, and visible in the
+  // emitted `let __decomp_633_12: Value<(Vec<u8>, Vec<u8>, i64)>` for
+  // `dxp/dxp.cpp:633`), so a tuple component has NO cell to share. Gate (2)
+  // therefore restricts this arm to a holder C++ CANNOT WRITE THROUGH; see there.
+  //
+  // ⛔ This does NOT reach `llvm::detail::enumerator_result` (row g3096): that
+  // type binds through the tuple PROTOCOL, has no `rules/tuple` key, and so is
+  // not `Mapper::Contains`ed here -- it keeps the loud refusal below.
+  //
+  // ⛔ AND IT IS STRICTLY ADDITIVE, which is why the tuple TEXT is parsed here
+  // rather than in gate (2): an element that is `Mapper::Contains`ed but is NOT
+  // modelled as a Rust tuple must keep falling through to the member-wise arm
+  // exactly as before, so the arm is only taken when there really is a
+  // parenthesised model to index. Nothing that reached `GetMemberwiseBindingFields`
+  // before this change can fail to reach it now.
+  std::string ptr_type = ConvertPtrType(range_init->getType());
+  std::string elem_text;
+  if (ptr_type.starts_with("Ptr<") && ptr_type.ends_with(">")) {
+    elem_text = ptr_type.substr(4, ptr_type.size() - 5);
+  }
+  const bool looks_like_rust_tuple =
+      elem_text.size() >= 2 && elem_text.front() == '(' && elem_text.back() == ')';
+  const bool is_tuple_model =
+      !is_pair && looks_like_rust_tuple && Mapper::Contains(elem_type);
   std::vector<const clang::FieldDecl *> fields;
   if (is_pair) {
     if (bindings.size() != 2) {
       ReportUnsupportedStructuredBinding(decomp);
       return false;
     }
-  } else {
+  } else if (!is_tuple_model) {
     // GetMemberwiseBindingFields (converter.cpp, shared via converter.h) is
     // model-agnostic: it only inspects the AST (holding vars, base classes,
     // anonymous/bitfield/reference members, a record with its own Mapper
@@ -2620,14 +2657,30 @@ bool ConverterRefCount::VisitCXXForRangeStmtVectorDecomposition(
   // one THIS TU emits as its own struct (not a `Mapper`-ruled library type,
   // which could choose a different representation), so the invariant applies
   // and no text-based re-derivation is needed.
-  std::string ptr_type = ConvertPtrType(range_init->getType());
-  if (is_pair) {
-    std::string elem_text;
-    if (ptr_type.starts_with("Ptr<") && ptr_type.ends_with(">")) {
-      elem_text = ptr_type.substr(4, ptr_type.size() - 5);
-    }
-    if (elem_text.size() < 2 || elem_text.front() != '(' ||
-        elem_text.back() != ')') {
+  //
+  // ⭐⭐ AND FOR THE ARITY-N `std::tuple` ARM THE `Value<..>` REQUIREMENT CANNOT BE
+  // MET AT ALL, so the arm is restricted instead of the requirement being
+  // dropped. `rules/tuple`'s refcount `t1..t4` are plain `(T1, .., TN)`, so a
+  // component has no cell of its own and NOTHING spelled here can make a binding
+  // alias the container element. The only sound move is the by-value one -- mint a
+  // FRESH cell over a copy of the component, gate (3)'s established spelling --
+  // and that is observationally equivalent to C++ exactly when C++ CANNOT WRITE
+  // THROUGH THE HOLDER: a `const T&` or by-value holder. A MUTABLE `T&` holder
+  // over a plain-tuple element therefore KEEPS THE LOUD REFUSAL rather than being
+  // lowered to a copy that compiles at rc=0 and SILENTLY DROPS EVERY WRITE --
+  // which is exactly the trap `converter.cpp:3720` names for the mutable `pair&`
+  // holder, and the reason it is not enough to check the arity. Measured cost of
+  // the restriction: 1 corpus TU (`ddc/ddcv1.cpp:93`, `auto& [node, range,
+  // node_added]`), left aborting loudly. Lifting it needs `rules/tuple`'s
+  // refcount target `Value<>`-wrapped, which is a rules-layer row, not this one.
+  //
+  // `component_boxed` records the per-component answer so the emission below can
+  // spell `Value<..>` and plain components differently. It stays EMPTY for the
+  // member-wise arm, whose fields are all boxed by the structural invariant
+  // above -- so the pair and member-wise paths emit byte-identically to before.
+  std::vector<bool> component_boxed;
+  if (is_pair || is_tuple_model) {
+    if (!looks_like_rust_tuple) {
       ReportUnsupportedStructuredBinding(decomp);
       return false;
     }
@@ -2638,9 +2691,31 @@ bool ConverterRefCount::VisitCXXForRangeStmtVectorDecomposition(
       return false;
     }
     for (const auto &component : components) {
-      if (!component.starts_with("Value<")) {
+      const bool boxed = component.starts_with("Value<");
+      if (is_pair && !boxed) {
         ReportUnsupportedStructuredBinding(decomp);
         return false;
+      }
+      component_boxed.push_back(boxed);
+    }
+    if (is_tuple_model) {
+      // A holder C++ can write through, over a component with no cell to share:
+      // refuse loudly (see above). `isConstQualified` is asked of the
+      // DecompositionDecl's REFERENT, and a by-value holder is not a reference at
+      // all, so both of the writable-through-nothing shapes pass.
+      const auto holder_type = decomp->getType();
+      if (holder_type->isReferenceType() &&
+          !holder_type.getNonReferenceType().isConstQualified()) {
+        ReportUnsupportedStructuredBinding(decomp);
+        return false;
+      }
+      // A REFERENCE binding would alias the element directly; there is no
+      // reference form in this model and a fresh cell is not one.
+      for (const auto *binding : bindings) {
+        if (binding->getType()->isReferenceType()) {
+          ReportUnsupportedStructuredBinding(decomp);
+          return false;
+        }
       }
     }
   }
@@ -2724,6 +2799,15 @@ bool ConverterRefCount::VisitCXXForRangeStmtVectorDecomposition(
       ReportUnsupportedStructuredBinding(decomp);
       return false;
     }
+    // ⛔ AND SO MUST `std::move` OUT OF AN ARITY-N PLAIN-TUPLE BINDING, for the
+    // third distinct reason: `take()` is sound only on a component that OWNS a
+    // cell, and gate (2)'s tuple arm exists precisely because these do not. The
+    // arm's holder is const, so a `std::move` out of it cannot move in C++ either;
+    // no witness has been measured and it keeps the LOUD refusal.
+    if (is_tuple_model) {
+      ReportUnsupportedStructuredBinding(decomp);
+      return false;
+    }
     if (!IsTemporaryRangeInit(range_init)) {
       ReportUnsupportedStructuredBinding(decomp);
       return false;
@@ -2788,12 +2872,22 @@ bool ConverterRefCount::VisitCXXForRangeStmtVectorDecomposition(
         fields.empty() ? std::to_string(index) : GetNamedDeclAsString(fields[index]);
     const std::string element =
         std::format("(*{}{}).{}", holder, deref, element_key);
+    // ⭐ AND AN ARITY-N PLAIN-TUPLE COMPONENT IS DEEP-COPIED TOO, for gate (2)'s
+    // reason rather than gate (3)'s: it owns no cell, so there is nothing to share
+    // and `Rc::new(RefCell::new(..))` is the only spelling that yields the
+    // `Value<T>` every downstream `VisitDeclRefExpr` in this model assumes a local
+    // to be. `.borrow()` is conditional on the component actually being boxed --
+    // for `std::pair` and for the member-wise arm every component is boxed, so
+    // both of those emit exactly the text they did before this change.
+    const bool boxed = component_boxed.empty() || component_boxed[index];
+    const std::string copied =
+        boxed ? std::format("{}.borrow().clone()", element)
+              : std::format("{}.clone()", element);
     StrCat(binding_name, token::kAssign,
            moved_bindings.contains(binding)
                ? std::format("Rc::new(RefCell::new({}.take()))", element)
-           : by_value
-               ? std::format("Rc::new(RefCell::new({}.borrow().clone()))",
-                             element)
+           : (by_value || is_tuple_model)
+               ? std::format("Rc::new(RefCell::new({}))", copied)
                : std::format("{}.clone()", element),
            token::kSemiColon);
     ++index;
