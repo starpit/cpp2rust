@@ -78,3 +78,33 @@ unsafe fn f16<T1: PartialEq>(a0: &Vec<T1>, a1: &Vec<T1>) -> bool {
 unsafe fn f17<T1>(a0: &mut Vec<T1>, a1: T1) {
     a0.push(a1)
 }
+
+// f18 -- `at(i)`, NON-CONST.  Body copied verbatim from `rules/vector`'s f7: the
+// `&mut Vec<T1>` index yields a `&mut T1`, which coerces to the `*mut T1` the
+// caller writes through.  A by-value or cloning body would drop the write.
+unsafe fn f18<T1>(a0: &mut Vec<T1>, a1: usize) -> *mut T1 {
+    &mut (a0)[a1 as usize]
+}
+
+// f19 -- `at(i) const`.  Body copied from `rules/vector`'s f98/f50 unsafe arm,
+// which spells the bounds check explicitly because `at` throws where `[]` is UB.
+unsafe fn f19<T1>(a0: &mut Vec<T1>, a1: usize) -> *mut T1 {
+    if a1 as usize >= a0.len() {
+        panic!("out of bounds access")
+    } else {
+        (a0).as_mut_ptr().add(a1 as usize)
+    }
+}
+
+// f20 -- `resize(n)`.  Body copied from `rules/vector`'s f15/f74.
+unsafe fn f20<T1: Default>(a0: &mut Vec<T1>, a1: usize) {
+    let __a0 = a1 as usize;
+    a0.resize_with(__a0, || <T1>::default())
+}
+
+// f21 -- `resize(n, v)`.  Body copied from `rules/vector`'s f54/f102.
+unsafe fn f21<T1: Default + Clone>(a0: &mut Vec<T1>, a1: usize, a2: T1) {
+    let __a0 = a1 as usize;
+    a0.resize(__a0, a2)
+}
+

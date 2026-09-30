@@ -809,3 +809,69 @@ typename std::vector<T1 *, T2>::const_iterator
 f136(const typename std::vector<T1 *, T2>::iterator &it) {
   return typename std::vector<T1 *, T2>::const_iterator(it);
 }
+
+// ============================================================================
+// g3108 -- WHY THERE IS NO POINTER-MONO SIBLING FOR `push_back` OR FOR CONST-`at`,
+// EVEN THOUGH THE MEASUREMENT SAYS THE ORIGINALS ARE DEAD FOR A POINTER ELEMENT TYPE.
+//
+// (1) THE MEASUREMENT.  `cpp2rust -verbose | grep 'search expr'` on
+//     dxp/dxp_standalone.cpp, refcount leg, binary at e67efaf6.  Of the 100 distinct
+//     `at`/`resize`/`push_back` signatures the converter searched for, 19 came back
+//     `result: None`, and EVERY `push_back` / const-`at` among them has ` *const ` in it:
+//        void std::vector<FoldFunction<int> *>::push_back(FoldFunction<int> *const &)
+//        void std::vector<FoldFunction<long> *>::push_back(FoldFunction<long> *const &)
+//        void std::vector<FoldFunction<std::vector<int>> *>::push_back(... *const &)
+//        void std::vector<FoldFunction<std::vector<long>> *>::push_back(... *const &)
+//        void std::vector<const FoldFunction<long> *>::push_back(const FoldFunction<long> *const &)
+//        void std::vector<const FoldFunction<std::vector<int>> *>::push_back(... *const &)
+//        void std::vector<const FoldFunction<std::vector<long>> *>::push_back(... *const &)
+//        FoldFunction<long> *const & std::vector<FoldFunction<long> *>::at(unsigned long) const
+//        FoldFunction<std::vector<int>> *const & std::vector<...>::at(unsigned long) const
+//        FoldFunction<std::vector<long>> *const & std::vector<...>::at(unsigned long) const
+//     f21/f80 record `push_back(const T1 &)` and f50/f98 record
+//     `const T1 & ...::at(unsigned long) const`; clang writes the corpus's TOP-LEVEL
+//     CONST TO THE RIGHT OF THE STAR, so the literal `const ` that sits immediately
+//     before the placeholder has nothing to match.  ⭐ THE NEGATIVE HALF OF THE SAME
+//     MEASUREMENT IS WHAT NAMES THE CLASS INSTEAD OF GUESSING IT: the `&&` overloads and
+//     the NON-const `at` HIT on the very same element types --
+//     `void std::vector<FoldFunction<long> *>::push_back(FoldFunction<long> * &&)` hits
+//     f14, and `FoldFunction<long> *& std::vector<FoldFunction<long> *>::at(unsigned
+//     long)` hits f7.  So a pointer element type is NOT the barrier, and neither is the
+//     missing space in ` *&`.  The barrier is exactly `const ` before a placeholder.
+//     NOT the SuppressDefaultTemplateArgs skew, NOT the operator>= angle-depth desync,
+//     NOT the matchTemplate swallow.  These are DEAD keys, not missing ones.
+//
+// (2) THE OBVIOUS FIX WAS WRITTEN, MEASURED, AND REMOVED.  Siblings over
+//     `std::vector<T1 *>` with the starred type spelled through `::const_reference`
+//     (the f127..f136 technique) DO match -- the keys recorded as
+//        void std::vector<T1 *>::push_back(T1 *const &)
+//        T1 *const & std::vector<T1 *>::at(unsigned long) const
+//     and the goal TU's 9 `push_back_*` and 3 `at_usize_const` literal-C++ names went to
+//     zero.  ⛔ AND THE EMITTED CODE IS WRONG.  The sibling's `T1` is the POINTEE, so
+//     the target must spell the pointer itself, and the only spellings a rule has are
+//     `*mut T1` / `Ptr<T1>`.  The converter models a C++ pointer as
+//     `PtrDyn<dyn X_Virtual>` when the pointee is POLYMORPHIC, and every corpus row here
+//     is (`FoldFunction<T>` has virtual members).  MEASURED with project rustc 1.98.0
+//     against the real libcc2rs rlib, positive and negative control in one file
+//     (`verif/g3108/snip/t.rs`):
+//        Vec<Ptr<Plain>>              + `as Ptr<Vec<Ptr<Plain>>>`  -> COMPILES
+//        Vec<PtrDyn<dyn FF_Virtual>>  + `as Ptr<Vec<Ptr<FF>>>`     -> E0277,
+//          "the trait bound Rc<RefCell<Vec<PtrDyn<dyn FF_Virtual>>>>:
+//           AsPointer<Vec<Ptr<FF>>> is not satisfied"
+//     i.e. the sibling emits `(fifo.as_pointer() as Ptr<Vec<Ptr<FoldFunction_int_>>>)`
+//     against a container modelled as `Vec<PtrDyn<dyn FoldFunction_int___Virtual>>`.
+//     Coverage-shaped and wrong, so per RULE 2 the keys are left OUT.
+//     ⚠️ THE SAME LIMIT APPLIES TO THE ALREADY-LANDED f127..f136: they are correct only
+//     where the pointee is NON-polymorphic.  Rowed separately; not changed here.
+//
+// (3) THE DISCRIMINATOR.  f14 and f7 fire on these element types and are correct,
+//     because their `T1` binds to the WHOLE POINTER TYPE and the converter substitutes
+//     its own model for it.  The pointee-placeholder form cannot do that: `PtrDyn`
+//     appears in 0 of 93 `rules/*/tgt_*.rs`, so no rule can name that model at all.
+//
+// (4) THE UNBLOCKER, IN THE RIGHT LAYER -- the preprocessor's matcher, not the rules.
+//     Make `matchTemplate` normalise a top-level `X *const &` parameter/return to the
+//     same placeholder shape as `const X &`, so f21/f80 and f50/f98 match a pointer
+//     element type with `T1` still bound to the POINTER.  That closes 16 of the 19
+//     measured misses at once: 7 vector `push_back`, 4 `rules/deque` `push_back`, 3
+//     vector const-`at`, and the 2 `rules/map` `at(const X *const &)` rows.
